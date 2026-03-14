@@ -257,32 +257,32 @@ export default function JobScreenshotDropzone({
 
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(110,231,183,0.08),transparent_54%)] opacity-80 transition group-hover:opacity-100" />
 
-        <div className="relative flex flex-col gap-6 p-6 sm:p-8">
+        <div className="relative flex flex-col gap-4 p-4 sm:p-5">
           <div className="flex items-start justify-between gap-4">
-            <div className="rounded-full border border-emerald-300/35 bg-emerald-300/10 px-4 py-2 text-xs font-medium uppercase tracking-[0.3em] text-emerald-200">
-              Primary upload
-            </div>
             <div className="rounded-full border border-white/12 bg-black/20 px-4 py-2 text-xs uppercase tracking-[0.24em] text-zinc-200">
+              Screenshot
+            </div>
+            <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">
               Drag, paste, or click
             </div>
           </div>
 
           <div className="flex flex-col items-center text-center">
-            <div className="flex h-20 w-20 items-center justify-center rounded-[1.75rem] border border-emerald-300/30 bg-black/25 text-4xl text-emerald-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+            <div className="flex h-14 w-14 items-center justify-center rounded-[1.25rem] border border-emerald-300/30 bg-black/25 text-2xl text-emerald-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
               {isProcessing ? (
-                <div className="h-9 w-9 animate-spin rounded-full border-4 border-emerald-200/20 border-t-emerald-200" />
+                <div className="h-7 w-7 animate-spin rounded-full border-4 border-emerald-200/20 border-t-emerald-200" />
               ) : (
                 "+"
               )}
             </div>
-            <h3 className="mt-6 max-w-3xl text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+            <h3 className="mt-4 max-w-3xl text-2xl font-semibold tracking-tight text-white">
               {disabledMessage
                 ? "Uploads are unavailable right now"
                 : isProcessing
                   ? "Extracting fields from your screenshot"
                   : "Drop your screenshot here"}
             </h3>
-            <p className="mt-4 max-w-2xl text-base leading-8 text-zinc-300">
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-300">
               {disabledMessage ? (
                 disabledMessage
               ) : isProcessing ? (
@@ -296,7 +296,7 @@ export default function JobScreenshotDropzone({
                 </>
               )}
             </p>
-            <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
               <span className="rounded-full border border-white/12 bg-white/6 px-4 py-2 text-xs uppercase tracking-[0.22em] text-zinc-200">
                 PNG, JPG, WebP
               </span>
@@ -309,7 +309,7 @@ export default function JobScreenshotDropzone({
             </div>
           </div>
 
-          <div className="grid gap-3 rounded-[1.5rem] border border-white/10 bg-black/30 p-4 sm:grid-cols-[1.2fr_0.8fr] sm:items-center">
+          <div className="grid gap-3 rounded-[1.25rem] border border-white/10 bg-black/30 p-3 sm:grid-cols-[1.2fr_0.8fr] sm:items-center">
             <div className="min-w-0">
               <p className="text-sm font-medium text-zinc-50">
                 {selectedFile ? selectedFile.name : "Waiting for a screenshot"}

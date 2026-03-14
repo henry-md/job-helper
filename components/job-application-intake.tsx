@@ -1,14 +1,17 @@
 "use client";
 
 import {
+  type ChangeEvent,
+  type DragEvent,
   type FormEvent,
   useEffect,
+  useEffectEvent,
+  useId,
   useRef,
   useState,
   useTransition,
 } from "react";
 import { useRouter } from "next/navigation";
-import JobScreenshotDropzone from "@/components/job-screenshot-dropzone";
 import type {
   JobApplicationDraft,
   JobApplicationExtraction,
@@ -18,7 +21,13 @@ type JobApplicationIntakeProps = {
   disabled?: boolean;
   disabledMessage?: string;
   extractionModel: string;
+  statusMessage?: {
+    text: string;
+    tone: "error" | "success";
+  } | null;
 };
+
+type UploadSource = "Dropped" | "Pasted" | "Selected";
 
 type DraftUpload = {
   error: string | null;
@@ -26,7 +35,7 @@ type DraftUpload = {
   file: File;
   id: string;
   model: string | null;
-  source: "Dropped" | "Pasted" | "Selected";
+  source: UploadSource;
   status: "extracting" | "failed" | "ready";
 };
 
@@ -42,6 +51,65 @@ const emptyDraft: JobApplicationDraft = {
   jobDescription: "",
   jobTitle: "",
 };
+
+const acceptedMimeTypes = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+]);
+
+const maxScreenshotBytes = 8 * 1024 * 1024;
+
+function formatBytes(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: value >= 1024 * 1024 ? 1 : 0,
+  }).format(value / (value >= 1024 * 1024 ? 1024 * 1024 : 1024));
+}
+
+function describeFileSize(value: number) {
+  if (value >= 1024 * 1024) {
+    return `${formatBytes(value)} MB`;
+  }
+
+  return `${formatBytes(value)} KB`;
+}
+
+function pickImageFile(items?: DataTransferItemList | null) {
+  if (!items) {
+    return null;
+  }
+
+  for (const item of items) {
+    if (item.kind !== "file") {
+      continue;
+    }
+
+    const file = item.getAsFile();
+
+    if (file && acceptedMimeTypes.has(file.type)) {
+      return file;
+    }
+  }
+
+  return null;
+}
+
+function validateImageFile(file: File) {
+  if (!acceptedMimeTypes.has(file.type)) {
+    return "Use a PNG, JPG, or WebP screenshot.";
+  }
+
+  if (file.size === 0) {
+    return "The screenshot is empty.";
+  }
+
+  if (file.size > maxScreenshotBytes) {
+    return "Keep the screenshot under 8 MB.";
+  }
+
+  return null;
+}
 
 function mergeTextField(currentValue: string, nextValue: string | null) {
   return nextValue?.trim() ? nextValue.trim() : currentValue;
@@ -73,12 +141,18 @@ function mergeJobDescription(currentValue: string, nextValue: string | null) {
 function mergeDraftWithExtraction(
   currentDraft: JobApplicationDraft,
   extraction: JobApplicationExtraction,
+  fallbackAppliedAt: string,
 ) {
+  const extractedAppliedAt = extraction.appliedAt?.trim();
+
   return {
     jobTitle: mergeTextField(currentDraft.jobTitle, extraction.jobTitle),
     companyName: mergeTextField(currentDraft.companyName, extraction.companyName),
     hasReferral: currentDraft.hasReferral || extraction.hasReferral,
-    appliedAt: extraction.appliedAt ?? currentDraft.appliedAt,
+    appliedAt:
+      extractedAppliedAt ||
+      currentDraft.appliedAt ||
+      fallbackAppliedAt,
     jobDescription: mergeJobDescription(
       currentDraft.jobDescription,
       extraction.jobDescription,
@@ -86,32 +160,43 @@ function mergeDraftWithExtraction(
   } satisfies JobApplicationDraft;
 }
 
+function getLocalDateInputValue() {
+  const now = new Date();
+  const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
+  return localDate.toISOString().slice(0, 10);
+}
+
 function fieldClassName() {
-  return "mt-3 w-full rounded-[1.25rem] border border-white/10 bg-zinc-950/70 px-4 py-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-300/45";
+  return "mt-2 w-full rounded-[1rem] border border-white/10 bg-zinc-950/70 px-3 py-2.5 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-300/45";
 }
 
 export default function JobApplicationIntake({
   disabled = false,
   disabledMessage,
   extractionModel,
+  statusMessage,
 }: JobApplicationIntakeProps) {
   const router = useRouter();
   const [, startTransition] = useTransition();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [banner, setBanner] = useState<BannerState | null>(null);
   const [draft, setDraft] = useState<JobApplicationDraft>(emptyDraft);
   const [draftUploads, setDraftUploads] = useState<DraftUpload[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [latestModel, setLatestModel] = useState(extractionModel);
-  const draftFieldsRef = useRef<HTMLDivElement>(null);
+  const inputId = useId();
 
   const extractingCount = draftUploads.filter(
     (upload) => upload.status === "extracting",
   ).length;
+  const isExtracting = extractingCount > 0;
+  const isFormLocked = disabled || isSaving || isExtracting;
   const saveDisabled =
     disabled ||
     isSaving ||
     draftUploads.length === 0 ||
-    extractingCount > 0 ||
+    isExtracting ||
     draft.jobTitle.trim().length === 0 ||
     draft.companyName.trim().length === 0;
   const newestUpload = draftUploads[draftUploads.length - 1] ?? null;
@@ -119,20 +204,121 @@ export default function JobApplicationIntake({
     ? `Working on ${newestUpload.file.name}. The draft fields below will update automatically.`
     : "The draft fields will populate automatically when extraction finishes.";
 
-  useEffect(() => {
-    if (draftUploads.length === 0) {
+  function queueSelectedFile(file: File, source: UploadSource) {
+    const validationError = validateImageFile(file);
+
+    if (validationError) {
+      setBanner({
+        text: validationError,
+        tone: "error",
+      });
+
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+
       return;
     }
 
-    draftFieldsRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
-  }, [draftUploads.length]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+
+    void handleFileSelected(file, source);
+  }
+
+  function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file || isFormLocked) {
+      return;
+    }
+
+    queueSelectedFile(file, "Selected");
+  }
+
+  function handleDragOver(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+
+    if (isFormLocked) {
+      return;
+    }
+
+    setIsDragging(true);
+  }
+
+  function handleDragLeave(event: DragEvent<HTMLDivElement>) {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setIsDragging(false);
+    }
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsDragging(false);
+
+    if (isFormLocked) {
+      return;
+    }
+
+    const file =
+      pickImageFile(event.dataTransfer.items) ??
+      Array.from(event.dataTransfer.files).find((candidate) =>
+        acceptedMimeTypes.has(candidate.type),
+      );
+
+    if (!file) {
+      setBanner({
+        text: "Drop a PNG, JPG, or WebP screenshot onto the form.",
+        tone: "error",
+      });
+      return;
+    }
+
+    queueSelectedFile(file, "Dropped");
+  }
+
+  const syncPastedFile = useEffectEvent((file: File) => {
+    queueSelectedFile(file, "Pasted");
+  });
+
+  useEffect(() => {
+    if (isFormLocked) {
+      return;
+    }
+
+    function handlePaste(event: ClipboardEvent) {
+      const target = event.target;
+
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA")
+      ) {
+        return;
+      }
+
+      const file = pickImageFile(event.clipboardData?.items);
+
+      if (!file) {
+        return;
+      }
+
+      event.preventDefault();
+      syncPastedFile(file);
+    }
+
+    window.addEventListener("paste", handlePaste);
+
+    return () => {
+      window.removeEventListener("paste", handlePaste);
+    };
+  }, [isFormLocked]);
 
   async function handleFileSelected(
     file: File,
-    source: DraftUpload["source"],
+    source: UploadSource,
   ) {
     const uploadId = crypto.randomUUID();
 
@@ -172,9 +358,10 @@ export default function JobApplicationIntake({
       }
 
       const extraction = payload.extraction;
+      const fallbackAppliedAt = getLocalDateInputValue();
 
       setDraft((currentDraft) =>
-        mergeDraftWithExtraction(currentDraft, extraction),
+        mergeDraftWithExtraction(currentDraft, extraction, fallbackAppliedAt),
       );
       setDraftUploads((currentUploads) =>
         currentUploads.map((upload) =>
@@ -299,82 +486,22 @@ export default function JobApplicationIntake({
   }
 
   return (
-    <form className="grid gap-5" onSubmit={handleSubmit}>
-      <JobScreenshotDropzone
-        disabled={disabled}
-        disabledMessage={disabled ? disabledMessage : undefined}
-        isProcessing={extractingCount > 0}
-        processingLabel={processingLabel}
-        onFileSelected={handleFileSelected}
-      />
-
-      <div className="grid gap-3 rounded-[1.5rem] border border-white/8 bg-black/20 p-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">
-              Draft uploads
-            </p>
-            <p className="mt-2 text-sm leading-7 text-zinc-400">
-              Every screenshot starts extraction automatically. Later uploads can keep
-              filling in missing fields before you save.
-            </p>
-          </div>
-          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-300">
-            {draftUploads.length} loaded
-          </span>
+    <form className="flex h-full min-h-0 flex-col gap-3" onSubmit={handleSubmit}>
+      {statusMessage ? (
+        <div
+          className={`shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
+            statusMessage.tone === "success"
+              ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
+              : "border border-amber-400/25 bg-amber-400/10 text-amber-100"
+          }`}
+        >
+          {statusMessage.text}
         </div>
-
-        {draftUploads.length === 0 ? (
-          <div className="rounded-[1.25rem] border border-white/8 bg-white/5 px-4 py-3 text-sm text-zinc-500">
-            No draft screenshots yet. Drop one into the box above to begin.
-          </div>
-        ) : (
-          <div className="grid gap-3">
-            {draftUploads.map((upload) => (
-              <div
-                key={upload.id}
-                className="rounded-[1.25rem] border border-white/8 bg-white/5 px-4 py-3"
-              >
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-zinc-100">
-                      {upload.file.name}
-                    </p>
-                    <p className="text-sm text-zinc-500">
-                      {upload.source} • {(upload.file.size / (1024 * 1024)).toFixed(1)} MB
-                    </p>
-                  </div>
-                  <span
-                    className={`rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.2em] ${
-                      upload.status === "ready"
-                        ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
-                        : upload.status === "failed"
-                          ? "border border-amber-400/25 bg-amber-400/10 text-amber-200"
-                          : "border border-white/10 bg-white/5 text-zinc-400"
-                    }`}
-                  >
-                    {upload.status === "ready"
-                      ? "Extracted"
-                      : upload.status === "failed"
-                        ? "Needs review"
-                        : "Extracting"}
-                  </span>
-                </div>
-
-                {upload.error ? (
-                  <p className="mt-3 text-sm leading-6 text-amber-100">
-                    {upload.error}
-                  </p>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      ) : null}
 
       {banner ? (
         <div
-          className={`rounded-[1.5rem] px-5 py-4 text-sm ${
+          className={`shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
             banner.tone === "success"
               ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
               : banner.tone === "error"
@@ -387,157 +514,196 @@ export default function JobApplicationIntake({
       ) : null}
 
       <div
-        ref={draftFieldsRef}
-        className="grid gap-4 rounded-[1.5rem] border border-white/8 bg-black/20 p-5 sm:grid-cols-2"
+        className={[
+          "relative flex min-h-0 flex-1 flex-col gap-3 overflow-hidden rounded-[1.5rem] border-2 border-dashed p-4 transition sm:p-4",
+          disabled
+            ? "border-white/10 bg-black/15 opacity-70"
+            : isDragging
+              ? "border-emerald-300 bg-emerald-300/10 shadow-[0_0_0_1px_rgba(110,231,183,0.3),0_28px_80px_rgba(16,185,129,0.18)]"
+              : "border-emerald-300/45 bg-[radial-gradient(circle_at_top,rgba(52,211,153,0.12),rgba(9,9,11,0.92)_40%,rgba(5,5,7,0.98)_100%)] shadow-[0_0_0_1px_rgba(16,185,129,0.14)]",
+        ].join(" ")}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
       >
-        <div className="rounded-[1.25rem] border border-emerald-400/15 bg-emerald-400/6 p-4 sm:col-span-2">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-[0.24em] text-emerald-300">
-                Editable draft
-              </p>
-              <p className="mt-2 text-sm leading-7 text-zinc-300">
-                These fields auto-fill from screenshots and stay editable until you
-                save.
-              </p>
-            </div>
-            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-300">
-              {extractingCount > 0 ? "Updating now" : "Ready to review"}
-            </span>
+        <input
+          ref={fileInputRef}
+          accept="image/png,image/jpeg,image/webp"
+          className="sr-only"
+          disabled={isFormLocked}
+          id={inputId}
+          onChange={handleFileInputChange}
+          type="file"
+        />
+
+        {isExtracting ? (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-[1.5rem] bg-black/72 backdrop-blur-[2px]">
+            <div className="h-10 w-10 animate-spin rounded-full border-4 border-emerald-200/20 border-t-emerald-200" />
+            <p className="text-sm font-medium text-zinc-100">Extracting screenshot</p>
+            <p className="max-w-sm text-center text-sm text-zinc-400">
+              {processingLabel}
+            </p>
+          </div>
+        ) : null}
+
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+              Screenshot intake
+            </p>
+            <p className="mt-1 text-sm text-zinc-300">
+              Drag a screenshot anywhere into this section, paste it, or{" "}
+              <label
+                className={`cursor-pointer text-emerald-300 underline-offset-4 hover:underline ${
+                  isFormLocked ? "pointer-events-none opacity-60" : ""
+                }`}
+                htmlFor={inputId}
+              >
+                choose a file
+              </label>
+              .
+            </p>
+          </div>
+          <div className="text-right text-sm text-zinc-400">
+            <p className="truncate font-medium text-zinc-100">
+              {newestUpload ? newestUpload.file.name : "No screenshot loaded"}
+            </p>
+            <p className="mt-1">
+              {newestUpload
+                ? `${newestUpload.source} • ${describeFileSize(newestUpload.file.size)}`
+                : "PNG, JPG, WebP up to 8 MB"}
+            </p>
           </div>
         </div>
 
-        <label className="rounded-[1.25rem] border border-white/8 bg-white/5 p-4">
-          <span className="text-sm font-medium text-zinc-100">Job title</span>
-          <input
-            className={fieldClassName()}
-            disabled={disabled || isSaving}
-            onChange={(event) =>
-              setDraft((currentDraft) => ({
-                ...currentDraft,
-                jobTitle: event.target.value,
-              }))
-            }
-            placeholder="Software Engineer"
-            type="text"
-            value={draft.jobTitle}
-          />
-        </label>
-
-        <label className="rounded-[1.25rem] border border-white/8 bg-white/5 p-4">
-          <span className="text-sm font-medium text-zinc-100">Company name</span>
-          <input
-            className={fieldClassName()}
-            disabled={disabled || isSaving}
-            onChange={(event) =>
-              setDraft((currentDraft) => ({
-                ...currentDraft,
-                companyName: event.target.value,
-              }))
-            }
-            placeholder="OpenAI"
-            type="text"
-            value={draft.companyName}
-          />
-        </label>
-
-        <label className="rounded-[1.25rem] border border-white/8 bg-white/5 p-4">
-          <span className="text-sm font-medium text-zinc-100">Applied date</span>
-          <input
-            className={fieldClassName()}
-            disabled={disabled || isSaving}
-            onChange={(event) =>
-              setDraft((currentDraft) => ({
-                ...currentDraft,
-                appliedAt: event.target.value,
-              }))
-            }
-            type="date"
-            value={draft.appliedAt}
-          />
-        </label>
-
-        <div className="rounded-[1.25rem] border border-white/8 bg-white/5 p-4">
-          <span className="text-sm font-medium text-zinc-100">Referral status</span>
-          <div className="mt-3 flex h-[52px] items-center rounded-[1.25rem] border border-white/10 bg-zinc-950/70 px-4">
+        <div className="grid min-h-0 flex-1 grid-rows-[repeat(4,minmax(0,1fr))] gap-3 rounded-[1.25rem] border border-white/8 bg-black/20 p-3 sm:grid-cols-2 sm:grid-rows-[repeat(3,minmax(0,1fr))]">
+          <label className="flex min-h-0 flex-col rounded-[1rem] border border-white/8 bg-white/5 p-3">
+            <span className="text-sm font-medium text-zinc-100">Job title</span>
             <input
-              checked={draft.hasReferral}
-              className="h-4 w-4 accent-emerald-300"
-              disabled={disabled || isSaving}
-              id="hasReferral"
+              className={fieldClassName()}
+              disabled={isFormLocked}
               onChange={(event) =>
                 setDraft((currentDraft) => ({
                   ...currentDraft,
-                  hasReferral: event.target.checked,
+                  jobTitle: event.target.value,
                 }))
               }
-              type="checkbox"
+              placeholder="Software Engineer"
+              type="text"
+              value={draft.jobTitle}
             />
-            <label className="ml-3 text-sm text-zinc-300" htmlFor="hasReferral">
-              Mark this application as referral-backed
-            </label>
+          </label>
+
+          <label className="flex min-h-0 flex-col rounded-[1rem] border border-white/8 bg-white/5 p-3">
+            <span className="text-sm font-medium text-zinc-100">Company</span>
+            <input
+              className={fieldClassName()}
+              disabled={isFormLocked}
+              onChange={(event) =>
+                setDraft((currentDraft) => ({
+                  ...currentDraft,
+                  companyName: event.target.value,
+                }))
+              }
+              placeholder="OpenAI"
+              type="text"
+              value={draft.companyName}
+            />
+          </label>
+
+          <label className="flex min-h-0 flex-col rounded-[1rem] border border-white/8 bg-white/5 p-3">
+            <span className="text-sm font-medium text-zinc-100">Applied</span>
+            <input
+              className={fieldClassName()}
+              disabled={isFormLocked}
+              onChange={(event) =>
+                setDraft((currentDraft) => ({
+                  ...currentDraft,
+                  appliedAt: event.target.value,
+                }))
+              }
+              type="date"
+              value={draft.appliedAt}
+            />
+          </label>
+
+          <label className="flex min-h-0 flex-col rounded-[1rem] border border-white/8 bg-white/5 p-3">
+            <span className="text-sm font-medium text-zinc-100">Referral</span>
+            <div className="mt-2 flex h-[42px] items-center rounded-[1rem] border border-white/10 bg-zinc-950/70 px-3">
+              <input
+                checked={draft.hasReferral}
+                className="h-4 w-4 accent-emerald-300"
+                disabled={isFormLocked}
+                id="hasReferral"
+                onChange={(event) =>
+                  setDraft((currentDraft) => ({
+                    ...currentDraft,
+                    hasReferral: event.target.checked,
+                  }))
+                }
+                type="checkbox"
+              />
+              <label className="ml-3 text-sm text-zinc-300" htmlFor="hasReferral">
+                Referred
+              </label>
+            </div>
+          </label>
+
+          <div className="flex min-h-0 flex-col rounded-[1rem] border border-white/8 bg-white/5 p-3 sm:col-span-2">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm font-medium text-zinc-100">Description</span>
+              <span className="text-xs uppercase tracking-[0.2em] text-zinc-500">
+                {latestModel}
+              </span>
+            </div>
+            <textarea
+              className={`${fieldClassName()} min-h-0 flex-1 resize-none`}
+              disabled={isFormLocked}
+              onChange={(event) =>
+                setDraft((currentDraft) => ({
+                  ...currentDraft,
+                  jobDescription: event.target.value,
+                }))
+              }
+              placeholder="Optional notes from the screenshot."
+              value={draft.jobDescription}
+            />
+          </div>
+
+          <div className="flex min-h-0 flex-col justify-center gap-3 sm:col-span-2 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-zinc-400">
+              Save when title and company look correct.
+            </p>
+            <div className="flex gap-3">
+              <button
+                className="rounded-full border border-white/10 bg-transparent px-4 py-2.5 text-sm font-medium text-zinc-300 transition hover:border-white/20 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isFormLocked || draftUploads.length === 0}
+                onClick={resetDraft}
+                type="button"
+              >
+                Reset
+              </button>
+              <button
+                className="inline-flex items-center justify-center rounded-full border border-emerald-400/25 bg-emerald-400/10 px-4 py-2.5 text-sm font-medium text-emerald-200 transition hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={saveDisabled}
+                type="submit"
+              >
+                {isSaving
+                  ? "Saving..."
+                  : extractingCount > 0
+                    ? "Extracting..."
+                    : "Save"}
+              </button>
+            </div>
           </div>
         </div>
-
-        <label className="rounded-[1.25rem] border border-white/8 bg-white/5 p-4 sm:col-span-2">
-          <span className="text-sm font-medium text-zinc-100">
-            Job description
-          </span>
-          <textarea
-            className={`${fieldClassName()} min-h-40 resize-y`}
-            disabled={disabled || isSaving}
-            onChange={(event) =>
-              setDraft((currentDraft) => ({
-                ...currentDraft,
-                jobDescription: event.target.value,
-              }))
-            }
-            placeholder="Longer job description text will accumulate here when later screenshots reveal more detail."
-            value={draft.jobDescription}
-          />
-        </label>
       </div>
 
       {disabled ? (
-        <div className="rounded-[1.5rem] border border-amber-400/25 bg-amber-400/10 p-4 text-sm leading-7 text-amber-100">
+        <div className="rounded-[1.25rem] border border-amber-400/25 bg-amber-400/10 p-4 text-sm text-amber-100">
           {disabledMessage}
         </div>
       ) : null}
-
-      <div className="flex flex-col gap-3 rounded-[1.5rem] border border-white/8 bg-black/20 p-5 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="text-sm leading-7 text-zinc-300">
-            Extraction runs immediately after each upload. The draft does not hit the
-            database until you save it.
-          </p>
-          <p className="text-sm leading-7 text-zinc-500">
-            Latest extraction model: {latestModel}. The newest screenshot becomes the
-            application thumbnail after save.
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-3 sm:flex-row">
-          <button
-            className="rounded-full border border-white/10 bg-transparent px-5 py-3 text-sm font-medium text-zinc-300 transition hover:border-white/20 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={isSaving || draftUploads.length === 0}
-            onClick={resetDraft}
-            type="button"
-          >
-            Reset draft
-          </button>
-          <button
-            className="inline-flex items-center justify-center rounded-full border border-emerald-400/25 bg-emerald-400/10 px-5 py-3 text-sm font-medium text-emerald-200 transition hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={saveDisabled}
-            type="submit"
-          >
-            {isSaving
-              ? "Saving..."
-              : extractingCount > 0
-                ? `Extracting ${extractingCount} screenshot${extractingCount === 1 ? "" : "s"}...`
-                : "Save application"}
-          </button>
-        </div>
-      </div>
     </form>
   );
 }

@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 import SignInButton from "@/components/sign-in-button";
@@ -28,60 +27,55 @@ export default async function Home({ searchParams }: HomePageProps) {
   }
 
   return (
-    <main className="min-h-screen px-6 py-10 text-zinc-100 sm:px-10 lg:px-14">
-      <div className="mx-auto flex min-h-[calc(100vh-5rem)] w-full max-w-3xl flex-col justify-center">
-        <section className="glass-panel soft-ring rounded-[2rem] p-8 sm:p-10">
-          <div className="flex items-center justify-between gap-4 border-b border-white/8 pb-6">
-            <div>
-              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+    <main className="h-[100vh] overflow-hidden px-[5vw] py-[4vh] text-zinc-100">
+      <div className="mx-auto flex h-full w-full max-w-6xl items-center justify-center">
+        <section className="glass-panel soft-ring flex h-full max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-[1.75rem] p-[clamp(1.25rem,2vw,2rem)]">
+          <div className="flex h-[12%] min-h-0 items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-[0.68rem] uppercase tracking-[0.28em] text-zinc-500">
                 Job Helper
               </p>
-              <h1 className="mt-2 text-3xl font-semibold text-zinc-50 sm:text-4xl">
+              <h1 className="mt-[1.2vh] max-w-xl text-[clamp(2rem,4.6vw,3.75rem)] leading-[0.94] font-semibold text-zinc-50">
                 Track applications from screenshots
               </h1>
             </div>
-            <span className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.24em] text-zinc-400">
-              Google sign-in
+            <span className="shrink-0 rounded-full border border-white/10 px-3 py-1 text-[0.68rem] uppercase tracking-[0.24em] text-zinc-400">
+              Google
             </span>
           </div>
 
-          <p className="mt-6 max-w-2xl text-sm leading-7 text-zinc-300 sm:text-base">
-            Sign in to upload a job screenshot, extract the role details, and keep
-            the latest applications in one place.
-          </p>
-
-          <div className="mt-6 grid gap-3 text-sm text-zinc-300 sm:grid-cols-2">
-            <div className="rounded-[1.25rem] border border-white/8 bg-black/20 p-4">
-              Saves the screenshot and structured application record.
-            </div>
-            <div className="rounded-[1.25rem] border border-white/8 bg-black/20 p-4">
-              Uses Google OAuth and sends signed-in users to the dashboard.
-            </div>
+          <div className="flex h-[18%] min-h-0 items-center">
+            <p className="max-w-2xl text-[clamp(0.95rem,1.7vw,1.05rem)] leading-relaxed text-zinc-300">
+            Sign in, upload a screenshot, review the extracted fields, and save the application.
+            </p>
           </div>
 
-          <div className="mt-6 rounded-[1.25rem] border border-white/8 bg-black/20 p-4 text-sm text-zinc-300">
-            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+          <div className="flex h-[20%] min-h-0 items-stretch">
+            <div className="flex w-full flex-col justify-center rounded-[1rem] border border-white/8 bg-black/20 px-4 py-3 text-sm text-zinc-300">
+              <p className="text-[0.68rem] uppercase tracking-[0.24em] text-zinc-500">
               Callback URL
-            </p>
-            <p className="mt-2 break-all font-medium text-zinc-100">
+              </p>
+              <p className="mt-2 break-all text-[clamp(0.82rem,1.45vw,0.95rem)] font-medium text-zinc-100">
               http://localhost:3000/api/auth/callback/google
-            </p>
+              </p>
+            </div>
           </div>
 
-          {authError ? (
-            <div className="mt-6 rounded-[1.25rem] border border-amber-400/25 bg-amber-400/10 p-4 text-sm leading-7 text-amber-100">
-              {errorMessages[authError] ??
-                `Authentication failed with error code: ${authError}.`}
-            </div>
-          ) : null}
+          <div className="flex h-[22%] min-h-0 items-center">
+            {authError ? (
+              <div className="w-full rounded-[1rem] border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-[clamp(0.82rem,1.35vw,0.92rem)] leading-relaxed text-amber-100">
+                {errorMessages[authError] ??
+                  `Authentication failed with error code: ${authError}.`}
+              </div>
+            ) : (
+              <div className="w-full rounded-[1rem] border border-white/8 bg-white/[0.03] px-4 py-3 text-[clamp(0.82rem,1.35vw,0.92rem)] leading-relaxed text-zinc-400">
+                Designed to keep the first action visible immediately: authenticate, land in the dashboard, and start logging applications without scrolling.
+              </div>
+            )}
+          </div>
 
-          <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-sm text-zinc-500">
-              <Link className="text-zinc-300 transition hover:text-zinc-50" href="/dashboard">
-                Dashboard opens after sign-in
-              </Link>
-            </div>
-            <div className="w-full sm:w-auto sm:min-w-64">
+          <div className="flex h-[16%] min-h-0 items-end">
+            <div className="w-full sm:max-w-72">
               <SignInButton />
             </div>
           </div>
