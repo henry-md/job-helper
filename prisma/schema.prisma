@@ -14,7 +14,10 @@ model User {
   emailVerified DateTime?
   image         String?
   accounts      Account[]
+  applications  JobApplication[]
+  companies     Company[]
   sessions      Session[]
+  screenshots   JobApplicationScreenshot[]
 }
 
 model Account {
@@ -62,18 +65,68 @@ enum ApplicationStatus {
   WITHDRAWN
 }
 
-model JobApplication {
-  id        String            @id @default(cuid())
-  company   String
-  title     String
-  status    ApplicationStatus @default(SAVED)
-  location  String?
-  jobUrl    String?
-  notes     String?
-  appliedAt DateTime?
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
+enum ExtractionStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+}
 
+model Company {
+  id             String           @id @default(cuid())
+  userId         String
+  name           String
+  normalizedName String
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  applications   JobApplication[]
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, normalizedName])
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model JobApplicationScreenshot {
+  id               String           @id @default(cuid())
+  userId           String
+  originalFilename String
+  storagePath      String
+  mimeType         String
+  sizeBytes        Int
+  extractionStatus ExtractionStatus @default(PENDING)
+  extractionModel  String?
+  extractionError  String?
+  extractedPayload Json?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  application      JobApplication?
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([extractionStatus])
+}
+
+model JobApplication {
+  id               String                   @id @default(cuid())
+  userId           String
+  companyId        String
+  sourceScreenshotId String?               @unique
+  title            String
+  status           ApplicationStatus       @default(APPLIED)
+  location         String?
+  jobUrl           String?
+  notes            String?
+  hasReferral      Boolean                  @default(false)
+  jobDescription   String?
+  appliedAt        DateTime
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  company          Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sourceScreenshot JobApplicationScreenshot? @relation(fields: [sourceScreenshotId], references: [id], onDelete: SetNull)
+  user             User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([companyId, createdAt(sort: Desc)])
   @@index([status])
-  @@index([createdAt(sort: Desc)])
 }
