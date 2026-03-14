@@ -2,7 +2,12 @@ import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/auth";
 import { getPrismaClient } from "@/lib/prisma";
-import type { JobApplicationExtraction } from "@/lib/job-application-types";
+import type {
+  ApplicationStatusValue,
+  EmploymentTypeValue,
+  JobApplicationExtraction,
+  JobLocationType,
+} from "@/lib/job-application-types";
 import {
   assertSupportedImageFile,
   normalizeCompanyName,
@@ -16,6 +21,26 @@ type DraftUploadSnapshot = {
   model: string | null;
   status: "extracting" | "failed" | "ready";
 };
+
+const allowedLocationTypes = new Set<JobLocationType>([
+  "remote",
+  "onsite",
+  "hybrid",
+]);
+const allowedApplicationStatuses = new Set<ApplicationStatusValue>([
+  "SAVED",
+  "APPLIED",
+  "INTERVIEW",
+  "OFFER",
+  "REJECTED",
+  "WITHDRAWN",
+]);
+const allowedEmploymentTypes = new Set<EmploymentTypeValue>([
+  "full_time",
+  "part_time",
+  "contract",
+  "internship",
+]);
 
 function parseDraftUploadSnapshots(rawValue: FormDataEntryValue | null) {
   if (typeof rawValue !== "string" || rawValue.trim().length === 0) {
@@ -90,6 +115,15 @@ export async function POST(request: Request) {
   const appliedAt = formData.get("appliedAt");
   const jobDescription = formData.get("jobDescription");
   const hasReferral = formData.get("hasReferral");
+  const location = formData.get("location");
+  const onsiteDaysPerWeek = formData.get("onsiteDaysPerWeek");
+  const jobUrl = formData.get("jobUrl");
+  const salaryRange = formData.get("salaryRange");
+  const employmentType = formData.get("employmentType");
+  const teamOrDepartment = formData.get("teamOrDepartment");
+  const recruiterContact = formData.get("recruiterContact");
+  const notes = formData.get("notes");
+  const status = formData.get("status");
 
   if (typeof jobTitle !== "string" || jobTitle.trim().length === 0) {
     return NextResponse.json(
@@ -112,6 +146,106 @@ export async function POST(request: Request) {
   ) {
     return NextResponse.json(
       { error: "Use YYYY-MM-DD for the applied date." },
+      { status: 400 },
+    );
+  }
+
+  const normalizedLocation =
+    typeof location === "string" && location.trim().length > 0
+      ? location.trim().toLowerCase()
+      : null;
+
+  if (
+    normalizedLocation !== null &&
+    !allowedLocationTypes.has(normalizedLocation as JobLocationType)
+  ) {
+    return NextResponse.json(
+      { error: "Location must be remote, onsite, or hybrid." },
+      { status: 400 },
+    );
+  }
+
+  const normalizedOnsiteDaysPerWeek =
+    typeof onsiteDaysPerWeek === "string" && onsiteDaysPerWeek.trim().length > 0
+      ? Number.parseInt(onsiteDaysPerWeek.trim(), 10)
+      : null;
+
+  if (
+    normalizedOnsiteDaysPerWeek !== null &&
+    (!Number.isInteger(normalizedOnsiteDaysPerWeek) ||
+      normalizedOnsiteDaysPerWeek < 1 ||
+      normalizedOnsiteDaysPerWeek > 7)
+  ) {
+    return NextResponse.json(
+      { error: "Onsite days per week must be a whole number between 1 and 7." },
+      { status: 400 },
+    );
+  }
+
+  const persistedOnsiteDaysPerWeek =
+    normalizedLocation === "onsite" || normalizedLocation === "hybrid"
+      ? normalizedOnsiteDaysPerWeek
+      : null;
+
+  const normalizedJobUrl =
+    typeof jobUrl === "string" && jobUrl.trim().length > 0
+      ? jobUrl.trim()
+      : null;
+
+  if (normalizedJobUrl !== null) {
+    try {
+      const parsedUrl = new URL(normalizedJobUrl);
+
+      if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+        throw new Error("Unsupported protocol.");
+      }
+    } catch {
+      return NextResponse.json(
+        { error: "Job URL must be a valid http or https URL." },
+        { status: 400 },
+      );
+    }
+  }
+
+  const normalizedSalaryRange =
+    typeof salaryRange === "string" && salaryRange.trim().length > 0
+      ? salaryRange.trim()
+      : null;
+  const normalizedTeamOrDepartment =
+    typeof teamOrDepartment === "string" && teamOrDepartment.trim().length > 0
+      ? teamOrDepartment.trim()
+      : null;
+  const normalizedRecruiterContact =
+    typeof recruiterContact === "string" && recruiterContact.trim().length > 0
+      ? recruiterContact.trim()
+      : null;
+  const normalizedNotes =
+    typeof notes === "string" && notes.trim().length > 0
+      ? notes.trim()
+      : null;
+  const normalizedStatus =
+    typeof status === "string" && status.trim().length > 0
+      ? status.trim().toUpperCase()
+      : "APPLIED";
+
+  if (!allowedApplicationStatuses.has(normalizedStatus as ApplicationStatusValue)) {
+    return NextResponse.json(
+      { error: "Status must be one of the supported application states." },
+      { status: 400 },
+    );
+  }
+
+  const normalizedEmploymentType =
+    typeof employmentType === "string" && employmentType.trim().length > 0
+      ? employmentType.trim().toLowerCase()
+      : null;
+
+  if (
+    normalizedEmploymentType !== null &&
+    !allowedEmploymentTypes.has(normalizedEmploymentType as EmploymentTypeValue)
+  ) {
+    return NextResponse.json(
+      { error: "Employment type must be full_time, part_time, contract, or internship." },
       { status: 400 },
     );
   }
@@ -183,6 +317,15 @@ export async function POST(request: Request) {
         companyId: company.id,
         sourceScreenshotId,
         title: jobTitle.trim(),
+        status: normalizedStatus as ApplicationStatusValue,
+        location: normalizedLocation,
+        onsiteDaysPerWeek: persistedOnsiteDaysPerWeek,
+        jobUrl: normalizedJobUrl,
+        salaryRange: normalizedSalaryRange,
+        employmentType: normalizedEmploymentType,
+        teamOrDepartment: normalizedTeamOrDepartment,
+        recruiterContact: normalizedRecruiterContact,
+        notes: normalizedNotes,
         hasReferral: hasReferral === "true",
         jobDescription:
           typeof jobDescription === "string" && jobDescription.trim().length > 0
@@ -191,7 +334,6 @@ export async function POST(request: Request) {
         appliedAt: resolveAppliedAt(
           typeof appliedAt === "string" ? appliedAt.trim() : null,
         ),
-        status: "APPLIED",
       },
       include: {
         company: true,

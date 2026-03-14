@@ -114,7 +114,12 @@ model JobApplication {
   title            String
   status           ApplicationStatus       @default(APPLIED)
   location         String?
+  onsiteDaysPerWeek Int?
   jobUrl           String?
+  salaryRange      String?
+  employmentType   String?
+  teamOrDepartment String?
+  recruiterContact String?
   notes            String?
   hasReferral      Boolean                  @default(false)
   jobDescription   String?
