@@ -11,6 +11,7 @@ App patterns:
 - Prefer server components/pages for session checks and initial Prisma reads.
 - Keep interactive upload/form logic in client components; the current intake flow already does this.
 - Reuse `lib/job-application-types.ts` for extraction/draft shapes instead of redefining them.
+- Do not put developer setup/configuration instructions in the product UI. Keep user-facing copy product-focused; if setup context matters, tell the developer separately or add a short note to `notes.md`.
 
 Uploads and extraction:
 - Keep screenshot validation rules aligned between client and server: PNG/JPG/WebP only, max 8 MB.

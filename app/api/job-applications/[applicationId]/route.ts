@@ -7,7 +7,11 @@ import type {
   EmploymentTypeValue,
   JobLocationType,
 } from "@/lib/job-application-types";
-import { normalizeCompanyName, resolveAppliedAt } from "@/lib/job-tracking";
+import {
+  normalizeCompanyName,
+  normalizeSalaryRange,
+  resolveAppliedAt,
+} from "@/lib/job-tracking";
 
 const allowedLocationTypes = new Set<JobLocationType>([
   "remote",
@@ -50,7 +54,8 @@ export async function PATCH(
     typeof body.appliedAt === "string" ? body.appliedAt.trim() : "";
   const jobDescription =
     typeof body.jobDescription === "string" ? body.jobDescription.trim() : null;
-  const hasReferral = Boolean(body.hasReferral);
+  const referrerId =
+    typeof body.referrerId === "string" ? body.referrerId.trim() : "";
   const jobUrl = typeof body.jobUrl === "string" ? body.jobUrl.trim() : null;
   const location =
     typeof body.location === "string" ? body.location.trim().toLowerCase() : "";
@@ -146,6 +151,7 @@ export async function PATCH(
   }
 
   const normalizedStatus = status || "APPLIED";
+  const normalizedSalary = normalizeSalaryRange(salaryRange);
 
   if (!allowedApplicationStatuses.has(normalizedStatus as ApplicationStatusValue)) {
     return NextResponse.json(
@@ -169,6 +175,27 @@ export async function PATCH(
   const prisma = getPrismaClient();
 
   try {
+    const normalizedReferrerId = referrerId || null;
+
+    let referrerRecord: { id: string; recruiterContact: string | null } | null = null;
+
+    if (normalizedReferrerId) {
+      referrerRecord = await prisma.person.findFirst({
+        where: {
+          id: normalizedReferrerId,
+          userId: session.user.id,
+        },
+        select: { id: true, recruiterContact: true },
+      });
+
+      if (!referrerRecord) {
+        return NextResponse.json(
+          { error: "Selected referrer was not found." },
+          { status: 400 },
+        );
+      }
+    }
+
     const existingApplication = await prisma.jobApplication.findFirst({
       where: {
         id: applicationId,
@@ -205,18 +232,26 @@ export async function PATCH(
         status: normalizedStatus as ApplicationStatusValue,
         location: normalizedLocation,
         onsiteDaysPerWeek: persistedOnsiteDaysPerWeek,
+        referrerId: referrerRecord?.id ?? null,
         jobUrl: jobUrl || null,
-        salaryRange: salaryRange || null,
+        salaryRange: normalizedSalary.text,
+        salaryMinimum: normalizedSalary.minimum,
+        salaryMaximum: normalizedSalary.maximum,
         employmentType: normalizedEmploymentType,
         teamOrDepartment: teamOrDepartment || null,
-        recruiterContact: recruiterContact || null,
+        recruiterContact: (referrerRecord?.recruiterContact ?? recruiterContact) || null,
         notes: notes || null,
-        hasReferral,
+        hasReferral: Boolean(referrerRecord),
         jobDescription: jobDescription || null,
         appliedAt: resolveAppliedAt(appliedAt || null),
       },
       include: {
         company: true,
+        referrer: {
+          include: {
+            company: true,
+          },
+        },
       },
     });
 

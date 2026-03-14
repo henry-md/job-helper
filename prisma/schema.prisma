@@ -16,6 +16,7 @@ model User {
   accounts      Account[]
   applications  JobApplication[]
   companies     Company[]
+  people        Person[]
   sessions      Session[]
   screenshots   JobApplicationScreenshot[]
 }
@@ -80,10 +81,29 @@ model Company {
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
   applications   JobApplication[]
+  people         Person[]
   user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, normalizedName])
   @@index([userId, createdAt(sort: Desc)])
+}
+
+model Person {
+  id             String           @id @default(cuid())
+  userId         String
+  companyId      String?
+  name           String
+  normalizedName String
+  recruiterContact String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  company        Company?         @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  referredApplications JobApplication[] @relation("JobApplicationReferrer")
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, normalizedName])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([companyId])
 }
 
 model JobApplicationScreenshot {
@@ -110,6 +130,7 @@ model JobApplication {
   id               String                   @id @default(cuid())
   userId           String
   companyId        String
+  referrerId       String?
   sourceScreenshotId String?               @unique
   title            String
   status           ApplicationStatus       @default(APPLIED)
@@ -117,6 +138,8 @@ model JobApplication {
   onsiteDaysPerWeek Int?
   jobUrl           String?
   salaryRange      String?
+  salaryMinimum    Int?
+  salaryMaximum    Int?
   employmentType   String?
   teamOrDepartment String?
   recruiterContact String?
@@ -127,6 +150,7 @@ model JobApplication {
   createdAt        DateTime                 @default(now())
   updatedAt        DateTime                 @updatedAt
   company          Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  referrer         Person?                  @relation("JobApplicationReferrer", fields: [referrerId], references: [id], onDelete: SetNull)
   sourceScreenshot JobApplicationScreenshot? @relation(fields: [sourceScreenshotId], references: [id], onDelete: SetNull)
   user             User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -134,4 +158,5 @@ model JobApplication {
   @@index([userId, createdAt(sort: Desc)])
   @@index([companyId, createdAt(sort: Desc)])
   @@index([status])
+  @@index([referrerId])
 }

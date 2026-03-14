@@ -13,7 +13,6 @@ const extractionSchema = {
   properties: {
     jobTitle: { type: ["string", "null"] },
     companyName: { type: ["string", "null"] },
-    hasReferral: { type: "boolean" },
     appliedAt: {
       type: ["string", "null"],
       description:
@@ -67,6 +66,11 @@ const extractionSchema = {
       description:
         "Optional extra visible notes worth preserving that do not fit the other fields. Use null when not present.",
     },
+    referrerName: {
+      type: ["string", "null"],
+      description:
+        "Name of the person explicitly shown as the referrer. Use null when no referrer person is visible.",
+    },
     onsiteDaysPerWeek: {
       type: ["integer", "null"],
       description:
@@ -80,13 +84,13 @@ const extractionSchema = {
       properties: {
         jobTitle: { type: "number" },
         companyName: { type: "number" },
-        hasReferral: { type: "number" },
         appliedAt: { type: "number" },
         jobDescription: { type: "number" },
         jobUrl: { type: "number" },
         location: { type: "number" },
         notes: { type: "number" },
         onsiteDaysPerWeek: { type: "number" },
+        referrerName: { type: "number" },
         recruiterContact: { type: "number" },
         salaryRange: { type: "number" },
         status: { type: "number" },
@@ -96,13 +100,13 @@ const extractionSchema = {
       required: [
         "jobTitle",
         "companyName",
-        "hasReferral",
         "appliedAt",
         "jobDescription",
         "jobUrl",
         "location",
         "notes",
         "onsiteDaysPerWeek",
+        "referrerName",
         "recruiterContact",
         "salaryRange",
         "status",
@@ -116,13 +120,13 @@ const extractionSchema = {
       properties: {
         jobTitle: { type: ["string", "null"] },
         companyName: { type: ["string", "null"] },
-        hasReferral: { type: ["string", "null"] },
         appliedAt: { type: ["string", "null"] },
         jobDescription: { type: ["string", "null"] },
         jobUrl: { type: ["string", "null"] },
         location: { type: ["string", "null"] },
         notes: { type: ["string", "null"] },
         onsiteDaysPerWeek: { type: ["string", "null"] },
+        referrerName: { type: ["string", "null"] },
         recruiterContact: { type: ["string", "null"] },
         salaryRange: { type: ["string", "null"] },
         status: { type: ["string", "null"] },
@@ -132,13 +136,13 @@ const extractionSchema = {
       required: [
         "jobTitle",
         "companyName",
-        "hasReferral",
         "appliedAt",
         "jobDescription",
         "jobUrl",
         "location",
         "notes",
         "onsiteDaysPerWeek",
+        "referrerName",
         "recruiterContact",
         "salaryRange",
         "status",
@@ -150,13 +154,13 @@ const extractionSchema = {
   required: [
     "jobTitle",
     "companyName",
-    "hasReferral",
     "appliedAt",
     "jobDescription",
     "jobUrl",
     "location",
     "notes",
     "onsiteDaysPerWeek",
+    "referrerName",
     "recruiterContact",
     "salaryRange",
     "status",
@@ -194,14 +198,6 @@ function readStringOrNull(value: unknown) {
   throw new Error("Expected a string or null in the extraction payload.");
 }
 
-function readBoolean(value: unknown, field: string) {
-  if (typeof value !== "boolean") {
-    throw new Error(`Expected a boolean for ${field}.`);
-  }
-
-  return value;
-}
-
 function readConfidence(value: unknown) {
   if (!isRecord(value)) {
     throw new Error("Expected a confidence object in the extraction payload.");
@@ -210,13 +206,13 @@ function readConfidence(value: unknown) {
   const fields = [
     "jobTitle",
     "companyName",
-    "hasReferral",
     "appliedAt",
     "jobDescription",
     "jobUrl",
     "location",
     "notes",
     "onsiteDaysPerWeek",
+    "referrerName",
     "recruiterContact",
     "salaryRange",
     "status",
@@ -245,13 +241,13 @@ function readEvidence(value: unknown) {
   return {
     jobTitle: readStringOrNull(value.jobTitle),
     companyName: readStringOrNull(value.companyName),
-    hasReferral: readStringOrNull(value.hasReferral),
     appliedAt: readStringOrNull(value.appliedAt),
     jobDescription: readStringOrNull(value.jobDescription),
     jobUrl: readStringOrNull(value.jobUrl),
     location: readStringOrNull(value.location),
     notes: readStringOrNull(value.notes),
     onsiteDaysPerWeek: readStringOrNull(value.onsiteDaysPerWeek),
+    referrerName: readStringOrNull(value.referrerName),
     recruiterContact: readStringOrNull(value.recruiterContact),
     salaryRange: readStringOrNull(value.salaryRange),
     status: readStringOrNull(value.status),
@@ -342,7 +338,6 @@ function parseExtractionPayload(value: unknown): JobApplicationExtraction {
     companyName: readStringOrNull(value.companyName),
     confidence: readConfidence(value.confidence),
     evidence: readEvidence(value.evidence),
-    hasReferral: readBoolean(value.hasReferral, "hasReferral"),
     jobDescription: readStringOrNull(value.jobDescription),
     jobTitle: readStringOrNull(value.jobTitle),
     jobUrl: readStringOrNull(value.jobUrl),
@@ -350,6 +345,7 @@ function parseExtractionPayload(value: unknown): JobApplicationExtraction {
     notes: readStringOrNull(value.notes),
     onsiteDaysPerWeek:
       location === "onsite" || location === "hybrid" ? onsiteDaysPerWeek : null,
+    referrerName: readStringOrNull(value.referrerName),
     recruiterContact: readStringOrNull(value.recruiterContact),
     salaryRange: readStringOrNull(value.salaryRange),
     status: readStatus(value.status),
@@ -397,14 +393,14 @@ export async function extractJobApplicationFromScreenshot(input: {
   const response = await client.responses.create({
     model,
     instructions:
-      "Extract job application details from a screenshot. Never invent values that are not visible. Return null for missing fields. Only mark hasReferral true when the screenshot explicitly indicates a referral, referred-by flow, or employee referral. Only use remote, onsite, or hybrid for location when that classification is clearly visible. Only use SAVED, APPLIED, INTERVIEW, OFFER, REJECTED, or WITHDRAWN for status when it is clearly visible. Only use full_time, part_time, contract, or internship for employmentType when it is clearly visible.",
+      "Extract job application details from a screenshot. Never invent values that are not visible. Return null for missing fields. Only return a referrerName when the screenshot explicitly names the referring person. Only use remote, onsite, or hybrid for location when that classification is clearly visible. Only use SAVED, APPLIED, INTERVIEW, OFFER, REJECTED, or WITHDRAWN for status when it is clearly visible. Only use full_time, part_time, contract, or internship for employmentType when it is clearly visible.",
     input: [
       {
         role: "user",
         content: [
           {
             type: "input_text",
-            text: `This image is a job-application screenshot named ${input.filename}. Extract the visible job title, company name, whether a referral is shown, the date applied if visible, an optional longer job description, a visible job URL, the work arrangement category if visible (remote, onsite, or hybrid), the number of onsite days per week if explicitly stated, any visible salary range, employment type, team or department, recruiter or contact, status, and optional extra visible notes that do not fit the other fields.`,
+            text: `This image is a job-application screenshot named ${input.filename}. Extract the visible job title, company name, the specific referrer name if visible, the date applied if visible, an optional longer job description, a visible job URL, the work arrangement category if visible (remote, onsite, or hybrid), the number of onsite days per week if explicitly stated, any visible salary range, employment type, team or department, recruiter or contact, status, and optional extra visible notes that do not fit the other fields.`,
           },
           {
             type: "input_image",

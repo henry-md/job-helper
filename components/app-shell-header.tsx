@@ -79,7 +79,6 @@ export default function AppShellHeader({
   applicationCount,
   companyCount,
   currentView,
-  openAIReady,
   pageLabel,
   userImage,
   userName,
@@ -87,7 +86,6 @@ export default function AppShellHeader({
   applicationCount: number;
   companyCount: number;
   currentView: "application-window" | "stats";
-  openAIReady: boolean;
   pageLabel: string;
   userImage: string | null | undefined;
   userName: string | null | undefined;
@@ -140,15 +138,6 @@ export default function AppShellHeader({
         </span>
         <span className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
           {companyCount} companies
-        </span>
-        <span
-          className={`rounded-full px-3 py-1 text-xs uppercase tracking-[0.2em] ${
-            openAIReady
-              ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
-              : "border border-amber-400/25 bg-amber-400/10 text-amber-200"
-          }`}
-        >
-          {openAIReady ? "Ready" : "Setup needed"}
         </span>
         <SignOutButton />
       </div>

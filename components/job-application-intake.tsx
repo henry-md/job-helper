@@ -13,12 +13,18 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import ApplicationWindow from "@/components/application-window";
-import type { JobApplicationDraft, JobApplicationExtraction } from "@/lib/job-application-types";
+import type {
+  CompanyOption,
+  JobApplicationDraft,
+  JobApplicationExtraction,
+  ReferrerOption,
+} from "@/lib/job-application-types";
 
 type JobApplicationIntakeProps = {
+  companyOptions: CompanyOption[];
   disabled?: boolean;
-  disabledMessage?: string;
   extractionModel: string;
+  referrerOptions: ReferrerOption[];
   statusMessage?: {
     text: string;
     tone: "error" | "success";
@@ -45,13 +51,14 @@ type BannerState = {
 const emptyDraft: JobApplicationDraft = {
   appliedAt: "",
   companyName: "",
-  hasReferral: false,
   jobDescription: "",
   jobTitle: "",
   jobUrl: "",
   location: "",
   notes: "",
   onsiteDaysPerWeek: "",
+  referrerId: "",
+  referrerName: "",
   recruiterContact: "",
   salaryRange: "",
   status: "APPLIED",
@@ -156,13 +163,13 @@ function mergeDraftWithExtraction(
   currentDraft: JobApplicationDraft,
   extraction: JobApplicationExtraction,
   fallbackAppliedAt: string,
+  matchingReferrer: ReferrerOption | null,
 ) {
   const extractedAppliedAt = extraction.appliedAt?.trim();
 
   return {
     jobTitle: mergeTextField(currentDraft.jobTitle, extraction.jobTitle),
     companyName: mergeTextField(currentDraft.companyName, extraction.companyName),
-    hasReferral: currentDraft.hasReferral || extraction.hasReferral,
     appliedAt:
       extractedAppliedAt ||
       currentDraft.appliedAt ||
@@ -174,8 +181,13 @@ function mergeDraftWithExtraction(
       extraction.onsiteDaysPerWeek !== null
         ? String(extraction.onsiteDaysPerWeek)
         : currentDraft.onsiteDaysPerWeek,
+    referrerId: matchingReferrer?.id ?? currentDraft.referrerId,
+    referrerName: mergeTextField(
+      matchingReferrer?.name ?? currentDraft.referrerName,
+      extraction.referrerName,
+    ),
     recruiterContact: mergeTextField(
-      currentDraft.recruiterContact,
+      matchingReferrer?.recruiterContact ?? currentDraft.recruiterContact,
       extraction.recruiterContact,
     ),
     salaryRange: mergeTextField(currentDraft.salaryRange, extraction.salaryRange),
@@ -202,9 +214,10 @@ function getLocalDateInputValue() {
 }
 
 export default function JobApplicationIntake({
+  companyOptions,
   disabled = false,
-  disabledMessage,
   extractionModel,
+  referrerOptions: initialReferrerOptions,
   statusMessage,
 }: JobApplicationIntakeProps) {
   const router = useRouter();
@@ -217,6 +230,7 @@ export default function JobApplicationIntake({
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [latestModel, setLatestModel] = useState(extractionModel);
+  const [referrerOptions, setReferrerOptions] = useState(initialReferrerOptions);
   const inputId = useId();
 
   const extractingCount = draftUploads.filter(
@@ -389,9 +403,21 @@ export default function JobApplicationIntake({
 
       const extraction = payload.extraction;
       const fallbackAppliedAt = getLocalDateInputValue();
+      const matchingReferrer = extraction.referrerName
+        ? referrerOptions.find(
+            (option) =>
+              option.name.trim().toLowerCase() ===
+              extraction.referrerName?.trim().toLowerCase(),
+          ) ?? null
+        : null;
 
       setDraft((currentDraft) =>
-        mergeDraftWithExtraction(currentDraft, extraction, fallbackAppliedAt),
+        mergeDraftWithExtraction(
+          currentDraft,
+          extraction,
+          fallbackAppliedAt,
+          matchingReferrer,
+        ),
       );
       setDraftUploads((currentUploads) =>
         currentUploads.map((upload) =>
@@ -439,7 +465,7 @@ export default function JobApplicationIntake({
 
     setIsSaving(true);
     setBanner({
-      text: "Saving the draft to Postgres...",
+      text: "Saving your application...",
       tone: "info",
     });
 
@@ -453,11 +479,11 @@ export default function JobApplicationIntake({
     formData.append("companyName", draft.companyName);
     formData.append("appliedAt", draft.appliedAt);
     formData.append("jobDescription", draft.jobDescription);
-    formData.append("hasReferral", String(draft.hasReferral));
     formData.append("jobUrl", draft.jobUrl);
     formData.append("location", draft.location);
     formData.append("notes", draft.notes);
     formData.append("onsiteDaysPerWeek", draft.onsiteDaysPerWeek);
+    formData.append("referrerId", draft.referrerId);
     formData.append("recruiterContact", draft.recruiterContact);
     formData.append("salaryRange", draft.salaryRange);
     formData.append("status", draft.status);
@@ -522,21 +548,9 @@ export default function JobApplicationIntake({
     setBanner(null);
   }
 
-  return (
-    <ApplicationWindow
-      draft={draft}
-      extractingCount={extractingCount}
-      isFormLocked={isFormLocked}
-      isMoreOpen={isMoreOpen}
-      isSaving={isSaving}
-      latestModel={latestModel}
-      onReset={resetDraft}
-      onSubmit={handleSubmit}
-      saveDisabled={saveDisabled}
-      setDraft={setDraft}
-      setIsMoreOpen={setIsMoreOpen}
-    >
-      {!hasUploadedScreenshot ? (
+  if (!hasUploadedScreenshot) {
+    return (
+      <div className="flex h-full min-h-0 flex-col gap-3">
         <div className="flex shrink-0 items-start justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">
@@ -553,8 +567,102 @@ export default function JobApplicationIntake({
             {extractionModel}
           </span>
         </div>
-      ) : null}
 
+        {statusMessage ? (
+          <div
+            className={`shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
+              statusMessage.tone === "success"
+                ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
+                : "border border-amber-400/25 bg-amber-400/10 text-amber-100"
+            }`}
+          >
+            {statusMessage.text}
+          </div>
+        ) : null}
+
+        {banner ? (
+          <div
+            className={`shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
+              banner.tone === "success"
+                ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
+                : banner.tone === "error"
+                  ? "border border-amber-400/25 bg-amber-400/10 text-amber-100"
+                  : "border border-white/10 bg-white/5 text-zinc-200"
+            }`}
+          >
+            {banner.text}
+          </div>
+        ) : null}
+
+        <div
+          className={[
+            "relative flex min-h-0 flex-1 flex-col justify-center overflow-hidden rounded-[1.5rem] border-2 border-dashed p-5 transition",
+            disabled
+              ? "border-white/10 bg-black/15 opacity-70"
+              : isDragging
+                ? "border-emerald-300 bg-emerald-300/10 shadow-[0_0_0_1px_rgba(110,231,183,0.3),0_28px_80px_rgba(16,185,129,0.18)]"
+                : "border-emerald-300/45 bg-[radial-gradient(circle_at_top,rgba(52,211,153,0.12),rgba(9,9,11,0.92)_40%,rgba(5,5,7,0.98)_100%)] shadow-[0_0_0_1px_rgba(16,185,129,0.14)]",
+          ].join(" ")}
+          onDragLeave={handleDragLeave}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+        >
+          <input
+            ref={fileInputRef}
+            accept="image/png,image/jpeg,image/webp"
+            className="sr-only"
+            disabled={isFormLocked}
+            id={inputId}
+            onChange={handleFileInputChange}
+            type="file"
+          />
+
+          <div className="mx-auto flex w-full max-w-2xl flex-col items-center text-center">
+            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+              Screenshot intake
+            </p>
+            <h3 className="mt-3 text-2xl font-semibold text-zinc-50">
+              Upload a screenshot to start
+            </h3>
+            <p className="mt-3 max-w-xl text-sm text-zinc-300">
+              Drag a screenshot anywhere into this area, paste it, or{" "}
+              <label
+                className={`cursor-pointer text-emerald-300 underline-offset-4 hover:underline ${
+                  isFormLocked ? "pointer-events-none opacity-60" : ""
+                }`}
+                htmlFor={inputId}
+              >
+                choose a file
+              </label>
+              . The editor appears after extraction finishes.
+            </p>
+            <p className="mt-4 text-sm text-zinc-400">PNG, JPG, WebP up to 8 MB</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <ApplicationWindow
+      companyOptions={companyOptions}
+      draft={draft}
+      extractingCount={extractingCount}
+      isFormLocked={isFormLocked}
+      isExtracting={isExtracting}
+      isMoreOpen={isMoreOpen}
+      isSaving={isSaving}
+      referrerOptions={referrerOptions}
+      latestModel={latestModel}
+      onReset={resetDraft}
+      onSubmit={handleSubmit}
+      panelClassName="flex h-full min-h-0 flex-col gap-3 overflow-auto rounded-[1.5rem] border-2 border-dashed border-emerald-300/45 bg-[radial-gradient(circle_at_top,rgba(52,211,153,0.12),rgba(9,9,11,0.92)_40%,rgba(5,5,7,0.98)_100%)] p-4 shadow-[0_0_0_1px_rgba(16,185,129,0.14)] sm:p-4"
+      processingLabel={processingLabel}
+      saveDisabled={saveDisabled}
+      setDraft={setDraft}
+      setIsMoreOpen={setIsMoreOpen}
+      setReferrerOptions={setReferrerOptions}
+    >
       {statusMessage ? (
         <div
           className={`shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
@@ -583,12 +691,12 @@ export default function JobApplicationIntake({
 
       <div
         className={[
-          "relative flex min-h-0 flex-1 flex-col gap-3 overflow-hidden rounded-[1.5rem] border-2 border-dashed p-4 transition sm:p-4",
+          "relative flex min-h-0 flex-col gap-3 overflow-hidden rounded-[1.25rem] border border-emerald-300/30 bg-black/20 p-4 transition",
           disabled
             ? "border-white/10 bg-black/15 opacity-70"
             : isDragging
               ? "border-emerald-300 bg-emerald-300/10 shadow-[0_0_0_1px_rgba(110,231,183,0.3),0_28px_80px_rgba(16,185,129,0.18)]"
-              : "border-emerald-300/45 bg-[radial-gradient(circle_at_top,rgba(52,211,153,0.12),rgba(9,9,11,0.92)_40%,rgba(5,5,7,0.98)_100%)] shadow-[0_0_0_1px_rgba(16,185,129,0.14)]",
+              : "shadow-[0_0_0_1px_rgba(16,185,129,0.08)]",
         ].join(" ")}
         onDragLeave={handleDragLeave}
         onDragOver={handleDragOver}
@@ -604,46 +712,14 @@ export default function JobApplicationIntake({
           type="file"
         />
 
-        {isExtracting ? (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-[1.5rem] bg-black/72 backdrop-blur-[2px]">
-            <div className="h-10 w-10 animate-spin rounded-full border-4 border-emerald-200/20 border-t-emerald-200" />
-            <p className="text-sm font-medium text-zinc-100">Extracting screenshot</p>
-            <p className="max-w-sm text-center text-sm text-zinc-400">
-              {processingLabel}
-            </p>
-          </div>
-        ) : null}
-
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
           <div>
-            {hasUploadedScreenshot ? (
-              <>
-                <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                  Application form
-                </p>
-                <p className="mt-1 text-sm text-zinc-300">
-                  Review the extracted draft, make corrections, and save.
-                </p>
-              </>
-            ) : (
-              <>
-                <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                  Screenshot intake
-                </p>
-                <p className="mt-1 text-sm text-zinc-300">
-                  Drag a screenshot anywhere into this section, paste it, or{" "}
-                  <label
-                    className={`cursor-pointer text-emerald-300 underline-offset-4 hover:underline ${
-                      isFormLocked ? "pointer-events-none opacity-60" : ""
-                    }`}
-                    htmlFor={inputId}
-                  >
-                    choose a file
-                  </label>
-                  .
-                </p>
-              </>
-            )}
+            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+              Screenshot intake
+            </p>
+            <p className="mt-1 text-sm text-zinc-300">
+              Review the extracted draft, make corrections, and save.
+            </p>
           </div>
           <div className="text-right text-sm text-zinc-400">
             <p className="truncate font-medium text-zinc-100">
@@ -657,12 +733,6 @@ export default function JobApplicationIntake({
           </div>
         </div>
       </div>
-
-      {disabled ? (
-        <div className="rounded-[1.25rem] border border-amber-400/25 bg-amber-400/10 p-4 text-sm text-amber-100">
-          {disabledMessage}
-        </div>
-      ) : null}
     </ApplicationWindow>
   );
 }

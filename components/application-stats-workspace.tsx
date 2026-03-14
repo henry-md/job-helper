@@ -4,8 +4,10 @@ import { type FormEvent, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import ApplicationWindow from "@/components/application-window";
 import type {
+  CompanyOption,
   JobApplicationDraft,
   JobApplicationRecord,
+  ReferrerOption,
 } from "@/lib/job-application-types";
 
 function formatDate(value: string) {
@@ -18,13 +20,14 @@ function toDraft(application: JobApplicationRecord): JobApplicationDraft {
   return {
     appliedAt: application.appliedAt,
     companyName: application.companyName,
-    hasReferral: application.hasReferral,
     jobDescription: application.jobDescription,
     jobTitle: application.jobTitle,
     jobUrl: application.jobUrl,
     location: application.location,
     notes: application.notes,
     onsiteDaysPerWeek: application.onsiteDaysPerWeek,
+    referrerId: application.referrerId,
+    referrerName: application.referrerName,
     recruiterContact: application.recruiterContact,
     salaryRange: application.salaryRange,
     status: application.status,
@@ -54,9 +57,13 @@ function matchesSearch(application: JobApplicationRecord, query: string) {
 }
 
 export default function ApplicationStatsWorkspace({
+  companyOptions,
   applications: initialApplications,
+  referrerOptions: initialReferrerOptions,
 }: {
+  companyOptions: CompanyOption[];
   applications: JobApplicationRecord[];
+  referrerOptions: ReferrerOption[];
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -68,13 +75,14 @@ export default function ApplicationStatsWorkspace({
       : {
           appliedAt: "",
           companyName: "",
-          hasReferral: false,
           jobDescription: "",
           jobTitle: "",
           jobUrl: "",
           location: "",
           notes: "",
           onsiteDaysPerWeek: "",
+          referrerId: "",
+          referrerName: "",
           recruiterContact: "",
           salaryRange: "",
           status: "APPLIED",
@@ -84,6 +92,7 @@ export default function ApplicationStatsWorkspace({
   );
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [referrerOptions, setReferrerOptions] = useState(initialReferrerOptions);
   const [searchQuery, setSearchQuery] = useState("");
   const [banner, setBanner] = useState<{
     text: string;
@@ -98,7 +107,7 @@ export default function ApplicationStatsWorkspace({
   const activePipelineCount = applications.filter((application) =>
     ["APPLIED", "INTERVIEW", "OFFER"].includes(application.status),
   ).length;
-  const referredCount = applications.filter((application) => application.hasReferral).length;
+  const referredCount = applications.filter((application) => application.referrerId).length;
   const flexibleCount = applications.filter((application) =>
     application.location === "remote" || application.location === "hybrid",
   ).length;
@@ -149,7 +158,11 @@ export default function ApplicationStatsWorkspace({
           teamOrDepartment: string | null;
           recruiterContact: string | null;
           notes: string | null;
-          hasReferral: boolean;
+          referrer: {
+            id: string;
+            name: string;
+            company: { id: string; name: string } | null;
+          } | null;
           jobDescription: string | null;
           appliedAt: string;
           createdAt: string;
@@ -167,7 +180,6 @@ export default function ApplicationStatsWorkspace({
         appliedAt: payload.application.appliedAt.slice(0, 10),
         companyName: payload.application.company.name,
         createdAt: payload.application.createdAt,
-        hasReferral: payload.application.hasReferral,
         id: payload.application.id,
         jobDescription: payload.application.jobDescription ?? "",
         jobTitle: payload.application.title,
@@ -178,6 +190,8 @@ export default function ApplicationStatsWorkspace({
           payload.application.onsiteDaysPerWeek !== null
             ? String(payload.application.onsiteDaysPerWeek)
             : "",
+        referrerId: payload.application.referrer?.id ?? "",
+        referrerName: payload.application.referrer?.name ?? "",
         recruiterContact: payload.application.recruiterContact ?? "",
         salaryRange: payload.application.salaryRange ?? "",
         status: payload.application.status as JobApplicationRecord["status"],
@@ -374,6 +388,7 @@ export default function ApplicationStatsWorkspace({
             ) : null}
 
             <ApplicationWindow
+              companyOptions={companyOptions}
               draft={draft}
               footerMessage="Edit the application, then save changes."
               isFormLocked={isSaving}
@@ -381,6 +396,7 @@ export default function ApplicationStatsWorkspace({
               isSaving={isSaving}
               onReset={resetSelectedDraft}
               onSubmit={handleSubmit}
+              referrerOptions={referrerOptions}
               saveDisabled={
                 isSaving ||
                 draft.jobTitle.trim().length === 0 ||
@@ -388,6 +404,7 @@ export default function ApplicationStatsWorkspace({
               }
               setDraft={setDraft}
               setIsMoreOpen={setIsMoreOpen}
+              setReferrerOptions={setReferrerOptions}
             />
           </>
         )}

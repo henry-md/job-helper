@@ -10,6 +10,7 @@ import type {
 } from "@/lib/job-application-types";
 import {
   assertSupportedImageFile,
+  normalizeSalaryRange,
   normalizeCompanyName,
   persistJobScreenshot,
   resolveAppliedAt,
@@ -114,9 +115,9 @@ export async function POST(request: Request) {
   const companyName = formData.get("companyName");
   const appliedAt = formData.get("appliedAt");
   const jobDescription = formData.get("jobDescription");
-  const hasReferral = formData.get("hasReferral");
   const location = formData.get("location");
   const onsiteDaysPerWeek = formData.get("onsiteDaysPerWeek");
+  const referrerId = formData.get("referrerId");
   const jobUrl = formData.get("jobUrl");
   const salaryRange = formData.get("salaryRange");
   const employmentType = formData.get("employmentType");
@@ -207,10 +208,9 @@ export async function POST(request: Request) {
     }
   }
 
-  const normalizedSalaryRange =
-    typeof salaryRange === "string" && salaryRange.trim().length > 0
-      ? salaryRange.trim()
-      : null;
+  const normalizedSalary = normalizeSalaryRange(
+    typeof salaryRange === "string" ? salaryRange : null,
+  );
   const normalizedTeamOrDepartment =
     typeof teamOrDepartment === "string" && teamOrDepartment.trim().length > 0
       ? teamOrDepartment.trim()
@@ -254,6 +254,30 @@ export async function POST(request: Request) {
   const prisma = getPrismaClient();
 
   try {
+    const normalizedReferrerId =
+      typeof referrerId === "string" && referrerId.trim().length > 0
+        ? referrerId.trim()
+        : null;
+
+    let referrerRecord: { id: string; recruiterContact: string | null } | null = null;
+
+    if (normalizedReferrerId) {
+      referrerRecord = await prisma.person.findFirst({
+        where: {
+          id: normalizedReferrerId,
+          userId: session.user.id,
+        },
+        select: { id: true, recruiterContact: true },
+      });
+
+      if (!referrerRecord) {
+        return NextResponse.json(
+          { error: "Selected referrer was not found." },
+          { status: 400 },
+        );
+      }
+    }
+
     const persistedScreenshots = [];
 
     for (const [index, screenshotFile] of screenshotFiles.entries()) {
@@ -320,13 +344,16 @@ export async function POST(request: Request) {
         status: normalizedStatus as ApplicationStatusValue,
         location: normalizedLocation,
         onsiteDaysPerWeek: persistedOnsiteDaysPerWeek,
+        referrerId: referrerRecord?.id ?? null,
         jobUrl: normalizedJobUrl,
-        salaryRange: normalizedSalaryRange,
+        salaryRange: normalizedSalary.text,
+        salaryMinimum: normalizedSalary.minimum,
+        salaryMaximum: normalizedSalary.maximum,
         employmentType: normalizedEmploymentType,
         teamOrDepartment: normalizedTeamOrDepartment,
-        recruiterContact: normalizedRecruiterContact,
+        recruiterContact: referrerRecord?.recruiterContact ?? normalizedRecruiterContact,
         notes: normalizedNotes,
-        hasReferral: hasReferral === "true",
+        hasReferral: Boolean(referrerRecord),
         jobDescription:
           typeof jobDescription === "string" && jobDescription.trim().length > 0
             ? jobDescription.trim()

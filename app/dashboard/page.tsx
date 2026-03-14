@@ -4,6 +4,7 @@ import AppShellHeader from "@/components/app-shell-header";
 import JobApplicationIntake from "@/components/job-application-intake";
 import { authOptions } from "@/auth";
 import { getPrismaClient } from "@/lib/prisma";
+import type { CompanyOption, ReferrerOption } from "@/lib/job-application-types";
 
 type DashboardPageProps = {
   searchParams?: Promise<{
@@ -27,7 +28,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const databaseStatus = await (async () => {
     try {
       const prisma = getPrismaClient();
-      const [applicationCount, companyCount, applications] =
+      const [applicationCount, companyCount, applications, companies, people] =
         await Promise.all([
           prisma.jobApplication.count({
             where: { userId: session.user.id },
@@ -46,6 +47,16 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             },
             take: 8,
           }),
+          prisma.company.findMany({
+            where: { userId: session.user.id },
+            orderBy: { name: "asc" },
+            select: { id: true, name: true },
+          }),
+          prisma.person.findMany({
+            where: { userId: session.user.id },
+            include: { company: { select: { id: true, name: true } } },
+            orderBy: { name: "asc" },
+          }),
         ]);
 
       return {
@@ -57,6 +68,14 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         applicationCount,
         companyCount,
         applications,
+        companies: companies as CompanyOption[],
+        people: people.map((person) => ({
+          companyId: person.company?.id ?? null,
+          companyName: person.company?.name ?? null,
+          id: person.id,
+          name: person.name,
+          recruiterContact: person.recruiterContact ?? null,
+        })) as ReferrerOption[],
       };
     } catch (error) {
       return {
@@ -68,6 +87,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         applicationCount: 0,
         companyCount: 0,
         applications: [],
+        companies: [] as CompanyOption[],
+        people: [] as ReferrerOption[],
       };
     }
   })();
@@ -75,11 +96,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const openAIReady = Boolean(process.env.OPENAI_API_KEY);
   const extractionModel = process.env.OPENAI_JOB_EXTRACTION_MODEL ?? "gpt-5-mini";
   const uploadDisabled = !databaseStatus.ok || !openAIReady;
-  const uploadDisabledMessage = !databaseStatus.ok && !openAIReady
-    ? "Configure Postgres and set OPENAI_API_KEY before testing uploads."
-    : !databaseStatus.ok
-      ? "Connect Postgres before testing uploads."
-      : "Set OPENAI_API_KEY before testing uploads.";
 
   const statusMessage = params?.ingested
     ? {
@@ -100,7 +116,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           applicationCount={databaseStatus.applicationCount}
           companyCount={databaseStatus.companyCount}
           currentView="application-window"
-          openAIReady={databaseStatus.ok && openAIReady}
           pageLabel="Application window"
           userImage={session.user.image}
           userName={session.user.name}
@@ -109,9 +124,10 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         <section className="grid min-h-0 flex-1 gap-[clamp(0.75rem,1.2vh,1rem)] xl:grid-cols-[1.45fr_0.55fr]">
           <section className="glass-panel soft-ring flex min-h-0 flex-col rounded-[1.5rem] p-4 sm:p-5">
               <JobApplicationIntake
+                companyOptions={databaseStatus.companies}
                 disabled={uploadDisabled}
-                disabledMessage={uploadDisabled ? uploadDisabledMessage : undefined}
                 extractionModel={extractionModel}
+                referrerOptions={databaseStatus.people}
                 statusMessage={statusMessage}
               />
           </section>

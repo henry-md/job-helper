@@ -12,16 +12,29 @@ export type EmploymentTypeValue =
   | "contract"
   | "internship";
 
+export type ReferrerOption = {
+  companyId: string | null;
+  companyName: string | null;
+  id: string;
+  name: string;
+  recruiterContact: string | null;
+};
+
+export type CompanyOption = {
+  id: string;
+  name: string;
+};
+
 export type FieldConfidence = {
   appliedAt: number;
   companyName: number;
-  hasReferral: number;
   jobDescription: number;
   jobTitle: number;
   jobUrl: number;
   location: number;
   notes: number;
   onsiteDaysPerWeek: number;
+  referrerName: number;
   recruiterContact: number;
   salaryRange: number;
   status: number;
@@ -32,13 +45,13 @@ export type FieldConfidence = {
 export type FieldEvidence = {
   appliedAt: string | null;
   companyName: string | null;
-  hasReferral: string | null;
   jobDescription: string | null;
   jobTitle: string | null;
   jobUrl: string | null;
   location: string | null;
   notes: string | null;
   onsiteDaysPerWeek: string | null;
+  referrerName: string | null;
   recruiterContact: string | null;
   salaryRange: string | null;
   status: string | null;
@@ -51,13 +64,13 @@ export type JobApplicationExtraction = {
   companyName: string | null;
   confidence: FieldConfidence;
   evidence: FieldEvidence;
-  hasReferral: boolean;
   jobDescription: string | null;
   jobTitle: string | null;
   jobUrl: string | null;
   location: JobLocationType | null;
   notes: string | null;
   onsiteDaysPerWeek: number | null;
+  referrerName: string | null;
   recruiterContact: string | null;
   salaryRange: string | null;
   status: ApplicationStatusValue | null;
@@ -68,13 +81,14 @@ export type JobApplicationExtraction = {
 export type JobApplicationDraft = {
   appliedAt: string;
   companyName: string;
-  hasReferral: boolean;
   jobDescription: string;
   jobTitle: string;
   jobUrl: string;
   location: "" | JobLocationType;
   notes: string;
   onsiteDaysPerWeek: string;
+  referrerId: string;
+  referrerName: string;
   recruiterContact: string;
   salaryRange: string;
   status: "" | ApplicationStatusValue;
@@ -86,7 +100,6 @@ export type JobApplicationRecord = {
   appliedAt: string;
   companyName: string;
   createdAt: string;
-  hasReferral: boolean;
   id: string;
   jobDescription: string;
   jobTitle: string;
@@ -94,6 +107,8 @@ export type JobApplicationRecord = {
   location: "" | JobLocationType;
   notes: string;
   onsiteDaysPerWeek: string;
+  referrerId: string;
+  referrerName: string;
   recruiterContact: string;
   salaryRange: string;
   status: ApplicationStatusValue;
