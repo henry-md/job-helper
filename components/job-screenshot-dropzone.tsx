@@ -4,6 +4,7 @@ import {
   type ChangeEvent,
   type DragEvent,
   useEffect,
+  useEffectEvent,
   useId,
   useRef,
   useState,
@@ -11,7 +12,13 @@ import {
 
 type JobScreenshotDropzoneProps = {
   disabled?: boolean;
+  disabledMessage?: string;
+  isProcessing?: boolean;
+  processingLabel?: string;
+  onFileSelected?: (file: File, source: "Dropped" | "Pasted" | "Selected") => void;
 };
+
+type UploadSource = "Dropped" | "Pasted" | "Selected";
 
 const acceptedMimeTypes = new Set([
   "image/png",
@@ -74,15 +81,19 @@ function validateImageFile(file: File) {
 
 export default function JobScreenshotDropzone({
   disabled = false,
+  disabledMessage,
+  isProcessing = false,
+  processingLabel,
+  onFileSelected,
 }: JobScreenshotDropzoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [selectionSource, setSelectionSource] = useState<string | null>(null);
+  const [selectionSource, setSelectionSource] = useState<UploadSource | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const inputId = useId();
 
-  function syncFile(file: File, source: string) {
+  function syncFile(file: File, source: UploadSource) {
     const validationError = validateImageFile(file);
 
     if (validationError) {
@@ -110,6 +121,11 @@ export default function JobScreenshotDropzone({
     setSelectedFile(file);
     setSelectionSource(source);
     setErrorMessage(null);
+    onFileSelected?.(file, source);
+
+    if (inputRef.current) {
+      inputRef.current.value = "";
+    }
   }
 
   function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
@@ -149,12 +165,16 @@ export default function JobScreenshotDropzone({
       return;
     }
 
-    const file = Array.from(event.dataTransfer.files).find((candidate) =>
-      acceptedMimeTypes.has(candidate.type),
-    );
+    const file =
+      pickImageFile(event.dataTransfer.items) ??
+      Array.from(event.dataTransfer.files).find((candidate) =>
+        acceptedMimeTypes.has(candidate.type),
+      );
 
     if (!file) {
-      setErrorMessage("Drop a PNG, JPG, or WebP screenshot.");
+      setErrorMessage(
+        "This drag did not expose an image file to the browser. Paste with Cmd+V or drag a saved screenshot instead.",
+      );
       return;
     }
 
@@ -170,6 +190,10 @@ export default function JobScreenshotDropzone({
     setSelectionSource(null);
     setErrorMessage(null);
   }
+
+  const syncPastedFile = useEffectEvent((file: File) => {
+    syncFile(file, "Pasted");
+  });
 
   useEffect(() => {
     if (disabled) {
@@ -195,7 +219,7 @@ export default function JobScreenshotDropzone({
       }
 
       event.preventDefault();
-      syncFile(file, "Pasted");
+      syncPastedFile(file);
     }
 
     window.addEventListener("paste", handlePaste);
@@ -209,12 +233,12 @@ export default function JobScreenshotDropzone({
     <div className="grid gap-3">
       <label
         className={[
-          "group relative block rounded-[1.75rem] border border-dashed p-5 transition sm:p-6",
+          "group relative block overflow-hidden rounded-[2rem] border-2 border-dashed transition",
           disabled
             ? "cursor-not-allowed border-white/10 bg-black/15 opacity-70"
             : isDragging
-              ? "border-emerald-300/60 bg-emerald-400/10"
-              : "cursor-pointer border-white/12 bg-black/20 hover:border-emerald-300/30 hover:bg-white/6",
+              ? "cursor-pointer border-emerald-300 bg-emerald-300/12 shadow-[0_0_0_1px_rgba(110,231,183,0.3),0_28px_80px_rgba(16,185,129,0.18)]"
+              : "cursor-pointer border-emerald-300/40 bg-[radial-gradient(circle_at_top,rgba(52,211,153,0.18),rgba(9,9,11,0.86)_42%,rgba(5,5,7,0.96)_100%)] shadow-[0_0_0_1px_rgba(16,185,129,0.15),0_24px_70px_rgba(0,0,0,0.35)] hover:border-emerald-200/70 hover:shadow-[0_0_0_1px_rgba(110,231,183,0.22),0_32px_90px_rgba(16,185,129,0.18)]",
         ].join(" ")}
         htmlFor={inputId}
         onDragLeave={handleDragLeave}
@@ -227,57 +251,93 @@ export default function JobScreenshotDropzone({
           className="sr-only"
           disabled={disabled}
           id={inputId}
-          name="jobScreenshot"
           onChange={handleFileInputChange}
-          required
           type="file"
         />
 
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <span className="block text-sm font-medium text-zinc-100">
-              Job screenshot
-            </span>
-            <span className="mt-2 block max-w-2xl text-sm leading-7 text-zinc-400">
-              Drag the fresh macOS screenshot thumbnail here, paste with{" "}
-              <span className="text-zinc-200">Cmd+V</span>, or click to browse.
-              PNG, JPG, and WebP are supported up to 8 MB.
-            </span>
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(110,231,183,0.08),transparent_54%)] opacity-80 transition group-hover:opacity-100" />
+
+        <div className="relative flex flex-col gap-6 p-6 sm:p-8">
+          <div className="flex items-start justify-between gap-4">
+            <div className="rounded-full border border-emerald-300/35 bg-emerald-300/10 px-4 py-2 text-xs font-medium uppercase tracking-[0.3em] text-emerald-200">
+              Primary upload
+            </div>
+            <div className="rounded-full border border-white/12 bg-black/20 px-4 py-2 text-xs uppercase tracking-[0.24em] text-zinc-200">
+              Drag, paste, or click
+            </div>
           </div>
 
-          <div className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.24em] text-zinc-300 transition group-hover:border-emerald-300/30 group-hover:text-zinc-100">
-            Drag or paste first
-          </div>
-        </div>
-
-        <div className="mt-5 grid gap-3 rounded-[1.5rem] border border-white/8 bg-zinc-950/40 p-4 sm:grid-cols-[1.2fr_0.8fr] sm:items-center">
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-zinc-100">
-              {selectedFile ? selectedFile.name : "No screenshot selected yet"}
+          <div className="flex flex-col items-center text-center">
+            <div className="flex h-20 w-20 items-center justify-center rounded-[1.75rem] border border-emerald-300/30 bg-black/25 text-4xl text-emerald-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+              {isProcessing ? (
+                <div className="h-9 w-9 animate-spin rounded-full border-4 border-emerald-200/20 border-t-emerald-200" />
+              ) : (
+                "+"
+              )}
+            </div>
+            <h3 className="mt-6 max-w-3xl text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+              {disabledMessage
+                ? "Uploads are unavailable right now"
+                : isProcessing
+                  ? "Extracting fields from your screenshot"
+                  : "Drop your screenshot here"}
+            </h3>
+            <p className="mt-4 max-w-2xl text-base leading-8 text-zinc-300">
+              {disabledMessage ? (
+                disabledMessage
+              ) : isProcessing ? (
+                processingLabel ??
+                "The draft fields will populate automatically when extraction finishes."
+              ) : (
+                <>
+                  Drag the fresh macOS screenshot thumbnail from the lower-right
+                  corner, paste with <span className="text-white">Cmd+V</span>, or
+                  click this box to choose a file manually.
+                </>
+              )}
             </p>
-            <p className="mt-1 text-sm text-zinc-500">
-              {selectedFile
-                ? `${selectionSource} from ${selectedFile.type || "image"} • ${describeFileSize(selectedFile.size)}`
-                : "The screenshot should clearly show the job title and company name."}
-            </p>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+              <span className="rounded-full border border-white/12 bg-white/6 px-4 py-2 text-xs uppercase tracking-[0.22em] text-zinc-200">
+                PNG, JPG, WebP
+              </span>
+              <span className="rounded-full border border-white/12 bg-white/6 px-4 py-2 text-xs uppercase tracking-[0.22em] text-zinc-200">
+                Max 8 MB
+              </span>
+              <span className="rounded-full border border-white/12 bg-white/6 px-4 py-2 text-xs uppercase tracking-[0.22em] text-zinc-200">
+                {isProcessing ? "Extraction in progress" : "Paste is most reliable"}
+              </span>
+            </div>
           </div>
 
-          <div className="flex flex-wrap gap-2 sm:justify-end">
-            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs uppercase tracking-[0.22em] text-zinc-400">
-              Finder not required
-            </span>
-            {selectedFile ? (
-              <button
-                className="rounded-full border border-white/10 bg-transparent px-3 py-2 text-xs uppercase tracking-[0.22em] text-zinc-300 transition hover:border-white/20 hover:text-zinc-100"
-                onClick={(event) => {
-                  event.preventDefault();
-                  clearSelection();
-                }}
-                type="button"
-              >
-                Clear
-              </button>
-            ) : null}
+          <div className="grid gap-3 rounded-[1.5rem] border border-white/10 bg-black/30 p-4 sm:grid-cols-[1.2fr_0.8fr] sm:items-center">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-zinc-50">
+                {selectedFile ? selectedFile.name : "Waiting for a screenshot"}
+              </p>
+              <p className="mt-1 text-sm text-zinc-400">
+                {selectedFile
+                  ? `${selectionSource} from ${selectedFile.type || "image"} • ${describeFileSize(selectedFile.size)}`
+                  : "The screenshot should clearly show the job title and company name."}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2 sm:justify-end">
+              <span className="rounded-full border border-emerald-300/25 bg-emerald-300/10 px-3 py-2 text-xs uppercase tracking-[0.22em] text-emerald-200">
+                Finder not required
+              </span>
+              {selectedFile ? (
+                <button
+                  className="pointer-events-auto rounded-full border border-white/10 bg-transparent px-3 py-2 text-xs uppercase tracking-[0.22em] text-zinc-200 transition hover:border-white/25 hover:text-white"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    clearSelection();
+                  }}
+                  type="button"
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
           </div>
         </div>
       </label>

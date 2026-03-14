@@ -17,6 +17,7 @@ npx prisma migrate dev
 
 ```text
 http://localhost:3000/api/auth/callback/google
+[And your Railway site]
 ```
 
 5. Start the app:

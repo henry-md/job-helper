@@ -1,19 +1,9 @@
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
-import JobScreenshotDropzone from "@/components/job-screenshot-dropzone";
+import JobApplicationIntake from "@/components/job-application-intake";
 import SignOutButton from "@/components/sign-out-button";
-import UploadJobScreenshotButton from "@/components/upload-job-screenshot-button";
-import { uploadJobScreenshotAction } from "@/app/dashboard/actions";
 import { authOptions } from "@/auth";
 import { getPrismaClient } from "@/lib/prisma";
-
-const trackedFields = [
-  "Job title",
-  "Company name",
-  "Referral status",
-  "Applied date",
-  "Long job description",
-];
 
 type DashboardPageProps = {
   searchParams?: Promise<{
@@ -116,25 +106,26 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const openAIReady = Boolean(process.env.OPENAI_API_KEY);
   const extractionModel = process.env.OPENAI_JOB_EXTRACTION_MODEL ?? "gpt-5-mini";
   const uploadDisabled = !databaseStatus.ok || !openAIReady;
+  const uploadDisabledMessage = !databaseStatus.ok && !openAIReady
+    ? "Configure Postgres and set OPENAI_API_KEY before testing uploads."
+    : !databaseStatus.ok
+      ? "Connect Postgres before testing uploads."
+      : "Set OPENAI_API_KEY before testing uploads.";
 
   return (
     <main className="min-h-screen px-6 py-10 sm:px-10 lg:px-14">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
         <header className="glass-panel soft-ring flex flex-col justify-between gap-6 rounded-[2rem] p-8 sm:flex-row sm:items-center">
           <div>
             <p className="text-xs uppercase tracking-[0.32em] text-zinc-500">
-              Protected workspace
+              Dashboard
             </p>
-            <h1 className="serif-display mt-3 text-5xl font-semibold tracking-tight text-zinc-50 sm:text-6xl">
+            <h1 className="mt-3 text-4xl font-semibold tracking-tight text-zinc-50 sm:text-5xl">
               {displayName}
             </h1>
-            <p className="mt-2 text-sm uppercase tracking-[0.28em] text-zinc-500">
-              Automatic job tracking
-            </p>
             <p className="mt-4 max-w-2xl text-sm leading-7 text-zinc-400">
-              Upload one screenshot per job. The app stores the image, extracts a
-              structured application record, and groups applications under first-class
-              companies.
+              Upload a screenshot to create a job application record. Recent
+              applications and upload results stay below.
             </p>
           </div>
 
@@ -153,22 +144,21 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           </div>
         ) : null}
 
-        <section className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+        <section className="grid items-start gap-6 lg:grid-cols-[1.35fr_0.65fr]">
           <div className="grid gap-6">
             <section className="glass-panel soft-ring rounded-[2rem] p-7 sm:p-8">
               <div className="mb-6 flex items-start justify-between gap-6">
                 <div>
                   <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">
-                    Screenshot ingestion
+                    Draft intake
                   </p>
                   <h2 className="mt-2 text-2xl font-semibold text-zinc-50">
-                    Turn one upload into a tracked application
+                    Build the application before saving
                   </h2>
                   <p className="mt-3 max-w-2xl text-sm leading-7 text-zinc-400">
-                    Drop a fresh screenshot straight from the macOS thumbnail, paste
-                    it, or browse manually. The app stores it locally, sends it to
-                    OpenAI for structured extraction, then writes the company and
-                    application record in Postgres.
+                    Each screenshot now fills the draft immediately. You can review or
+                    edit the extracted fields, add more screenshots to enrich the
+                    draft, and save only when the row looks correct.
                   </p>
                 </div>
                 <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-emerald-300">
@@ -176,34 +166,11 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                 </span>
               </div>
 
-              <form action={uploadJobScreenshotAction} className="grid gap-5">
-                <JobScreenshotDropzone disabled={uploadDisabled} />
-
-                <div className="grid gap-3 rounded-[1.5rem] border border-white/8 bg-black/20 p-5 sm:grid-cols-2">
-                  {trackedFields.map((field) => (
-                    <div key={field} className="rounded-2xl border border-white/8 bg-white/5 px-4 py-3 text-sm text-zinc-300">
-                      {field}
-                    </div>
-                  ))}
-                </div>
-
-                {uploadDisabled ? (
-                  <div className="rounded-[1.5rem] border border-amber-400/25 bg-amber-400/10 p-4 text-sm leading-7 text-amber-100">
-                    {!databaseStatus.ok
-                      ? "Connect Postgres before uploading screenshots."
-                      : "Set OPENAI_API_KEY before uploading screenshots."}
-                  </div>
-                ) : null}
-
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-sm leading-7 text-zinc-500">
-                    Paste from the clipboard or drag the screenshot bubble before it
-                    disappears. If no applied date is visible, the app stores
-                    today&apos;s date.
-                  </p>
-                  <UploadJobScreenshotButton disabled={uploadDisabled} />
-                </div>
-              </form>
+              <JobApplicationIntake
+                disabled={uploadDisabled}
+                disabledMessage={uploadDisabled ? uploadDisabledMessage : undefined}
+                extractionModel={extractionModel}
+              />
             </section>
 
             <section className="glass-panel soft-ring rounded-[2rem] p-7 sm:p-8">
@@ -280,11 +247,27 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             </section>
           </div>
 
-          <aside className="grid gap-6">
-            <div className="glass-panel soft-ring rounded-[2rem] p-6">
-              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                Account
-              </p>
+          <aside className="grid content-start gap-6 self-start">
+            <div className="glass-panel soft-ring h-fit rounded-[2rem] p-6">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+                    Account
+                  </p>
+                  <p className="mt-2 text-sm text-zinc-400">
+                    {session.user.email ?? "No email available"}
+                  </p>
+                </div>
+                <span
+                  className={`rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.2em] ${
+                    databaseStatus.ok && openAIReady
+                      ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
+                      : "border border-amber-400/25 bg-amber-400/10 text-amber-200"
+                  }`}
+                >
+                  {databaseStatus.ok && openAIReady ? "Ready" : "Setup needed"}
+                </span>
+              </div>
               <div className="mt-5 flex items-center gap-4">
                 {session.user.image ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -303,68 +286,20 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                     {session.user.name ?? "Authenticated user"}
                   </p>
                   <p className="text-sm text-zinc-400">
-                    {session.user.email ?? "No email available"}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="glass-panel soft-ring rounded-[2rem] p-6">
-              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                Environment
-              </p>
-              <div className="mt-4 space-y-3 text-sm text-zinc-300">
-                <div className="rounded-2xl border border-white/8 bg-black/20 p-4">
-                  <span className="block text-zinc-500">Required vars</span>
-                  <span className="mt-1 block text-zinc-100">
-                    NEXTAUTH_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
-                    DATABASE_URL, OPENAI_API_KEY
-                  </span>
-                </div>
-                <div className="rounded-2xl border border-white/8 bg-black/20 p-4">
-                  <span className="block text-zinc-500">Database</span>
-                  <span
-                    className={`mt-1 block ${
-                      databaseStatus.ok ? "text-emerald-300" : "text-amber-300"
-                    }`}
-                  >
-                    {databaseStatus.ok ? "Connected" : "Needs setup"}
-                  </span>
-                  <span className="mt-2 block leading-6 text-zinc-400">
                     {databaseStatus.detail}
-                  </span>
-                </div>
-                <div className="rounded-2xl border border-white/8 bg-black/20 p-4">
-                  <span className="block text-zinc-500">OpenAI extraction</span>
-                  <span
-                    className={`mt-1 block ${
-                      openAIReady ? "text-emerald-300" : "text-amber-300"
-                    }`}
-                  >
-                    {openAIReady ? "Ready" : "Missing API key"}
-                  </span>
-                  <span className="mt-2 block leading-6 text-zinc-400">
-                    Model: {extractionModel}
-                  </span>
+                  </p>
                 </div>
               </div>
             </div>
 
-            <div className="glass-panel soft-ring rounded-[2rem] p-6">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                    Companies
-                  </p>
-                  <h2 className="mt-2 text-xl font-semibold text-zinc-50">
-                    First-class company records
-                  </h2>
-                </div>
-              </div>
+            <div className="glass-panel soft-ring h-fit rounded-[2rem] p-6">
+              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+                Companies
+              </p>
 
               {databaseStatus.companies.length === 0 ? (
                 <p className="mt-4 text-sm leading-7 text-zinc-400">
-                  Company records appear automatically as screenshots are ingested.
+                  Companies appear automatically as screenshots are processed.
                 </p>
               ) : (
                 <div className="mt-4 grid gap-3">
@@ -386,13 +321,13 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               )}
             </div>
 
-            <div className="glass-panel soft-ring rounded-[2rem] p-6">
+            <div className="glass-panel soft-ring h-fit rounded-[2rem] p-6">
               <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
                 Recent uploads
               </p>
               {databaseStatus.screenshots.length === 0 ? (
                 <p className="mt-4 text-sm leading-7 text-zinc-400">
-                  Upload history will appear here, including extraction failures.
+                  Upload history appears here.
                 </p>
               ) : (
                 <div className="mt-4 grid gap-3">

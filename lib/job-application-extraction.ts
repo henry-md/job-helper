@@ -1,30 +1,8 @@
 import OpenAI from "openai";
-
-type FieldConfidence = {
-  appliedAt: number;
-  companyName: number;
-  hasReferral: number;
-  jobDescription: number;
-  jobTitle: number;
-};
-
-type FieldEvidence = {
-  appliedAt: string | null;
-  companyName: string | null;
-  hasReferral: string | null;
-  jobDescription: string | null;
-  jobTitle: string | null;
-};
-
-export type JobApplicationExtraction = {
-  appliedAt: string | null;
-  companyName: string | null;
-  confidence: FieldConfidence;
-  evidence: FieldEvidence;
-  hasReferral: boolean;
-  jobDescription: string | null;
-  jobTitle: string | null;
-};
+import type {
+  FieldConfidence,
+  JobApplicationExtraction,
+} from "@/lib/job-application-types";
 
 const extractionSchema = {
   type: "object",
