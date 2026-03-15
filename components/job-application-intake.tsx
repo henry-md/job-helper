@@ -257,7 +257,7 @@ export default function JobApplicationIntake({
   const uploadsRef = useRef<DraftUpload[]>([]);
   const inputId = useId();
   const screenshotThumbnailHalf = 35;
-  const screenshotRightInset = 50;
+  const screenshotRightInset = 60;
 
   const extractingCount = draftUploads.filter(
     (upload) => upload.status === "extracting",

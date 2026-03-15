@@ -112,6 +112,9 @@ export default function DashboardWorkspace({
   userName: string | null | undefined;
 }) {
   const [activeTab, setActiveTab] = useState<"history" | "new">("new");
+  const [historyApplicationId, setHistoryApplicationId] = useState<string | null>(
+    null,
+  );
   const displayName = userName?.trim()?.split(" ")[0] || userName || "there";
   const profileImageSrc = getValidProfileImageSrc(userImage);
   const includeYearInDates = shouldIncludeShortYear(
@@ -202,9 +205,14 @@ export default function DashboardWorkspace({
                 ) : (
                   <div className="grid gap-2">
                     {applications.slice(0, 4).map((application) => (
-                      <article
+                      <button
                         key={application.id}
-                        className="rounded-[1rem] border border-white/8 bg-black/20 px-3 py-2.5"
+                        className="rounded-[1rem] border border-white/8 bg-black/20 px-3 py-2.5 text-left transition hover:border-emerald-400/25 hover:bg-emerald-400/6 focus-visible:border-emerald-300/45 focus-visible:outline-none"
+                        onClick={() => {
+                          setHistoryApplicationId(application.id);
+                          setActiveTab("history");
+                        }}
+                        type="button"
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
@@ -222,7 +230,7 @@ export default function DashboardWorkspace({
                             )}
                           </span>
                         </div>
-                      </article>
+                      </button>
                     ))}
                   </div>
                 )}
@@ -233,6 +241,7 @@ export default function DashboardWorkspace({
           <ApplicationStatsWorkspace
             companyOptions={companyOptions}
             applications={applications}
+            initialExpandedId={historyApplicationId}
             referrerOptions={referrerOptions}
           />
         )}

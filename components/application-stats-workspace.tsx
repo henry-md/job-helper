@@ -73,10 +73,12 @@ function matchesSearch(application: JobApplicationRecord, query: string) {
 
 export default function ApplicationStatsWorkspace({
   companyOptions,
+  initialExpandedId = null,
   applications: initialApplications,
   referrerOptions: initialReferrerOptions,
 }: {
   companyOptions: CompanyOption[];
+  initialExpandedId?: string | null;
   applications: JobApplicationRecord[];
   referrerOptions: ReferrerOption[];
 }) {
@@ -128,6 +130,11 @@ export default function ApplicationStatsWorkspace({
   useEffect(() => {
     setReferrerOptions(initialReferrerOptions);
   }, [initialReferrerOptions]);
+
+  useEffect(() => {
+    setExpandedId(initialExpandedId);
+    setBanner(null);
+  }, [initialExpandedId]);
 
   useEffect(() => {
     if (applications.length === 0) {
