@@ -91,6 +91,7 @@ export default function ApplicationStatsWorkspace({
   );
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [referrerOptions, setReferrerOptions] = useState(initialReferrerOptions);
   const [searchQuery, setSearchQuery] = useState("");
   const [banner, setBanner] = useState<{
@@ -262,6 +263,56 @@ export default function ApplicationStatsWorkspace({
     }
   }
 
+  async function handleDelete(application: JobApplicationRecord) {
+    const confirmed = window.confirm(
+      `Delete "${application.jobTitle}" at ${application.companyName}? This cannot be undone.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingId(application.id);
+    setBanner(null);
+
+    try {
+      const response = await fetch(`/api/job-applications/${application.id}`, {
+        method: "DELETE",
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        ok?: boolean;
+      };
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error ?? "Failed to delete the application.");
+      }
+
+      setApplications((currentApplications) =>
+        currentApplications.filter(
+          (currentApplication) => currentApplication.id !== application.id,
+        ),
+      );
+      setBanner({
+        text: "Deleted the application.",
+        tone: "success",
+      });
+      startTransition(() => {
+        router.refresh();
+      });
+    } catch (error) {
+      setBanner({
+        text:
+          error instanceof Error
+            ? error.message
+            : "Failed to delete the application.",
+        tone: "error",
+      });
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   function resetSelectedDraft() {
     if (!selectedApplication) {
       return;
@@ -345,6 +396,17 @@ export default function ApplicationStatsWorkspace({
           type="search"
           value={searchQuery}
         />
+        {banner ? (
+          <div
+            className={`mt-3 shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
+              banner.tone === "success"
+                ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
+                : "border border-amber-400/25 bg-amber-400/10 text-amber-100"
+            }`}
+          >
+            {banner.text}
+          </div>
+        ) : null}
 
         <div className="app-scrollbar mt-3 min-h-0 flex-1 overflow-visible pr-1 xl:overflow-y-auto">
           {filteredApplications.length === 0 ? (
@@ -355,6 +417,7 @@ export default function ApplicationStatsWorkspace({
             <div className="grid gap-3">
               {filteredApplications.map((application) => {
                 const isExpanded = application.id === expandedId;
+                const isDeleting = deletingId === application.id;
 
                 return (
                   <article
@@ -365,70 +428,71 @@ export default function ApplicationStatsWorkspace({
                         : "border-white/8 bg-black/20"
                     }`}
                   >
-                    <button
-                      className="flex w-full items-start justify-between gap-4 px-4 py-4 text-left transition hover:bg-white/[0.03]"
-                      onClick={() => {
-                        setExpandedId((currentId) =>
-                          currentId === application.id ? null : application.id,
-                        );
-                        setBanner(null);
-                      }}
-                      type="button"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-base font-medium text-zinc-100">
-                          {application.jobTitle}
-                        </p>
-                        <p className="mt-1 truncate text-sm text-zinc-400">
-                          {application.companyName}
-                        </p>
-                        <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-500">
-                          <span>
-                            Submitted{" "}
-                            {formatCompactDate(
-                              application.appliedAt,
-                              includeYearInDates,
-                            )}
+                    <div className="flex items-start justify-between gap-4 px-4 py-4">
+                      <button
+                        className="flex min-w-0 flex-1 items-start justify-between gap-4 text-left transition hover:bg-white/[0.03]"
+                        onClick={() => {
+                          setExpandedId((currentId) =>
+                            currentId === application.id ? null : application.id,
+                          );
+                          setBanner(null);
+                        }}
+                        type="button"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-base font-medium text-zinc-100">
+                            {application.jobTitle}
+                          </p>
+                          <p className="mt-1 truncate text-sm text-zinc-400">
+                            {application.companyName}
+                          </p>
+                          <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-500">
+                            <span>
+                              Submitted{" "}
+                              {formatCompactDate(
+                                application.appliedAt,
+                                includeYearInDates,
+                              )}
+                            </span>
+                            <span>
+                              Updated{" "}
+                              {formatCompactDate(
+                                application.updatedAt,
+                                includeYearInDates,
+                              )}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex shrink-0 items-center gap-3">
+                          <span className="rounded-full border border-white/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-zinc-400">
+                            {application.status}
                           </span>
-                          <span>
-                            Updated{" "}
-                            {formatCompactDate(
-                              application.updatedAt,
-                              includeYearInDates,
-                            )}
+                          <span
+                            aria-hidden="true"
+                            className={`text-sm text-zinc-500 transition-transform ${
+                              isExpanded ? "rotate-180" : ""
+                            }`}
+                          >
+                            ▼
                           </span>
                         </div>
-                      </div>
+                      </button>
 
-                      <div className="flex shrink-0 items-center gap-3">
-                        <span className="rounded-full border border-white/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-zinc-400">
-                          {application.status}
-                        </span>
-                        <span
-                          aria-hidden="true"
-                          className={`text-sm text-zinc-500 transition-transform ${
-                            isExpanded ? "rotate-180" : ""
-                          }`}
-                        >
-                          ▼
-                        </span>
-                      </div>
-                    </button>
+                      <button
+                        className="rounded-full border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs uppercase tracking-[0.18em] text-rose-200 transition hover:border-rose-300/35 hover:bg-rose-400/15 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={isDeleting}
+                        onClick={() => {
+                          void handleDelete(application);
+                        }}
+                        type="button"
+                      >
+                        {isDeleting ? "Deleting..." : "Delete"}
+                      </button>
+                    </div>
 
                     {isExpanded ? (
                       <div className="border-t border-white/8 px-3 pb-3 pt-3">
-                        {banner ? (
-                          <div
-                            className={`mb-3 shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
-                              banner.tone === "success"
-                                ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
-                                : "border border-amber-400/25 bg-amber-400/10 text-amber-100"
-                            }`}
-                          >
-                            {banner.text}
-                          </div>
-                        ) : null}
-
                         <ApplicationWindow
                           companyOptions={companyOptions}
                           draft={draft}

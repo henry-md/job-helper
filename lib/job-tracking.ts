@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const supportedMimeTypes = new Set([
@@ -236,6 +236,28 @@ export async function persistJobScreenshot(file: File, userId: string) {
     sizeBytes: buffer.byteLength,
     storagePath: `/${relativePath}`,
   };
+}
+
+export async function deletePersistedJobScreenshot(storagePath: string) {
+  const trimmedPath = storagePath.trim();
+
+  if (!trimmedPath.startsWith("/uploads/job-screenshots/")) {
+    return;
+  }
+
+  const absolutePath = path.join(process.cwd(), "public", trimmedPath);
+
+  try {
+    await unlink(absolutePath);
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !("code" in error) ||
+      error.code !== "ENOENT"
+    ) {
+      throw error;
+    }
+  }
 }
 
 export function fileBufferToDataUrl(buffer: Buffer, mimeType: string) {

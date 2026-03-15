@@ -8,6 +8,7 @@ import type {
   JobLocationType,
 } from "@/lib/job-application-types";
 import {
+  deletePersistedJobScreenshot,
   normalizeCompanyName,
   normalizeSalaryRange,
   resolveAppliedAt,
@@ -259,6 +260,68 @@ export async function PATCH(
   } catch (error) {
     const detail =
       error instanceof Error ? error.message : "Failed to update the application.";
+
+    return NextResponse.json({ error: detail }, { status: 500 });
+  }
+}
+
+export async function DELETE(
+  _request: Request,
+  context: { params: Promise<{ applicationId: string }> },
+) {
+  const session = await getServerSession(authOptions);
+
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  const { applicationId } = await context.params;
+  const prisma = getPrismaClient();
+
+  try {
+    const existingApplication = await prisma.jobApplication.findFirst({
+      where: {
+        id: applicationId,
+        userId: session.user.id,
+      },
+      include: {
+        screenshots: {
+          select: {
+            id: true,
+            storagePath: true,
+          },
+        },
+      },
+    });
+
+    if (!existingApplication) {
+      return NextResponse.json({ error: "Application not found." }, { status: 404 });
+    }
+
+    await prisma.$transaction([
+      prisma.jobApplicationScreenshot.deleteMany({
+        where: {
+          applicationId: existingApplication.id,
+          userId: session.user.id,
+        },
+      }),
+      prisma.jobApplication.delete({
+        where: {
+          id: existingApplication.id,
+        },
+      }),
+    ]);
+
+    await Promise.all(
+      existingApplication.screenshots.map((screenshot) =>
+        deletePersistedJobScreenshot(screenshot.storagePath),
+      ),
+    );
+
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    const detail =
+      error instanceof Error ? error.message : "Failed to delete the application.";
 
     return NextResponse.json({ error: detail }, { status: 500 });
   }
