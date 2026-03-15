@@ -14,6 +14,7 @@ import {
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
+import { toast } from "sonner";
 import ApplicationWindow from "@/components/application-window";
 import type {
   CompanyOption,
@@ -48,7 +49,7 @@ type DraftUpload = {
 
 type BannerState = {
   text: string;
-  tone: "error" | "info" | "success";
+  tone: "error" | "info";
 };
 
 const emptyDraft: JobApplicationDraft = {
@@ -611,10 +612,7 @@ export default function JobApplicationIntake({
     }
 
     setIsSaving(true);
-    setBanner({
-      text: "Saving your application...",
-      tone: "info",
-    });
+    setBanner(null);
 
     const formData = new FormData();
 
@@ -666,10 +664,8 @@ export default function JobApplicationIntake({
       setDraftUploads([]);
       setPreviewUploadId(null);
       setIsMoreOpen(false);
-      setBanner({
-        text: "Saved the application. You can start a new draft immediately.",
-        tone: "success",
-      });
+      setBanner(null);
+      toast.success("Saved the application. You can start a new draft immediately.");
       startTransition(() => {
         router.refresh();
       });
@@ -729,11 +725,9 @@ export default function JobApplicationIntake({
         {banner ? (
           <div
             className={`shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
-              banner.tone === "success"
-                ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
-                : banner.tone === "error"
-                  ? "border border-amber-400/25 bg-amber-400/10 text-amber-100"
-                  : "border border-white/10 bg-white/5 text-zinc-200"
+              banner.tone === "error"
+                ? "border border-amber-400/25 bg-amber-400/10 text-amber-100"
+                : "border border-white/10 bg-white/5 text-zinc-200"
             }`}
           >
             {banner.text}
@@ -839,11 +833,9 @@ export default function JobApplicationIntake({
       {banner ? (
         <div
           className={`shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
-            banner.tone === "success"
-              ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
-              : banner.tone === "error"
-                ? "border border-amber-400/25 bg-amber-400/10 text-amber-100"
-                : "border border-white/10 bg-white/5 text-zinc-200"
+            banner.tone === "error"
+              ? "border border-amber-400/25 bg-amber-400/10 text-amber-100"
+              : "border border-white/10 bg-white/5 text-zinc-200"
           }`}
         >
           {banner.text}

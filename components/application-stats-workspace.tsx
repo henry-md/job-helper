@@ -2,6 +2,7 @@
 
 import { type FormEvent, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import ApplicationWindow from "@/components/application-window";
 import { formatCompactDate, shouldIncludeShortYear } from "@/lib/date-format";
 import type {
@@ -264,14 +265,6 @@ export default function ApplicationStatsWorkspace({
   }
 
   async function handleDelete(application: JobApplicationRecord) {
-    const confirmed = window.confirm(
-      `Delete "${application.jobTitle}" at ${application.companyName}? This cannot be undone.`,
-    );
-
-    if (!confirmed) {
-      return;
-    }
-
     setDeletingId(application.id);
     setBanner(null);
 
@@ -293,10 +286,7 @@ export default function ApplicationStatsWorkspace({
           (currentApplication) => currentApplication.id !== application.id,
         ),
       );
-      setBanner({
-        text: "Deleted the application.",
-        tone: "success",
-      });
+      toast.success("Deleted the application.");
       startTransition(() => {
         router.refresh();
       });
@@ -311,6 +301,27 @@ export default function ApplicationStatsWorkspace({
     } finally {
       setDeletingId(null);
     }
+  }
+
+  function requestDelete(application: JobApplicationRecord) {
+    toast.warning(
+      `Delete "${application.jobTitle}" at ${application.companyName}? This cannot be undone.`,
+      {
+        action: {
+          label: "Delete",
+          onClick: () => {
+            void handleDelete(application);
+          },
+        },
+        cancel: {
+          label: "Cancel",
+          onClick: () => {
+            setDeletingId(null);
+          },
+        },
+        duration: 10000,
+      },
+    );
   }
 
   function resetSelectedDraft() {
@@ -483,7 +494,7 @@ export default function ApplicationStatsWorkspace({
                         className="rounded-full border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs uppercase tracking-[0.18em] text-rose-200 transition hover:border-rose-300/35 hover:bg-rose-400/15 disabled:cursor-not-allowed disabled:opacity-60"
                         disabled={isDeleting}
                         onClick={() => {
-                          void handleDelete(application);
+                          requestDelete(application);
                         }}
                         type="button"
                       >
