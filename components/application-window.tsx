@@ -1,6 +1,12 @@
 "use client";
 
-import type { Dispatch, FormEvent, ReactNode, SetStateAction } from "react";
+import type {
+  Dispatch,
+  DragEvent,
+  FormEvent,
+  ReactNode,
+  SetStateAction,
+} from "react";
 import ReferrerSelector from "@/components/referrer-selector";
 import type {
   CompanyOption,
@@ -55,8 +61,10 @@ export default function ApplicationWindow({
   isExtracting = false,
   isMoreOpen,
   isSaving,
-  latestModel,
   onReset,
+  onPanelDragLeave,
+  onPanelDragOver,
+  onPanelDrop,
   onSubmit,
   panelClassName,
   processingLabel,
@@ -75,8 +83,10 @@ export default function ApplicationWindow({
   isExtracting?: boolean;
   isMoreOpen: boolean;
   isSaving: boolean;
-  latestModel?: string | null;
   onReset: () => void;
+  onPanelDragLeave?: (event: DragEvent<HTMLDivElement>) => void;
+  onPanelDragOver?: (event: DragEvent<HTMLDivElement>) => void;
+  onPanelDrop?: (event: DragEvent<HTMLDivElement>) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   panelClassName?: string;
   processingLabel?: string;
@@ -110,8 +120,11 @@ export default function ApplicationWindow({
         <div
           className={
             panelClassName ??
-            "flex h-full min-h-0 flex-col gap-3 overflow-auto rounded-[1.25rem] border border-white/8 bg-black/20 p-3"
+            "app-scrollbar flex h-full min-h-0 flex-col gap-3 overflow-auto rounded-[1.25rem] border border-white/8 bg-black/20 p-3"
           }
+          onDragLeave={onPanelDragLeave}
+          onDragOver={onPanelDragOver}
+          onDrop={onPanelDrop}
         >
           {children}
 
@@ -253,11 +266,6 @@ export default function ApplicationWindow({
             <div className="flex flex-col rounded-[1rem] border border-white/8 bg-white/5 p-3">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm font-medium text-zinc-100">Description</span>
-                {latestModel ? (
-                  <span className="text-xs uppercase tracking-[0.2em] text-zinc-500">
-                    {latestModel}
-                  </span>
-                ) : null}
               </div>
               <textarea
                 className={`${fieldClassName()} min-h-24 max-h-32 resize-none overflow-y-auto`}
@@ -423,14 +431,13 @@ export default function ApplicationWindow({
         </div>
 
         {isExtracting ? (
-          <div className="absolute inset-0 z-20 flex items-center justify-center rounded-[1.5rem] bg-black/60 p-4 backdrop-blur-md">
-            <div className="glass-panel soft-ring w-full max-w-md rounded-[1.5rem] border border-emerald-300/30 bg-[radial-gradient(circle_at_top,rgba(52,211,153,0.2),rgba(24,24,27,0.92)_48%,rgba(5,5,7,0.97)_100%)] px-6 py-7 text-center shadow-[0_0_0_1px_rgba(16,185,129,0.14),0_28px_80px_rgba(0,0,0,0.42)]">
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[1.5rem] bg-black/35 p-4">
+            <div className="w-full max-w-sm rounded-[1.5rem] border border-white/10 bg-black/70 px-6 py-7 text-center shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-md">
               <div className="mx-auto h-11 w-11 animate-spin rounded-full border-4 border-emerald-200/15 border-t-emerald-200" />
-              <p className="mt-5 text-lg font-semibold text-zinc-50">
-                Extracting screenshot
-              </p>
+              <p className="mt-5 text-lg font-semibold text-zinc-50">Processing screenshot</p>
               <p className="mt-2 text-sm leading-relaxed text-zinc-300">
-                {processingLabel ?? "The draft will update automatically when extraction finishes."}
+                {processingLabel ??
+                  "The draft fields will update automatically when extraction finishes."}
               </p>
             </div>
           </div>

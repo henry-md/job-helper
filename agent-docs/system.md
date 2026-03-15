@@ -16,6 +16,9 @@ Important runtime assumptions:
 - `OPENAI_API_KEY` gates extraction/upload readiness on the dashboard.
 - Default extraction model is `gpt-5-mini`, overridable with `OPENAI_JOB_EXTRACTION_MODEL`.
 
+Dashboard UI note:
+- The `/dashboard` shell is viewport-height constrained, so the intake form must tolerate extra extraction banners and multi-line OCR output without relying on equal-height rows. Keep the form/description area scrollable instead of clipping content after uploads.
+
 When changing behavior, gather more context from:
 - `app/dashboard/page.tsx` for the main server-rendered dashboard.
 - `components/job-application-intake.tsx` for the client upload/save flow.

@@ -27,10 +27,10 @@ export default async function Home({ searchParams }: HomePageProps) {
   }
 
   return (
-    <main className="min-h-[100dvh] px-5 py-6 text-zinc-100 sm:px-8 sm:py-8">
-      <div className="mx-auto flex min-h-[calc(100dvh-3rem)] w-full max-w-6xl items-center justify-center sm:min-h-[calc(100dvh-4rem)]">
-        <section className="glass-panel soft-ring grid w-full max-w-5xl gap-10 overflow-hidden rounded-[2rem] p-6 sm:p-8 lg:grid-cols-[1.15fr_0.85fr] lg:p-10">
-          <div className="flex flex-col justify-between gap-8">
+    <main className="h-[100dvh] overflow-hidden px-5 py-6 text-zinc-100 sm:px-8 sm:py-8">
+      <div className="mx-auto flex h-full w-full max-w-6xl items-center justify-center">
+        <section className="glass-panel soft-ring grid h-full max-h-[calc(100dvh-3rem)] w-full max-w-5xl gap-8 overflow-hidden rounded-[2rem] p-6 sm:max-h-[calc(100dvh-4rem)] sm:p-8 lg:grid-cols-[1.15fr_0.85fr] lg:gap-8 lg:p-10">
+          <div className="flex min-h-0 flex-col justify-between gap-6 lg:gap-8">
             <div className="space-y-6">
               <div className="flex items-center justify-between gap-4">
                 <p className="text-[0.72rem] uppercase tracking-[0.32em] text-zinc-500">
@@ -42,7 +42,7 @@ export default async function Home({ searchParams }: HomePageProps) {
               </div>
 
               <div className="space-y-4">
-                <h1 className="max-w-3xl text-[clamp(2.6rem,7vw,5.6rem)] leading-[0.92] font-semibold tracking-tight text-zinc-50">
+                <h1 className="max-w-3xl text-[clamp(2.6rem,6vw,5.35rem)] leading-[0.9] font-semibold tracking-tight text-zinc-50">
                   Keep your job search organized from the first screenshot.
                 </h1>
                 <p className="max-w-2xl text-[clamp(1rem,1.8vw,1.125rem)] leading-relaxed text-zinc-300">
@@ -65,7 +65,7 @@ export default async function Home({ searchParams }: HomePageProps) {
             </div>
           </div>
 
-          <aside className="flex flex-col justify-end">
+          <aside className="flex min-h-0 flex-col justify-end">
             <div className="rounded-[1.75rem] border border-white/10 bg-black/20 p-5 sm:p-6">
               <p className="text-sm font-medium text-zinc-100">
                 Continue with Google to open your dashboard.

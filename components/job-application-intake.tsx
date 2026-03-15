@@ -11,7 +11,9 @@ import {
   useState,
   useTransition,
 } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
+import { createPortal } from "react-dom";
 import ApplicationWindow from "@/components/application-window";
 import type {
   CompanyOption,
@@ -39,8 +41,9 @@ type DraftUpload = {
   file: File;
   id: string;
   model: string | null;
+  previewUrl: string;
   source: UploadSource;
-  status: "extracting" | "failed" | "ready";
+  status: "extracting" | "failed" | "queued" | "ready";
 };
 
 type BannerState = {
@@ -75,24 +78,12 @@ const acceptedMimeTypes = new Set([
 
 const maxScreenshotBytes = 8 * 1024 * 1024;
 
-function formatBytes(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    maximumFractionDigits: value >= 1024 * 1024 ? 1 : 0,
-  }).format(value / (value >= 1024 * 1024 ? 1024 * 1024 : 1024));
-}
-
-function describeFileSize(value: number) {
-  if (value >= 1024 * 1024) {
-    return `${formatBytes(value)} MB`;
-  }
-
-  return `${formatBytes(value)} KB`;
-}
-
-function pickImageFile(items?: DataTransferItemList | null) {
+function pickImageFilesFromItems(items?: DataTransferItemList | null) {
   if (!items) {
-    return null;
+    return [] as File[];
   }
+
+  const files: File[] = [];
 
   for (const item of items) {
     if (item.kind !== "file") {
@@ -102,11 +93,24 @@ function pickImageFile(items?: DataTransferItemList | null) {
     const file = item.getAsFile();
 
     if (file && acceptedMimeTypes.has(file.type)) {
-      return file;
+      files.push(file);
     }
   }
 
-  return null;
+  return files;
+}
+
+function pickImageFiles(
+  items?: DataTransferItemList | null,
+  files?: FileList | File[] | null,
+) {
+  const imageFilesFromItems = pickImageFilesFromItems(items);
+
+  if (imageFilesFromItems.length > 0) {
+    return imageFilesFromItems;
+  }
+
+  return Array.from(files ?? []).filter((file) => acceptedMimeTypes.has(file.type));
 }
 
 function validateImageFile(file: File) {
@@ -213,6 +217,12 @@ function getLocalDateInputValue() {
   return localDate.toISOString().slice(0, 10);
 }
 
+function revokeUploadPreviews(uploads: DraftUpload[]) {
+  for (const upload of uploads) {
+    URL.revokeObjectURL(upload.previewUrl);
+  }
+}
+
 export default function JobApplicationIntake({
   companyOptions,
   disabled = false,
@@ -225,19 +235,28 @@ export default function JobApplicationIntake({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [banner, setBanner] = useState<BannerState | null>(null);
   const [draft, setDraft] = useState<JobApplicationDraft>(emptyDraft);
+  const draftRef = useRef(draft);
   const [draftUploads, setDraftUploads] = useState<DraftUpload[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [latestModel, setLatestModel] = useState(extractionModel);
+  const [isPreviewMounted, setIsPreviewMounted] = useState(false);
+  const [previewUploadId, setPreviewUploadId] = useState<string | null>(null);
   const [referrerOptions, setReferrerOptions] = useState(initialReferrerOptions);
+  const referrerOptionsRef = useRef(initialReferrerOptions);
+  const uploadsRef = useRef<DraftUpload[]>([]);
   const inputId = useId();
 
   const extractingCount = draftUploads.filter(
     (upload) => upload.status === "extracting",
   ).length;
-  const isExtracting = extractingCount > 0;
+  const queuedCount = draftUploads.filter(
+    (upload) => upload.status === "queued",
+  ).length;
+  const processingCount = extractingCount + queuedCount;
+  const isExtracting = processingCount > 0;
   const isFormLocked = disabled || isSaving || isExtracting;
+  const isUploadLocked = disabled || isSaving;
   const saveDisabled =
     disabled ||
     isSaving ||
@@ -246,48 +265,113 @@ export default function JobApplicationIntake({
     draft.jobTitle.trim().length === 0 ||
     draft.companyName.trim().length === 0;
   const newestUpload = draftUploads[draftUploads.length - 1] ?? null;
+  const extractingUpload =
+    [...draftUploads].reverse().find((upload) => upload.status === "extracting") ??
+    null;
+  const activeUpload =
+    extractingUpload ??
+    draftUploads.find((upload) => upload.status === "queued") ??
+    newestUpload;
+  const remainingQueuedCount =
+    queuedCount - (activeUpload?.status === "queued" ? 1 : 0);
   const hasUploadedScreenshot = draftUploads.length > 0;
-  const processingLabel = newestUpload
-    ? `Working on ${newestUpload.file.name}. The draft fields below will update automatically.`
+  const previewUpload =
+    draftUploads.find((upload) => upload.id === previewUploadId) ?? null;
+  const processingLabel = activeUpload
+    ? remainingQueuedCount > 0
+      ? `Working on ${activeUpload.file.name}. ${remainingQueuedCount} more screenshot${remainingQueuedCount === 1 ? "" : "s"} queued, and the draft will keep merging new details.`
+      : `Working on ${activeUpload.file.name}. The draft fields below will update automatically.`
     : "The draft fields will populate automatically when extraction finishes.";
 
-  function queueSelectedFile(file: File, source: UploadSource) {
-    const validationError = validateImageFile(file);
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
 
-    if (validationError) {
-      setBanner({
-        text: validationError,
-        tone: "error",
-      });
+  useEffect(() => {
+    referrerOptionsRef.current = referrerOptions;
+  }, [referrerOptions]);
 
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
+  useEffect(() => {
+    uploadsRef.current = draftUploads;
+  }, [draftUploads]);
+
+  useEffect(() => {
+    return () => {
+      revokeUploadPreviews(uploadsRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    setIsPreviewMounted(true);
+  }, []);
+
+  function queueSelectedFiles(files: File[], source: UploadSource) {
+    const validFiles: File[] = [];
+    const validationErrors: string[] = [];
+
+    for (const file of files) {
+      const validationError = validateImageFile(file);
+
+      if (validationError) {
+        validationErrors.push(
+          `${file.name || "Screenshot"}: ${validationError}`,
+        );
+        continue;
       }
 
-      return;
+      validFiles.push(file);
     }
 
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
 
-    void handleFileSelected(file, source);
-  }
-
-  function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-
-    if (!file || isFormLocked) {
+    if (validFiles.length === 0) {
+      setBanner({
+        text: validationErrors[0] ?? "Select a PNG, JPG, or WebP screenshot.",
+        tone: "error",
+      });
       return;
     }
 
-    queueSelectedFile(file, "Selected");
+    if (validationErrors.length > 0) {
+      setBanner({
+        text: `${validationErrors[0]} Queued ${validFiles.length} screenshot${validFiles.length === 1 ? "" : "s"} anyway.`,
+        tone: "info",
+      });
+    } else {
+      setBanner(null);
+    }
+
+    setDraftUploads((currentUploads) => [
+      ...currentUploads,
+      ...validFiles.map((file) => ({
+        error: null,
+        extraction: null,
+        file,
+        id: crypto.randomUUID(),
+        model: null,
+        previewUrl: URL.createObjectURL(file),
+        source,
+        status: "queued" as const,
+      })),
+    ]);
+  }
+
+  function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+
+    if (files.length === 0 || isUploadLocked) {
+      return;
+    }
+
+    queueSelectedFiles(files, "Selected");
   }
 
   function handleDragOver(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
 
-    if (isFormLocked) {
+    if (isUploadLocked) {
       return;
     }
 
@@ -304,17 +388,16 @@ export default function JobApplicationIntake({
     event.preventDefault();
     setIsDragging(false);
 
-    if (isFormLocked) {
+    if (isUploadLocked) {
       return;
     }
 
-    const file =
-      pickImageFile(event.dataTransfer.items) ??
-      Array.from(event.dataTransfer.files).find((candidate) =>
-        acceptedMimeTypes.has(candidate.type),
-      );
+    const files = pickImageFiles(
+      event.dataTransfer.items,
+      event.dataTransfer.files,
+    );
 
-    if (!file) {
+    if (files.length === 0) {
       setBanner({
         text: "Drop a PNG, JPG, or WebP screenshot onto the form.",
         tone: "error",
@@ -322,15 +405,15 @@ export default function JobApplicationIntake({
       return;
     }
 
-    queueSelectedFile(file, "Dropped");
+    queueSelectedFiles(files, "Dropped");
   }
 
   const syncPastedFile = useEffectEvent((file: File) => {
-    queueSelectedFile(file, "Pasted");
+    queueSelectedFiles([file], "Pasted");
   });
 
   useEffect(() => {
-    if (isFormLocked) {
+    if (isUploadLocked) {
       return;
     }
 
@@ -361,100 +444,105 @@ export default function JobApplicationIntake({
     return () => {
       window.removeEventListener("paste", handlePaste);
     };
-  }, [isFormLocked]);
+  }, [isUploadLocked]);
 
-  async function handleFileSelected(
-    file: File,
-    source: UploadSource,
-  ) {
-    const uploadId = crypto.randomUUID();
+  const processQueuedUpload = useEffectEvent(
+    async (uploadId: string, file: File) => {
+      setDraftUploads((currentUploads) =>
+        currentUploads.map((upload) =>
+          upload.id === uploadId && upload.status === "queued"
+            ? { ...upload, status: "extracting" }
+            : upload,
+        ),
+      );
 
-    setBanner(null);
-    setDraftUploads((currentUploads) => [
-      ...currentUploads,
-      {
-        error: null,
-        extraction: null,
-        file,
-        id: uploadId,
-        model: null,
-        source,
-        status: "extracting",
-      },
-    ]);
+      const formData = new FormData();
+      formData.append("jobScreenshot", file);
+      formData.append("draftContext", JSON.stringify(draftRef.current));
 
-    const formData = new FormData();
-    formData.append("jobScreenshot", file);
+      try {
+        const response = await fetch("/api/job-applications/extract", {
+          method: "POST",
+          body: formData,
+        });
+        const payload = (await response.json()) as {
+          error?: string;
+          extraction?: JobApplicationExtraction;
+          model?: string;
+        };
 
-    try {
-      const response = await fetch("/api/job-applications/extract", {
-        method: "POST",
-        body: formData,
-      });
-      const payload = (await response.json()) as {
-        error?: string;
-        extraction?: JobApplicationExtraction;
-        model?: string;
-      };
+        if (!response.ok || !payload.extraction) {
+          throw new Error(payload.error ?? "Failed to extract the screenshot.");
+        }
 
-      if (!response.ok || !payload.extraction) {
-        throw new Error(payload.error ?? "Failed to extract the screenshot.");
+        const extraction = payload.extraction;
+        const fallbackAppliedAt = getLocalDateInputValue();
+        const matchingReferrer = extraction.referrerName
+          ? referrerOptionsRef.current.find(
+              (option) =>
+                option.name.trim().toLowerCase() ===
+                extraction.referrerName?.trim().toLowerCase(),
+            ) ?? null
+          : null;
+
+        setDraft((currentDraft) =>
+          mergeDraftWithExtraction(
+            currentDraft,
+            extraction,
+            fallbackAppliedAt,
+            matchingReferrer,
+          ),
+        );
+        setDraftUploads((currentUploads) =>
+          currentUploads.map((upload) =>
+            upload.id === uploadId
+              ? {
+                  ...upload,
+                  extraction,
+                  model: payload.model ?? extractionModel,
+                  status: "ready",
+                }
+              : upload,
+          ),
+        );
+      } catch (error) {
+        const detail =
+          error instanceof Error
+            ? error.message
+            : "Failed to extract the screenshot.";
+
+        setDraftUploads((currentUploads) =>
+          currentUploads.map((upload) =>
+            upload.id === uploadId
+              ? {
+                  ...upload,
+                  error: detail,
+                  status: "failed",
+                }
+              : upload,
+          ),
+        );
+        setBanner({
+          text: `${detail} You can upload another screenshot or fill the fields manually.`,
+          tone: "error",
+        });
       }
+    },
+  );
 
-      const extraction = payload.extraction;
-      const fallbackAppliedAt = getLocalDateInputValue();
-      const matchingReferrer = extraction.referrerName
-        ? referrerOptions.find(
-            (option) =>
-              option.name.trim().toLowerCase() ===
-              extraction.referrerName?.trim().toLowerCase(),
-          ) ?? null
-        : null;
-
-      setDraft((currentDraft) =>
-        mergeDraftWithExtraction(
-          currentDraft,
-          extraction,
-          fallbackAppliedAt,
-          matchingReferrer,
-        ),
-      );
-      setDraftUploads((currentUploads) =>
-        currentUploads.map((upload) =>
-          upload.id === uploadId
-            ? {
-                ...upload,
-                extraction,
-                model: payload.model ?? extractionModel,
-                status: "ready",
-              }
-            : upload,
-        ),
-      );
-      setLatestModel(payload.model ?? extractionModel);
-    } catch (error) {
-      const detail =
-        error instanceof Error
-          ? error.message
-          : "Failed to extract the screenshot.";
-
-      setDraftUploads((currentUploads) =>
-        currentUploads.map((upload) =>
-          upload.id === uploadId
-            ? {
-                ...upload,
-                error: detail,
-                status: "failed",
-              }
-            : upload,
-        ),
-      );
-      setBanner({
-        text: `${detail} You can upload another screenshot or fill the fields manually.`,
-        tone: "error",
-      });
+  useEffect(() => {
+    if (isUploadLocked || extractingCount > 0) {
+      return;
     }
-  }
+
+    const nextUpload = draftUploads.find((upload) => upload.status === "queued");
+
+    if (!nextUpload) {
+      return;
+    }
+
+    void processQueuedUpload(nextUpload.id, nextUpload.file);
+  }, [draftUploads, extractingCount, isUploadLocked]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -515,9 +603,10 @@ export default function JobApplicationIntake({
       }
 
       setDraft(emptyDraft);
+      revokeUploadPreviews(draftUploads);
       setDraftUploads([]);
+      setPreviewUploadId(null);
       setIsMoreOpen(false);
-      setLatestModel(extractionModel);
       setBanner({
         text: "Saved the application. You can start a new draft immediately.",
         tone: "success",
@@ -541,17 +630,18 @@ export default function JobApplicationIntake({
   }
 
   function resetDraft() {
+    revokeUploadPreviews(draftUploads);
     setDraft(emptyDraft);
     setDraftUploads([]);
+    setPreviewUploadId(null);
     setIsMoreOpen(false);
-    setLatestModel(extractionModel);
     setBanner(null);
   }
 
   if (!hasUploadedScreenshot) {
     return (
       <div className="flex h-full min-h-0 flex-col gap-3">
-        <div className="flex shrink-0 items-start justify-between gap-4">
+        <div className="shrink-0">
           <div>
             <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">
               New application
@@ -563,9 +653,6 @@ export default function JobApplicationIntake({
               Screenshot in, key fields out.
             </p>
           </div>
-          <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-emerald-300">
-            {extractionModel}
-          </span>
         </div>
 
         {statusMessage ? (
@@ -611,10 +698,11 @@ export default function JobApplicationIntake({
             ref={fileInputRef}
             accept="image/png,image/jpeg,image/webp"
             className="sr-only"
-            disabled={isFormLocked}
+            disabled={isUploadLocked}
             id={inputId}
             onChange={handleFileInputChange}
             type="file"
+            multiple
           />
 
           <div className="mx-auto flex w-full max-w-2xl flex-col items-center text-center">
@@ -628,7 +716,7 @@ export default function JobApplicationIntake({
               Drag a screenshot anywhere into this area, paste it, or{" "}
               <label
                 className={`cursor-pointer text-emerald-300 underline-offset-4 hover:underline ${
-                  isFormLocked ? "pointer-events-none opacity-60" : ""
+                  isUploadLocked ? "pointer-events-none opacity-60" : ""
                 }`}
                 htmlFor={inputId}
               >
@@ -636,7 +724,9 @@ export default function JobApplicationIntake({
               </label>
               . The editor appears after extraction finishes.
             </p>
-            <p className="mt-4 text-sm text-zinc-400">PNG, JPG, WebP up to 8 MB</p>
+            <p className="mt-4 text-sm text-zinc-400">
+              PNG, JPG, WebP up to 8 MB each
+            </p>
           </div>
         </div>
       </div>
@@ -647,16 +737,20 @@ export default function JobApplicationIntake({
     <ApplicationWindow
       companyOptions={companyOptions}
       draft={draft}
-      extractingCount={extractingCount}
+      extractingCount={processingCount}
       isFormLocked={isFormLocked}
       isExtracting={isExtracting}
       isMoreOpen={isMoreOpen}
       isSaving={isSaving}
       referrerOptions={referrerOptions}
-      latestModel={latestModel}
       onReset={resetDraft}
+      onPanelDragLeave={handleDragLeave}
+      onPanelDragOver={handleDragOver}
+      onPanelDrop={handleDrop}
       onSubmit={handleSubmit}
-      panelClassName="flex h-full min-h-0 flex-col gap-3 overflow-auto rounded-[1.5rem] border-2 border-dashed border-emerald-300/45 bg-[radial-gradient(circle_at_top,rgba(52,211,153,0.12),rgba(9,9,11,0.92)_40%,rgba(5,5,7,0.98)_100%)] p-4 shadow-[0_0_0_1px_rgba(16,185,129,0.14)] sm:p-4"
+      panelClassName={`app-scrollbar flex h-full min-h-0 flex-col gap-3 rounded-[1.5rem] border-2 border-dashed border-emerald-300/45 bg-[radial-gradient(circle_at_top,rgba(52,211,153,0.12),rgba(9,9,11,0.92)_40%,rgba(5,5,7,0.98)_100%)] p-4 shadow-[0_0_0_1px_rgba(16,185,129,0.14)] sm:p-4 ${
+        isExtracting ? "overflow-hidden" : "overflow-auto"
+      }`}
       processingLabel={processingLabel}
       saveDisabled={saveDisabled}
       setDraft={setDraft}
@@ -689,50 +783,89 @@ export default function JobApplicationIntake({
         </div>
       ) : null}
 
-      <div
-        className={[
-          "relative flex min-h-0 flex-col gap-3 overflow-hidden rounded-[1.25rem] border border-emerald-300/30 bg-black/20 p-4 transition",
-          disabled
-            ? "border-white/10 bg-black/15 opacity-70"
-            : isDragging
-              ? "border-emerald-300 bg-emerald-300/10 shadow-[0_0_0_1px_rgba(110,231,183,0.3),0_28px_80px_rgba(16,185,129,0.18)]"
-              : "shadow-[0_0_0_1px_rgba(16,185,129,0.08)]",
-        ].join(" ")}
-        onDragLeave={handleDragLeave}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-      >
-        <input
-          ref={fileInputRef}
-          accept="image/png,image/jpeg,image/webp"
-          className="sr-only"
-          disabled={isFormLocked}
-          id={inputId}
-          onChange={handleFileInputChange}
-          type="file"
-        />
-
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-              Screenshot intake
-            </p>
-            <p className="mt-1 text-sm text-zinc-300">
-              Review the extracted draft, make corrections, and save.
-            </p>
+      <div className="pointer-events-none absolute right-4 top-0 z-30 flex max-w-[20rem] -translate-y-1/2 flex-wrap justify-end gap-2">
+        {draftUploads.map((upload, index) => (
+          <div key={upload.id} className="pointer-events-auto">
+            <button
+              className="group relative h-[70px] w-[70px] shrink-0 overflow-hidden rounded-[1rem] border border-white/15 bg-black/85 shadow-[0_18px_40px_rgba(0,0,0,0.42)] ring-1 ring-emerald-300/10 transition hover:-translate-y-1 hover:border-emerald-300/40 hover:ring-emerald-300/30 focus:outline-none focus:ring-2 focus:ring-emerald-300/40"
+              onClick={() => setPreviewUploadId(upload.id)}
+              type="button"
+            >
+              <Image
+                alt={`${upload.file.name} preview`}
+                className="h-full w-full object-cover opacity-90 transition duration-200 group-hover:scale-[1.03] group-hover:opacity-100"
+                fill
+                sizes="70px"
+                src={upload.previewUrl}
+                unoptimized
+              />
+              {extractingUpload?.id === upload.id ? (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/35">
+                  <div className="h-7 w-7 animate-spin rounded-full border-[3px] border-emerald-200/25 border-t-emerald-200" />
+                </div>
+              ) : null}
+              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/70 to-transparent px-1.5 pb-1.5 pt-4 text-left">
+                <p className="truncate text-[9px] font-medium uppercase tracking-[0.14em] text-white/90">
+                  Shot {index + 1}
+                </p>
+                <p className="truncate text-[9px] text-zinc-300">
+                  {upload.status === "failed"
+                    ? "Needs review"
+                    : upload.status === "extracting"
+                      ? "Extracting"
+                      : upload.status === "queued"
+                        ? "Queued"
+                        : "Tap to expand"}
+                </p>
+              </div>
+            </button>
           </div>
-          <div className="text-right text-sm text-zinc-400">
-            <p className="truncate font-medium text-zinc-100">
-              {newestUpload ? newestUpload.file.name : "No screenshot loaded"}
-            </p>
-            <p className="mt-1">
-              {newestUpload
-                ? `${newestUpload.source} • ${describeFileSize(newestUpload.file.size)}`
-                : "PNG, JPG, WebP up to 8 MB"}
-            </p>
-          </div>
-        </div>
+        ))}
       </div>
+
+      {previewUpload && isPreviewMounted
+        ? createPortal(
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-5 backdrop-blur-sm">
+              <button
+                aria-label="Close screenshot preview"
+                className="absolute inset-0"
+                onClick={() => setPreviewUploadId(null)}
+                type="button"
+              />
+              <div className="relative z-10 flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-[1.5rem] border border-emerald-300/30 bg-zinc-950/95 shadow-[0_30px_120px_rgba(0,0,0,0.58)]">
+                <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-zinc-100">
+                      {previewUpload.file.name}
+                    </p>
+                    <p className="mt-1 text-xs uppercase tracking-[0.22em] text-zinc-400">
+                      Temporary reference preview while editing
+                    </p>
+                  </div>
+                  <button
+                    className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                    onClick={() => setPreviewUploadId(null)}
+                    type="button"
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="flex-1 overflow-auto p-4">
+                  <Image
+                    alt={previewUpload.file.name}
+                    className="mx-auto h-auto max-h-[calc(90vh-7rem)] w-auto max-w-full rounded-[1.1rem] border border-white/10 shadow-[0_18px_50px_rgba(0,0,0,0.35)]"
+                    height={1200}
+                    sizes="100vw"
+                    src={previewUpload.previewUrl}
+                    unoptimized
+                    width={1200}
+                  />
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </ApplicationWindow>
   );
 }

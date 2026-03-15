@@ -3,9 +3,12 @@ import type {
   ApplicationStatusValue,
   EmploymentTypeValue,
   FieldConfidence,
+  JobApplicationDraft,
   JobLocationType,
   JobApplicationExtraction,
 } from "@/lib/job-application-types";
+
+const TEST_OPENAI_RESPONSE_MODEL = "test-openai-response";
 
 const extractionSchema = {
   type: "object",
@@ -181,6 +184,11 @@ function getOpenAIClient() {
   return new OpenAI({ apiKey });
 }
 
+function isTestOpenAIResponseEnabled() {
+  const value = process.env.TEST_OPENAI_RESPONSE?.trim().toLowerCase();
+  return value === "true" || value === "1" || value === "yes";
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -261,11 +269,41 @@ function readLocationType(value: unknown): JobLocationType | null {
     return null;
   }
 
-  if (value === "remote" || value === "onsite" || value === "hybrid") {
-    return value;
+  if (typeof value !== "string") {
+    throw new Error("Expected location to be remote, onsite, hybrid, or null.");
   }
 
-  throw new Error("Expected location to be remote, onsite, hybrid, or null.");
+  const normalizedValue = value.trim().toLowerCase();
+
+  if (
+    normalizedValue === "remote" ||
+    normalizedValue === "onsite" ||
+    normalizedValue === "hybrid"
+  ) {
+    return normalizedValue;
+  }
+
+  if (
+    normalizedValue.includes("remote") ||
+    normalizedValue.includes("work from home")
+  ) {
+    return "remote";
+  }
+
+  if (normalizedValue.includes("hybrid")) {
+    return "hybrid";
+  }
+
+  if (
+    normalizedValue.includes("onsite") ||
+    normalizedValue.includes("on-site") ||
+    normalizedValue.includes("in office") ||
+    normalizedValue.includes("in-office")
+  ) {
+    return "onsite";
+  }
+
+  return null;
 }
 
 function readOnsiteDaysPerWeek(value: unknown) {
@@ -354,6 +392,59 @@ function parseExtractionPayload(value: unknown): JobApplicationExtraction {
   };
 }
 
+function buildSampleExtraction(): JobApplicationExtraction {
+  return parseExtractionPayload({
+    appliedAt: "2025-01-15",
+    companyName: "OpenAI",
+    confidence: {
+      jobTitle: 0.99,
+      companyName: 0.99,
+      appliedAt: 0.99,
+      jobDescription: 0.99,
+      jobUrl: 0.88,
+      location: 0.76,
+      notes: 0.41,
+      onsiteDaysPerWeek: 0.12,
+      referrerName: 0.08,
+      recruiterContact: 0.16,
+      salaryRange: 0.81,
+      status: 0.93,
+      teamOrDepartment: 0.62,
+      employmentType: 0.89,
+    },
+    evidence: {
+      jobTitle: "Senior Software Engineer",
+      companyName: "OpenAI",
+      appliedAt: "Applied on Jan 15, 2025",
+      jobDescription:
+        "Build backend and AI-powered product features for internal tools.",
+      jobUrl: "careers.openai.com/jobs/senior-software-engineer",
+      location: "Hybrid",
+      notes: null,
+      onsiteDaysPerWeek: null,
+      referrerName: null,
+      recruiterContact: null,
+      salaryRange: "$120k - $150k",
+      status: "Applied",
+      teamOrDepartment: "Platform Engineering",
+      employmentType: "Full-time",
+    },
+    jobDescription:
+      "Build backend and AI-powered product features for internal tools.",
+    jobTitle: "Senior Software Engineer",
+    jobUrl: "https://careers.openai.com/jobs/senior-software-engineer",
+    location: "hybrid",
+    notes: null,
+    onsiteDaysPerWeek: null,
+    referrerName: null,
+    recruiterContact: null,
+    salaryRange: "$120k - $150k",
+    status: "APPLIED",
+    teamOrDepartment: "Platform Engineering",
+    employmentType: "full_time",
+  });
+}
+
 function readOutputText(response: {
   output?: Array<{
     type?: string;
@@ -382,18 +473,50 @@ function readOutputText(response: {
   return chunks.join("").trim();
 }
 
+function buildExistingDraftContext(existingDraft?: JobApplicationDraft | null) {
+  if (!existingDraft) {
+    return null;
+  }
+
+  const populatedEntries = Object.entries(existingDraft).filter(
+    ([field, value]) =>
+      field !== "referrerId" &&
+      typeof value === "string" &&
+      value.trim().length > 0,
+  );
+
+  if (populatedEntries.length === 0) {
+    return null;
+  }
+
+  return JSON.stringify(Object.fromEntries(populatedEntries), null, 2);
+}
+
 export async function extractJobApplicationFromScreenshot(input: {
   dataUrl: string;
+  existingDraft?: JobApplicationDraft | null;
   filename: string;
   mimeType: string;
 }) {
   const model = process.env.OPENAI_JOB_EXTRACTION_MODEL ?? "gpt-5-mini";
+
+  if (isTestOpenAIResponseEnabled()) {
+    const extraction = buildSampleExtraction();
+
+    return {
+      extraction,
+      model: TEST_OPENAI_RESPONSE_MODEL,
+      rawText: JSON.stringify(extraction),
+    };
+  }
+
   const client = getOpenAIClient();
+  const existingDraftContext = buildExistingDraftContext(input.existingDraft);
 
   const response = await client.responses.create({
     model,
     instructions:
-      "Extract job application details from a screenshot. Never invent values that are not visible. Return null for missing fields. Only return a referrerName when the screenshot explicitly names the referring person. Only use remote, onsite, or hybrid for location when that classification is clearly visible. Only use SAVED, APPLIED, INTERVIEW, OFFER, REJECTED, or WITHDRAWN for status when it is clearly visible. Only use full_time, part_time, contract, or internship for employmentType when it is clearly visible.",
+      "Extract job application details from a screenshot. Never invent values that are not visible. Return null for missing fields. Only return a referrerName when the screenshot explicitly names the referring person. Only use remote, onsite, or hybrid for location when that classification is clearly visible. Only use SAVED, APPLIED, INTERVIEW, OFFER, REJECTED, or WITHDRAWN for status when it is clearly visible. Only use full_time, part_time, contract, or internship for employmentType when it is clearly visible. If existing draft fields are provided from earlier screenshots, treat them as prior context that should be preserved unless the current screenshot clearly adds new details or corrects them. When the current screenshot continues a job description from an earlier screenshot, return one merged description in reading order instead of only the newest fragment.",
     input: [
       {
         role: "user",
@@ -402,6 +525,14 @@ export async function extractJobApplicationFromScreenshot(input: {
             type: "input_text",
             text: `This image is a job-application screenshot named ${input.filename}. Extract the visible job title, company name, the specific referrer name if visible, the date applied if visible, an optional longer job description, a visible job URL, the work arrangement category if visible (remote, onsite, or hybrid), the number of onsite days per week if explicitly stated, any visible salary range, employment type, team or department, recruiter or contact, status, and optional extra visible notes that do not fit the other fields.`,
           },
+          ...(existingDraftContext
+            ? [
+                {
+                  type: "input_text" as const,
+                  text: `Existing draft context from earlier screenshots or user edits:\n${existingDraftContext}\n\nMerge the current screenshot into that draft. Preserve earlier details that are still consistent, fill in anything newly visible, and rewrite the full jobDescription when this screenshot extends or clarifies it.`,
+                },
+              ]
+            : []),
           {
             type: "input_image",
             image_url: input.dataUrl,
