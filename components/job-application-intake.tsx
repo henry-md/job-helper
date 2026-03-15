@@ -236,6 +236,8 @@ export default function JobApplicationIntake({
 }: JobApplicationIntakeProps) {
   const router = useRouter();
   const [, startTransition] = useTransition();
+  const editorShellRef = useRef<HTMLDivElement>(null);
+  const applicationPanelRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [banner, setBanner] = useState<BannerState | null>(null);
   const [draft, setDraft] = useState<JobApplicationDraft>(emptyDraft);
@@ -246,10 +248,16 @@ export default function JobApplicationIntake({
   const [isSaving, setIsSaving] = useState(false);
   const [isPreviewMounted, setIsPreviewMounted] = useState(false);
   const [previewUploadId, setPreviewUploadId] = useState<string | null>(null);
+  const [thumbnailRailStyle, setThumbnailRailStyle] = useState<{
+    right: number;
+    top: number;
+  } | null>(null);
   const [referrerOptions, setReferrerOptions] = useState(initialReferrerOptions);
   const referrerOptionsRef = useRef(initialReferrerOptions);
   const uploadsRef = useRef<DraftUpload[]>([]);
   const inputId = useId();
+  const screenshotThumbnailHalf = 35;
+  const screenshotRightInset = 50;
 
   const extractingCount = draftUploads.filter(
     (upload) => upload.status === "extracting",
@@ -308,6 +316,53 @@ export default function JobApplicationIntake({
   useEffect(() => {
     setIsPreviewMounted(true);
   }, []);
+
+  const updateThumbnailRailPosition = useEffectEvent(() => {
+    const applicationPanel = applicationPanelRef.current;
+    const editorShell = editorShellRef.current;
+
+    if (!applicationPanel || !editorShell) {
+      return;
+    }
+
+    const rect = applicationPanel.getBoundingClientRect();
+
+    setThumbnailRailStyle({
+      right: Math.max(
+        16,
+        window.innerWidth - rect.right - screenshotThumbnailHalf + screenshotRightInset,
+      ),
+      top: Math.max(16, rect.top - screenshotThumbnailHalf),
+    });
+  });
+
+  useEffect(() => {
+    if (!isPreviewMounted || draftUploads.length === 0) {
+      return;
+    }
+
+    updateThumbnailRailPosition();
+
+    const resizeObserver = new ResizeObserver(() => {
+      updateThumbnailRailPosition();
+    });
+
+    if (editorShellRef.current) {
+      resizeObserver.observe(editorShellRef.current);
+    }
+    if (applicationPanelRef.current) {
+      resizeObserver.observe(applicationPanelRef.current);
+    }
+
+    window.addEventListener("resize", updateThumbnailRailPosition);
+    window.addEventListener("scroll", updateThumbnailRailPosition, true);
+
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", updateThumbnailRailPosition);
+      window.removeEventListener("scroll", updateThumbnailRailPosition, true);
+    };
+  }, [draftUploads.length, isPreviewMounted]);
 
   function queueSelectedFiles(files: File[], source: UploadSource) {
     const validFiles: File[] = [];
@@ -738,29 +793,37 @@ export default function JobApplicationIntake({
   }
 
   return (
-    <ApplicationWindow
-      companyOptions={companyOptions}
-      draft={draft}
-      extractingCount={processingCount}
-      isFormLocked={isFormLocked}
-      isExtracting={isExtracting}
-      isMoreOpen={isMoreOpen}
-      isSaving={isSaving}
-      referrerOptions={referrerOptions}
-      onReset={resetDraft}
-      onPanelDragLeave={handleDragLeave}
-      onPanelDragOver={handleDragOver}
-      onPanelDrop={handleDrop}
-      onSubmit={handleSubmit}
-      panelClassName={`app-scrollbar flex h-full min-h-0 flex-col gap-3 rounded-[1.5rem] border-2 border-dashed border-emerald-300/45 bg-[radial-gradient(circle_at_top,rgba(52,211,153,0.12),rgba(9,9,11,0.92)_40%,rgba(5,5,7,0.98)_100%)] p-4 shadow-[0_0_0_1px_rgba(16,185,129,0.14)] sm:p-4 ${
-        isExtracting ? "overflow-hidden" : "overflow-auto"
-      }`}
-      processingLabel={processingLabel}
-      saveDisabled={saveDisabled}
-      setDraft={setDraft}
-      setIsMoreOpen={setIsMoreOpen}
-      setReferrerOptions={setReferrerOptions}
-    >
+    <div ref={editorShellRef} className="relative flex h-full min-h-0 flex-col gap-3">
+      <div className="shrink-0">
+        <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">
+          New application
+        </p>
+      </div>
+
+      <ApplicationWindow
+        companyOptions={companyOptions}
+        draft={draft}
+        extractingCount={processingCount}
+        isFormLocked={isFormLocked}
+        isExtracting={isExtracting}
+        isMoreOpen={isMoreOpen}
+        isSaving={isSaving}
+        onReset={resetDraft}
+        onPanelDragLeave={handleDragLeave}
+        onPanelDragOver={handleDragOver}
+        onPanelDrop={handleDrop}
+        onSubmit={handleSubmit}
+        panelClassName={`app-scrollbar flex h-full min-h-0 flex-col gap-3 rounded-[1.5rem] border-2 border-dashed border-emerald-300/45 bg-[radial-gradient(circle_at_top,rgba(52,211,153,0.12),rgba(9,9,11,0.92)_40%,rgba(5,5,7,0.98)_100%)] p-4 shadow-[0_0_0_1px_rgba(16,185,129,0.14)] sm:p-4 ${
+          isExtracting ? "overflow-hidden" : "overflow-auto"
+        }`}
+        panelRef={applicationPanelRef}
+        processingLabel={processingLabel}
+        referrerOptions={referrerOptions}
+        saveDisabled={saveDisabled}
+        setDraft={setDraft}
+        setIsMoreOpen={setIsMoreOpen}
+        setReferrerOptions={setReferrerOptions}
+      >
       {statusMessage ? (
         <div
           className={`shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
@@ -787,49 +850,57 @@ export default function JobApplicationIntake({
         </div>
       ) : null}
 
-      <div className="pointer-events-none absolute right-4 top-0 z-30 flex max-w-[20rem] -translate-y-1/2 flex-wrap justify-end gap-2">
-        {draftUploads.map((upload, index) => (
-          <div key={upload.id} className="pointer-events-auto">
-            <button
-              className="group relative h-[70px] w-[70px] shrink-0 overflow-hidden rounded-[1rem] border border-white/15 bg-black/85 shadow-[0_18px_40px_rgba(0,0,0,0.42)] ring-1 ring-emerald-300/10 transition hover:-translate-y-1 hover:border-emerald-300/40 hover:ring-emerald-300/30 focus:outline-none focus:ring-2 focus:ring-emerald-300/40"
-              onClick={() => setPreviewUploadId(upload.id)}
-              type="button"
+      {draftUploads.length > 0 && isPreviewMounted && thumbnailRailStyle
+        ? createPortal(
+            <div
+              className="pointer-events-none fixed z-[140] flex max-w-[20rem] flex-wrap justify-end gap-2"
+              style={thumbnailRailStyle}
             >
-              <Image
-                alt={`${upload.file.name} preview`}
-                className="h-full w-full object-cover opacity-90 transition duration-200 group-hover:scale-[1.03] group-hover:opacity-100"
-                fill
-                sizes="70px"
-                src={upload.previewUrl}
-                unoptimized
-              />
-              {extractingUpload?.id === upload.id ? (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/35">
-                  <div className="h-7 w-7 animate-spin rounded-full border-[3px] border-emerald-200/25 border-t-emerald-200" />
+              {draftUploads.map((upload, index) => (
+                <div key={upload.id} className="pointer-events-auto">
+                  <button
+                    className="group relative h-[70px] w-[70px] shrink-0 overflow-hidden rounded-[1rem] border border-white/15 bg-black/85 shadow-[0_18px_40px_rgba(0,0,0,0.42)] ring-1 ring-emerald-300/10 transition hover:-translate-y-1 hover:border-emerald-300/40 hover:ring-emerald-300/30 focus:outline-none focus:ring-2 focus:ring-emerald-300/40"
+                    onClick={() => setPreviewUploadId(upload.id)}
+                    type="button"
+                  >
+                    <Image
+                      alt={`${upload.file.name} preview`}
+                      className="h-full w-full object-cover opacity-90 transition duration-200 group-hover:scale-[1.03] group-hover:opacity-100"
+                      fill
+                      sizes="70px"
+                      src={upload.previewUrl}
+                      unoptimized
+                    />
+                    {extractingUpload?.id === upload.id ? (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/35">
+                        <div className="h-7 w-7 animate-spin rounded-full border-[3px] border-emerald-200/25 border-t-emerald-200" />
+                      </div>
+                    ) : null}
+                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/70 to-transparent px-1.5 pb-1.5 pt-4 text-left">
+                      <p className="truncate text-[9px] font-medium uppercase tracking-[0.14em] text-white/90">
+                        Shot {index + 1}
+                      </p>
+                      <p className="truncate text-[9px] text-zinc-300">
+                        {upload.status === "failed"
+                          ? "Needs review"
+                          : upload.status === "extracting"
+                            ? "Extracting"
+                            : upload.status === "queued"
+                              ? "Queued"
+                              : ""}
+                      </p>
+                    </div>
+                  </button>
                 </div>
-              ) : null}
-              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/70 to-transparent px-1.5 pb-1.5 pt-4 text-left">
-                <p className="truncate text-[9px] font-medium uppercase tracking-[0.14em] text-white/90">
-                  Shot {index + 1}
-                </p>
-                <p className="truncate text-[9px] text-zinc-300">
-                  {upload.status === "failed"
-                    ? "Needs review"
-                    : upload.status === "extracting"
-                      ? "Extracting"
-                      : upload.status === "queued"
-                        ? "Queued"
-                        : ""}
-                </p>
-              </div>
-            </button>
-          </div>
-        ))}
-      </div>
+              ))}
+            </div>,
+            document.body,
+          )
+        : null}
 
       {previewUpload && isPreviewMounted
         ? createPortal(
-            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-5 backdrop-blur-sm">
+            <div className="fixed inset-0 z-[160] flex items-center justify-center bg-black/80 p-5 backdrop-blur-sm">
               <button
                 aria-label="Close screenshot preview"
                 className="absolute inset-0"
@@ -880,6 +951,7 @@ export default function JobApplicationIntake({
             document.body,
           )
         : null}
-    </ApplicationWindow>
+      </ApplicationWindow>
+    </div>
   );
 }

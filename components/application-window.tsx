@@ -4,6 +4,7 @@ import type {
   Dispatch,
   DragEvent,
   FormEvent,
+  RefObject,
   ReactNode,
   SetStateAction,
 } from "react";
@@ -65,6 +66,7 @@ export default function ApplicationWindow({
   onPanelDragLeave,
   onPanelDragOver,
   onPanelDrop,
+  panelRef,
   onSubmit,
   panelClassName,
   processingLabel,
@@ -87,6 +89,7 @@ export default function ApplicationWindow({
   onPanelDragLeave?: (event: DragEvent<HTMLDivElement>) => void;
   onPanelDragOver?: (event: DragEvent<HTMLDivElement>) => void;
   onPanelDrop?: (event: DragEvent<HTMLDivElement>) => void;
+  panelRef?: RefObject<HTMLDivElement | null>;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   panelClassName?: string;
   processingLabel?: string;
@@ -118,6 +121,7 @@ export default function ApplicationWindow({
     <form className="flex h-full min-h-0 flex-col gap-3" onSubmit={onSubmit}>
       <div className="relative min-h-0 flex-1">
         <div
+          ref={panelRef}
           className={
             panelClassName ??
             "app-scrollbar flex h-full min-h-0 flex-col gap-3 overflow-auto rounded-[1.25rem] border border-white/8 bg-black/20 p-3"

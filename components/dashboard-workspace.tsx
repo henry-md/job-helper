@@ -4,17 +4,12 @@ import { useState } from "react";
 import ApplicationStatsWorkspace from "@/components/application-stats-workspace";
 import JobApplicationIntake from "@/components/job-application-intake";
 import SignOutButton from "@/components/sign-out-button";
+import { formatCompactDate, shouldIncludeShortYear } from "@/lib/date-format";
 import type {
   CompanyOption,
   JobApplicationRecord,
   ReferrerOption,
 } from "@/lib/job-application-types";
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(
-    new Date(value),
-  );
-}
 
 function getValidProfileImageSrc(value: string | null | undefined) {
   const normalizedValue = value?.trim();
@@ -119,6 +114,9 @@ export default function DashboardWorkspace({
   const [activeTab, setActiveTab] = useState<"history" | "new">("new");
   const displayName = userName?.trim()?.split(" ")[0] || userName || "there";
   const profileImageSrc = getValidProfileImageSrc(userImage);
+  const includeYearInDates = shouldIncludeShortYear(
+    applications.map((application) => application.appliedAt),
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-[clamp(0.75rem,1.2vh,1rem)]">
@@ -218,7 +216,10 @@ export default function DashboardWorkspace({
                             </p>
                           </div>
                           <span className="text-xs text-zinc-500">
-                            {formatDate(application.appliedAt)}
+                            {formatCompactDate(
+                              application.appliedAt,
+                              includeYearInDates,
+                            )}
                           </span>
                         </div>
                       </article>

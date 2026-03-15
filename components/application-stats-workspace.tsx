@@ -3,18 +3,13 @@
 import { type FormEvent, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import ApplicationWindow from "@/components/application-window";
+import { formatCompactDate, shouldIncludeShortYear } from "@/lib/date-format";
 import type {
   CompanyOption,
   JobApplicationDraft,
   JobApplicationRecord,
   ReferrerOption,
 } from "@/lib/job-application-types";
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(
-    new Date(value),
-  );
-}
 
 function getEmptyDraft(): JobApplicationDraft {
   return {
@@ -118,6 +113,12 @@ export default function ApplicationStatsWorkspace({
       count: applications.filter((application) => application.status === status).length,
       label: status,
     }),
+  );
+  const includeYearInDates = shouldIncludeShortYear(
+    applications.flatMap((application) => [
+      application.appliedAt,
+      application.updatedAt,
+    ]),
   );
 
   useEffect(() => {
@@ -375,8 +376,20 @@ export default function ApplicationStatsWorkspace({
                           {application.companyName}
                         </p>
                         <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-500">
-                          <span>Submitted {formatDate(application.appliedAt)}</span>
-                          <span>Updated {formatDate(application.updatedAt)}</span>
+                          <span>
+                            Submitted{" "}
+                            {formatCompactDate(
+                              application.appliedAt,
+                              includeYearInDates,
+                            )}
+                          </span>
+                          <span>
+                            Updated{" "}
+                            {formatCompactDate(
+                              application.updatedAt,
+                              includeYearInDates,
+                            )}
+                          </span>
                         </div>
                       </div>
 
