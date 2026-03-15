@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ApplicationStatsWorkspace from "@/components/application-stats-workspace";
 import JobApplicationIntake from "@/components/job-application-intake";
 import SignOutButton from "@/components/sign-out-button";
@@ -39,8 +39,36 @@ function ProfileAvatar({
   imageSrc: string | null;
   name: string;
 }) {
-  const [hasImageError, setHasImageError] = useState(false);
-  const shouldRenderImage = Boolean(imageSrc) && !hasImageError;
+  const [resolvedImageSrc, setResolvedImageSrc] = useState<string | null>(null);
+  const shouldRenderImage =
+    imageSrc !== null && resolvedImageSrc === imageSrc;
+
+  useEffect(() => {
+    if (!imageSrc) {
+      return;
+    }
+
+    let isActive = true;
+    const probe = new window.Image();
+
+    probe.onload = () => {
+      if (isActive) {
+        setResolvedImageSrc(imageSrc);
+      }
+    };
+
+    probe.onerror = () => {
+      if (isActive) {
+        setResolvedImageSrc(null);
+      }
+    };
+
+    probe.src = imageSrc;
+
+    return () => {
+      isActive = false;
+    };
+  }, [imageSrc]);
 
   if (shouldRenderImage) {
     return (
@@ -48,7 +76,7 @@ function ProfileAvatar({
       <img
         alt={name}
         className="h-11 w-11 rounded-full object-cover"
-        onError={() => setHasImageError(true)}
+        onError={() => setResolvedImageSrc(null)}
         src={imageSrc}
       />
     );
