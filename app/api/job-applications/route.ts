@@ -278,42 +278,11 @@ export async function POST(request: Request) {
       }
     }
 
-    const persistedScreenshots = [];
-
-    for (const [index, screenshotFile] of screenshotFiles.entries()) {
-      const persistedScreenshot = await persistJobScreenshot(
-        screenshotFile,
-        session.user.id,
-      );
-      const snapshot = draftSnapshots[index];
-      const extractionStatus =
-        snapshot?.status === "failed"
-          ? "FAILED"
-          : snapshot?.status === "ready"
-            ? "SUCCEEDED"
-            : "PENDING";
-
-      const screenshotRecord = await prisma.jobApplicationScreenshot.create({
-        data: {
-          userId: session.user.id,
-          originalFilename: screenshotFile.name || "job-screenshot",
-          storagePath: persistedScreenshot.storagePath,
-          mimeType: screenshotFile.type || "application/octet-stream",
-          sizeBytes: persistedScreenshot.sizeBytes,
-          extractionStatus,
-          extractionModel: snapshot?.model ?? null,
-          extractionError:
-            extractionStatus === "FAILED"
-              ? snapshot?.error ?? "Draft extraction failed before save."
-              : null,
-          ...(snapshot?.extraction
-            ? { extractedPayload: snapshot.extraction }
-            : {}),
-        },
-      });
-
-      persistedScreenshots.push(screenshotRecord);
-    }
+    const persistedScreenshots = await Promise.all(
+      screenshotFiles.map((screenshotFile) =>
+        persistJobScreenshot(screenshotFile, session.user.id),
+      ),
+    );
 
     const company = await prisma.company.upsert({
       where: {
@@ -332,14 +301,10 @@ export async function POST(request: Request) {
       },
     });
 
-    const sourceScreenshotId =
-      persistedScreenshots[persistedScreenshots.length - 1]?.id ?? null;
-
     const application = await prisma.jobApplication.create({
       data: {
         userId: session.user.id,
         companyId: company.id,
-        sourceScreenshotId,
         title: jobTitle.trim(),
         status: normalizedStatus as ApplicationStatusValue,
         location: normalizedLocation,
@@ -364,11 +329,61 @@ export async function POST(request: Request) {
       },
       include: {
         company: true,
-        sourceScreenshot: true,
+        screenshots: {
+          orderBy: {
+            createdAt: "asc",
+          },
+        },
       },
     });
 
-    return NextResponse.json({ application });
+    await Promise.all(
+      screenshotFiles.map((screenshotFile, index) => {
+        const snapshot = draftSnapshots[index];
+        const extractionStatus =
+          snapshot?.status === "failed"
+            ? "FAILED"
+            : snapshot?.status === "ready"
+              ? "SUCCEEDED"
+              : "PENDING";
+
+        return prisma.jobApplicationScreenshot.create({
+          data: {
+            applicationId: application.id,
+            userId: session.user.id,
+            originalFilename: screenshotFile.name || "job-screenshot",
+            storagePath: persistedScreenshots[index]?.storagePath ?? "",
+            mimeType: screenshotFile.type || "application/octet-stream",
+            sizeBytes: persistedScreenshots[index]?.sizeBytes ?? screenshotFile.size,
+            extractionStatus,
+            extractionModel: snapshot?.model ?? null,
+            extractionError:
+              extractionStatus === "FAILED"
+                ? snapshot?.error ?? "Draft extraction failed before save."
+                : null,
+            ...(snapshot?.extraction
+              ? { extractedPayload: snapshot.extraction }
+              : {}),
+          },
+        });
+      }),
+    );
+
+    const savedApplication = await prisma.jobApplication.findUniqueOrThrow({
+      where: {
+        id: application.id,
+      },
+      include: {
+        company: true,
+        screenshots: {
+          orderBy: {
+            createdAt: "asc",
+          },
+        },
+      },
+    });
+
+    return NextResponse.json({ application: savedApplication });
   } catch (error) {
     const detail =
       error instanceof Error ? error.message : "Failed to save the application.";

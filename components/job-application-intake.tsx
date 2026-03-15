@@ -113,6 +113,10 @@ function pickImageFiles(
   return Array.from(files ?? []).filter((file) => acceptedMimeTypes.has(file.type));
 }
 
+function pickImageFile(items?: DataTransferItemList | null) {
+  return pickImageFilesFromItems(items)[0] ?? null;
+}
+
 function validateImageFile(file: File) {
   if (!acceptedMimeTypes.has(file.type)) {
     return "Use a PNG, JPG, or WebP screenshot.";
@@ -815,7 +819,7 @@ export default function JobApplicationIntake({
                       ? "Extracting"
                       : upload.status === "queued"
                         ? "Queued"
-                        : "Tap to expand"}
+                        : ""}
                 </p>
               </div>
             </button>
@@ -838,16 +842,26 @@ export default function JobApplicationIntake({
                     <p className="truncate text-sm font-medium text-zinc-100">
                       {previewUpload.file.name}
                     </p>
-                    <p className="mt-1 text-xs uppercase tracking-[0.22em] text-zinc-400">
-                      Temporary reference preview while editing
-                    </p>
                   </div>
                   <button
-                    className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                    className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
                     onClick={() => setPreviewUploadId(null)}
                     type="button"
                   >
-                    Close
+                    <svg
+                      aria-hidden="true"
+                      className="h-3.5 w-3.5 shrink-0"
+                      fill="none"
+                      viewBox="0 0 14 14"
+                    >
+                      <path
+                        d="M3.5 3.5 10.5 10.5M10.5 3.5 3.5 10.5"
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeWidth="1.5"
+                      />
+                    </svg>
+                    <span>Close</span>
                   </button>
                 </div>
                 <div className="flex-1 overflow-auto p-4">

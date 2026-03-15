@@ -18,5 +18,5 @@ Important boundaries:
 - Screenshot file persistence is local filesystem storage under `public/uploads/job-screenshots/<userId>/`, not object storage.
 
 Current persistence nuance:
-- A save can include multiple screenshot records, but only the newest screenshot is linked as `JobApplication.sourceScreenshotId`.
+- A saved application can own multiple `JobApplicationScreenshot` records through `JobApplicationScreenshot.applicationId`.
 - Screenshot records may store extraction payload/model/error snapshots from the client-side draft state.

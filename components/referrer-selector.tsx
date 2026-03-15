@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   CompanyOption,
   JobApplicationDraft,
@@ -53,6 +53,7 @@ export default function ReferrerSelector({
   setDraft: React.Dispatch<React.SetStateAction<JobApplicationDraft>>;
   setReferrerOptions: React.Dispatch<React.SetStateAction<ReferrerOption[]>>;
 }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -72,6 +73,33 @@ export default function ReferrerSelector({
 
     setCreateCompanyName(currentCompanyName);
   }, [currentCompanyName, isCreateOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    function handlePointerOrFocusOutside(event: MouseEvent | FocusEvent) {
+      const eventTarget = event.target;
+
+      if (
+        eventTarget instanceof Node &&
+        containerRef.current?.contains(eventTarget)
+      ) {
+        return;
+      }
+
+      setIsOpen(false);
+    }
+
+    document.addEventListener("mousedown", handlePointerOrFocusOutside);
+    document.addEventListener("focusin", handlePointerOrFocusOutside);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerOrFocusOutside);
+      document.removeEventListener("focusin", handlePointerOrFocusOutside);
+    };
+  }, [isOpen]);
 
   const filteredOptions = useMemo(() => {
     return referrerOptions
@@ -152,7 +180,10 @@ export default function ReferrerSelector({
   }
 
   return (
-    <div className="relative flex min-w-0 flex-col rounded-[1rem] border border-white/8 bg-white/5 p-3">
+    <div
+      ref={containerRef}
+      className="relative flex min-w-0 flex-col rounded-[1rem] border border-white/8 bg-white/5 p-3"
+    >
       <div className="flex items-center justify-between gap-3">
         <span className="text-sm font-medium text-zinc-100">Referrer</span>
         <button

@@ -16,6 +16,26 @@ function formatDate(value: string) {
   );
 }
 
+function getEmptyDraft(): JobApplicationDraft {
+  return {
+    appliedAt: "",
+    companyName: "",
+    jobDescription: "",
+    jobTitle: "",
+    jobUrl: "",
+    location: "",
+    notes: "",
+    onsiteDaysPerWeek: "",
+    referrerId: "",
+    referrerName: "",
+    recruiterContact: "",
+    salaryRange: "",
+    status: "APPLIED",
+    teamOrDepartment: "",
+    employmentType: "",
+  };
+}
+
 function toDraft(application: JobApplicationRecord): JobApplicationDraft {
   return {
     appliedAt: application.appliedAt,
@@ -68,27 +88,9 @@ export default function ApplicationStatsWorkspace({
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [applications, setApplications] = useState(initialApplications);
-  const [selectedId, setSelectedId] = useState(initialApplications[0]?.id ?? null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<JobApplicationDraft>(
-    initialApplications[0]
-      ? toDraft(initialApplications[0])
-      : {
-          appliedAt: "",
-          companyName: "",
-          jobDescription: "",
-          jobTitle: "",
-          jobUrl: "",
-          location: "",
-          notes: "",
-          onsiteDaysPerWeek: "",
-          referrerId: "",
-          referrerName: "",
-          recruiterContact: "",
-          salaryRange: "",
-          status: "APPLIED",
-          teamOrDepartment: "",
-          employmentType: "",
-        },
+    getEmptyDraft(),
   );
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -103,7 +105,7 @@ export default function ApplicationStatsWorkspace({
     matchesSearch(application, searchQuery),
   );
   const selectedApplication =
-    applications.find((application) => application.id === selectedId) ?? null;
+    applications.find((application) => application.id === expandedId) ?? null;
   const activePipelineCount = applications.filter((application) =>
     ["APPLIED", "INTERVIEW", "OFFER"].includes(application.status),
   ).length;
@@ -119,7 +121,33 @@ export default function ApplicationStatsWorkspace({
   );
 
   useEffect(() => {
+    setApplications(initialApplications);
+  }, [initialApplications]);
+
+  useEffect(() => {
+    setReferrerOptions(initialReferrerOptions);
+  }, [initialReferrerOptions]);
+
+  useEffect(() => {
+    if (applications.length === 0) {
+      setExpandedId(null);
+      setDraft(getEmptyDraft());
+      return;
+    }
+
+    if (
+      expandedId &&
+      !applications.some((application) => application.id === expandedId)
+    ) {
+      setExpandedId(null);
+      setDraft(getEmptyDraft());
+    }
+  }, [applications, expandedId]);
+
+  useEffect(() => {
     if (!selectedApplication) {
+      setDraft(getEmptyDraft());
+      setIsMoreOpen(false);
       return;
     }
 
@@ -237,7 +265,7 @@ export default function ApplicationStatsWorkspace({
   }
 
   return (
-    <section className="grid min-h-0 flex-1 gap-[clamp(0.75rem,1.2vh,1rem)] xl:grid-cols-[0.72fr_1.28fr]">
+    <section className="app-scrollbar grid min-h-0 flex-1 gap-[clamp(0.75rem,1.2vh,1rem)] overflow-y-auto xl:overflow-hidden xl:grid-cols-[0.72fr_1.28fr]">
       <aside className="grid min-h-0 content-start gap-[clamp(0.75rem,1.2vh,1rem)]">
         <section className="glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
           <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
@@ -291,123 +319,123 @@ export default function ApplicationStatsWorkspace({
             </div>
           </div>
         </section>
-
-        <section className="glass-panel soft-ring flex min-h-0 flex-col rounded-[1.5rem] p-4 sm:p-5">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-              Applications
-            </p>
-            <span className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
-              {filteredApplications.length}
-            </span>
-          </div>
-          <input
-            className="mt-3 rounded-[1rem] border border-white/10 bg-zinc-950/70 px-3 py-2.5 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-emerald-300/45"
-            onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search title, company, status..."
-            type="search"
-            value={searchQuery}
-          />
-          <div className="mt-3 min-h-0 flex-1 overflow-auto">
-            {filteredApplications.length === 0 ? (
-              <p className="text-sm text-zinc-400">No applications match this filter.</p>
-            ) : (
-              <div className="grid gap-2">
-                {filteredApplications.map((application) => (
-                  <button
-                    key={application.id}
-                    className={`rounded-[1rem] border px-3 py-3 text-left transition ${
-                      application.id === selectedId
-                        ? "border-emerald-400/30 bg-emerald-400/10"
-                        : "border-white/8 bg-black/20 hover:border-white/14"
-                    }`}
-                    onClick={() => {
-                      setSelectedId(application.id);
-                      setBanner(null);
-                    }}
-                    type="button"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-zinc-100">
-                          {application.jobTitle}
-                        </p>
-                        <p className="truncate text-sm text-zinc-400">
-                          {application.companyName}
-                        </p>
-                      </div>
-                      <span className="text-xs uppercase tracking-[0.16em] text-zinc-500">
-                        {application.status}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-xs text-zinc-500">
-                      Updated {formatDate(application.updatedAt)}
-                    </p>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
       </aside>
 
       <section className="glass-panel soft-ring flex min-h-0 flex-col rounded-[1.5rem] p-4 sm:p-5">
-        {!selectedApplication ? (
-          <div className="flex h-full items-center justify-center rounded-[1.25rem] border border-white/8 bg-black/20 p-6 text-center text-sm text-zinc-400">
-            Select an application to edit it.
-          </div>
-        ) : (
-          <>
-            <div className="mb-3 flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                  Application window
-                </p>
-                <h2 className="mt-1 text-lg font-semibold text-zinc-50">
-                  {selectedApplication.companyName}
-                </h2>
-                <p className="mt-1 text-sm text-zinc-400">
-                  Last updated {formatDate(selectedApplication.updatedAt)}
-                </p>
-              </div>
-              <span className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
-                {selectedApplication.status}
-              </span>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+            Application history
+          </p>
+          <span className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
+            {filteredApplications.length}
+          </span>
+        </div>
+        <input
+          className="mt-3 rounded-[1rem] border border-white/10 bg-zinc-950/70 px-3 py-2.5 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-emerald-300/45"
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder="Search title, company, status..."
+          type="search"
+          value={searchQuery}
+        />
+
+        <div className="app-scrollbar mt-3 min-h-0 flex-1 overflow-visible pr-1 xl:overflow-y-auto">
+          {filteredApplications.length === 0 ? (
+            <div className="flex h-full min-h-[220px] items-center justify-center rounded-[1.25rem] border border-white/8 bg-black/20 p-6 text-center text-sm text-zinc-400">
+              No applications match this filter.
             </div>
+          ) : (
+            <div className="grid gap-3">
+              {filteredApplications.map((application) => {
+                const isExpanded = application.id === expandedId;
 
-            {banner ? (
-              <div
-                className={`mb-3 shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
-                  banner.tone === "success"
-                    ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
-                    : "border border-amber-400/25 bg-amber-400/10 text-amber-100"
-                }`}
-              >
-                {banner.text}
-              </div>
-            ) : null}
+                return (
+                  <article
+                    key={application.id}
+                    className={`overflow-hidden rounded-[1.25rem] border transition ${
+                      isExpanded
+                        ? "border-emerald-400/25 bg-emerald-400/6"
+                        : "border-white/8 bg-black/20"
+                    }`}
+                  >
+                    <button
+                      className="flex w-full items-start justify-between gap-4 px-4 py-4 text-left transition hover:bg-white/[0.03]"
+                      onClick={() => {
+                        setExpandedId((currentId) =>
+                          currentId === application.id ? null : application.id,
+                        );
+                        setBanner(null);
+                      }}
+                      type="button"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-base font-medium text-zinc-100">
+                          {application.jobTitle}
+                        </p>
+                        <p className="mt-1 truncate text-sm text-zinc-400">
+                          {application.companyName}
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-500">
+                          <span>Submitted {formatDate(application.appliedAt)}</span>
+                          <span>Updated {formatDate(application.updatedAt)}</span>
+                        </div>
+                      </div>
 
-            <ApplicationWindow
-              companyOptions={companyOptions}
-              draft={draft}
-              footerMessage="Edit the application, then save changes."
-              isFormLocked={isSaving}
-              isMoreOpen={isMoreOpen}
-              isSaving={isSaving}
-              onReset={resetSelectedDraft}
-              onSubmit={handleSubmit}
-              referrerOptions={referrerOptions}
-              saveDisabled={
-                isSaving ||
-                draft.jobTitle.trim().length === 0 ||
-                draft.companyName.trim().length === 0
-              }
-              setDraft={setDraft}
-              setIsMoreOpen={setIsMoreOpen}
-              setReferrerOptions={setReferrerOptions}
-            />
-          </>
-        )}
+                      <div className="flex shrink-0 items-center gap-3">
+                        <span className="rounded-full border border-white/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-zinc-400">
+                          {application.status}
+                        </span>
+                        <span
+                          aria-hidden="true"
+                          className={`text-sm text-zinc-500 transition-transform ${
+                            isExpanded ? "rotate-180" : ""
+                          }`}
+                        >
+                          ▼
+                        </span>
+                      </div>
+                    </button>
+
+                    {isExpanded ? (
+                      <div className="border-t border-white/8 px-3 pb-3 pt-3">
+                        {banner ? (
+                          <div
+                            className={`mb-3 shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
+                              banner.tone === "success"
+                                ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
+                                : "border border-amber-400/25 bg-amber-400/10 text-amber-100"
+                            }`}
+                          >
+                            {banner.text}
+                          </div>
+                        ) : null}
+
+                        <ApplicationWindow
+                          companyOptions={companyOptions}
+                          draft={draft}
+                          footerMessage="Edit the application, then save changes."
+                          isFormLocked={isSaving}
+                          isMoreOpen={isMoreOpen}
+                          isSaving={isSaving}
+                          onReset={resetSelectedDraft}
+                          onSubmit={handleSubmit}
+                          referrerOptions={referrerOptions}
+                          saveDisabled={
+                            isSaving ||
+                            draft.jobTitle.trim().length === 0 ||
+                            draft.companyName.trim().length === 0
+                          }
+                          setDraft={setDraft}
+                          setIsMoreOpen={setIsMoreOpen}
+                          setReferrerOptions={setReferrerOptions}
+                        />
+                      </div>
+                    ) : null}
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </section>
     </section>
   );

@@ -109,6 +109,7 @@ model Person {
 model JobApplicationScreenshot {
   id               String           @id @default(cuid())
   userId           String
+  applicationId    String?
   originalFilename String
   storagePath      String
   mimeType         String
@@ -119,9 +120,10 @@ model JobApplicationScreenshot {
   extractedPayload Json?
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
-  application      JobApplication?
+  application      JobApplication?  @relation(fields: [applicationId], references: [id], onDelete: SetNull)
   user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([applicationId, createdAt(sort: Desc)])
   @@index([userId, createdAt(sort: Desc)])
   @@index([extractionStatus])
 }
@@ -131,7 +133,6 @@ model JobApplication {
   userId           String
   companyId        String
   referrerId       String?
-  sourceScreenshotId String?               @unique
   title            String
   status           ApplicationStatus       @default(APPLIED)
   location         String?
@@ -151,7 +152,7 @@ model JobApplication {
   updatedAt        DateTime                 @updatedAt
   company          Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   referrer         Person?                  @relation("JobApplicationReferrer", fields: [referrerId], references: [id], onDelete: SetNull)
-  sourceScreenshot JobApplicationScreenshot? @relation(fields: [sourceScreenshotId], references: [id], onDelete: SetNull)
+  screenshots      JobApplicationScreenshot[]
   user             User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, status])

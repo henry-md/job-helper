@@ -76,15 +76,11 @@ function ProfileAvatar({
 }
 
 export default function AppShellHeader({
-  applicationCount,
-  companyCount,
   currentView,
   pageLabel,
   userImage,
   userName,
 }: {
-  applicationCount: number;
-  companyCount: number;
   currentView: "application-window" | "stats";
   pageLabel: string;
   userImage: string | null | undefined;
@@ -133,12 +129,6 @@ export default function AppShellHeader({
             Stats
           </Link>
         </nav>
-        <span className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
-          {applicationCount} apps
-        </span>
-        <span className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
-          {companyCount} companies
-        </span>
         <SignOutButton />
       </div>
     </header>
