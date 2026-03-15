@@ -5,12 +5,16 @@ import { Toaster } from "sonner";
 export default function AppToaster() {
   return (
     <Toaster
-      position="top-right"
-      richColors
+      closeButton
+      expand
+      gap={14}
+      offset={24}
+      position="bottom-left"
       theme="dark"
       toastOptions={{
+        duration: 3600,
         className:
-          "border border-emerald-300/20 bg-zinc-950/95 text-zinc-100 shadow-[0_20px_60px_rgba(0,0,0,0.45)]",
+          "rounded-[1.2rem] border border-white/10 bg-[linear-gradient(180deg,rgba(39,39,42,0.88),rgba(9,9,11,0.96))] text-zinc-100 shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl ring-1 ring-white/6",
       }}
     />
   );

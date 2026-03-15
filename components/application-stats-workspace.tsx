@@ -1,9 +1,20 @@
 "use client";
 
 import { type FormEvent, useEffect, useState, useTransition } from "react";
+import { ChevronDown } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import ApplicationWindow from "@/components/application-window";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { formatCompactDate, shouldIncludeShortYear } from "@/lib/date-format";
 import type {
   CompanyOption,
@@ -93,6 +104,8 @@ export default function ApplicationStatsWorkspace({
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [pendingDeleteApplication, setPendingDeleteApplication] =
+    useState<JobApplicationRecord | null>(null);
   const [referrerOptions, setReferrerOptions] = useState(initialReferrerOptions);
   const [searchQuery, setSearchQuery] = useState("");
   const [banner, setBanner] = useState<{
@@ -304,24 +317,7 @@ export default function ApplicationStatsWorkspace({
   }
 
   function requestDelete(application: JobApplicationRecord) {
-    toast.warning(
-      `Delete "${application.jobTitle}" at ${application.companyName}? This cannot be undone.`,
-      {
-        action: {
-          label: "Delete",
-          onClick: () => {
-            void handleDelete(application);
-          },
-        },
-        cancel: {
-          label: "Cancel",
-          onClick: () => {
-            setDeletingId(null);
-          },
-        },
-        duration: 10000,
-      },
-    );
+    setPendingDeleteApplication(application);
   }
 
   function resetSelectedDraft() {
@@ -335,8 +331,51 @@ export default function ApplicationStatsWorkspace({
   }
 
   return (
-    <section className="app-scrollbar grid min-h-0 flex-1 gap-[clamp(0.75rem,1.2vh,1rem)] overflow-y-auto xl:overflow-hidden xl:grid-cols-[0.72fr_1.28fr]">
-      <aside className="grid min-h-0 content-start gap-[clamp(0.75rem,1.2vh,1rem)]">
+    <>
+      <AlertDialog
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingDeleteApplication(null);
+          }
+        }}
+        open={pendingDeleteApplication !== null}
+      >
+        <AlertDialogContent className="max-w-md rounded-[1.5rem] border border-white/10 bg-zinc-950/95 p-0 text-zinc-100 shadow-[0_30px_120px_rgba(0,0,0,0.58)] ring-1 ring-white/10 backdrop-blur-xl">
+          <AlertDialogHeader className="items-start gap-2 px-6 pb-4 pt-6 text-left sm:place-items-start sm:text-left">
+            <AlertDialogTitle className="text-lg font-semibold text-zinc-50">
+              Delete application?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-sm leading-6 text-zinc-400">
+              {pendingDeleteApplication
+                ? `Delete "${pendingDeleteApplication.jobTitle}" at ${pendingDeleteApplication.companyName}? This cannot be undone.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="mx-0 mb-0 border-t border-white/10 bg-white/5 px-6 py-4 sm:justify-end">
+            <AlertDialogCancel className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.18em] text-zinc-200 hover:border-white/20 hover:bg-white/10">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="rounded-full border border-rose-400/25 bg-rose-400/12 px-4 py-2 text-xs uppercase tracking-[0.18em] text-rose-100 hover:bg-rose-400/18"
+              disabled={!pendingDeleteApplication || deletingId !== null}
+              onClick={() => {
+                if (!pendingDeleteApplication) {
+                  return;
+                }
+
+                void handleDelete(pendingDeleteApplication);
+                setPendingDeleteApplication(null);
+              }}
+              variant="destructive"
+            >
+              {deletingId && pendingDeleteApplication ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <section className="app-scrollbar grid min-h-0 flex-1 gap-[clamp(0.75rem,1.2vh,1rem)] overflow-y-auto xl:overflow-hidden xl:grid-cols-[0.72fr_1.28fr]">
+        <aside className="grid min-h-0 content-start gap-[clamp(0.75rem,1.2vh,1rem)]">
         <section className="glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
           <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
             Stats overview
@@ -389,9 +428,9 @@ export default function ApplicationStatsWorkspace({
             </div>
           </div>
         </section>
-      </aside>
+        </aside>
 
-      <section className="glass-panel soft-ring flex min-h-0 flex-col rounded-[1.5rem] p-4 sm:p-5">
+        <section className="glass-panel soft-ring flex min-h-0 flex-col rounded-[1.5rem] p-4 sm:p-5">
         <div className="flex items-center justify-between gap-3">
           <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
             Application history
@@ -433,15 +472,15 @@ export default function ApplicationStatsWorkspace({
                 return (
                   <article
                     key={application.id}
-                    className={`overflow-hidden rounded-[1.25rem] border transition ${
+                    className={`group overflow-hidden rounded-[1.25rem] border transition ${
                       isExpanded
                         ? "border-emerald-400/25 bg-emerald-400/6"
-                        : "border-white/8 bg-black/20"
+                        : "border-white/8 bg-black/20 hover:border-white/12 hover:bg-white/[0.03]"
                     }`}
-                  >
-                    <div className="flex items-start justify-between gap-4 px-4 py-4">
+                    >
+                    <div className="flex items-start justify-between gap-3 px-4 py-4">
                       <button
-                        className="flex min-w-0 flex-1 items-start justify-between gap-4 text-left transition hover:bg-white/[0.03]"
+                        className="flex min-w-0 flex-1 items-start rounded-[1.05rem] px-4 py-3 text-left transition"
                         onClick={() => {
                           setExpandedId((currentId) =>
                             currentId === application.id ? null : application.id,
@@ -450,7 +489,7 @@ export default function ApplicationStatsWorkspace({
                         }}
                         type="button"
                       >
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <p className="truncate text-base font-medium text-zinc-100">
                             {application.jobTitle}
                           </p>
@@ -474,32 +513,38 @@ export default function ApplicationStatsWorkspace({
                             </span>
                           </div>
                         </div>
+                      </button>
 
-                        <div className="flex shrink-0 items-center gap-3">
-                          <span className="rounded-full border border-white/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-zinc-400">
-                            {application.status}
-                          </span>
-                          <span
+                      <div className="flex shrink-0 flex-col items-center gap-3 pt-1">
+                        <button
+                          className="rounded-full border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs uppercase tracking-[0.18em] text-rose-200 transition hover:border-rose-300/35 hover:bg-rose-400/15 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={isDeleting}
+                          onClick={() => {
+                            requestDelete(application);
+                          }}
+                          type="button"
+                        >
+                          {isDeleting ? "Deleting..." : "Delete"}
+                        </button>
+                        <button
+                          aria-label={isExpanded ? "Collapse application" : "Expand application"}
+                          className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-zinc-400 transition hover:border-white/15 hover:text-zinc-300"
+                          onClick={() => {
+                            setExpandedId((currentId) =>
+                              currentId === application.id ? null : application.id,
+                            );
+                            setBanner(null);
+                          }}
+                          type="button"
+                        >
+                          <ChevronDown
                             aria-hidden="true"
-                            className={`text-sm text-zinc-500 transition-transform ${
+                            className={`h-4 w-4 transition-transform ${
                               isExpanded ? "rotate-180" : ""
                             }`}
-                          >
-                            ▼
-                          </span>
-                        </div>
-                      </button>
-
-                      <button
-                        className="rounded-full border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs uppercase tracking-[0.18em] text-rose-200 transition hover:border-rose-300/35 hover:bg-rose-400/15 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={isDeleting}
-                        onClick={() => {
-                          requestDelete(application);
-                        }}
-                        type="button"
-                      >
-                        {isDeleting ? "Deleting..." : "Delete"}
-                      </button>
+                          />
+                        </button>
+                      </div>
                     </div>
 
                     {isExpanded ? (
@@ -531,7 +576,8 @@ export default function ApplicationStatsWorkspace({
             </div>
           )}
         </div>
+        </section>
       </section>
-    </section>
+    </>
   );
 }

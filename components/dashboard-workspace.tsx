@@ -39,12 +39,16 @@ function ProfileAvatar({
   imageSrc: string | null;
   name: string;
 }) {
-  if (imageSrc) {
+  const [hasImageError, setHasImageError] = useState(false);
+  const shouldRenderImage = Boolean(imageSrc) && !hasImageError;
+
+  if (shouldRenderImage) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img
         alt={name}
         className="h-11 w-11 rounded-full object-cover"
+        onError={() => setHasImageError(true)}
         src={imageSrc}
       />
     );
