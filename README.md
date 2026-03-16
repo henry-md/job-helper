@@ -35,6 +35,7 @@ local INGEST_ENDPOINT = JOB_HELPER_SITE .. "/api/job-applications/ingest"
 local DASHBOARD_URL = JOB_HELPER_SITE .. "/dashboard?ingested=1"
 local JOB_HELPER_SECRET = "replace-with-your-JOB_HELPER_INGEST_SECRET"
 local JOB_HELPER_USER_EMAIL = "replace-with-your-google-email@example.com"
+local ENABLED = false
 
 local function shellQuote(value)
   return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
@@ -46,6 +47,11 @@ local function logAndAlert(message)
 end
 
 hs.hotkey.bind({"cmd", "shift"}, "S", function()
+  if not ENABLED then
+    logAndAlert("Hammerspoon is not enabled")
+    return
+  end
+
   hs.alert.show("Hammerspoon taking screenshot fwahhh")
 
   local path = "/tmp/hs-job-helper-shot.png"

@@ -7,6 +7,7 @@ import {
 } from "./job-helper";
 
 type OverlayTone = "error" | "info" | "success";
+let isCaptureInFlight = false;
 
 async function getActiveTab() {
   const [tab] = await chrome.tabs.query({
@@ -180,6 +181,45 @@ async function ingestActiveTab() {
   await showOverlay(tabId, record.message, "success");
 }
 
+async function runCaptureFlow() {
+  if (isCaptureInFlight) {
+    return;
+  }
+
+  isCaptureInFlight = true;
+
+  try {
+    await ingestActiveTab();
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to ingest the active page.";
+
+    const record: IngestionRecord = {
+      applicationId: null,
+      capturedAt: new Date().toISOString(),
+      endpoint: DEFAULT_INGEST_ENDPOINT,
+      evidence: null,
+      extraction: null,
+      message,
+      status: "error",
+    };
+
+    await persistResult(record);
+
+    try {
+      const activeTab = await getActiveTab();
+
+      if (typeof activeTab.id === "number") {
+        await showOverlay(activeTab.id, message, "error");
+      }
+    } catch {
+      // Ignore follow-up UI failures after persisting the error.
+    }
+  } finally {
+    isCaptureInFlight = false;
+  }
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   console.log("Job Helper extension installed.");
 });
@@ -189,34 +229,18 @@ chrome.commands.onCommand.addListener((command) => {
     return;
   }
 
-  void (async () => {
-    try {
-      await ingestActiveTab();
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to ingest the active page.";
+  void runCaptureFlow();
+});
 
-      const record: IngestionRecord = {
-        applicationId: null,
-        capturedAt: new Date().toISOString(),
-        endpoint: DEFAULT_INGEST_ENDPOINT,
-        evidence: null,
-        extraction: null,
-        message,
-        status: "error",
-      };
+chrome.runtime.onMessage.addListener((message: unknown) => {
+  const typedMessage =
+    typeof message === "object" && message !== null
+      ? (message as { type?: string })
+      : null;
 
-      await persistResult(record);
+  if (typedMessage?.type !== "JOB_HELPER_TRIGGER_CAPTURE") {
+    return;
+  }
 
-      try {
-        const activeTab = await getActiveTab();
-
-        if (typeof activeTab.id === "number") {
-          await showOverlay(activeTab.id, message, "error");
-        }
-      } catch {
-        // Ignore follow-up UI failures after persisting the error.
-      }
-    }
-  })();
+  void runCaptureFlow();
 });

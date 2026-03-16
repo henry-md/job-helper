@@ -3,6 +3,7 @@ import type { JobPageContext, JobPostingStructuredHint } from "./job-helper";
 type OverlayTone = "error" | "info" | "success";
 
 let overlayTimeoutId: number | null = null;
+let lastShortcutAt = 0;
 
 function cleanText(value: string | null | undefined, maxLength = 0) {
   const collapsed = (value ?? "").replace(/\s+/g, " ").trim();
@@ -315,6 +316,49 @@ function showOverlay(text: string, tone: OverlayTone) {
     overlayTimeoutId = null;
   }, 1_750);
 }
+
+function isEditableTarget(target: EventTarget | null) {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable ||
+      target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.tagName === "SELECT")
+  );
+}
+
+function isCaptureShortcut(event: KeyboardEvent) {
+  const isMacShortcut = event.metaKey && event.shiftKey && !event.ctrlKey;
+  const isNonMacShortcut = event.ctrlKey && event.shiftKey && !event.metaKey;
+
+  return (
+    !event.altKey &&
+    (isMacShortcut || isNonMacShortcut) &&
+    event.key.toLowerCase() === "s"
+  );
+}
+
+window.addEventListener(
+  "keydown",
+  (event) => {
+    if (event.repeat || isEditableTarget(event.target) || !isCaptureShortcut(event)) {
+      return;
+    }
+
+    const now = Date.now();
+
+    if (now - lastShortcutAt < 750) {
+      return;
+    }
+
+    lastShortcutAt = now;
+    showOverlay("Job Helper read Cmd+Shift+S", "info");
+    void chrome.runtime.sendMessage({
+      type: "JOB_HELPER_TRIGGER_CAPTURE",
+    });
+  },
+  true,
+);
 
 chrome.runtime.onMessage.addListener((
   message: unknown,

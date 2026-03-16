@@ -1,19 +1,32 @@
 # Job Helper Extension
 
-Vite + React Chrome extension starter for this repo.
+Vite + React Chrome extension for this repo, with CRXJS-powered hot reload during development.
 
 ## Commands
 
 ```bash
 npm install
+npm run dev
 npm run build
 ```
 
-Then load `/Users/Henry/Developer/job-helper/extension/dist` as an unpacked extension in Chrome.
+## Development
+
+1. Run `npm run dev`.
+2. Open `chrome://extensions`.
+3. Enable Developer Mode.
+4. Load `/Users/Henry/Developer/job-helper/extension/dist` as an unpacked extension.
+5. Keep the Vite dev server running while you work.
+
+Popup and content-script changes hot-update automatically. Background-script and manifest changes trigger an extension reload, so source edits no longer require manually rebuilding and reloading the extension.
+
+## Production build
+
+Run `npm run build`, then load `/Users/Henry/Developer/job-helper/extension/dist` as an unpacked extension in Chrome.
 
 ## Included pieces
 
 - `src/App.tsx`: popup UI rendered with React.
 - `src/content.ts`: content script that scrapes structured page evidence and renders the in-page command banner.
 - `src/background.ts`: MV3 service worker entry that handles `Cmd+Shift+S` / `Ctrl+Shift+S`, captures the visible tab, and posts to `/api/job-applications/ingest`.
-- `public/manifest.json`: Chrome extension manifest.
+- `manifest.config.ts`: typed Chrome extension manifest source used by CRXJS/Vite.
