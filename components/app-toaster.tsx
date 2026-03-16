@@ -9,7 +9,7 @@ export default function AppToaster() {
       expand
       gap={14}
       offset={24}
-      position="bottom-left"
+      position="bottom-right"
       theme="dark"
       toastOptions={{
         duration: 3600,

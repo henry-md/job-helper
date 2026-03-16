@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { toast } from "sonner";
 
 type JobScreenshotDropzoneProps = {
   disabled?: boolean;
@@ -90,14 +91,13 @@ export default function JobScreenshotDropzone({
   const [isDragging, setIsDragging] = useState(false);
   const [selectionSource, setSelectionSource] = useState<UploadSource | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const inputId = useId();
 
   function syncFile(file: File, source: UploadSource) {
     const validationError = validateImageFile(file);
 
     if (validationError) {
-      setErrorMessage(validationError);
+      toast.error(validationError);
       setSelectedFile(null);
       setSelectionSource(null);
 
@@ -120,7 +120,6 @@ export default function JobScreenshotDropzone({
 
     setSelectedFile(file);
     setSelectionSource(source);
-    setErrorMessage(null);
     onFileSelected?.(file, source);
 
     if (inputRef.current) {
@@ -134,7 +133,6 @@ export default function JobScreenshotDropzone({
     if (!file) {
       setSelectedFile(null);
       setSelectionSource(null);
-      setErrorMessage(null);
       return;
     }
 
@@ -172,7 +170,7 @@ export default function JobScreenshotDropzone({
       );
 
     if (!file) {
-      setErrorMessage(
+      toast.error(
         "This drag did not expose an image file to the browser. Paste with Cmd+V or drag a saved screenshot instead.",
       );
       return;
@@ -188,7 +186,6 @@ export default function JobScreenshotDropzone({
 
     setSelectedFile(null);
     setSelectionSource(null);
-    setErrorMessage(null);
   }
 
   const syncPastedFile = useEffectEvent((file: File) => {
@@ -341,12 +338,6 @@ export default function JobScreenshotDropzone({
           </div>
         </div>
       </label>
-
-      {errorMessage ? (
-        <div className="rounded-[1.25rem] border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-          {errorMessage}
-        </div>
-      ) : null}
     </div>
   );
 }

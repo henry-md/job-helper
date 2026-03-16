@@ -28,10 +28,6 @@ type JobApplicationIntakeProps = {
   disabled?: boolean;
   extractionModel: string;
   referrerOptions: ReferrerOption[];
-  statusMessage?: {
-    text: string;
-    tone: "error" | "success";
-  } | null;
 };
 
 type UploadSource = "Dropped" | "Pasted" | "Selected";
@@ -45,11 +41,6 @@ type DraftUpload = {
   previewUrl: string;
   source: UploadSource;
   status: "extracting" | "failed" | "queued" | "ready";
-};
-
-type BannerState = {
-  text: string;
-  tone: "error" | "info";
 };
 
 const emptyDraft: JobApplicationDraft = {
@@ -233,14 +224,12 @@ export default function JobApplicationIntake({
   disabled = false,
   extractionModel,
   referrerOptions: initialReferrerOptions,
-  statusMessage,
 }: JobApplicationIntakeProps) {
   const router = useRouter();
   const [, startTransition] = useTransition();
   const editorShellRef = useRef<HTMLDivElement>(null);
   const applicationPanelRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [banner, setBanner] = useState<BannerState | null>(null);
   const [draft, setDraft] = useState<JobApplicationDraft>(emptyDraft);
   const draftRef = useRef(draft);
   const [draftUploads, setDraftUploads] = useState<DraftUpload[]>([]);
@@ -387,20 +376,14 @@ export default function JobApplicationIntake({
     }
 
     if (validFiles.length === 0) {
-      setBanner({
-        text: validationErrors[0] ?? "Select a PNG, JPG, or WebP screenshot.",
-        tone: "error",
-      });
+      toast.error(validationErrors[0] ?? "Select a PNG, JPG, or WebP screenshot.");
       return;
     }
 
     if (validationErrors.length > 0) {
-      setBanner({
-        text: `${validationErrors[0]} Queued ${validFiles.length} screenshot${validFiles.length === 1 ? "" : "s"} anyway.`,
-        tone: "info",
-      });
-    } else {
-      setBanner(null);
+      toast.info(
+        `${validationErrors[0]} Queued ${validFiles.length} screenshot${validFiles.length === 1 ? "" : "s"} anyway.`,
+      );
     }
 
     setDraftUploads((currentUploads) => [
@@ -458,10 +441,7 @@ export default function JobApplicationIntake({
     );
 
     if (files.length === 0) {
-      setBanner({
-        text: "Drop a PNG, JPG, or WebP screenshot onto the form.",
-        tone: "error",
-      });
+      toast.error("Drop a PNG, JPG, or WebP screenshot onto the form.");
       return;
     }
 
@@ -582,10 +562,9 @@ export default function JobApplicationIntake({
               : upload,
           ),
         );
-        setBanner({
-          text: `${detail} You can upload another screenshot or fill the fields manually.`,
-          tone: "error",
-        });
+        toast.error(
+          `${detail} You can upload another screenshot or fill the fields manually.`,
+        );
       }
     },
   );
@@ -612,7 +591,6 @@ export default function JobApplicationIntake({
     }
 
     setIsSaving(true);
-    setBanner(null);
 
     const formData = new FormData();
 
@@ -664,7 +642,6 @@ export default function JobApplicationIntake({
       setDraftUploads([]);
       setPreviewUploadId(null);
       setIsMoreOpen(false);
-      setBanner(null);
       toast.success("Saved the application. You can start a new draft immediately.");
       startTransition(() => {
         router.refresh();
@@ -675,10 +652,7 @@ export default function JobApplicationIntake({
           ? error.message
           : "Failed to save the application.";
 
-      setBanner({
-        text: detail,
-        tone: "error",
-      });
+      toast.error(detail);
     } finally {
       setIsSaving(false);
     }
@@ -690,7 +664,6 @@ export default function JobApplicationIntake({
     setDraftUploads([]);
     setPreviewUploadId(null);
     setIsMoreOpen(false);
-    setBanner(null);
   }
 
   if (!hasUploadedScreenshot) {
@@ -709,30 +682,6 @@ export default function JobApplicationIntake({
             </p>
           </div>
         </div>
-
-        {statusMessage ? (
-          <div
-            className={`shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
-              statusMessage.tone === "success"
-                ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
-                : "border border-amber-400/25 bg-amber-400/10 text-amber-100"
-            }`}
-          >
-            {statusMessage.text}
-          </div>
-        ) : null}
-
-        {banner ? (
-          <div
-            className={`shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
-              banner.tone === "error"
-                ? "border border-amber-400/25 bg-amber-400/10 text-amber-100"
-                : "border border-white/10 bg-white/5 text-zinc-200"
-            }`}
-          >
-            {banner.text}
-          </div>
-        ) : null}
 
         <div
           className={[
@@ -818,30 +767,6 @@ export default function JobApplicationIntake({
         setIsMoreOpen={setIsMoreOpen}
         setReferrerOptions={setReferrerOptions}
       >
-      {statusMessage ? (
-        <div
-          className={`shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
-            statusMessage.tone === "success"
-              ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
-              : "border border-amber-400/25 bg-amber-400/10 text-amber-100"
-          }`}
-        >
-          {statusMessage.text}
-        </div>
-      ) : null}
-
-      {banner ? (
-        <div
-          className={`shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
-            banner.tone === "error"
-              ? "border border-amber-400/25 bg-amber-400/10 text-amber-100"
-              : "border border-white/10 bg-white/5 text-zinc-200"
-          }`}
-        >
-          {banner.text}
-        </div>
-      ) : null}
-
       {draftUploads.length > 0 && isPreviewMounted && thumbnailRailStyle
         ? createPortal(
             <div

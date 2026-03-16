@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import ApplicationStatsWorkspace from "@/components/application-stats-workspace";
 import JobApplicationIntake from "@/components/job-application-intake";
 import SignOutButton from "@/components/sign-out-button";
+import StatusToast from "@/components/status-toast";
 import { formatCompactDate, shouldIncludeShortYear } from "@/lib/date-format";
 import type {
   CompanyOption,
@@ -155,6 +156,11 @@ export default function DashboardWorkspace({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-[clamp(0.75rem,1.2vh,1rem)]">
+      <StatusToast
+        message={statusMessage?.text}
+        tone={statusMessage?.tone}
+      />
+
       <header className="glass-panel soft-ring flex min-h-[88px] flex-wrap items-center justify-between gap-4 rounded-[1.5rem] px-5 py-4">
         <div className="flex min-w-0 items-center gap-3">
           <ProfileAvatar
@@ -213,7 +219,6 @@ export default function DashboardWorkspace({
                 disabled={disabled}
                 extractionModel={extractionModel}
                 referrerOptions={referrerOptions}
-                statusMessage={statusMessage}
               />
             </section>
 

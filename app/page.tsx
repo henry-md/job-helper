@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 import SignInButton from "@/components/sign-in-button";
+import StatusToast from "@/components/status-toast";
 import { authOptions } from "@/auth";
 
 type HomePageProps = {
@@ -21,6 +22,10 @@ export default async function Home({ searchParams }: HomePageProps) {
   const session = await getServerSession(authOptions);
   const params = searchParams ? await searchParams : undefined;
   const authError = params?.error;
+  const authErrorMessage = authError
+    ? errorMessages[authError] ??
+      `Authentication failed with error code: ${authError}.`
+    : null;
 
   if (session?.user) {
     redirect("/dashboard");
@@ -28,6 +33,8 @@ export default async function Home({ searchParams }: HomePageProps) {
 
   return (
     <main className="min-h-[100dvh] overflow-x-hidden px-5 py-6 text-zinc-100 sm:px-8 sm:py-8">
+      <StatusToast message={authErrorMessage} tone="error" />
+
       <div className="mx-auto flex h-full w-full max-w-6xl items-center justify-center">
         <section className="glass-panel soft-ring grid w-full max-w-5xl gap-8 overflow-visible rounded-[2rem] p-6 sm:p-8 lg:grid-cols-[1.05fr_0.95fr] lg:gap-8 lg:p-10">
           <div className="flex min-h-0 flex-col justify-between gap-6 lg:gap-8">
@@ -73,13 +80,6 @@ export default async function Home({ searchParams }: HomePageProps) {
               <p className="mt-2 text-sm leading-relaxed text-zinc-400">
                 Your applications, companies, and screenshots stay tied to your account.
               </p>
-
-              {authError ? (
-                <div className="mt-5 rounded-[1rem] border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm leading-relaxed text-amber-100">
-                  {errorMessages[authError] ??
-                    `Authentication failed with error code: ${authError}.`}
-                </div>
-              ) : null}
 
               <div className="mt-6 sm:max-w-sm">
                 <SignInButton />

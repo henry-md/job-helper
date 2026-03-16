@@ -108,10 +108,6 @@ export default function ApplicationStatsWorkspace({
     useState<JobApplicationRecord | null>(null);
   const [referrerOptions, setReferrerOptions] = useState(initialReferrerOptions);
   const [searchQuery, setSearchQuery] = useState("");
-  const [banner, setBanner] = useState<{
-    text: string;
-    tone: "error" | "success";
-  } | null>(null);
 
   const filteredApplications = applications.filter((application) =>
     matchesSearch(application, searchQuery),
@@ -148,7 +144,6 @@ export default function ApplicationStatsWorkspace({
 
   useEffect(() => {
     setExpandedId(initialExpandedId);
-    setBanner(null);
   }, [initialExpandedId]);
 
   useEffect(() => {
@@ -186,7 +181,6 @@ export default function ApplicationStatsWorkspace({
     }
 
     setIsSaving(true);
-    setBanner(null);
 
     try {
       const response = await fetch(`/api/job-applications/${selectedApplication.id}`, {
@@ -257,21 +251,16 @@ export default function ApplicationStatsWorkspace({
           application.id === updatedApplication.id ? updatedApplication : application,
         ),
       );
-      setBanner({
-        text: "Updated the application.",
-        tone: "success",
-      });
+      toast.success("Updated the application.");
       startTransition(() => {
         router.refresh();
       });
     } catch (error) {
-      setBanner({
-        text:
-          error instanceof Error
-            ? error.message
-            : "Failed to update the application.",
-        tone: "error",
-      });
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to update the application.",
+      );
     } finally {
       setIsSaving(false);
     }
@@ -279,7 +268,6 @@ export default function ApplicationStatsWorkspace({
 
   async function handleDelete(application: JobApplicationRecord) {
     setDeletingId(application.id);
-    setBanner(null);
 
     try {
       const response = await fetch(`/api/job-applications/${application.id}`, {
@@ -304,13 +292,11 @@ export default function ApplicationStatsWorkspace({
         router.refresh();
       });
     } catch (error) {
-      setBanner({
-        text:
-          error instanceof Error
-            ? error.message
-            : "Failed to delete the application.",
-        tone: "error",
-      });
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to delete the application.",
+      );
     } finally {
       setDeletingId(null);
     }
@@ -327,7 +313,6 @@ export default function ApplicationStatsWorkspace({
 
     setDraft(toDraft(selectedApplication));
     setIsMoreOpen(false);
-    setBanner(null);
   }
 
   return (
@@ -446,17 +431,6 @@ export default function ApplicationStatsWorkspace({
           type="search"
           value={searchQuery}
         />
-        {banner ? (
-          <div
-            className={`mt-3 shrink-0 rounded-[1rem] px-4 py-2.5 text-sm ${
-              banner.tone === "success"
-                ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
-                : "border border-amber-400/25 bg-amber-400/10 text-amber-100"
-            }`}
-          >
-            {banner.text}
-          </div>
-        ) : null}
 
         <div className="app-scrollbar mt-3 min-h-0 flex-1 overflow-visible pr-1 xl:overflow-y-auto">
           {filteredApplications.length === 0 ? (
@@ -485,7 +459,6 @@ export default function ApplicationStatsWorkspace({
                           setExpandedId((currentId) =>
                             currentId === application.id ? null : application.id,
                           );
-                          setBanner(null);
                         }}
                         type="button"
                       >
@@ -533,7 +506,6 @@ export default function ApplicationStatsWorkspace({
                             setExpandedId((currentId) =>
                               currentId === application.id ? null : application.id,
                             );
-                            setBanner(null);
                           }}
                           type="button"
                         >
