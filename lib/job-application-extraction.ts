@@ -4,6 +4,7 @@ import type {
   EmploymentTypeValue,
   FieldConfidence,
   JobApplicationDraft,
+  JobPageContext,
   JobLocationType,
   JobApplicationExtraction,
 } from "@/lib/job-application-types";
@@ -492,11 +493,66 @@ function buildExistingDraftContext(existingDraft?: JobApplicationDraft | null) {
   return JSON.stringify(Object.fromEntries(populatedEntries), null, 2);
 }
 
-export async function extractJobApplicationFromScreenshot(input: {
-  dataUrl: string;
+function trimContextText(value: string | null | undefined, maxLength: number) {
+  const trimmedValue = value?.trim();
+
+  if (!trimmedValue) {
+    return null;
+  }
+
+  if (trimmedValue.length <= maxLength) {
+    return trimmedValue;
+  }
+
+  return `${trimmedValue.slice(0, maxLength)}…`;
+}
+
+function buildPageContextSummary(pageContext?: JobPageContext | null) {
+  if (!pageContext) {
+    return null;
+  }
+
+  const compactContext = {
+    url: trimContextText(pageContext.url, 400),
+    title: trimContextText(pageContext.title, 300),
+    description: trimContextText(pageContext.description, 500),
+    canonicalUrl: trimContextText(pageContext.canonicalUrl, 400),
+    siteName: trimContextText(pageContext.siteName, 200),
+    selectionText: trimContextText(pageContext.selectionText, 2_000),
+    rawText: trimContextText(pageContext.rawText, 18_000),
+    headings: pageContext.headings.slice(0, 12),
+    topTextBlocks: pageContext.topTextBlocks.slice(0, 10),
+    titleCandidates: pageContext.titleCandidates.slice(0, 8),
+    companyCandidates: pageContext.companyCandidates.slice(0, 8),
+    locationCandidates: pageContext.locationCandidates.slice(0, 8),
+    salaryMentions: pageContext.salaryMentions.slice(0, 8),
+    employmentTypeCandidates: pageContext.employmentTypeCandidates.slice(0, 8),
+    jsonLdJobPostings: pageContext.jsonLdJobPostings.slice(0, 4),
+  };
+
+  const hasContent = Object.values(compactContext).some((value) => {
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+
+    return Boolean(value);
+  });
+
+  if (!hasContent) {
+    return null;
+  }
+
+  return JSON.stringify(compactContext, null, 2);
+}
+
+export async function extractJobApplicationFromEvidence(input: {
   existingDraft?: JobApplicationDraft | null;
-  filename: string;
-  mimeType: string;
+  pageContext?: JobPageContext | null;
+  screenshots?: Array<{
+    dataUrl: string;
+    filename: string;
+    mimeType: string;
+  }>;
 }) {
   const model = process.env.OPENAI_JOB_EXTRACTION_MODEL ?? "gpt-5-mini";
 
@@ -510,34 +566,59 @@ export async function extractJobApplicationFromScreenshot(input: {
     };
   }
 
-  const client = getOpenAIClient();
+  const screenshots = input.screenshots ?? [];
   const existingDraftContext = buildExistingDraftContext(input.existingDraft);
+  const pageContextSummary = buildPageContextSummary(input.pageContext);
 
+  if (screenshots.length === 0 && !pageContextSummary) {
+    throw new Error("Provide at least one screenshot or page context to extract.");
+  }
+
+  const client = getOpenAIClient();
   const response = await client.responses.create({
     model,
     instructions:
-      "Extract job application details from a screenshot. Never invent values that are not visible. Return null for missing fields. Only return a referrerName when the screenshot explicitly names the referring person. Only use remote, onsite, or hybrid for location when that classification is clearly visible. Only use SAVED, APPLIED, INTERVIEW, OFFER, REJECTED, or WITHDRAWN for status when it is clearly visible. Only use full_time, part_time, contract, or internship for employmentType when it is clearly visible. If existing draft fields are provided from earlier screenshots, treat them as prior context that should be preserved unless the current screenshot clearly adds new details or corrects them. When the current screenshot continues a job description from an earlier screenshot, return one merged description in reading order instead of only the newest fragment.",
+      "Extract job application details from the provided evidence. The evidence may include browser text, structured page hints, screenshots, or a combination. Never invent values that are not explicitly supported by the evidence. Return null for missing fields. Only return a referrerName when the evidence explicitly names the referring person. Only use remote, onsite, or hybrid for location when that classification is clearly supported. Only use SAVED, APPLIED, INTERVIEW, OFFER, REJECTED, or WITHDRAWN for status when it is clearly supported. Only use full_time, part_time, contract, or internship for employmentType when it is clearly supported. If screenshots and page text disagree, prefer the clearer evidence and reflect uncertainty in the confidence scores and evidence fields. If existing draft fields are provided from earlier evidence, preserve them unless the new evidence clearly adds or corrects them.",
     input: [
       {
         role: "user",
         content: [
           {
             type: "input_text",
-            text: `This image is a job-application screenshot named ${input.filename}. Extract the visible job title, company name, the specific referrer name if visible, the date applied if visible, an optional longer job description, a visible job URL, the work arrangement category if visible (remote, onsite, or hybrid), the number of onsite days per week if explicitly stated, any visible salary range, employment type, team or department, recruiter or contact, status, and optional extra visible notes that do not fit the other fields.`,
+            text:
+              screenshots.length > 0
+                ? `Extract the job title, company name, job URL, applied date, location, salary range, employment type, team or department, recruiter or contact, referrer name, onsite days per week, status, notes, and job description from these job-posting screenshots and page signals. There are ${screenshots.length} screenshot${screenshots.length === 1 ? "" : "s"} attached.`
+                : "Extract the job title, company name, job URL, applied date, location, salary range, employment type, team or department, recruiter or contact, referrer name, onsite days per week, status, notes, and job description from these job-posting page signals.",
           },
+          ...(pageContextSummary
+            ? [
+                {
+                  type: "input_text" as const,
+                  text:
+                    `Browser page context captured by the Chrome extension:\n${pageContextSummary}\n\nUse this as structured evidence. The rawText field is flattened page text and may include some navigation or duplicate content, so prefer clearer candidates, headings, and JSON-LD job-posting hints when they are available.`,
+                },
+              ]
+            : []),
           ...(existingDraftContext
             ? [
                 {
                   type: "input_text" as const,
-                  text: `Existing draft context from earlier screenshots or user edits:\n${existingDraftContext}\n\nMerge the current screenshot into that draft. Preserve earlier details that are still consistent, fill in anything newly visible, and rewrite the full jobDescription when this screenshot extends or clarifies it.`,
+                  text:
+                    `Existing draft context from earlier screenshots or user edits:\n${existingDraftContext}\n\nMerge the new evidence into that draft. Preserve earlier details that are still consistent, fill in anything newly visible, and rewrite the full jobDescription when the new evidence extends or clarifies it.`,
                 },
               ]
             : []),
-          {
-            type: "input_image",
-            image_url: input.dataUrl,
-            detail: "high",
-          },
+          ...screenshots.flatMap((screenshot) => [
+            {
+              type: "input_text" as const,
+              text: `Screenshot evidence: ${screenshot.filename} (${screenshot.mimeType}).`,
+            },
+            {
+              type: "input_image" as const,
+              image_url: screenshot.dataUrl,
+              detail: "high" as const,
+            },
+          ]),
         ],
       },
     ],
@@ -563,4 +644,22 @@ export async function extractJobApplicationFromScreenshot(input: {
     model: (response as { model?: string }).model ?? model,
     rawText: outputText,
   };
+}
+
+export async function extractJobApplicationFromScreenshot(input: {
+  dataUrl: string;
+  existingDraft?: JobApplicationDraft | null;
+  filename: string;
+  mimeType: string;
+}) {
+  return extractJobApplicationFromEvidence({
+    existingDraft: input.existingDraft,
+    screenshots: [
+      {
+        dataUrl: input.dataUrl,
+        filename: input.filename,
+        mimeType: input.mimeType,
+      },
+    ],
+  });
 }

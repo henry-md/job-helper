@@ -6,7 +6,7 @@ automatic job tracking from uploaded screenshots.
 ## Setup
 
 1. Copy `.env.example` to `.env`.
-2. Fill in `NEXTAUTH_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `DATABASE_URL`, `OPENAI_API_KEY`, and `HAMMERSPOON_INGEST_SECRET`.
+2. Fill in `NEXTAUTH_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `DATABASE_URL`, `OPENAI_API_KEY`, and `JOB_HELPER_INGEST_SECRET`.
 3. Create and apply the Prisma migrations against Railway:
 
 ```bash
@@ -31,9 +31,9 @@ npm run dev
 hs.alert.show("Hammerspoon loaded fwahhh")
 
 local JOB_HELPER_SITE = "http://localhost:3000"
-local INGEST_ENDPOINT = JOB_HELPER_SITE .. "/api/hammerspoon/ingest"
+local INGEST_ENDPOINT = JOB_HELPER_SITE .. "/api/job-applications/ingest"
 local DASHBOARD_URL = JOB_HELPER_SITE .. "/dashboard?ingested=1"
-local JOB_HELPER_SECRET = "replace-with-your-HAMMERSPOON_INGEST_SECRET"
+local JOB_HELPER_SECRET = "replace-with-your-JOB_HELPER_INGEST_SECRET"
 local JOB_HELPER_USER_EMAIL = "replace-with-your-google-email@example.com"
 
 local function shellQuote(value)
@@ -88,7 +88,8 @@ hs.hotkey.bind({"cmd", "shift"}, "S", function()
     "--fail",
     "-H", shellQuote("X-Job-Helper-Secret: " .. JOB_HELPER_SECRET),
     "-H", shellQuote("X-Job-Helper-User-Email: " .. JOB_HELPER_USER_EMAIL),
-    "-F", shellQuote("jobScreenshot=@" .. path .. ";type=image/png"),
+    "-F", shellQuote("source=hammerspoon"),
+    "-F", shellQuote("jobScreenshots=@" .. path .. ";type=image/png"),
     shellQuote(INGEST_ENDPOINT)
   }, " ") .. " 2>&1"
   local curlOutput, curlOk = hs.execute(curlCommand)
@@ -153,5 +154,6 @@ end)
 - Prisma uses PostgreSQL and is configured in [`prisma/schema.prisma`](/Users/Henry/Developer/job-helper/prisma/schema.prisma).
 - Google users, accounts, and sessions are persisted in Postgres through the Prisma adapter.
 - Uploading a screenshot on `/dashboard` stores the image under `public/uploads/job-screenshots/`, sends it to the OpenAI Responses API with a strict JSON schema, and creates `Company`, `JobApplicationScreenshot`, and `JobApplication` records.
-- The Hammerspoon hotkey posts directly to `/api/hammerspoon/ingest`, so it needs `HAMMERSPOON_INGEST_SECRET` in `.env` and the matching secret plus Google account email in `~/.hammerspoon/init.lua`.
+- The Hammerspoon hotkey posts directly to `/api/job-applications/ingest`, so it needs `JOB_HELPER_INGEST_SECRET` in `.env` and the matching secret plus Google account email in `~/.hammerspoon/init.lua`.
+- The shared ingestion endpoint accepts screenshots, structured page context, raw page text, or any combination. Hammerspoon currently sends screenshots; the Chrome extension sends both a screenshot and structured browser evidence.
 - The default extraction model is `gpt-5-mini`; override it with `OPENAI_JOB_EXTRACTION_MODEL`.

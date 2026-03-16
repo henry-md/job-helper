@@ -16,6 +16,7 @@ Important boundaries:
 - Prisma client is created in `lib/prisma.ts` using `@prisma/adapter-pg` and a global singleton.
 - Extraction logic is centralized in `lib/job-application-extraction.ts`; it uses a strict JSON schema and validates the returned payload manually.
 - Screenshot file persistence is local filesystem storage under `public/uploads/job-screenshots/<userId>/`, not object storage.
+- Shared browser/automation ingestion is documented in `agent-docs/architecture/ingestion.md`.
 
 Current persistence nuance:
 - A saved application can own multiple `JobApplicationScreenshot` records through `JobApplicationScreenshot.applicationId`.

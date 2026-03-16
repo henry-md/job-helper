@@ -14,6 +14,6 @@ Then load `/Users/Henry/Developer/job-helper/extension/dist` as an unpacked exte
 ## Included pieces
 
 - `src/App.tsx`: popup UI rendered with React.
-- `src/content.ts`: content script that reads the active page title, URL, and meta description.
-- `src/background.ts`: MV3 service worker entry.
+- `src/content.ts`: content script that scrapes structured page evidence and renders the in-page command banner.
+- `src/background.ts`: MV3 service worker entry that handles `Cmd+Shift+S` / `Ctrl+Shift+S`, captures the visible tab, and posts to `/api/job-applications/ingest`.
 - `public/manifest.json`: Chrome extension manifest.

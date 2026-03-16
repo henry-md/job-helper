@@ -78,6 +78,37 @@ export type JobApplicationExtraction = {
   employmentType: EmploymentTypeValue | null;
 };
 
+export type JobPostingStructuredHint = {
+  baseSalary: string[];
+  datePosted: string | null;
+  description: string | null;
+  directApply: boolean | null;
+  employmentType: string[];
+  hiringOrganization: string | null;
+  identifier: string | null;
+  locations: string[];
+  title: string | null;
+  validThrough: string | null;
+};
+
+export type JobPageContext = {
+  canonicalUrl: string;
+  companyCandidates: string[];
+  description: string;
+  employmentTypeCandidates: string[];
+  headings: string[];
+  jsonLdJobPostings: JobPostingStructuredHint[];
+  locationCandidates: string[];
+  rawText: string;
+  salaryMentions: string[];
+  selectionText: string;
+  siteName: string;
+  title: string;
+  titleCandidates: string[];
+  topTextBlocks: string[];
+  url: string;
+};
+
 export type JobApplicationDraft = {
   appliedAt: string;
   companyName: string;

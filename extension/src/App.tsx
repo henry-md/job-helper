@@ -1,16 +1,16 @@
 import { useEffect, useState } from "react";
 import "./App.css";
-
-type PageSnapshot = {
-  description: string;
-  title: string;
-  url: string;
-};
+import {
+  CAPTURE_COMMAND_NAME,
+  LAST_INGESTION_STORAGE_KEY,
+  type IngestionRecord,
+  type JobPageContext,
+} from "./job-helper";
 
 type PopupState =
   | { status: "idle"; snapshot: null }
   | { status: "loading"; snapshot: null }
-  | { status: "ready"; snapshot: PageSnapshot }
+  | { status: "ready"; snapshot: JobPageContext }
   | { status: "error"; error: string; snapshot: null };
 
 async function getActiveTab() {
@@ -44,7 +44,7 @@ async function fetchSnapshot() {
     );
   }
 
-  return response.snapshot as PageSnapshot;
+  return (response.pageContext ?? response.snapshot) as JobPageContext;
 }
 
 function App() {
@@ -52,6 +52,7 @@ function App() {
     status: "idle",
     snapshot: null,
   });
+  const [lastIngestion, setLastIngestion] = useState<IngestionRecord | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -73,14 +74,45 @@ function App() {
     })();
   }, []);
 
+  useEffect(() => {
+    void chrome.storage.local
+      .get(LAST_INGESTION_STORAGE_KEY)
+      .then((result) => {
+        const storedValue = result[LAST_INGESTION_STORAGE_KEY];
+
+        if (storedValue) {
+          setLastIngestion(storedValue as IngestionRecord);
+        }
+      });
+
+    function handleStorageChange(
+      changes: Record<string, chrome.storage.StorageChange>,
+      areaName: string,
+    ) {
+      if (areaName !== "local" || !changes[LAST_INGESTION_STORAGE_KEY]) {
+        return;
+      }
+
+      setLastIngestion(
+        (changes[LAST_INGESTION_STORAGE_KEY].newValue as IngestionRecord | null) ?? null,
+      );
+    }
+
+    chrome.storage.onChanged.addListener(handleStorageChange);
+
+    return () => {
+      chrome.storage.onChanged.removeListener(handleStorageChange);
+    };
+  }, []);
+
   return (
     <main className="popup-shell">
       <section className="panel">
         <p className="eyebrow">Job Helper Extension</p>
         <h1>Chrome capture starter</h1>
         <p className="lede">
-          This starter reads the active tab title, URL, and meta description through a
-          content script. Build on this to send structured job-page data to your app.
+          Press <code>Cmd+Shift+S</code> on macOS to capture the current page, scrape
+          structured browser evidence, and send it to Job Helper.
         </p>
 
         <div className="status-row">
@@ -92,6 +124,37 @@ function App() {
             {state.status === "error" && state.error}
           </span>
         </div>
+
+        <section className="snapshot-card">
+          <h2>Last ingestion</h2>
+          {lastIngestion ? (
+            <dl className="snapshot-grid">
+              <div>
+                <dt>Status</dt>
+                <dd>{lastIngestion.message}</dd>
+              </div>
+              <div>
+                <dt>Captured at</dt>
+                <dd>{new Date(lastIngestion.capturedAt).toLocaleString()}</dd>
+              </div>
+              <div>
+                <dt>Extracted title</dt>
+                <dd>{lastIngestion.extraction?.jobTitle || "No title extracted."}</dd>
+              </div>
+              <div>
+                <dt>Extracted company</dt>
+                <dd>
+                  {lastIngestion.extraction?.companyName || "No company extracted."}
+                </dd>
+              </div>
+            </dl>
+          ) : (
+            <p className="placeholder">
+              Run the <code>{CAPTURE_COMMAND_NAME}</code> shortcut once to store the
+              latest ingestion result here.
+            </p>
+          )}
+        </section>
 
         <section className="snapshot-card">
           <h2>Active page</h2>
@@ -108,6 +171,14 @@ function App() {
               <div>
                 <dt>Description</dt>
                 <dd>{state.snapshot.description || "No meta description found."}</dd>
+              </div>
+              <div>
+                <dt>Salary hints</dt>
+                <dd>
+                  {state.snapshot.salaryMentions.length > 0
+                    ? state.snapshot.salaryMentions.join(", ")
+                    : "No salary hints detected."}
+                </dd>
               </div>
             </dl>
           ) : (

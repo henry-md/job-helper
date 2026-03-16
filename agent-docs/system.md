@@ -4,6 +4,7 @@ Current product slice:
 - Public `/` page handles Google sign-in.
 - Protected `/dashboard` page shows counts/recent applications and the intake form.
 - Users upload one or more screenshots, the app extracts draft fields with OpenAI, then saves screenshots + one `JobApplication`.
+- Automation/browser clients can also ingest evidence through `POST /api/job-applications/ingest`, which accepts screenshots, structured page context, raw text, or a mix.
 
 Core dependencies:
 - Next.js 16 App Router, React 19, TypeScript.
