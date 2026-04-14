@@ -13,7 +13,7 @@ export default defineManifest({
     service_worker: "src/background.ts",
     type: "module",
   },
-  permissions: ["storage", "tabs"],
+  permissions: ["scripting", "storage", "tabs"],
   host_permissions: ["<all_urls>"],
   commands: {
     capture_job_page: {

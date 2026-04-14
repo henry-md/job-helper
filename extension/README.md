@@ -18,6 +18,8 @@ npm run build
 4. Load `/Users/Henry/Developer/job-helper/extension/dist` as an unpacked extension.
 5. Keep the Vite dev server running while you work.
 
+The extension dev server is pinned to `http://localhost:5186`. If `npm run dev` is not running, Chrome will show a service-worker fetch error because the dev loader imports the background script from that local server.
+
 Popup and content-script changes hot-update automatically. Background-script and manifest changes trigger an extension reload, so source edits no longer require manually rebuilding and reloading the extension.
 
 ## Production build

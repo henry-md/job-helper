@@ -5,6 +5,11 @@ import manifest from "./manifest.config";
 
 export default defineConfig({
   plugins: [react(), crx({ manifest })],
+  server: {
+    host: "localhost",
+    port: 5186,
+    strictPort: true,
+  },
   build: {
     outDir: "dist",
   },

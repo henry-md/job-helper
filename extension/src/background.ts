@@ -5,9 +5,61 @@ import {
   type IngestionRecord,
   type JobPageContext,
 } from "./job-helper";
-
 type OverlayTone = "error" | "info" | "success";
 let isCaptureInFlight = false;
+
+function injectOverlayIntoPage(text: string, tone: OverlayTone) {
+  const existingOverlay = document.getElementById("job-helper-command-banner");
+  const overlay =
+    existingOverlay instanceof HTMLDivElement
+      ? existingOverlay
+      : document.createElement("div");
+
+  overlay.id = "job-helper-command-banner";
+  overlay.setAttribute("aria-live", "polite");
+  overlay.textContent = text;
+  overlay.style.position = "fixed";
+  overlay.style.top = "50%";
+  overlay.style.left = "50%";
+  overlay.style.transform = "translate(-50%, -50%)";
+  overlay.style.maxWidth = "min(80vw, 720px)";
+  overlay.style.padding = "18px 26px";
+  overlay.style.borderRadius = "999px";
+  overlay.style.fontFamily =
+    '"IBM Plex Sans","Avenir Next","Segoe UI",sans-serif';
+  overlay.style.fontSize = "18px";
+  overlay.style.fontWeight = "700";
+  overlay.style.letterSpacing = "0.01em";
+  overlay.style.color = "#ffffff";
+  overlay.style.boxShadow = "0 18px 60px rgba(0, 0, 0, 0.28)";
+  overlay.style.zIndex = "2147483647";
+  overlay.style.pointerEvents = "none";
+  overlay.style.opacity = "1";
+  overlay.style.transition = "opacity 120ms ease";
+  overlay.style.background =
+    tone === "success"
+      ? "rgba(15, 118, 110, 0.92)"
+      : tone === "error"
+        ? "rgba(185, 28, 28, 0.94)"
+        : "rgba(17, 24, 39, 0.9)";
+
+  if (!existingOverlay) {
+    document.documentElement.appendChild(overlay);
+  }
+
+  const previousTimeoutId = Number(overlay.dataset.jobHelperTimeoutId || "0");
+
+  if (previousTimeoutId) {
+    window.clearTimeout(previousTimeoutId);
+  }
+
+  const timeoutId = window.setTimeout(() => {
+    overlay.style.opacity = "0";
+    overlay.dataset.jobHelperTimeoutId = "";
+  }, 1_750);
+
+  overlay.dataset.jobHelperTimeoutId = String(timeoutId);
+}
 
 async function getActiveTab() {
   const [tab] = await chrome.tabs.query({
@@ -53,7 +105,15 @@ async function showOverlay(tabId: number, text: string, tone: OverlayTone) {
       },
     });
   } catch {
-    // Some pages like chrome:// do not have a receiving content script.
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: injectOverlayIntoPage,
+        args: [text, tone],
+      });
+    } catch {
+      // Some pages like chrome:// do not allow script injection.
+    }
   }
 }
 
