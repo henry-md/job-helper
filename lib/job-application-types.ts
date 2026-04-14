@@ -25,19 +25,6 @@ export type CompanyOption = {
   name: string;
 };
 
-export type SavedResumeRecord = {
-  mimeType: string;
-  originalFilename: string;
-  sizeBytes: number;
-  storagePath: string;
-  updatedAt: string;
-};
-
-export type TailorResumeProfile = {
-  jobDescription: string;
-  resume: SavedResumeRecord | null;
-};
-
 export type FieldConfidence = {
   appliedAt: number;
   companyName: number;

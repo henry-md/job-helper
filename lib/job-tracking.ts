@@ -277,6 +277,7 @@ export async function persistUserResume(file: File, userId: string) {
   await writeFile(absolutePath, buffer);
 
   return {
+    buffer,
     sizeBytes: buffer.byteLength,
     storagePath: `/${relativePath}`,
   };

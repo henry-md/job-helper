@@ -7,12 +7,10 @@ import {
   toJobApplicationRecord,
   toReferrerOption,
 } from "@/lib/job-application-records";
-import {
-  tailorResumeProfileSelect,
-  toTailorResumeProfile,
-} from "@/lib/tailor-resume-profile";
 import { getPrismaClient } from "@/lib/prisma";
-import type { CompanyOption, ReferrerOption, TailorResumeProfile } from "@/lib/job-application-types";
+import { readTailorResumeProfile } from "@/lib/tailor-resume-storage";
+import type { CompanyOption, ReferrerOption } from "@/lib/job-application-types";
+import type { TailorResumeProfile } from "@/lib/tailor-resume-types";
 
 type DashboardPageProps = {
   searchParams?: Promise<{
@@ -32,7 +30,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const databaseStatus = await (async () => {
     try {
       const prisma = getPrismaClient();
-      const [applicationCount, applications, companies, people, user] =
+      const [applicationCount, applications, companies, people] =
         await Promise.all([
           prisma.jobApplication.count({
             where: { userId: session.user.id },
@@ -59,10 +57,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             include: { company: { select: { id: true, name: true } } },
             orderBy: { name: "asc" },
           }),
-          prisma.user.findUnique({
-            where: { id: session.user.id },
-            select: tailorResumeProfileSelect,
-          }),
         ]);
       const companyCount = countDistinctApplicationCompanies(applications);
 
@@ -77,7 +71,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         applications: applications.map(toJobApplicationRecord),
         companies: companies as CompanyOption[],
         people: people.map(toReferrerOption),
-        tailorResumeProfile: toTailorResumeProfile(user),
       };
     } catch (error) {
       return {
@@ -91,11 +84,26 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         applications: [],
         companies: [] as CompanyOption[],
         people: [] as ReferrerOption[],
-        tailorResumeProfile: {
-          jobDescription: "",
-          resume: null,
-        } satisfies TailorResumeProfile,
       };
+    }
+  })();
+  const tailorResumeProfile = await (async () => {
+    try {
+      return await readTailorResumeProfile(session.user.id);
+    } catch {
+      return {
+        extraction: {
+          editedDocument: null,
+          error: null,
+          extractedDocument: null,
+          model: null,
+          rawText: null,
+          status: "idle",
+          updatedAt: null,
+        },
+        jobDescription: "",
+        resume: null,
+      } satisfies TailorResumeProfile;
     }
   })();
 
@@ -132,8 +140,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             extractionModel={extractionModel}
             referrerOptions={databaseStatus.people}
             statusMessage={statusMessage}
-            tailorResumeDisabled={!databaseStatus.ok}
-            tailorResumeProfile={databaseStatus.tailorResumeProfile}
+            tailorResumeOpenAIReady={openAIReady}
+            tailorResumeProfile={tailorResumeProfile}
             userImage={session.user.image}
             userName={session.user.name}
           />

@@ -11,8 +11,8 @@ import type {
   CompanyOption,
   JobApplicationRecord,
   ReferrerOption,
-  TailorResumeProfile,
 } from "@/lib/job-application-types";
+import type { TailorResumeProfile } from "@/lib/tailor-resume-types";
 
 function getValidProfileImageSrc(value: string | null | undefined) {
   const normalizedValue = value?.trim();
@@ -129,7 +129,7 @@ export default function DashboardWorkspace({
   extractionModel,
   referrerOptions,
   statusMessage,
-  tailorResumeDisabled,
+  tailorResumeOpenAIReady,
   tailorResumeProfile,
   userImage,
   userName,
@@ -145,7 +145,7 @@ export default function DashboardWorkspace({
     text: string;
     tone: "error" | "success";
   } | null;
-  tailorResumeDisabled: boolean;
+  tailorResumeOpenAIReady: boolean;
   tailorResumeProfile: TailorResumeProfile;
   userImage: string | null | undefined;
   userName: string | null | undefined;
@@ -293,7 +293,7 @@ export default function DashboardWorkspace({
           </section>
         ) : activeTab === "tailor" ? (
           <TailorResumeWorkspace
-            disabled={tailorResumeDisabled}
+            openAIReady={tailorResumeOpenAIReady}
             initialProfile={tailorResumeProfile}
           />
         ) : (

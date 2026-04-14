@@ -7,9 +7,10 @@ High-level structure:
 
 Current request flow:
 1. NextAuth session is resolved server-side with `getServerSession(authOptions)`.
-2. `/dashboard` loads counts, recent applications, and the saved tailor-resume profile directly with Prisma.
+2. `/dashboard` loads counts/recent applications from Prisma and reads the saved tailor-resume profile from the local filesystem.
 3. Client uploads screenshots to `POST /api/job-applications/extract` for draft extraction.
 4. Final form submit goes to `POST /api/job-applications`, which persists screenshots, upserts `Company`, then creates one `JobApplication`.
+5. `POST /api/tailor-resume` persists the uploaded resume file, runs resume extraction through OpenAI, and stores both the extracted and user-edited resume document in the per-user tailor-resume profile.
 
 Important boundaries:
 - Auth config lives in `auth.ts`; route handler is `app/api/auth/[...nextauth]/route.ts`.
@@ -21,3 +22,4 @@ Important boundaries:
 Current persistence nuance:
 - A saved application can own multiple `JobApplicationScreenshot` records through `JobApplicationScreenshot.applicationId`.
 - Screenshot records may store extraction payload/model/error snapshots from the client-side draft state.
+- Tailor Resume does not use Prisma right now; it stores the public resume asset under `public/uploads/resumes/<userId>/` and the private editable profile JSON under `.job-helper-data/tailor-resumes/<userId>/profile.json`.

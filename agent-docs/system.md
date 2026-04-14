@@ -4,6 +4,7 @@ Current product slice:
 - Public `/` page handles Google sign-in.
 - Protected `/dashboard` page shows counts/recent applications and the intake form.
 - `/dashboard` also includes a Tailor Resume tab where each signed-in user can save one resume file plus a draft job description for later tailoring work.
+- Uploading a resume now triggers a structured OpenAI extraction pass and persists an editable correction form so the user can review and fix the extracted resume document on reload.
 - Users upload one or more screenshots, the app extracts draft fields with OpenAI, then saves screenshots + one `JobApplication`.
 - Automation/browser clients can also ingest evidence through `POST /api/job-applications/ingest`, which accepts screenshots, structured page context, raw text, or a mix.
 
