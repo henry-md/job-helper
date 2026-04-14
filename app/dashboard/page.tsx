@@ -7,8 +7,12 @@ import {
   toJobApplicationRecord,
   toReferrerOption,
 } from "@/lib/job-application-records";
+import {
+  tailorResumeProfileSelect,
+  toTailorResumeProfile,
+} from "@/lib/tailor-resume-profile";
 import { getPrismaClient } from "@/lib/prisma";
-import type { CompanyOption, ReferrerOption } from "@/lib/job-application-types";
+import type { CompanyOption, ReferrerOption, TailorResumeProfile } from "@/lib/job-application-types";
 
 type DashboardPageProps = {
   searchParams?: Promise<{
@@ -28,7 +32,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const databaseStatus = await (async () => {
     try {
       const prisma = getPrismaClient();
-      const [applicationCount, applications, companies, people] =
+      const [applicationCount, applications, companies, people, user] =
         await Promise.all([
           prisma.jobApplication.count({
             where: { userId: session.user.id },
@@ -55,6 +59,10 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             include: { company: { select: { id: true, name: true } } },
             orderBy: { name: "asc" },
           }),
+          prisma.user.findUnique({
+            where: { id: session.user.id },
+            select: tailorResumeProfileSelect,
+          }),
         ]);
       const companyCount = countDistinctApplicationCompanies(applications);
 
@@ -69,6 +77,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         applications: applications.map(toJobApplicationRecord),
         companies: companies as CompanyOption[],
         people: people.map(toReferrerOption),
+        tailorResumeProfile: toTailorResumeProfile(user),
       };
     } catch (error) {
       return {
@@ -82,6 +91,10 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         applications: [],
         companies: [] as CompanyOption[],
         people: [] as ReferrerOption[],
+        tailorResumeProfile: {
+          jobDescription: "",
+          resume: null,
+        } satisfies TailorResumeProfile,
       };
     }
   })();
@@ -119,6 +132,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             extractionModel={extractionModel}
             referrerOptions={databaseStatus.people}
             statusMessage={statusMessage}
+            tailorResumeDisabled={!databaseStatus.ok}
+            tailorResumeProfile={databaseStatus.tailorResumeProfile}
             userImage={session.user.image}
             userName={session.user.name}
           />

@@ -8,8 +8,16 @@ const supportedMimeTypes = new Set([
   "image/jpg",
   "image/webp",
 ]);
+const supportedResumeMimeTypes = new Set([
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+]);
 
 const maxScreenshotBytes = 8 * 1024 * 1024;
+const maxResumeBytes = 10 * 1024 * 1024;
 const salarySuffixMultipliers = {
   b: 1_000_000_000,
   k: 1_000,
@@ -30,6 +38,10 @@ function extensionForFile(file: File) {
 
   if (originalExtension) {
     return originalExtension;
+  }
+
+  if (file.type === "application/pdf") {
+    return ".pdf";
   }
 
   if (file.type === "image/png") {
@@ -54,6 +66,20 @@ export function assertSupportedImageFile(file: File) {
 
   if (file.size > maxScreenshotBytes) {
     throw new Error("Upload a screenshot smaller than 8 MB.");
+  }
+}
+
+export function assertSupportedResumeFile(file: File) {
+  if (!supportedResumeMimeTypes.has(file.type)) {
+    throw new Error("Upload a PDF, PNG, JPG, or WebP resume.");
+  }
+
+  if (file.size === 0) {
+    throw new Error("The uploaded resume is empty.");
+  }
+
+  if (file.size > maxResumeBytes) {
+    throw new Error("Upload a resume smaller than 10 MB.");
   }
 }
 
@@ -238,10 +264,50 @@ export async function persistJobScreenshot(file: File, userId: string) {
   };
 }
 
+export async function persistUserResume(file: File, userId: string) {
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const safeBaseName = sanitizeBaseName(path.parse(file.name).name) || "resume";
+  const filename = `${Date.now()}-${safeBaseName}-${randomUUID()}${extensionForFile(file)}`;
+  const relativeDir = path.posix.join("uploads", "resumes", userId);
+  const relativePath = path.posix.join(relativeDir, filename);
+  const absoluteDir = path.join(process.cwd(), "public", "uploads", "resumes", userId);
+  const absolutePath = path.join(process.cwd(), "public", relativePath);
+
+  await mkdir(absoluteDir, { recursive: true });
+  await writeFile(absolutePath, buffer);
+
+  return {
+    sizeBytes: buffer.byteLength,
+    storagePath: `/${relativePath}`,
+  };
+}
+
 export async function deletePersistedJobScreenshot(storagePath: string) {
   const trimmedPath = storagePath.trim();
 
   if (!trimmedPath.startsWith("/uploads/job-screenshots/")) {
+    return;
+  }
+
+  const absolutePath = path.join(process.cwd(), "public", trimmedPath);
+
+  try {
+    await unlink(absolutePath);
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !("code" in error) ||
+      error.code !== "ENOENT"
+    ) {
+      throw error;
+    }
+  }
+}
+
+export async function deletePersistedUserResume(storagePath: string) {
+  const trimmedPath = storagePath.trim();
+
+  if (!trimmedPath.startsWith("/uploads/resumes/")) {
     return;
   }
 

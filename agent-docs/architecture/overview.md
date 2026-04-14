@@ -7,7 +7,7 @@ High-level structure:
 
 Current request flow:
 1. NextAuth session is resolved server-side with `getServerSession(authOptions)`.
-2. `/dashboard` loads counts and recent applications directly with Prisma.
+2. `/dashboard` loads counts, recent applications, and the saved tailor-resume profile directly with Prisma.
 3. Client uploads screenshots to `POST /api/job-applications/extract` for draft extraction.
 4. Final form submit goes to `POST /api/job-applications`, which persists screenshots, upserts `Company`, then creates one `JobApplication`.
 

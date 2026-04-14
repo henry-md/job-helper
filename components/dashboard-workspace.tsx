@@ -5,11 +5,13 @@ import ApplicationStatsWorkspace from "@/components/application-stats-workspace"
 import JobApplicationIntake from "@/components/job-application-intake";
 import SignOutButton from "@/components/sign-out-button";
 import StatusToast from "@/components/status-toast";
+import TailorResumeWorkspace from "@/components/tailor-resume-workspace";
 import { formatCompactDate, shouldIncludeShortYear } from "@/lib/date-format";
 import type {
   CompanyOption,
   JobApplicationRecord,
   ReferrerOption,
+  TailorResumeProfile,
 } from "@/lib/job-application-types";
 
 function getValidProfileImageSrc(value: string | null | undefined) {
@@ -127,6 +129,8 @@ export default function DashboardWorkspace({
   extractionModel,
   referrerOptions,
   statusMessage,
+  tailorResumeDisabled,
+  tailorResumeProfile,
   userImage,
   userName,
 }: {
@@ -141,10 +145,12 @@ export default function DashboardWorkspace({
     text: string;
     tone: "error" | "success";
   } | null;
+  tailorResumeDisabled: boolean;
+  tailorResumeProfile: TailorResumeProfile;
   userImage: string | null | undefined;
   userName: string | null | undefined;
 }) {
-  const [activeTab, setActiveTab] = useState<"history" | "new">("new");
+  const [activeTab, setActiveTab] = useState<"history" | "new" | "tailor">("new");
   const [historyApplicationId, setHistoryApplicationId] = useState<string | null>(
     null,
   );
@@ -192,6 +198,17 @@ export default function DashboardWorkspace({
             </button>
             <button
               className={`rounded-full px-3 py-2 text-xs uppercase tracking-[0.18em] transition ${
+                activeTab === "tailor"
+                  ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
+                  : "text-zinc-400 hover:text-zinc-200"
+              }`}
+              onClick={() => setActiveTab("tailor")}
+              type="button"
+            >
+              Tailor Resume
+            </button>
+            <button
+              className={`rounded-full px-3 py-2 text-xs uppercase tracking-[0.18em] transition ${
                 activeTab === "history"
                   ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
                   : "text-zinc-400 hover:text-zinc-200"
@@ -208,7 +225,7 @@ export default function DashboardWorkspace({
 
       <div
         className={`min-h-0 flex-1 ${
-          activeTab === "history" ? "overflow-y-auto" : "overflow-hidden"
+          activeTab === "new" ? "overflow-hidden" : "overflow-y-auto"
         }`}
       >
         {activeTab === "new" ? (
@@ -274,6 +291,11 @@ export default function DashboardWorkspace({
               </section>
             </aside>
           </section>
+        ) : activeTab === "tailor" ? (
+          <TailorResumeWorkspace
+            disabled={tailorResumeDisabled}
+            initialProfile={tailorResumeProfile}
+          />
         ) : (
           <ApplicationStatsWorkspace
             companyOptions={companyOptions}

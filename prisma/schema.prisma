@@ -13,6 +13,12 @@ model User {
   email         String?   @unique
   emailVerified DateTime?
   image         String?
+  tailorJobDescription String?
+  resumeOriginalFilename String?
+  resumeStoragePath String?
+  resumeMimeType String?
+  resumeSizeBytes Int?
+  resumeUpdatedAt DateTime?
   accounts      Account[]
   applications  JobApplication[]
   companies     Company[]
