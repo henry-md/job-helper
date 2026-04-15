@@ -90,6 +90,7 @@ export type RunResumeLatexToolLoopResult = {
     willRetry: boolean;
   }>;
   latexCode: string;
+  links: TailorResumeLinkValidationEntry[];
   linkSummary: TailorResumeLinkValidationSummary | null;
   model: string;
   previewPdf: Buffer | null;
@@ -232,6 +233,7 @@ export async function runResumeLatexToolLoop(
   let nextInput: ResumeLatexLoopInput | undefined;
   let lastError: string | null = null;
   let lastLatexCode: string | null = null;
+  let lastLinks: TailorResumeLinkValidationEntry[] = [];
   let lastLinkSummary: TailorResumeLinkValidationSummary | null = null;
   let resolvedModel: string | null = null;
 
@@ -259,6 +261,7 @@ export async function runResumeLatexToolLoop(
           const fallbackLatexCode = readExtractedLatexCode(JSON.parse(outputText));
           lastLatexCode = fallbackLatexCode;
           const validation = await args.validateLatex(fallbackLatexCode);
+          lastLinks = validation.links;
           lastLinkSummary = validation.linkSummary;
 
           if (!validation.ok) {
@@ -293,6 +296,7 @@ export async function runResumeLatexToolLoop(
               },
             ],
             latexCode: fallbackLatexCode,
+            links: validation.links,
             linkSummary: validation.linkSummary,
             model: resolvedModel ?? args.fallbackModel,
             previewPdf: validation.previewPdf,
@@ -328,6 +332,7 @@ export async function runResumeLatexToolLoop(
       const latexCode = readExtractedLatexCode(JSON.parse(toolCall.arguments));
       lastLatexCode = latexCode;
       const validation = await args.validateLatex(latexCode);
+      lastLinks = validation.links;
       lastLinkSummary = validation.linkSummary;
 
       if (!validation.ok) {
@@ -367,6 +372,7 @@ export async function runResumeLatexToolLoop(
           },
         ],
         latexCode,
+        links: validation.links,
         linkSummary: validation.linkSummary,
         model: resolvedModel ?? args.fallbackModel,
         previewPdf: validation.previewPdf,
@@ -402,6 +408,7 @@ export async function runResumeLatexToolLoop(
     attempts: maxAttempts,
     attemptEvents,
     latexCode: lastLatexCode,
+    links: lastLinks,
     linkSummary: lastLinkSummary,
     model: resolvedModel ?? args.fallbackModel,
     previewPdf: null,

@@ -21,7 +21,10 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import type { TailorResumeProfile } from "@/lib/tailor-resume-types";
+import type {
+  SavedResumeRecord,
+  TailorResumeProfile,
+} from "@/lib/tailor-resume-types";
 
 type TailorResumeWorkspaceProps = {
   initialProfile: TailorResumeProfile;
@@ -43,6 +46,13 @@ type TailorResumeLinkValidationSummary = {
   unverifiedCount: number;
 };
 
+type TailorResumeLinkValidationEntry = {
+  displayText: string | null;
+  outcome: "failed" | "passed" | "unverified";
+  reason: string | null;
+  url: string;
+};
+
 const acceptedResumeMimeTypes = new Set([
   "application/pdf",
   "image/png",
@@ -57,6 +67,7 @@ const jobDescriptionToastId = "tailor-resume-job-description-save";
 const latexSaveToastId = "tailor-resume-latex-save";
 const linkValidationToastId = "tailor-resume-link-validation";
 const resumeUploadToastId = "tailor-resume-resume-upload";
+const failedLinkToastDurationMs = 5 * 60 * 1_000;
 
 function validateResumeFile(file: File) {
   if (!acceptedResumeMimeTypes.has(file.type)) {
@@ -84,6 +95,28 @@ function resolveSavedLatexCode(profile: TailorResumeProfile) {
   return profile.latex.code;
 }
 
+function buildPendingResumeRecord(file: File): SavedResumeRecord {
+  return {
+    mimeType: file.type || "application/octet-stream",
+    originalFilename: file.name || "resume",
+    sizeBytes: file.size,
+    storagePath: URL.createObjectURL(file),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function isObjectUrl(url: string) {
+  return url.startsWith("blob:");
+}
+
+function revokeObjectUrl(url: string | null | undefined) {
+  if (!url || !isObjectUrl(url)) {
+    return;
+  }
+
+  URL.revokeObjectURL(url);
+}
+
 function showExtractionAttemptToasts(
   attempts: TailorResumeExtractionAttempt[],
 ) {
@@ -92,8 +125,8 @@ function showExtractionAttemptToasts(
       if (attempt.outcome === "failed") {
         toast.error(
           attempt.willRetry
-            ? `LaTeX extraction attempt ${attempt.attempt} failed, so we retried it automatically.${attempt.error ? ` ${attempt.error}` : ""}`
-            : `LaTeX extraction attempt ${attempt.attempt} failed and no retries remain.${attempt.error ? ` ${attempt.error}` : ""}`,
+            ? `LaTeX generation attempt ${attempt.attempt} failed, so we retried it automatically.${attempt.error ? ` ${attempt.error}` : ""}`
+            : `LaTeX generation attempt ${attempt.attempt} failed and no retries remain.${attempt.error ? ` ${attempt.error}` : ""}`,
           {
             id: `tailor-resume-extraction-attempt-${attempt.attempt}-failed`,
           },
@@ -101,7 +134,7 @@ function showExtractionAttemptToasts(
         return;
       }
 
-      toast.success(`LaTeX extraction attempt ${attempt.attempt} succeeded.`, {
+      toast.success(`LaTeX generation attempt ${attempt.attempt} succeeded.`, {
         id: `tailor-resume-extraction-attempt-${attempt.attempt}-succeeded`,
       });
     }, index * 140);
@@ -110,6 +143,7 @@ function showExtractionAttemptToasts(
 
 function showLinkValidationSummaryToast(
   linkSummary: TailorResumeLinkValidationSummary | null | undefined,
+  links: TailorResumeLinkValidationEntry[] | null | undefined,
   delayMs = 0,
 ) {
   if (!linkSummary || linkSummary.totalCount === 0) {
@@ -117,6 +151,20 @@ function showLinkValidationSummaryToast(
   }
 
   window.setTimeout(() => {
+    const passedUrls = [...new Set(
+      (links ?? [])
+        .filter((link) => link.outcome === "passed")
+        .map((link) => link.url),
+    )];
+    const notPassedUrls = [...new Set(
+      (links ?? [])
+        .filter((link) => link.outcome !== "passed")
+        .map((link) =>
+          link.outcome === "failed"
+            ? `${link.url} (failed)`
+            : `${link.url} (unverified)`,
+        ),
+    )];
     const unverifiedFragment =
       linkSummary.unverifiedCount > 0
         ? `, ${linkSummary.unverifiedCount} couldn't be verified`
@@ -125,15 +173,22 @@ function showLinkValidationSummaryToast(
       `Validated ${linkSummary.totalCount} extracted ` +
       `link${linkSummary.totalCount === 1 ? "" : "s"}: ` +
       `${linkSummary.passedCount} passed, ${linkSummary.failedCount} failed${unverifiedFragment}.`;
+    const description = [
+      `Passed: ${passedUrls.length > 0 ? passedUrls.join(", ") : "none"}`,
+      `Didn't pass: ${notPassedUrls.length > 0 ? notPassedUrls.join(", ") : "none"}`,
+    ].join("\n");
 
     if (linkSummary.failedCount > 0) {
       toast.error(message, {
+        description,
+        duration: failedLinkToastDurationMs,
         id: linkValidationToastId,
       });
       return;
     }
 
     toast.success(message, {
+      description,
       id: linkValidationToastId,
     });
   }, delayMs);
@@ -165,6 +220,9 @@ export default function TailorResumeWorkspace({
     buildPreviewPdfUrl(initialProfile.latex.pdfUpdatedAt),
   );
   const [profile, setProfile] = useState(initialProfile);
+  const [pendingResume, setPendingResume] = useState<SavedResumeRecord | null>(
+    null,
+  );
   const [draftJobDescription, setDraftJobDescription] = useState(
     initialProfile.jobDescription,
   );
@@ -187,7 +245,8 @@ export default function TailorResumeWorkspace({
   );
 
   const resume = profile.resume;
-  const previewAsImage = resume?.mimeType.startsWith("image/") ?? false;
+  const displayedResume = pendingResume ?? resume;
+  const previewAsImage = displayedResume?.mimeType.startsWith("image/") ?? false;
   const editorDisabled = isUploadingResume;
   const previewPdfUrl = buildPreviewPdfUrl(profile.latex.pdfUpdatedAt);
   const previewErrorMessage =
@@ -219,6 +278,7 @@ export default function TailorResumeWorkspace({
     const resolvedLatexCode = resolveSavedLatexCode(initialProfile);
 
     setProfile(initialProfile);
+    setPendingResume(null);
     setDraftJobDescription(initialProfile.jobDescription);
     setDraftLatexCode(resolvedLatexCode);
     lastSavedJobDescriptionRef.current = initialProfile.jobDescription;
@@ -256,6 +316,12 @@ export default function TailorResumeWorkspace({
   useEffect(() => {
     latestDraftLatexCodeRef.current = draftLatexCode;
   }, [draftLatexCode]);
+
+  useEffect(() => {
+    return () => {
+      revokeObjectUrl(pendingResume?.storagePath);
+    };
+  }, [pendingResume]);
 
   const flushPendingLatexSave = useCallback(async () => {
     if (isLatexSaveInFlightRef.current) {
@@ -458,12 +524,13 @@ export default function TailorResumeWorkspace({
     }
 
     if (!openAIReady) {
-      toast.error("Add OPENAI_API_KEY before extracting resume LaTeX.");
+      toast.error("Add OPENAI_API_KEY before generating resume LaTeX.");
       return;
     }
 
+    setPendingResume(buildPendingResumeRecord(file));
     setIsUploadingResume(true);
-    toast.loading("Uploading the resume and extracting LaTeX...", {
+    toast.loading("Uploading the resume and generating LaTeX...", {
       id: resumeUploadToastId,
     });
 
@@ -479,6 +546,7 @@ export default function TailorResumeWorkspace({
         error?: string;
         extractionError?: string | null;
         extractionAttempts?: TailorResumeExtractionAttempt[];
+        linkValidationLinks?: TailorResumeLinkValidationEntry[] | null;
         linkValidationSummary?: TailorResumeLinkValidationSummary | null;
         profile?: TailorResumeProfile;
       };
@@ -490,35 +558,38 @@ export default function TailorResumeWorkspace({
       const resolvedLatexCode = resolveSavedLatexCode(payload.profile);
 
       setProfile(payload.profile);
+      setPendingResume(null);
       setDraftLatexCode(resolvedLatexCode);
       lastSavedLatexCodeRef.current = resolvedLatexCode;
       latestDraftLatexCodeRef.current = resolvedLatexCode;
       showExtractionAttemptToasts(payload.extractionAttempts ?? []);
       showLinkValidationSummaryToast(
         payload.linkValidationSummary,
+        payload.linkValidationLinks,
         (payload.extractionAttempts?.length ?? 0) * 140,
       );
 
       if (payload.extractionError) {
         toast.error(
-          `Saved the resume, but LaTeX extraction needs review: ${payload.extractionError}`,
+          `Saved the resume, but LaTeX generation needs review: ${payload.extractionError}`,
           {
             id: resumeUploadToastId,
           },
         );
       } else if (payload.profile.latex.status === "failed") {
         toast.error(
-          "Saved the resume, but the extracted LaTeX still needs a rendering fix before the preview can display.",
+          "Saved the resume, but the generated LaTeX still needs a rendering fix before the preview can display.",
           {
             id: resumeUploadToastId,
           },
         );
       } else {
-        toast.success("Saved the resume and opened the extracted LaTeX draft.", {
+        toast.success("Saved the resume and opened the generated LaTeX draft.", {
           id: resumeUploadToastId,
         });
       }
     } catch (error) {
+      setPendingResume(null);
       toast.error(
         error instanceof Error ? error.message : "Unable to save the resume.",
         {
@@ -569,7 +640,7 @@ export default function TailorResumeWorkspace({
   const editorPanelContent = (
     <section
       aria-busy={editorDisabled}
-      className="flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 bg-black/20 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
+      className="relative flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 bg-black/20 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
     >
       <div className="mb-3">
         <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
@@ -594,21 +665,22 @@ export default function TailorResumeWorkspace({
           <div aria-hidden="true" className="min-h-[600px] flex-1" />
         )}
 
-        {showEditorLoadingOverlay ? (
-          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-zinc-950/65 px-6 backdrop-blur-[2px]">
-            <div className="rounded-full border border-white/12 bg-black/42 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.28)]">
-              <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-white/15 border-t-emerald-300" />
-            </div>
-          </div>
-        ) : null}
       </div>
+
+      {showEditorLoadingOverlay ? (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[1.25rem] bg-zinc-950/45 px-6 backdrop-blur-[2px]">
+          <div className="rounded-full border border-white/12 bg-black/42 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.28)]">
+            <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-white/15 border-t-emerald-300" />
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 
   const previewPanelContent = (
     <section
       aria-busy={showPreviewLoadingOverlay}
-      className="flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 bg-black/20 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
+      className="relative flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 bg-black/20 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
     >
       <div className="mb-3">
         <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
@@ -639,14 +711,15 @@ export default function TailorResumeWorkspace({
           <div aria-hidden="true" className="h-full w-full" />
         )}
 
-        {showPreviewLoadingOverlay ? (
-          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/14 backdrop-blur-[0.5px]">
-            <div className="relative z-30 rounded-full border border-white/12 bg-black/42 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.28)]">
-              <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-emerald-100/25 border-t-emerald-100" />
-            </div>
-          </div>
-        ) : null}
       </div>
+
+      {showPreviewLoadingOverlay ? (
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[1.25rem] bg-black/14 backdrop-blur-[0.5px]">
+          <div className="relative z-30 rounded-full border border-white/12 bg-black/42 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.28)]">
+            <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-emerald-100/25 border-t-emerald-100" />
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 
@@ -819,7 +892,7 @@ export default function TailorResumeWorkspace({
         </>
       ) : null}
 
-      {isPreviewMounted && isPreviewOpen && resume
+      {isPreviewMounted && isPreviewOpen && displayedResume
         ? createPortal(
             <div className="fixed inset-0 z-[180] flex bg-black/90 backdrop-blur-sm">
               <button
@@ -833,7 +906,7 @@ export default function TailorResumeWorkspace({
 
               <a
                 className="absolute left-5 top-5 rounded-full border border-white/15 bg-black/40 px-4 py-2 text-xs uppercase tracking-[0.18em] text-zinc-100 transition hover:border-white/30 hover:bg-black/60"
-                href={resume.storagePath}
+                href={displayedResume.storagePath}
                 rel="noreferrer"
                 target="_blank"
               >
@@ -844,15 +917,15 @@ export default function TailorResumeWorkspace({
                 {previewAsImage ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    alt={resume.originalFilename}
+                    alt={displayedResume.originalFilename}
                     className="max-h-full max-w-full rounded-[1rem] object-contain shadow-[0_30px_120px_rgba(0,0,0,0.6)]"
-                    src={resume.storagePath}
+                    src={displayedResume.storagePath}
                   />
                 ) : (
                   <iframe
                     className="h-full w-full rounded-[1rem] border border-white/10 bg-white shadow-[0_30px_120px_rgba(0,0,0,0.6)]"
-                    src={resume.storagePath}
-                    title={resume.originalFilename}
+                    src={displayedResume.storagePath}
+                    title={displayedResume.originalFilename}
                   />
                 )}
               </div>

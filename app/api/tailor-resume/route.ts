@@ -71,7 +71,7 @@ async function persistExtractedLatexResult(
     code: extraction.latexCode,
     error:
       extraction.validationError ??
-      "Unable to compile the extracted LaTeX preview.",
+      "Unable to compile the generated LaTeX preview.",
     pdfUpdatedAt: null,
     status: "failed" as const,
     updatedAt,
@@ -161,6 +161,7 @@ async function runResumeExtraction(
     await writeTailorResumeProfile(userId, readyProfile);
     return {
       extractionAttempts: extraction.attemptEvents,
+      linkValidationLinks: extraction.links,
       linkValidationSummary: extraction.linkSummary,
       profile: readyProfile,
     };
@@ -181,6 +182,7 @@ async function runResumeExtraction(
     await writeTailorResumeProfile(userId, failedProfile);
     return {
       extractionAttempts: [],
+      linkValidationLinks: [],
       linkValidationSummary: null,
       profile: failedProfile,
     };
@@ -233,6 +235,7 @@ export async function PATCH(request: Request) {
           : updatedProfile.latex.status === "failed"
             ? updatedProfile.latex.error
           : null,
+      linkValidationLinks: extractionResult.linkValidationLinks,
       linkValidationSummary: extractionResult.linkValidationSummary,
       profile: updatedProfile,
     });
@@ -383,6 +386,7 @@ export async function POST(request: Request) {
         : updatedProfile.latex.status === "failed"
           ? updatedProfile.latex.error
         : null,
+    linkValidationLinks: extractionResult.linkValidationLinks,
     linkValidationSummary: extractionResult.linkValidationSummary,
     profile: updatedProfile,
   });
