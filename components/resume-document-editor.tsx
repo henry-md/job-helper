@@ -9,7 +9,6 @@ import type {
   ResumeRichText,
   ResumeSection,
   ResumeSectionBlock,
-  ResumeSegmentType,
   ResumeSubHeadLine,
   ResumeTextSegment,
 } from "@/lib/tailor-resume-types";
@@ -79,39 +78,12 @@ function SegmentEditor({
   onRemove?: () => void;
   value: ResumeTextSegment;
 }) {
-  const isSeparator = value.segmentType !== "text";
-
   return (
     <div className="rounded-[1rem] border border-white/10 bg-black/15 p-3">
-      <div className="grid gap-3 lg:grid-cols-[180px_minmax(0,1fr)_auto]">
-        <select
-          className="rounded-[0.85rem] border border-white/10 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-300/45"
-          disabled={disabled}
-          onChange={(event) => {
-            const nextType = event.target.value as ResumeSegmentType;
-            onChange({
-              ...value,
-              segmentType: nextType,
-              text:
-                nextType === "separator_pipe"
-                  ? "|"
-                  : nextType === "separator_bullet"
-                    ? "•"
-                    : value.text === "|" || value.text === "•"
-                      ? ""
-                      : value.text,
-            });
-          }}
-          value={value.segmentType}
-        >
-          <option value="text">Text</option>
-          <option value="separator_pipe">Separator |</option>
-          <option value="separator_bullet">Separator •</option>
-        </select>
-
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
         <input
           className="rounded-[0.85rem] border border-white/10 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-300/45"
-          disabled={disabled || isSeparator}
+          disabled={disabled}
           onChange={(event) =>
             onChange({
               ...value,
@@ -134,7 +106,7 @@ function SegmentEditor({
           <input
             checked={value.isBold}
             className="accent-emerald-400"
-            disabled={disabled || isSeparator}
+            disabled={disabled}
             onChange={(event) =>
               onChange({
                 ...value,
@@ -149,7 +121,7 @@ function SegmentEditor({
           <input
             checked={value.isItalic}
             className="accent-emerald-400"
-            disabled={disabled || isSeparator}
+            disabled={disabled}
             onChange={(event) =>
               onChange({
                 ...value,
@@ -164,7 +136,7 @@ function SegmentEditor({
           <input
             checked={value.isLinkStyle}
             className="accent-emerald-400"
-            disabled={disabled || isSeparator}
+            disabled={disabled}
             onChange={(event) =>
               onChange({
                 ...value,

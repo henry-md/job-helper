@@ -75,7 +75,7 @@ type TailorResumeSourceUnit = {
 
 type TailorResumeSourceSegment = {
   id: string;
-  segmentType: "text" | "separator_pipe" | "separator_bullet";
+  segmentType: "text";
   text: string;
   isBold: boolean;
   isItalic: boolean;

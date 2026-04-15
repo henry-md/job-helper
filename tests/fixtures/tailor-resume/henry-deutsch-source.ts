@@ -7,62 +7,30 @@ import type {
 } from "../../../lib/tailor-resume-types.ts";
 
 type SegmentInput =
-  | {
-      segmentType?: "text";
-      text: string;
-      isBold?: boolean;
-      isItalic?: boolean;
-      isLinkStyle?: boolean;
-      isUnderline?: boolean;
-      linkUrl?: string | null;
-    }
-  | {
-      segmentType: Extract<ResumeSegmentType, "separator_bullet" | "separator_pipe">;
-      text?: string;
-    };
+  {
+    segmentType?: ResumeSegmentType;
+    text: string;
+    isBold?: boolean;
+    isItalic?: boolean;
+    isLinkStyle?: boolean;
+    isUnderline?: boolean;
+    linkUrl?: string | null;
+  };
 
 function segment(
   unitId: string,
   index: number,
   input: SegmentInput,
 ): TailorResumeSourceSegment {
-  if (input.segmentType === "separator_pipe") {
-    return {
-      id: `${unitId}_seg_${String(index + 1).padStart(2, "0")}`,
-      isBold: false,
-      isItalic: false,
-      isLinkStyle: false,
-      isUnderline: false,
-      linkUrl: null,
-      segmentType: "separator_pipe",
-      text: "|",
-    };
-  }
-
-  if (input.segmentType === "separator_bullet") {
-    return {
-      id: `${unitId}_seg_${String(index + 1).padStart(2, "0")}`,
-      isBold: false,
-      isItalic: false,
-      isLinkStyle: false,
-      isUnderline: false,
-      linkUrl: null,
-      segmentType: "separator_bullet",
-      text: "•",
-    };
-  }
-
-  const textInput = input as Exclude<SegmentInput, { segmentType: "separator_pipe" | "separator_bullet" }>;
-
   return {
     id: `${unitId}_seg_${String(index + 1).padStart(2, "0")}`,
-    isBold: textInput.isBold ?? false,
-    isItalic: textInput.isItalic ?? false,
-    isLinkStyle: textInput.isLinkStyle ?? false,
-    isUnderline: textInput.isUnderline ?? textInput.isLinkStyle ?? false,
-    linkUrl: textInput.linkUrl ?? null,
+    isBold: input.isBold ?? false,
+    isItalic: input.isItalic ?? false,
+    isLinkStyle: input.isLinkStyle ?? false,
+    isUnderline: input.isUnderline ?? input.isLinkStyle ?? false,
+    linkUrl: input.linkUrl ?? null,
     segmentType: "text",
-    text: textInput.text,
+    text: input.text,
   };
 }
 
@@ -96,7 +64,7 @@ export const henryDeutschSourceDocument = {
           itemType: "entry",
           heading: unit("section_01_item_01_heading", "entry_heading", [
             { text: "NewForm AI", isBold: true },
-            { segmentType: "separator_pipe" },
+            { text: "|" },
             { text: "Software Engineer I --- Full Time", isItalic: true },
           ]),
           dates: unit("section_01_item_01_dates", "entry_dates", [
@@ -140,7 +108,7 @@ export const henryDeutschSourceDocument = {
           itemType: "entry",
           heading: unit("section_01_item_02_heading", "entry_heading", [
             { text: "KnoWhiz", isBold: true },
-            { segmentType: "separator_pipe" },
+            { text: "|" },
             { text: "Software Engineering Intern", isItalic: true },
           ]),
           dates: unit("section_01_item_02_dates", "entry_dates", [
@@ -182,7 +150,7 @@ export const henryDeutschSourceDocument = {
           itemType: "entry",
           heading: unit("section_01_item_03_heading", "entry_heading", [
             { text: "HF Engineering", isBold: true },
-            { segmentType: "separator_pipe" },
+            { text: "|" },
             { text: "Software Engineering Intern", isItalic: true },
           ]),
           dates: unit("section_01_item_03_dates", "entry_dates", [
@@ -217,7 +185,7 @@ export const henryDeutschSourceDocument = {
           itemType: "entry",
           heading: unit("section_01_item_04_heading", "entry_heading", [
             { text: "Johns Hopkins University", isBold: true },
-            { segmentType: "separator_pipe" },
+            { text: "|" },
             { text: "Software Development Intern", isItalic: true },
           ]),
           dates: unit("section_01_item_04_dates", "entry_dates", [
@@ -267,9 +235,9 @@ export const henryDeutschSourceDocument = {
           itemType: "entry",
           heading: unit("section_02_item_01_heading", "entry_heading", [
             { text: "Johns Hopkins University", isBold: true },
-            { segmentType: "separator_pipe" },
+            { text: "|" },
             { text: "Bachelor of Science in Computer Science" },
-            { segmentType: "separator_pipe" },
+            { text: "|" },
             { text: "Baltimore, MD" },
           ]),
           dates: unit("section_02_item_01_dates", "entry_dates", [
@@ -330,7 +298,7 @@ export const henryDeutschSourceDocument = {
               isLinkStyle: true,
               linkUrl: "https://chiefoffd.com/",
             },
-            { segmentType: "separator_pipe" },
+            { text: "|" },
             { text: "Paid Contract --- Full Stack Developer" },
           ]),
           dates: unit("section_03_item_01_dates", "entry_dates", [
@@ -411,7 +379,7 @@ export const henryDeutschSourceDocument = {
               isLinkStyle: true,
               linkUrl: "https://github.com/henry-md",
             },
-            { segmentType: "separator_pipe" },
+            { text: "|" },
             { text: "Research at Johns Hopkins" },
           ]),
           dates: null,
@@ -491,15 +459,15 @@ export const henryDeutschSourceDocument = {
   subHeadLines: [
     unit("sub_head_line_01", "sub_head_line", [
       { text: "HenryMDeutsch@gmail.com" },
-      { segmentType: "separator_bullet" },
+      { text: "•" },
       { text: "914-272-5561" },
-      { segmentType: "separator_bullet" },
+      { text: "•" },
       {
         text: "linkedin.com/in/henry-deutsch",
         isLinkStyle: true,
         linkUrl: "https://linkedin.com/in/henry-deutsch",
       },
-      { segmentType: "separator_bullet" },
+      { text: "•" },
       {
         text: "github.com/henry-md",
         isLinkStyle: true,

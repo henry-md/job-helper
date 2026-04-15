@@ -3,7 +3,6 @@ import { promisify } from "node:util";
 import type {
   ResumeDocument,
   ResumeRichText,
-  ResumeSegmentType,
   ResumeSubHeadLine,
   ResumeTextSegment,
   TailorResumeSourceDocument,
@@ -57,6 +56,36 @@ function inferVisibleLinkUrl(text: string) {
   return null;
 }
 
+function normalizeProvidedLinkUrl(value: string | null | undefined) {
+  const trimmedValue = value?.trim();
+
+  if (!trimmedValue) {
+    return null;
+  }
+
+  if (
+    /^https?:\/\//i.test(trimmedValue) ||
+    /^mailto:/i.test(trimmedValue) ||
+    /^tel:/i.test(trimmedValue)
+  ) {
+    return trimmedValue;
+  }
+
+  return inferVisibleLinkUrl(trimmedValue) ?? trimmedValue;
+}
+
+function isPipeSeparatorText(value: string) {
+  return value.trim() === "|";
+}
+
+function isBulletSeparatorText(value: string) {
+  return value.trim() === "•";
+}
+
+function isInlineSeparatorText(value: string) {
+  return isPipeSeparatorText(value) || isBulletSeparatorText(value);
+}
+
 function takeMatchingPdfLink(text: string, availablePdfLinks: string[]) {
   const normalizedText = normalizeUrlForMatching(text);
 
@@ -81,36 +110,51 @@ function takeMatchingPdfLink(text: string, availablePdfLinks: string[]) {
   return matchedUrl ?? null;
 }
 
+function splitResumeTextSegment(segment: ResumeTextSegment) {
+  const rawParts = segment.text.split(/([|•])/g).filter((part) => part.length > 0);
+
+  return rawParts.map((part) =>
+    isInlineSeparatorText(part)
+      ? {
+          ...segment,
+          isBold: false,
+          isItalic: false,
+          isLinkStyle: false,
+          linkUrl: null,
+          text: part,
+        }
+      : {
+          ...segment,
+          text: part,
+        },
+  );
+}
+
 function buildTextSegment(
   segment: ResumeTextSegment,
-  options: {
-    availablePdfLinks: string[];
-    nextSegmentType: ResumeSegmentType | null;
-    previousSegmentType: ResumeSegmentType | null;
-  },
+  availablePdfLinks: string[],
 ): DraftSourceSegment | null {
-  const shouldTrimForSeparator =
-    options.previousSegmentType === "separator_bullet" ||
-    options.previousSegmentType === "separator_pipe" ||
-    options.nextSegmentType === "separator_bullet" ||
-    options.nextSegmentType === "separator_pipe";
-  const text = shouldTrimForSeparator ? segment.text.trim() : segment.text;
+  const isInlineSeparator = isInlineSeparatorText(segment.text);
+  const text = isInlineSeparator ? segment.text.trim() : segment.text;
 
   if (!text) {
     return null;
   }
 
-  const matchingPdfLink = segment.isLinkStyle
-    ? takeMatchingPdfLink(text, options.availablePdfLinks)
+  const providedLinkUrl = normalizeProvidedLinkUrl(segment.linkUrl);
+  const matchingPdfLink = segment.isLinkStyle && !providedLinkUrl
+    ? takeMatchingPdfLink(text, availablePdfLinks)
     : null;
   const inferredLink = segment.isLinkStyle ? inferVisibleLinkUrl(text) : null;
-  const linkUrl = matchingPdfLink ?? inferredLink;
+  const linkUrl = isInlineSeparator
+    ? null
+    : providedLinkUrl ?? matchingPdfLink ?? inferredLink;
 
   return {
-    isBold: segment.isBold,
-    isItalic: segment.isItalic,
-    isLinkStyle: segment.isLinkStyle || Boolean(linkUrl),
-    isUnderline: segment.isLinkStyle || Boolean(linkUrl),
+    isBold: isInlineSeparator ? false : segment.isBold,
+    isItalic: isInlineSeparator ? false : segment.isItalic,
+    isLinkStyle: isInlineSeparator ? false : segment.isLinkStyle || Boolean(linkUrl),
+    isUnderline: isInlineSeparator ? false : segment.isLinkStyle || Boolean(linkUrl),
     linkUrl,
     segmentType: "text",
     text,
@@ -121,49 +165,10 @@ function normalizeResumeSegments(
   segments: ResumeTextSegment[],
   availablePdfLinks: string[],
 ): DraftSourceSegment[] {
-  const normalizedSegments: DraftSourceSegment[] = [];
-
-  for (let index = 0; index < segments.length; index += 1) {
-    const segment = segments[index];
-
-    if (segment.segmentType === "separator_pipe") {
-      normalizedSegments.push({
-        isBold: false,
-        isItalic: false,
-        isLinkStyle: false,
-        isUnderline: false,
-        linkUrl: null,
-        segmentType: "separator_pipe",
-        text: "|",
-      });
-      continue;
-    }
-
-    if (segment.segmentType === "separator_bullet") {
-      normalizedSegments.push({
-        isBold: false,
-        isItalic: false,
-        isLinkStyle: false,
-        isUnderline: false,
-        linkUrl: null,
-        segmentType: "separator_bullet",
-        text: "•",
-      });
-      continue;
-    }
-
-    const nextSegmentType = segments[index + 1]?.segmentType ?? null;
-    const previousSegmentType = segments[index - 1]?.segmentType ?? null;
-    const normalizedSegment = buildTextSegment(segment, {
-      availablePdfLinks,
-      nextSegmentType,
-      previousSegmentType,
-    });
-
-    if (normalizedSegment) {
-      normalizedSegments.push(normalizedSegment);
-    }
-  }
+  const normalizedSegments = segments
+    .flatMap((segment) => splitResumeTextSegment(segment))
+    .map((segment) => buildTextSegment(segment, availablePdfLinks))
+    .filter((segment): segment is DraftSourceSegment => segment !== null);
 
   return normalizedSegments.length > 0
     ? normalizedSegments
@@ -198,7 +203,8 @@ function flattenSubHeadLine(
         isBold: false,
         isItalic: false,
         isLinkStyle: false,
-        segmentType: "separator_bullet",
+        linkUrl: null,
+        segmentType: "text",
         text: "•",
       });
     }
@@ -208,13 +214,42 @@ function flattenSubHeadLine(
         isBold: false,
         isItalic: false,
         isLinkStyle: false,
-        segmentType: "separator_pipe",
+        linkUrl: null,
+        segmentType: "text",
         text: "|",
       });
     }
   });
 
   return normalizeResumeSegments(flattenedSegments, availablePdfLinks);
+}
+
+function normalizeSubHeadLineUnits(
+  lines: ResumeSubHeadLine[],
+  availablePdfLinks: string[],
+) {
+  const normalizedLines: DraftSourceSegment[][] = [];
+
+  lines.forEach((line) => {
+    if (line.separatorBetweenItems === null && line.lineItems.length > 1) {
+      line.lineItems.forEach((lineItem) => {
+        normalizedLines.push(
+          normalizeResumeSegments(lineItem.segments, availablePdfLinks),
+        );
+      });
+      return;
+    }
+
+    normalizedLines.push(flattenSubHeadLine(line, availablePdfLinks));
+  });
+
+  return normalizedLines.map((segments, index) =>
+    createSourceUnit(
+      `sub_head_line_${String(index + 1).padStart(2, "0")}`,
+      "sub_head_line",
+      segments,
+    ),
+  );
 }
 
 function createSourceUnit(
@@ -285,7 +320,7 @@ function splitAwardValueIntoLinkedTail(segments: DraftSourceSegment[]) {
   for (let index = nextSegments.length - 1; index >= 0; index -= 1) {
     const segment = nextSegments[index];
 
-    if (segment.segmentType !== "text") {
+    if (isInlineSeparatorText(segment.text)) {
       continue;
     }
 
@@ -334,15 +369,18 @@ function applyProjectHeadingLink(
   segments: DraftSourceSegment[],
   linkUrl: string,
 ): DraftSourceSegment[] {
-  let targetIndex = segments.findIndex(
-    (segment) => segment.segmentType === "separator_pipe",
-  );
+  let targetIndex = segments.findIndex((segment) => isPipeSeparatorText(segment.text));
   targetIndex =
     targetIndex === -1
-      ? segments.findIndex((segment) => segment.segmentType === "text")
+      ? segments.findIndex(
+          (segment) => !isInlineSeparatorText(segment.text) && segment.text.trim().length > 0,
+        )
       : segments
           .slice(0, targetIndex)
-          .findIndex((segment) => segment.segmentType === "text");
+          .findIndex(
+            (segment) =>
+              !isInlineSeparatorText(segment.text) && segment.text.trim().length > 0,
+          );
 
   if (targetIndex === -1) {
     return segments;
@@ -477,7 +515,7 @@ function normalizeLabeledLineItem(
     if (nextPdfLink) {
       valueSegments = splitAwardValueIntoLinkedTail(valueSegments).map(
         (segment, index, segments) =>
-          index === segments.length - 1 && segment.segmentType === "text"
+          index === segments.length - 1 && !isInlineSeparatorText(segment.text)
             ? {
                 ...segment,
                 isLinkStyle: true,
@@ -587,12 +625,9 @@ export function normalizeResumeDocument(
     "header_text",
     normalizeResumeSegments(document.headerText.segments, availablePdfLinks),
   );
-  const subHeadLines = document.subHeadText.map((line, index) =>
-    createSourceUnit(
-      `sub_head_line_${String(index + 1).padStart(2, "0")}`,
-      "sub_head_line",
-      flattenSubHeadLine(line, availablePdfLinks),
-    ),
+  const subHeadLines = normalizeSubHeadLineUnits(
+    document.subHeadText,
+    availablePdfLinks,
   );
 
   return {

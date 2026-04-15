@@ -2,15 +2,25 @@
 
 import {
   type ChangeEvent,
+  type MouseEvent,
+  type PointerEvent,
   type ReactNode,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { ChevronsLeft, ChevronsRight } from "lucide-react";
+import type { PanelImperativeHandle } from "react-resizable-panels";
 import { toast } from "sonner";
 import ResumeSourceEditor from "@/components/resume-source-editor";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
 import type {
   TailorResumeProfile,
   TailorResumeSourceDocument,
@@ -29,6 +39,8 @@ const acceptedResumeMimeTypes = new Set([
   "image/webp",
 ]);
 const maxResumeBytes = 10 * 1024 * 1024;
+const defaultEditorPaneSize = 66;
+const defaultPreviewPaneSize = 34;
 
 function formatFileSize(value: number) {
   if (value >= 1024 * 1024) {
@@ -65,6 +77,12 @@ function serializeSourceDocument(document: TailorResumeSourceDocument | null) {
   return document ? JSON.stringify(document) : "";
 }
 
+function buildPreviewPdfUrl(updatedAt: string | null) {
+  return updatedAt
+    ? `/api/tailor-resume/preview?updatedAt=${encodeURIComponent(updatedAt)}`
+    : null;
+}
+
 function StatusPill({ children }: { children: ReactNode }) {
   return (
     <span className="rounded-full border border-white/10 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-zinc-400">
@@ -79,11 +97,19 @@ export default function TailorResumeWorkspace({
 }: TailorResumeWorkspaceProps) {
   const fileInputId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const previewPanelRef = useRef<PanelImperativeHandle | null>(null);
   const jobDescriptionSaveSequenceRef = useRef(0);
   const sourceSaveSequenceRef = useRef(0);
   const lastSavedJobDescriptionRef = useRef(initialProfile.jobDescription);
   const lastSavedSourceDocumentRef = useRef(
     serializeSourceDocument(initialProfile.source.document),
+  );
+  const previousReadyPreviewPdfUrlRef = useRef(
+    buildPreviewPdfUrl(
+      initialProfile.latex.status === "ready"
+        ? initialProfile.latex.pdfUpdatedAt
+        : null,
+    ),
   );
   const [profile, setProfile] = useState(initialProfile);
   const [draftJobDescription, setDraftJobDescription] = useState(
@@ -93,10 +119,13 @@ export default function TailorResumeWorkspace({
     useState<TailorResumeSourceDocument | null>(initialProfile.source.document);
   const [isPreviewMounted, setIsPreviewMounted] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [isPreviewFrameLoading, setIsPreviewFrameLoading] = useState(false);
   const [isSavingJobDescription, setIsSavingJobDescription] = useState(false);
   const [isSavingSource, setIsSavingSource] = useState(false);
   const [isUploadingResume, setIsUploadingResume] = useState(false);
   const [isReextracting, setIsReextracting] = useState(false);
+  const [isWideLayout, setIsWideLayout] = useState(false);
+  const [isPreviewCollapsed, setIsPreviewCollapsed] = useState(false);
   const [jobDescriptionState, setJobDescriptionState] = useState<
     "idle" | "saved" | "saving"
   >("idle");
@@ -108,12 +137,32 @@ export default function TailorResumeWorkspace({
   const extraction = profile.extraction;
   const previewAsImage = resume?.mimeType.startsWith("image/") ?? false;
   const editorDisabled = isUploadingResume || isReextracting;
-  const previewPdfUrl = profile.latex.pdfUpdatedAt
-    ? `/api/tailor-resume/preview?updatedAt=${encodeURIComponent(profile.latex.pdfUpdatedAt)}`
-    : null;
+  const previewPdfUrl = buildPreviewPdfUrl(profile.latex.pdfUpdatedAt);
+  const readyPreviewPdfUrl =
+    profile.latex.status === "ready" ? previewPdfUrl : null;
+  const isPreviewRefreshing = Boolean(readyPreviewPdfUrl) && (
+    isSavingSource ||
+    isUploadingResume ||
+    isReextracting ||
+    isPreviewFrameLoading
+  );
 
   useEffect(() => {
     setIsPreviewMounted(true);
+  }, []);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(min-width: 1280px)");
+    const syncLayoutMode = () => {
+      setIsWideLayout(mediaQuery.matches);
+    };
+
+    syncLayoutMode();
+    mediaQuery.addEventListener("change", syncLayoutMode);
+
+    return () => {
+      mediaQuery.removeEventListener("change", syncLayoutMode);
+    };
   }, []);
 
   useEffect(() => {
@@ -124,9 +173,34 @@ export default function TailorResumeWorkspace({
     lastSavedSourceDocumentRef.current = serializeSourceDocument(
       initialProfile.source.document,
     );
+    previousReadyPreviewPdfUrlRef.current = buildPreviewPdfUrl(
+      initialProfile.latex.status === "ready"
+        ? initialProfile.latex.pdfUpdatedAt
+        : null,
+    );
+    setIsPreviewCollapsed(false);
+    setIsPreviewFrameLoading(false);
     setJobDescriptionState("idle");
     setSourceState("idle");
   }, [initialProfile]);
+
+  useLayoutEffect(() => {
+    if (!readyPreviewPdfUrl) {
+      previousReadyPreviewPdfUrlRef.current = null;
+      setIsPreviewFrameLoading(false);
+      return;
+    }
+
+    if (!previousReadyPreviewPdfUrlRef.current) {
+      previousReadyPreviewPdfUrlRef.current = readyPreviewPdfUrl;
+      return;
+    }
+
+    if (previousReadyPreviewPdfUrlRef.current !== readyPreviewPdfUrl) {
+      previousReadyPreviewPdfUrlRef.current = readyPreviewPdfUrl;
+      setIsPreviewFrameLoading(true);
+    }
+  }, [readyPreviewPdfUrl]);
 
   useEffect(() => {
     if (draftJobDescription === lastSavedJobDescriptionRef.current) {
@@ -404,6 +478,144 @@ export default function TailorResumeWorkspace({
     void uploadResume(file);
   }
 
+  function handlePreviewPanelResize(panelSize: {
+    asPercentage: number;
+    inPixels: number;
+  }) {
+    setIsPreviewCollapsed(panelSize.asPercentage < 1);
+  }
+
+  function togglePreviewPane() {
+    if (previewPanelRef.current?.isCollapsed()) {
+      previewPanelRef.current.expand();
+      return;
+    }
+
+    previewPanelRef.current?.collapse();
+  }
+
+  function stopHandleButtonEvent(
+    event: MouseEvent<HTMLButtonElement> | PointerEvent<HTMLButtonElement>,
+  ) {
+    event.stopPropagation();
+  }
+
+  const editorPanelContent = (
+    <section className="glass-panel soft-ring h-full min-w-0 rounded-[1.5rem] p-3 sm:p-4 xl:min-h-[560px]">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+            Resume editor
+          </p>
+          <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
+            Correct what the model got wrong
+          </h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">
+            Edit the structured resume directly. Drag the center divider to resize
+            the editor and preview, or collapse the preview from the handle when
+            you want full focus on the form.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <StatusPill>
+            {isSavingSource
+              ? "Saving..."
+              : sourceState === "saved"
+                ? "Saved"
+                : "Autosaves"}
+          </StatusPill>
+          {isWideLayout && isPreviewCollapsed ? (
+            <StatusPill>Preview hidden</StatusPill>
+          ) : null}
+        </div>
+      </div>
+
+      {draftSourceDocument ? (
+        <ResumeSourceEditor
+          disabled={editorDisabled}
+          onChange={setDraftSourceDocument}
+          value={draftSourceDocument}
+        />
+      ) : (
+        <div className="rounded-[1.25rem] border border-dashed border-white/12 bg-black/15 p-6 text-sm leading-6 text-zinc-400">
+          {resume
+            ? extraction.status === "failed"
+              ? "The resume is saved, but extraction failed. Use Re-extract after checking the file or your OpenAI setup."
+              : "The resume is saved, but there is no editable source document yet."
+            : "Upload a resume to populate the correction editor."}
+        </div>
+      )}
+    </section>
+  );
+
+  const previewPanelContent = (
+    <section className="glass-panel soft-ring flex h-full min-w-0 flex-col rounded-[1.5rem] p-3 sm:p-4 xl:min-h-[560px]">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+            Preview
+          </p>
+          <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
+            Rendered PDF
+          </h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
+            Keep the PDF nearby while you edit, then drag the divider or collapse
+            the pane when you want the editor to take over the workspace.
+          </p>
+        </div>
+
+        {readyPreviewPdfUrl ? (
+          <StatusPill>
+            {isPreviewRefreshing
+              ? "Updating preview..."
+              : profile.latex.pdfUpdatedAt
+                ? `Updated ${formatSavedAt(profile.latex.pdfUpdatedAt)}`
+                : "Preview ready"}
+          </StatusPill>
+        ) : null}
+      </div>
+
+      <div className="relative mt-4 flex min-h-[500px] flex-1 overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate">
+        {profile.latex.status === "failed" && profile.latex.error ? (
+          <div className="w-full overflow-auto p-4">
+            <p className="text-sm font-medium text-rose-100">
+              The current corrected resume did not render cleanly.
+            </p>
+            <pre className="mt-3 whitespace-pre-wrap font-mono text-xs leading-6 text-rose-200/90">
+              {profile.latex.error}
+            </pre>
+          </div>
+        ) : readyPreviewPdfUrl ? (
+          <div className="relative h-full min-h-[500px] w-full">
+            <iframe
+              className="relative z-0 h-full min-h-[500px] w-full bg-white"
+              onLoad={() => setIsPreviewFrameLoading(false)}
+              src={readyPreviewPdfUrl}
+              title="Compiled resume preview"
+            />
+
+            {isPreviewRefreshing ? (
+              <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/14 backdrop-blur-[0.5px]">
+                <div className="relative z-30 rounded-full border border-white/12 bg-black/42 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.28)]">
+                  <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-emerald-100/25 border-t-emerald-100" />
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="flex w-full items-center justify-center p-6 text-center text-sm leading-6 text-zinc-400">
+            {resume
+              ? extraction.status === "extracting"
+                ? "The preview will appear here as soon as extraction and rendering finish."
+                : "The preview will appear here after the next successful render."
+              : "Upload a resume to generate a live PDF preview."}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+
   return (
     <section className="grid gap-[clamp(0.75rem,1.2vh,1rem)]">
       <section className="grid gap-[clamp(0.75rem,1.2vh,1rem)] xl:grid-cols-[0.78fr_1.22fr]">
@@ -579,14 +791,18 @@ export default function TailorResumeWorkspace({
                       Preview
                     </p>
                     <p className="mt-2 text-zinc-100">
-                      {profile.latex.status === "ready"
-                        ? "PDF preview is ready"
+                      {isPreviewRefreshing
+                        ? "Refreshing preview"
+                        : profile.latex.status === "ready"
+                          ? "PDF preview is ready"
                         : profile.latex.status === "failed"
                           ? "Preview needs a fix"
                           : "Preview will appear after rendering"}
                     </p>
                     <p className="mt-2 text-zinc-500">
-                      {profile.latex.pdfUpdatedAt
+                      {isPreviewRefreshing
+                        ? "Keeping the current PDF visible while the update finishes."
+                        : profile.latex.pdfUpdatedAt
                         ? `Updated ${formatSavedAt(profile.latex.pdfUpdatedAt)}`
                         : "Waiting for the next successful render"}
                     </p>
@@ -619,101 +835,65 @@ export default function TailorResumeWorkspace({
         </section>
       </section>
 
-      <section className="grid gap-[clamp(0.75rem,1.2vh,1rem)] xl:grid-cols-[1.2fr_0.8fr]">
-        <section className="glass-panel soft-ring min-h-[620px] rounded-[1.5rem] p-4 sm:p-5">
-          <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                Resume editor
-              </p>
-              <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-                Correct what the model got wrong
-              </h2>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">
-                Edit header text, subhead lines, headings, dates, descriptions,
-                bullets, labels, and paragraphs directly. The saved structure stays
-                aligned with whatever the preview renders next.
-              </p>
-            </div>
+      {isWideLayout ? (
+        <section className="min-h-[560px]">
+          <ResizablePanelGroup
+            className="min-h-[560px] gap-0"
+            orientation="horizontal"
+          >
+            <ResizablePanel
+              className="min-w-0 overflow-hidden"
+              defaultSize={defaultEditorPaneSize}
+              minSize={42}
+            >
+              {editorPanelContent}
+            </ResizablePanel>
 
-            <StatusPill>
-              {isSavingSource
-                ? "Saving..."
-                : sourceState === "saved"
-                  ? "Saved"
-                  : "Autosaves"}
-            </StatusPill>
-          </div>
+            <ResizableHandle className="group relative w-6 bg-transparent after:hidden focus-visible:ring-0">
+              <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-white/10 transition group-data-[resize-handle-state=drag]:bg-emerald-300/40" />
 
-          {draftSourceDocument ? (
-            <ResumeSourceEditor
-              disabled={editorDisabled}
-              onChange={setDraftSourceDocument}
-              value={draftSourceDocument}
-            />
-          ) : (
-            <div className="rounded-[1.25rem] border border-dashed border-white/12 bg-black/15 p-6 text-sm leading-6 text-zinc-400">
-              {resume
-                ? extraction.status === "failed"
-                  ? "The resume is saved, but extraction failed. Use Re-extract after checking the file or your OpenAI setup."
-                  : "The resume is saved, but there is no editable source document yet."
-                : "Upload a resume to populate the correction editor."}
-            </div>
-          )}
-        </section>
+              <button
+                aria-label={isPreviewCollapsed ? "Show preview" : "Hide preview"}
+                className="absolute left-1/2 top-3 z-20 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-white/14 bg-zinc-950/96 text-zinc-100 shadow-[0_10px_26px_rgba(0,0,0,0.32)] transition hover:border-white/25 hover:bg-zinc-900"
+                onClick={(event) => {
+                  stopHandleButtonEvent(event);
+                  togglePreviewPane();
+                }}
+                onMouseDown={stopHandleButtonEvent}
+                onPointerDown={stopHandleButtonEvent}
+                type="button"
+              >
+                {isPreviewCollapsed ? (
+                  <ChevronsLeft className="h-4 w-4" />
+                ) : (
+                  <ChevronsRight className="h-4 w-4" />
+                )}
+              </button>
 
-        <section className="glass-panel soft-ring flex min-h-[620px] flex-col rounded-[1.5rem] p-4 sm:p-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                Preview
-              </p>
-              <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-                Rendered PDF
-              </h2>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-                The preview is generated from the saved structured resume, so it
-                stays aligned with the exact content that future tailoring will use.
-              </p>
-            </div>
-
-            {previewPdfUrl && profile.latex.status === "ready" ? (
-              <StatusPill>
-                {profile.latex.pdfUpdatedAt
-                  ? `Updated ${formatSavedAt(profile.latex.pdfUpdatedAt)}`
-                  : "Preview ready"}
-              </StatusPill>
-            ) : null}
-          </div>
-
-          <div className="mt-5 flex min-h-[520px] flex-1 overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20">
-            {profile.latex.status === "failed" && profile.latex.error ? (
-              <div className="w-full overflow-auto p-4">
-                <p className="text-sm font-medium text-rose-100">
-                  The current corrected resume did not render cleanly.
-                </p>
-                <pre className="mt-3 whitespace-pre-wrap font-mono text-xs leading-6 text-rose-200/90">
-                  {profile.latex.error}
-                </pre>
+              <div className="absolute left-1/2 top-1/2 z-10 flex h-14 w-3 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/8 bg-black/30 shadow-[0_6px_18px_rgba(0,0,0,0.24)]">
+                <div className="h-8 w-1 rounded-full bg-white/18 transition group-data-[resize-handle-state=drag]:bg-emerald-300/55" />
               </div>
-            ) : previewPdfUrl && profile.latex.status === "ready" ? (
-              <iframe
-                className="h-full min-h-[520px] w-full bg-white"
-                src={previewPdfUrl}
-                title="Compiled resume preview"
-              />
-            ) : (
-              <div className="flex w-full items-center justify-center p-6 text-center text-sm leading-6 text-zinc-400">
-                {resume
-                  ? extraction.status === "extracting"
-                    ? "The preview will appear here as soon as extraction and rendering finish."
-                    : "The preview will appear here after the next successful render."
-                  : "Upload a resume to generate a live PDF preview."}
-              </div>
-            )}
-          </div>
+            </ResizableHandle>
+
+            <ResizablePanel
+              className="min-w-0 overflow-hidden"
+              collapsedSize={0}
+              collapsible
+              defaultSize={defaultPreviewPaneSize}
+              minSize={22}
+              onResize={handlePreviewPanelResize}
+              panelRef={previewPanelRef}
+            >
+              {previewPanelContent}
+            </ResizablePanel>
+          </ResizablePanelGroup>
         </section>
-      </section>
+      ) : (
+        <section className="grid gap-[clamp(0.75rem,1.2vh,1rem)]">
+          {editorPanelContent}
+          {previewPanelContent}
+        </section>
+      )}
 
       <section className="glass-panel soft-ring flex min-h-[260px] flex-col rounded-[1.5rem] p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">

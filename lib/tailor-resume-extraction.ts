@@ -13,12 +13,15 @@ const textSegmentSchema = {
   properties: {
     segmentType: {
       type: "string",
-      enum: ["text", "separator_pipe", "separator_bullet"],
+      enum: ["text"],
     },
     text: { type: "string" },
     isBold: { type: "boolean" },
     isItalic: { type: "boolean" },
     isLinkStyle: { type: "boolean" },
+    linkUrl: {
+      type: ["string", "null"],
+    },
   },
   required: ["segmentType", "text", "isBold", "isItalic", "isLinkStyle"],
 } as const;
@@ -232,6 +235,7 @@ function buildSampleResumeDocument(): ResumeDocument {
                 isBold: false,
                 isItalic: false,
                 isLinkStyle: true,
+                linkUrl: "https://linkedin.com/in/henry-deutsch",
               },
             ],
           },
@@ -255,6 +259,7 @@ function buildSampleResumeDocument(): ResumeDocument {
                 isBold: false,
                 isItalic: false,
                 isLinkStyle: true,
+                linkUrl: "https://henry-deutsch.com",
               },
             ],
           },
@@ -288,7 +293,7 @@ function buildSampleResumeDocument(): ResumeDocument {
                   isLinkStyle: false,
                 },
                 {
-                  segmentType: "separator_pipe",
+                  segmentType: "text",
                   text: "|",
                   isBold: false,
                   isItalic: false,
@@ -428,7 +433,7 @@ export async function extractResumeDocument(input: {
     const response = await client.responses.create({
       model,
       instructions:
-        "Extract a structured resume document from the provided resume. Preserve intentional header lines, section order, entries, paragraph lines, bullet lists, and labeled lines such as 'Languages:' or 'Awards:'. Use blockType 'entry' for rows with main left-side content and optional right-side companion text such as dates. Put right-side dates or similar companion text into subSectionDates instead of encoding alignment. Use blockType 'paragraph' for standalone prose lines. Use blockType 'labeled_line' for lines with a label and value. Represent list bullets in subSectionBullets, not as separator segments. Use segmentType 'separator_pipe' only for the literal '|' character. Use segmentType 'separator_bullet' only for the literal '•' separator when it is part of inline content, not for list bullets. Keep em dashes and hyphens as normal text. Use isItalic only when text is visually italicized. Use isLinkStyle only when text visually appears link-styled, such as blue and underlined. Ignore exact spacing and visual centering. Never invent content that is not present in the resume.",
+        "Extract a structured resume document from the provided resume. Preserve intentional header lines, section order, entries, paragraph lines, bullet lists, and labeled lines such as 'Languages:' or 'Awards:'. Each intentionally separate visual line in the resume header must be its own element in subHeadText. Do not combine multiple visual header lines into one subHeadText item with separatorBetweenItems null. Use blockType 'entry' for rows with main left-side content and optional right-side companion text such as dates. Put right-side dates or similar companion text into subSectionDates instead of encoding alignment. Use blockType 'paragraph' for standalone prose lines. Use blockType 'labeled_line' for lines with a label and value. Represent list bullets in subSectionBullets, not as inline separator characters. Use only segmentType 'text'. If inline content contains the literal '|' or '•' separators, keep them as normal text segments, preferably as their own standalone text segments. Keep em dashes and hyphens as normal text. Use isItalic only when text is visually italicized. Use isLinkStyle only when text visually appears link-styled, such as blue and underlined. When a link destination is explicitly visible or otherwise directly recoverable from the resume, include it in linkUrl; otherwise use null. Ignore exact spacing and visual centering. Never invent content that is not present in the resume.",
       input: [
         {
           role: "user",

@@ -154,6 +154,14 @@ function escapeLatexUrl(value: string) {
     .replace(/&/g, "\\&");
 }
 
+function isPipeSeparatorSegment(segment: TailorResumeSourceSegment) {
+  return segment.text.trim() === "|";
+}
+
+function isBulletSeparatorSegment(segment: TailorResumeSourceSegment) {
+  return segment.text.trim() === "•";
+}
+
 function renderStyledTextSegment(
   segment: TailorResumeSourceSegment,
   options?: {
@@ -161,11 +169,11 @@ function renderStyledTextSegment(
     ignoreItalic?: boolean;
   },
 ) {
-  if (segment.segmentType === "separator_pipe") {
+  if (isPipeSeparatorSegment(segment)) {
     return "~|~";
   }
 
-  if (segment.segmentType === "separator_bullet") {
+  if (isBulletSeparatorSegment(segment)) {
     return " $\\cdot$ ";
   }
 
@@ -196,7 +204,12 @@ function renderSegment(
 ) {
   const renderedText = renderStyledTextSegment(segment, options);
 
-  if (segment.segmentType !== "text" || options?.omitLinkWrapper || !segment.isLinkStyle) {
+  if (
+    isPipeSeparatorSegment(segment) ||
+    isBulletSeparatorSegment(segment) ||
+    options?.omitLinkWrapper ||
+    !segment.isLinkStyle
+  ) {
     return renderedText;
   }
 
@@ -222,7 +235,7 @@ function splitSegmentsByPipe(segments: TailorResumeSourceSegment[]) {
   const parts: TailorResumeSourceSegment[][] = [[]];
 
   for (const segment of segments) {
-    if (segment.segmentType === "separator_pipe") {
+    if (isPipeSeparatorSegment(segment)) {
       parts.push([]);
       continue;
     }
@@ -237,7 +250,7 @@ function splitSegmentsByBullet(segments: TailorResumeSourceSegment[]) {
   const parts: TailorResumeSourceSegment[][] = [[]];
 
   for (const segment of segments) {
-    if (segment.segmentType === "separator_bullet") {
+    if (isBulletSeparatorSegment(segment)) {
       parts.push([]);
       continue;
     }
@@ -262,9 +275,10 @@ function renderHeaderLastLine(unit: TailorResumeSourceUnit) {
 
   if (
     lastSegment &&
-    lastSegment.segmentType === "text" &&
     lastSegment.isLinkStyle &&
-    lastSegment.linkUrl
+    lastSegment.linkUrl &&
+    !isPipeSeparatorSegment(lastSegment) &&
+    !isBulletSeparatorSegment(lastSegment)
   ) {
     const prefix = renderSegments(segments.slice(0, -1));
     const linkedText = renderStyledTextSegment(lastSegment);

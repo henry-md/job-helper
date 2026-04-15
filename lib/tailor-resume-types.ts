@@ -1,12 +1,10 @@
-export type ResumeSegmentType =
-  | "separator_bullet"
-  | "separator_pipe"
-  | "text";
+export type ResumeSegmentType = "text";
 
 export type ResumeTextSegment = {
   isBold: boolean;
   isItalic: boolean;
   isLinkStyle: boolean;
+  linkUrl: string | null;
   segmentType: ResumeSegmentType;
   text: string;
 };
@@ -189,11 +187,7 @@ const separatorBetweenItemValues = new Set<ResumeSubHeadSeparator>([
   "bullet",
   "pipe",
 ]);
-const segmentTypeValues = new Set<ResumeSegmentType>([
-  "separator_bullet",
-  "separator_pipe",
-  "text",
-]);
+const segmentTypeValues = new Set<ResumeSegmentType>(["text"]);
 const sourceUnitKindValues = new Set<TailorResumeSourceUnitKind>([
   "bullet",
   "entry_description",
@@ -232,6 +226,7 @@ export function createEmptyResumeTextSegment(): ResumeTextSegment {
     isBold: false,
     isItalic: false,
     isLinkStyle: false,
+    linkUrl: null,
     segmentType: "text",
     text: "",
   };
@@ -414,13 +409,9 @@ function parseResumeTextSegment(value: unknown): ResumeTextSegment {
     isBold: readBoolean(value.isBold),
     isItalic: readBoolean(value.isItalic),
     isLinkStyle: readBoolean(value.isLinkStyle),
+    linkUrl: readNullableString(value.linkUrl),
     segmentType,
-    text:
-      segmentType === "separator_pipe"
-        ? "|"
-        : segmentType === "separator_bullet"
-          ? "•"
-          : text,
+    text,
   };
 }
 
@@ -564,12 +555,7 @@ function parseTailorResumeSourceSegment(
     isUnderline: readBoolean(value.isUnderline),
     linkUrl: readNullableString(value.linkUrl),
     segmentType,
-    text:
-      segmentType === "separator_pipe"
-        ? "|"
-        : segmentType === "separator_bullet"
-          ? "•"
-          : readString(value.text),
+    text: readString(value.text),
   };
 }
 
@@ -605,9 +591,7 @@ function parseTailorResumeSourceUnit(
 }
 
 function hasMeaningfulSourceUnit(unit: TailorResumeSourceUnit) {
-  return unit.segments.some(
-    (segment) => segment.segmentType !== "text" || segment.text.trim().length > 0,
-  );
+  return unit.segments.some((segment) => segment.text.trim().length > 0);
 }
 
 function mergeTailorResumeSourceUnits(
