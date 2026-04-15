@@ -5,6 +5,7 @@ import {
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -37,21 +38,6 @@ const acceptedResumeMimeTypes = new Set([
 const maxResumeBytes = 10 * 1024 * 1024;
 const defaultEditorPaneSize = 56;
 const defaultPreviewPaneSize = 44;
-
-function formatFileSize(value: number) {
-  if (value >= 1024 * 1024) {
-    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
-  return `${Math.max(1, Math.round(value / 1024))} KB`;
-}
-
-function formatSavedAt(value: string) {
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
-}
 
 function validateResumeFile(file: File) {
   if (!acceptedResumeMimeTypes.has(file.type)) {
@@ -98,6 +84,9 @@ export default function TailorResumeWorkspace({
   const latexSaveSequenceRef = useRef(0);
   const lastSavedJobDescriptionRef = useRef(initialProfile.jobDescription);
   const lastSavedLatexCodeRef = useRef(resolveSavedLatexCode(initialProfile));
+  const latestDraftLatexCodeRef = useRef(resolveSavedLatexCode(initialProfile));
+  const pendingLatexCodeRef = useRef<string | null>(null);
+  const isLatexSaveInFlightRef = useRef(false);
   const previousPreviewPdfUrlRef = useRef(
     buildPreviewPdfUrl(initialProfile.latex.pdfUpdatedAt),
   );
@@ -114,7 +103,9 @@ export default function TailorResumeWorkspace({
   const [isSavingJobDescription, setIsSavingJobDescription] = useState(false);
   const [isSavingLatex, setIsSavingLatex] = useState(false);
   const [isUploadingResume, setIsUploadingResume] = useState(false);
-  const [isReextracting, setIsReextracting] = useState(false);
+  const [pendingUploadMimeType, setPendingUploadMimeType] = useState<
+    string | null
+  >(null);
   const [isWideLayout, setIsWideLayout] = useState(false);
   const [isPreviewCollapsed, setIsPreviewCollapsed] = useState(false);
   const [jobDescriptionState, setJobDescriptionState] = useState<
@@ -125,16 +116,23 @@ export default function TailorResumeWorkspace({
   );
 
   const resume = profile.resume;
-  const extraction = profile.extraction;
   const previewAsImage = resume?.mimeType.startsWith("image/") ?? false;
-  const editorDisabled = isUploadingResume || isReextracting;
+  const editorDisabled = isUploadingResume;
+  const isPendingPdfUpload = pendingUploadMimeType === "application/pdf";
+  const latexLockTitle = isUploadingResume
+    ? isPendingPdfUpload
+      ? "Parsing your newly uploaded PDF"
+      : "Parsing your newly uploaded resume"
+    : null;
+  const latexLockMessage = isUploadingResume
+    ? isPendingPdfUpload
+      ? "We're parsing your newly uploaded PDF now. The LaTeX draft will unlock as soon as the fresh extraction is ready."
+      : "We're parsing your newly uploaded resume now. The LaTeX draft will unlock as soon as the fresh extraction is ready."
+    : null;
   const previewPdfUrl = buildPreviewPdfUrl(profile.latex.pdfUpdatedAt);
   const hasPreviewPdf = Boolean(previewPdfUrl);
   const isPreviewRefreshing = hasPreviewPdf && (
-    isSavingLatex ||
-    isUploadingResume ||
-    isReextracting ||
-    isPreviewFrameLoading
+    isSavingLatex || isUploadingResume || isPreviewFrameLoading
   );
   useEffect(() => {
     setIsPreviewMounted(true);
@@ -162,6 +160,9 @@ export default function TailorResumeWorkspace({
     setDraftLatexCode(resolvedLatexCode);
     lastSavedJobDescriptionRef.current = initialProfile.jobDescription;
     lastSavedLatexCodeRef.current = resolvedLatexCode;
+    latestDraftLatexCodeRef.current = resolvedLatexCode;
+    pendingLatexCodeRef.current = null;
+    isLatexSaveInFlightRef.current = false;
     previousPreviewPdfUrlRef.current = buildPreviewPdfUrl(
       initialProfile.latex.pdfUpdatedAt,
     );
@@ -188,6 +189,90 @@ export default function TailorResumeWorkspace({
       setIsPreviewFrameLoading(true);
     }
   }, [previewPdfUrl]);
+
+  useEffect(() => {
+    latestDraftLatexCodeRef.current = draftLatexCode;
+  }, [draftLatexCode]);
+
+  const flushPendingLatexSave = useCallback(async () => {
+    if (isLatexSaveInFlightRef.current) {
+      return;
+    }
+
+    const nextLatexCode = pendingLatexCodeRef.current;
+
+    if (!nextLatexCode || nextLatexCode === lastSavedLatexCodeRef.current) {
+      setIsSavingLatex(false);
+      setLatexState("saved");
+      return;
+    }
+
+    if (nextLatexCode.trim().length === 0) {
+      pendingLatexCodeRef.current = null;
+      setIsSavingLatex(false);
+      setLatexState("idle");
+      return;
+    }
+
+    const sequence = latexSaveSequenceRef.current + 1;
+    latexSaveSequenceRef.current = sequence;
+    isLatexSaveInFlightRef.current = true;
+    setIsSavingLatex(true);
+    setLatexState("saving");
+
+    try {
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({ latexCode: nextLatexCode }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        profile?: TailorResumeProfile;
+      };
+
+      if (!response.ok || !payload.profile) {
+        throw new Error(payload.error ?? "Unable to save the LaTeX draft.");
+      }
+
+      if (latexSaveSequenceRef.current !== sequence) {
+        return;
+      }
+
+      const resolvedLatexCode = resolveSavedLatexCode(payload.profile);
+
+      lastSavedLatexCodeRef.current = resolvedLatexCode;
+      setProfile(payload.profile);
+
+      if (pendingLatexCodeRef.current === resolvedLatexCode) {
+        pendingLatexCodeRef.current = null;
+      }
+
+      if (latestDraftLatexCodeRef.current === resolvedLatexCode) {
+        setIsSavingLatex(false);
+        setLatexState("saved");
+      }
+    } catch (error) {
+      if (latexSaveSequenceRef.current !== sequence) {
+        return;
+      }
+
+      pendingLatexCodeRef.current = null;
+      setIsSavingLatex(false);
+      setLatexState("idle");
+      toast.error(
+        error instanceof Error ? error.message : "Unable to save the LaTeX draft.",
+      );
+    } finally {
+      isLatexSaveInFlightRef.current = false;
+
+      if (pendingLatexCodeRef.current) {
+        void flushPendingLatexSave();
+      }
+    }
+  }, []);
 
   useEffect(() => {
     if (draftJobDescription === lastSavedJobDescriptionRef.current) {
@@ -259,62 +344,17 @@ export default function TailorResumeWorkspace({
     }
 
     if (draftLatexCode.trim().length === 0) {
+      pendingLatexCodeRef.current = null;
       setIsSavingLatex(false);
       setLatexState("idle");
       return;
     }
 
-    const sequence = latexSaveSequenceRef.current + 1;
-    latexSaveSequenceRef.current = sequence;
+    pendingLatexCodeRef.current = draftLatexCode;
     setIsSavingLatex(true);
     setLatexState("saving");
-
-    const timeoutId = window.setTimeout(async () => {
-      try {
-        const response = await fetch("/api/tailor-resume", {
-          body: JSON.stringify({ latexCode: draftLatexCode }),
-          headers: {
-            "Content-Type": "application/json",
-          },
-          method: "PATCH",
-        });
-        const payload = (await response.json()) as {
-          error?: string;
-          profile?: TailorResumeProfile;
-        };
-
-        if (!response.ok || !payload.profile) {
-          throw new Error(payload.error ?? "Unable to save the LaTeX draft.");
-        }
-
-        if (latexSaveSequenceRef.current !== sequence) {
-          return;
-        }
-
-        const resolvedLatexCode = resolveSavedLatexCode(payload.profile);
-
-        lastSavedLatexCodeRef.current = resolvedLatexCode;
-        setProfile(payload.profile);
-        setDraftLatexCode(resolvedLatexCode);
-        setIsSavingLatex(false);
-        setLatexState("saved");
-      } catch (error) {
-        if (latexSaveSequenceRef.current !== sequence) {
-          return;
-        }
-
-        setIsSavingLatex(false);
-        setLatexState("idle");
-        toast.error(
-          error instanceof Error ? error.message : "Unable to save the LaTeX draft.",
-        );
-      }
-    }, 700);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [draftLatexCode, latexState]);
+    void flushPendingLatexSave();
+  }, [draftLatexCode, latexState, flushPendingLatexSave]);
 
   useEffect(() => {
     if (!isPreviewOpen) {
@@ -347,6 +387,7 @@ export default function TailorResumeWorkspace({
       return;
     }
 
+    setPendingUploadMimeType(file.type);
     setIsUploadingResume(true);
 
     try {
@@ -389,6 +430,7 @@ export default function TailorResumeWorkspace({
         error instanceof Error ? error.message : "Unable to save the resume.",
       );
     } finally {
+      setPendingUploadMimeType(null);
       setIsUploadingResume(false);
 
       if (fileInputRef.current) {
@@ -397,66 +439,10 @@ export default function TailorResumeWorkspace({
     }
   }
 
-  async function reextractResume() {
-    if (!resume) {
-      return;
-    }
-
-    if (!openAIReady) {
-      toast.error("Add OPENAI_API_KEY before extracting resume LaTeX.");
-      return;
-    }
-
-    setIsReextracting(true);
-
-    try {
-      const response = await fetch("/api/tailor-resume", {
-        body: JSON.stringify({ action: "reextract" }),
-        headers: {
-          "Content-Type": "application/json",
-        },
-        method: "PATCH",
-      });
-      const payload = (await response.json()) as {
-        error?: string;
-        extractionError?: string | null;
-        profile?: TailorResumeProfile;
-      };
-
-      if (!response.ok || !payload.profile) {
-        throw new Error(payload.error ?? "Unable to re-extract the resume.");
-      }
-
-      const resolvedLatexCode = resolveSavedLatexCode(payload.profile);
-
-      setProfile(payload.profile);
-      setDraftLatexCode(resolvedLatexCode);
-      lastSavedLatexCodeRef.current = resolvedLatexCode;
-
-      if (payload.extractionError) {
-        toast.error(
-          `Saved the resume, but LaTeX extraction still failed: ${payload.extractionError}`,
-        );
-      } else if (payload.profile.latex.status === "failed") {
-        toast.error(
-          "The resume was re-extracted, but the returned LaTeX still needs a rendering fix.",
-        );
-      } else {
-        toast.success("Re-extracted the resume and refreshed the LaTeX draft.");
-      }
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Unable to re-extract the resume.",
-      );
-    } finally {
-      setIsReextracting(false);
-    }
-  }
-
   function handleResumeChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
 
-    if (!file || isUploadingResume || isReextracting) {
+    if (!file || isUploadingResume) {
       return;
     }
 
@@ -486,95 +472,61 @@ export default function TailorResumeWorkspace({
   }
 
   const editorPanelContent = (
-    <section className="glass-panel soft-ring h-full min-w-0 rounded-[1.5rem] p-3 sm:p-4 xl:min-h-[560px]">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-            LaTeX source
-          </p>
-          <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-            Edit the resume directly in LaTeX
-          </h2>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">
-            This is now the real source of truth. The extracted LaTeX autosaves as
-            you type, then the PDF preview recompiles from that exact document.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <StatusPill>
-            {isSavingLatex
-              ? "Saving..."
-              : latexState === "saved"
-                ? "Saved"
-                : "Autosaves"}
-          </StatusPill>
-          {isWideLayout && isPreviewCollapsed ? (
-            <StatusPill>Preview hidden</StatusPill>
-          ) : null}
-        </div>
+    <section
+      aria-busy={editorDisabled}
+      className="flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 bg-black/10 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
+    >
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+          LATEX SOURCE
+        </p>
+        {latexLockTitle ? <StatusPill>{latexLockTitle}</StatusPill> : null}
       </div>
 
-      <div className="flex min-h-[640px] flex-col overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3 text-xs uppercase tracking-[0.18em] text-zinc-500">
-          <span>
-            {draftLatexCode.trim().length > 0
-              ? `${draftLatexCode.split("\n").length} line${
-                  draftLatexCode.split("\n").length === 1 ? "" : "s"
-                } in the current source`
-              : "Upload a resume to seed the LaTeX editor"}
-          </span>
-          <span>Editing the left pane updates the compiled PDF on the right</span>
-        </div>
-
+      <div className="relative flex min-h-[640px] flex-col overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20">
         {draftLatexCode.trim().length > 0 || resume ? (
           <textarea
-            className="min-h-[600px] w-full flex-1 resize-none bg-transparent px-4 py-4 font-mono text-[13px] leading-6 text-zinc-100 outline-none placeholder:text-zinc-500"
+            className={`min-h-[600px] w-full flex-1 resize-none bg-transparent px-4 py-4 font-mono text-[13px] leading-6 outline-none placeholder:text-zinc-500 transition ${
+              editorDisabled
+                ? "cursor-not-allowed text-zinc-500 opacity-35"
+                : "text-zinc-100"
+            }`}
             disabled={editorDisabled}
             onChange={(event) => setDraftLatexCode(event.target.value)}
-            placeholder="Upload a resume to populate the LaTeX source."
             spellCheck={false}
             value={draftLatexCode}
           />
         ) : (
-          <div className="flex min-h-[600px] items-center justify-center p-6 text-center text-sm leading-6 text-zinc-400">
-            Upload a resume to generate the first LaTeX draft here.
-          </div>
+          <div aria-hidden="true" className="min-h-[600px] flex-1" />
         )}
+
+        {latexLockTitle && latexLockMessage ? (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-zinc-950/65 px-6 backdrop-blur-[2px]">
+            <div className="max-w-md rounded-[1.25rem] border border-white/10 bg-black/55 px-5 py-4 text-center shadow-[0_16px_45px_rgba(0,0,0,0.34)]">
+              <div className="mx-auto h-9 w-9 animate-spin rounded-full border-[3px] border-white/15 border-t-emerald-300" />
+              <p className="mt-4 text-sm font-medium text-zinc-50">
+                {latexLockTitle}
+              </p>
+              <p className="mt-2 text-sm leading-6 text-zinc-300">
+                {latexLockMessage}
+              </p>
+            </div>
+          </div>
+        ) : null}
       </div>
     </section>
   );
 
   const previewPanelContent = (
-    <section className="glass-panel soft-ring flex h-full min-w-0 flex-col rounded-[1.5rem] p-3 sm:p-4 xl:min-h-[560px]">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-            Preview
-          </p>
-          <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-            Rendered PDF
-          </h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-            The preview always compiles from the current saved LaTeX draft. If the
-            draft stops compiling, the error appears here so you can fix it in the
-            editor immediately.
-          </p>
-        </div>
-
-        {hasPreviewPdf ? (
-          <StatusPill>
-            {isPreviewRefreshing
-              ? "Updating preview..."
-              : profile.latex.pdfUpdatedAt
-                ? `Updated ${formatSavedAt(profile.latex.pdfUpdatedAt)}`
-                : "Preview ready"}
-          </StatusPill>
-        ) : null}
+    <section className="flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 bg-black/10 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]">
+      <div className="mb-3">
+        <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+          Preview
+        </p>
       </div>
 
       {profile.latex.status === "failed" && profile.latex.error ? (
-        <div className="mt-4 rounded-[1.1rem] border border-rose-400/20 bg-rose-400/10 p-4 text-sm leading-6 text-rose-100">
+        <div className="mb-3 rounded-[1.1rem] border border-rose-400/20 bg-rose-400/10 p-4 text-sm leading-6 text-rose-100">
           <p className="font-medium">The current LaTeX draft did not render cleanly.</p>
           <pre className="mt-3 overflow-auto whitespace-pre-wrap font-mono text-xs leading-6 text-rose-200/90">
             {profile.latex.error}
@@ -582,7 +534,7 @@ export default function TailorResumeWorkspace({
         </div>
       ) : null}
 
-      <div className="relative mt-4 flex min-h-[500px] flex-1 overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate">
+      <div className="relative flex min-h-[500px] flex-1 overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate">
         {previewPdfUrl ? (
           <div className="relative h-full min-h-[500px] w-full">
             <iframe
@@ -601,15 +553,7 @@ export default function TailorResumeWorkspace({
             ) : null}
           </div>
         ) : (
-          <div className="flex w-full items-center justify-center p-6 text-center text-sm leading-6 text-zinc-400">
-            {resume
-              ? extraction.status === "extracting"
-                ? "The preview will appear here as soon as extraction and rendering finish."
-                : profile.latex.status === "failed" && profile.latex.error
-                  ? "Fix the LaTeX on the left, then the preview will return here after the next successful compile."
-                  : "The preview will appear here after the next successful render."
-              : "Upload a resume to generate a live PDF preview."}
-          </div>
+          <div aria-hidden="true" className="h-full w-full" />
         )}
       </div>
     </section>
@@ -617,309 +561,172 @@ export default function TailorResumeWorkspace({
 
   return (
     <section className="grid gap-[clamp(0.75rem,1.2vh,1rem)]">
-      <section className="grid gap-[clamp(0.75rem,1.2vh,1rem)] xl:grid-cols-[0.78fr_1.22fr]">
-        <section className="glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
+      <input
+        accept="application/pdf,image/png,image/jpeg,image/webp"
+        className="sr-only"
+        disabled={!openAIReady || isUploadingResume}
+        id={fileInputId}
+        onChange={handleResumeChange}
+        ref={fileInputRef}
+        type="file"
+      />
+
+      {resume ? (
+        <section className="glass-panel soft-ring overflow-hidden rounded-[1.5rem]">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3 sm:px-4 sm:py-4">
+            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+              Resume
+            </p>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-[0.2em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                onClick={() => setIsPreviewOpen(true)}
+                type="button"
+              >
+                View source
+              </button>
+
+              <label
+                className={`inline-flex items-center rounded-full px-3 py-2 text-[11px] uppercase tracking-[0.2em] transition ${
+                  !openAIReady || isUploadingResume
+                    ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
+                    : "cursor-pointer border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
+                }`}
+                htmlFor={fileInputId}
+              >
+                {isUploadingResume ? "Saving..." : "Re-upload"}
+              </label>
+            </div>
+          </div>
+
+          <div className="px-3 pb-3 sm:px-4 sm:pb-4">
+            {isWideLayout ? (
+              <section className="min-h-[560px] pt-1">
+                <ResizablePanelGroup
+                  className="min-h-[560px] gap-0"
+                  orientation="horizontal"
+                >
+                  <ResizablePanel
+                    className="min-w-0 overflow-hidden pr-2"
+                    defaultSize={defaultEditorPaneSize}
+                    minSize={42}
+                  >
+                    {editorPanelContent}
+                  </ResizablePanel>
+
+                  <ResizableHandle className="group relative w-4 bg-transparent after:hidden focus-visible:ring-0">
+                    <button
+                      aria-label={isPreviewCollapsed ? "Show preview" : "Hide preview"}
+                      className="absolute left-1/2 top-3 z-20 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-white/14 bg-zinc-950/96 text-zinc-100 shadow-[0_10px_26px_rgba(0,0,0,0.32)] transition hover:border-white/25 hover:bg-zinc-900"
+                      onClick={(event) => {
+                        stopHandleButtonEvent(event);
+                        togglePreviewPane();
+                      }}
+                      onMouseDown={stopHandleButtonEvent}
+                      onPointerDown={stopHandleButtonEvent}
+                      type="button"
+                    >
+                      {isPreviewCollapsed ? (
+                        <ChevronsLeft className="h-4 w-4" />
+                      ) : (
+                        <ChevronsRight className="h-4 w-4" />
+                      )}
+                    </button>
+                  </ResizableHandle>
+
+                  <ResizablePanel
+                    className="min-w-0 overflow-hidden pl-2"
+                    collapsedSize={0}
+                    collapsible
+                    defaultSize={defaultPreviewPaneSize}
+                    minSize={22}
+                    onResize={handlePreviewPanelResize}
+                    panelRef={previewPanelRef}
+                  >
+                    {previewPanelContent}
+                  </ResizablePanel>
+                </ResizablePanelGroup>
+              </section>
+            ) : (
+              <section className="grid gap-[clamp(0.75rem,1.2vh,1rem)] pt-1">
+                {editorPanelContent}
+                {previewPanelContent}
+              </section>
+            )}
+          </div>
+        </section>
+      ) : (
+        <section
+          className={`glass-panel soft-ring rounded-[1.5rem] p-4 transition sm:p-5 ${
+            isUploadingResume ? "border-white/8 bg-white/[0.02] opacity-85" : ""
+          }`}
+        >
+          <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
               <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
                 Resume
               </p>
               <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-                Upload once, then replace whenever you want
+                Upload a resume
               </h2>
-              <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-400">
-                Replacing the saved file reruns extraction, seeds a fresh LaTeX
-                draft, and refreshes the compiled preview below.
-              </p>
             </div>
 
             <label
-              className={`inline-flex cursor-pointer items-center rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
-                !openAIReady || isUploadingResume || isReextracting
+              className={`inline-flex items-center rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
+                !openAIReady || isUploadingResume
                   ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
-                  : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
+                  : "cursor-pointer border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
               }`}
               htmlFor={fileInputId}
             >
-              {isUploadingResume
-                ? "Saving..."
-                : resume
-                  ? "Replace resume"
-                  : "Upload resume"}
+              {isUploadingResume ? "Saving..." : "Upload resume"}
             </label>
           </div>
-
-          <input
-            accept="application/pdf,image/png,image/jpeg,image/webp"
-            className="sr-only"
-            disabled={!openAIReady || isUploadingResume || isReextracting}
-            id={fileInputId}
-            onChange={handleResumeChange}
-            ref={fileInputRef}
-            type="file"
-          />
 
           {!openAIReady ? (
             <div className="mt-5 rounded-[1.25rem] border border-amber-400/25 bg-amber-400/10 p-4 text-sm leading-6 text-amber-100">
               Resume extraction is not configured yet, so uploads cannot be processed.
             </div>
-          ) : null}
-
-          {resume ? (
-            <div className="mt-5 grid gap-4">
-              <button
-                className="rounded-[1.35rem] border border-white/10 bg-black/20 p-4 text-left transition hover:border-emerald-400/25 hover:bg-emerald-400/6 focus-visible:border-emerald-300/45 focus-visible:outline-none"
-                onClick={() => setIsPreviewOpen(true)}
-                type="button"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="truncate text-base font-medium text-zinc-100">
-                      {resume.originalFilename}
-                    </p>
-                    <p className="mt-1 text-sm text-zinc-400">
-                      {resume.mimeType === "application/pdf" ? "PDF" : "Image"} •{" "}
-                      {formatFileSize(resume.sizeBytes)}
-                    </p>
-                    <p className="mt-2 text-xs uppercase tracking-[0.18em] text-zinc-500">
-                      Saved {formatSavedAt(resume.updatedAt)}
-                    </p>
-                  </div>
-                  <span className="rounded-full border border-white/10 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-zinc-300">
-                    View full screen
-                  </span>
-                </div>
-              </button>
-
-              <div className="flex flex-wrap gap-2">
-                <StatusPill>
-                  {extraction.status === "ready"
-                    ? "Extracted"
-                    : extraction.status === "failed"
-                      ? "Needs retry"
-                      : extraction.status === "extracting"
-                        ? "Extracting..."
-                        : "Awaiting extraction"}
-                </StatusPill>
-                {extraction.model ? <StatusPill>{extraction.model}</StatusPill> : null}
-                {extraction.updatedAt ? (
-                  <StatusPill>{formatSavedAt(extraction.updatedAt)}</StatusPill>
-                ) : null}
-              </div>
-            </div>
           ) : (
             <div className="mt-5 rounded-[1.35rem] border border-dashed border-white/12 bg-black/15 p-6 text-sm leading-6 text-zinc-400">
-              No saved resume yet. Upload a PDF or image resume and the app will
-              keep the file, the extracted LaTeX source, and the preview on reload.
+              Upload a PDF or image to start editing the LaTeX and preview.
             </div>
           )}
         </section>
-
-        <section className="glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                LaTeX workflow
-              </p>
-              <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-                Extract once, then tailor the actual document
-              </h2>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-                The uploaded resume is converted straight into LaTeX. That LaTeX is
-                what you edit, save, and compile from here on out.
-              </p>
-            </div>
-
-            {resume ? (
-              <button
-                className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
-                  !openAIReady || isUploadingResume || isReextracting
-                    ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
-                    : "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
-                }`}
-                disabled={!openAIReady || isUploadingResume || isReextracting}
-                onClick={() => void reextractResume()}
-                type="button"
-              >
-                {isReextracting ? "Extracting..." : "Re-extract"}
-              </button>
-            ) : null}
-          </div>
-
-          <div className="mt-5 rounded-[1.25rem] border border-white/10 bg-black/20 p-4">
-            {resume ? (
-              extraction.status === "ready" ? (
-                <div className="grid gap-4 text-sm leading-6 text-zinc-300 sm:grid-cols-3">
-                  <div className="rounded-[1rem] border border-white/10 bg-black/20 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">
-                      Source
-                    </p>
-                    <p className="mt-2 text-zinc-100">
-                      {draftLatexCode.trim().length > 0
-                        ? `${draftLatexCode.split("\n").length} editable line${
-                            draftLatexCode.split("\n").length === 1 ? "" : "s"
-                          }`
-                        : "Waiting for LaTeX"}
-                    </p>
-                    <p className="mt-2 text-zinc-500">
-                      {profile.latex.updatedAt
-                        ? `Updated ${formatSavedAt(profile.latex.updatedAt)}`
-                        : "No saved LaTeX yet"}
-                    </p>
-                  </div>
-
-                  <div className="rounded-[1rem] border border-white/10 bg-black/20 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">
-                      Editing
-                    </p>
-                    <p className="mt-2 text-zinc-100">
-                      {isSavingLatex
-                        ? "Saving your LaTeX now"
-                        : latexState === "saved"
-                          ? "Draft saved"
-                          : "Autosaves as you work"}
-                    </p>
-                    <p className="mt-2 text-zinc-500">
-                      Make changes in raw LaTeX and let the preview follow.
-                    </p>
-                  </div>
-
-                  <div className="rounded-[1rem] border border-white/10 bg-black/20 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">
-                      Preview
-                    </p>
-                    <p className="mt-2 text-zinc-100">
-                      {isPreviewRefreshing
-                        ? "Refreshing preview"
-                        : previewPdfUrl
-                          ? "PDF preview is ready"
-                          : profile.latex.status === "failed"
-                            ? "Preview needs a fix"
-                            : "Preview will appear after rendering"}
-                    </p>
-                    <p className="mt-2 text-zinc-500">
-                      {isPreviewRefreshing
-                        ? "Keeping the current PDF visible while the update finishes."
-                        : profile.latex.pdfUpdatedAt
-                          ? `Updated ${formatSavedAt(profile.latex.pdfUpdatedAt)}`
-                          : "Waiting for the next successful render"}
-                    </p>
-                  </div>
-                </div>
-              ) : extraction.status === "failed" ? (
-                <div className="space-y-2 text-sm leading-6 text-rose-100">
-                  <p>LaTeX extraction failed for the current resume.</p>
-                  <p className="text-rose-200/80">
-                    {extraction.error ?? "Try re-extracting the saved file."}
-                  </p>
-                </div>
-              ) : extraction.status === "extracting" ? (
-                <p className="text-sm leading-6 text-zinc-300">
-                  The resume is being processed now. As soon as extraction finishes,
-                  the LaTeX editor and compiled preview will appear below.
-                </p>
-              ) : (
-                <p className="text-sm leading-6 text-zinc-300">
-                  Upload a resume to generate the editable LaTeX draft and preview.
-                </p>
-              )
-            ) : (
-              <p className="text-sm leading-6 text-zinc-300">
-                Upload a resume first. Once extraction finishes, the LaTeX editor
-                and preview will persist here on reload.
-              </p>
-            )}
-          </div>
-        </section>
-      </section>
-
-      {isWideLayout ? (
-        <section className="min-h-[560px]">
-          <ResizablePanelGroup
-            className="min-h-[560px] gap-0"
-            orientation="horizontal"
-          >
-            <ResizablePanel
-              className="min-w-0 overflow-hidden"
-              defaultSize={defaultEditorPaneSize}
-              minSize={42}
-            >
-              {editorPanelContent}
-            </ResizablePanel>
-
-            <ResizableHandle className="group relative w-6 bg-transparent after:hidden focus-visible:ring-0">
-              <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-white/10 transition group-data-[resize-handle-state=drag]:bg-emerald-300/40" />
-
-              <button
-                aria-label={isPreviewCollapsed ? "Show preview" : "Hide preview"}
-                className="absolute left-1/2 top-3 z-20 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-white/14 bg-zinc-950/96 text-zinc-100 shadow-[0_10px_26px_rgba(0,0,0,0.32)] transition hover:border-white/25 hover:bg-zinc-900"
-                onClick={(event) => {
-                  stopHandleButtonEvent(event);
-                  togglePreviewPane();
-                }}
-                onMouseDown={stopHandleButtonEvent}
-                onPointerDown={stopHandleButtonEvent}
-                type="button"
-              >
-                {isPreviewCollapsed ? (
-                  <ChevronsLeft className="h-4 w-4" />
-                ) : (
-                  <ChevronsRight className="h-4 w-4" />
-                )}
-              </button>
-
-              <div className="absolute left-1/2 top-1/2 z-10 flex h-14 w-3 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/8 bg-black/30 shadow-[0_6px_18px_rgba(0,0,0,0.24)]">
-                <div className="h-8 w-1 rounded-full bg-white/18 transition group-data-[resize-handle-state=drag]:bg-emerald-300/55" />
-              </div>
-            </ResizableHandle>
-
-            <ResizablePanel
-              className="min-w-0 overflow-hidden"
-              collapsedSize={0}
-              collapsible
-              defaultSize={defaultPreviewPaneSize}
-              minSize={22}
-              onResize={handlePreviewPanelResize}
-              panelRef={previewPanelRef}
-            >
-              {previewPanelContent}
-            </ResizablePanel>
-          </ResizablePanelGroup>
-        </section>
-      ) : (
-        <section className="grid gap-[clamp(0.75rem,1.2vh,1rem)]">
-          {editorPanelContent}
-          {previewPanelContent}
-        </section>
       )}
 
-      <section className="glass-panel soft-ring flex min-h-[260px] flex-col rounded-[1.5rem] p-4 sm:p-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-              Job description
-            </p>
-            <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-              Paste the role you want to tailor for
-            </h2>
-          </div>
+      {resume ? (
+        <>
+          <section className="glass-panel soft-ring flex min-h-[260px] flex-col rounded-[1.5rem] p-4 sm:p-5">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+                  Job description
+                </p>
+                <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
+                  Paste the role you want to tailor for
+                </h2>
+              </div>
 
-          <StatusPill>
-            {isSavingJobDescription
-              ? "Saving..."
-              : jobDescriptionState === "saved"
-                ? "Saved"
-                : "Autosaves"}
-          </StatusPill>
-        </div>
+              <StatusPill>
+                {isSavingJobDescription
+                  ? "Saving..."
+                  : jobDescriptionState === "saved"
+                    ? "Saved"
+                    : "Autosaves"}
+              </StatusPill>
+            </div>
 
-        <textarea
-          className="mt-5 min-h-[180px] w-full flex-1 resize-none rounded-[1.25rem] border border-white/10 bg-black/20 px-4 py-4 text-sm leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-300/45"
-          onChange={(event) => setDraftJobDescription(event.target.value)}
-          placeholder="Paste the full job description here. This saves separately from the LaTeX resume source."
-          value={draftJobDescription}
-        />
-      </section>
+            <textarea
+              className="mt-5 min-h-[180px] w-full flex-1 resize-none rounded-[1.25rem] border border-white/10 bg-black/20 px-4 py-4 text-sm leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-300/45"
+              onChange={(event) => setDraftJobDescription(event.target.value)}
+              placeholder="Paste the full job description here. This saves separately from the LaTeX resume source."
+              value={draftJobDescription}
+            />
+          </section>
+        </>
+      ) : null}
 
       {isPreviewMounted && isPreviewOpen && resume
         ? createPortal(

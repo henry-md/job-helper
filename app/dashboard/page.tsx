@@ -119,7 +119,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       : null;
 
   return (
-    <main className="h-[100dvh] overflow-hidden px-[clamp(0.7rem,1.2vw,1.4rem)] py-[clamp(0.75rem,1.6vh,1.25rem)]">
+    <main className="h-[100dvh] overflow-hidden px-[clamp(1.4rem,2.4vw,2.8rem)] py-[clamp(0.75rem,1.6vh,1.25rem)]">
       <div className="mx-auto flex h-full w-full max-w-[1800px] flex-col gap-[clamp(0.75rem,1.2vh,1rem)]">
         <section className="flex min-h-0 flex-1 flex-col gap-[clamp(0.75rem,1.2vh,1rem)]">
           <DashboardWorkspace
