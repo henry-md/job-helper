@@ -15,7 +15,7 @@ import type {
   TailorResumeSourceSegment,
   TailorResumeSourceUnit,
   TailorResumeSourceUnitKind,
-} from "@/lib/tailor-resume-types";
+} from "./tailor-resume-types.ts";
 
 const execFile = promisify(execFileCallback);
 

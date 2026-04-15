@@ -10,7 +10,7 @@ Current request flow:
 2. `/dashboard` loads counts/recent applications from Prisma and reads the saved tailor-resume profile from the local filesystem.
 3. Client uploads screenshots to `POST /api/job-applications/extract` for draft extraction.
 4. Final form submit goes to `POST /api/job-applications`, which persists screenshots, upserts `Company`, then creates one `JobApplication`.
-5. `POST /api/tailor-resume` persists the uploaded resume file, runs resume extraction through OpenAI, and stores both the extracted and user-edited resume document in the per-user tailor-resume profile.
+5. `POST /api/tailor-resume` persists the uploaded resume file, runs resume extraction through OpenAI, normalizes the extraction into the simplified tailor-resume source document, and stores the derived LaTeX/PDF preview in the per-user tailor-resume profile.
 
 Important boundaries:
 - Auth config lives in `auth.ts`; route handler is `app/api/auth/[...nextauth]/route.ts`.
@@ -18,6 +18,7 @@ Important boundaries:
 - Extraction logic is centralized in `lib/job-application-extraction.ts`; it uses a strict JSON schema and validates the returned payload manually.
 - Screenshot file persistence is local filesystem storage under `public/uploads/job-screenshots/<userId>/`, not object storage.
 - Shared browser/automation ingestion is documented in `agent-docs/architecture/ingestion.md`.
+- Tailor Resume object naming and flow are documented in `agent-docs/architecture/tailor-resume-objects.md`.
 
 Current persistence nuance:
 - A saved application can own multiple `JobApplicationScreenshot` records through `JobApplicationScreenshot.applicationId`.
