@@ -98,6 +98,7 @@ const latexHeadingMacros = String.raw`% ---------- HEADINGS ----------
 \newcommand{\descline}[1]{{\BodyFont #1\par}}
 
 \newenvironment{resumebullets}{
+  \vspace{0} % ENV: If you want space between description and bullets
   \begin{itemize}\BodyFont
 }{
   \end{itemize}
@@ -583,15 +584,11 @@ function extractRelevantLatexError(output: string) {
   return lines.slice(-12).join("\n");
 }
 
-function buildPreviewFallbackLatex(latexCode: string, compileOutput: string) {
-  if (/newtx(text|math)\.sty/i.test(compileOutput)) {
-    return latexCode.replace(
-      String.raw`\usepackage{newtxtext,newtxmath}`,
-      String.raw`\usepackage{lmodern}`,
-    );
-  }
-
-  return null;
+function buildCompilablePreviewLatex(latexCode: string) {
+  return latexCode.replace(
+    String.raw`\vspace{0} % ENV: If you want space between description and bullets`,
+    String.raw`\vspace{0pt} % ENV: If you want space between description and bullets`,
+  );
 }
 
 async function runPdflatex(texPath: string, outputDirectory: string) {
@@ -640,29 +637,12 @@ export async function compileTailorResumeLatex(latexCode: string) {
   const pdfPath = path.join(tempDir, "resume.pdf");
 
   try {
-    await writeFile(texPath, latexCode, "utf8");
+    await writeFile(texPath, buildCompilablePreviewLatex(latexCode), "utf8");
     await runPdflatex(texPath, tempDir);
 
     return await readFile(pdfPath);
   } catch (error) {
     const output = readLatexProcessOutput(error);
-    const fallbackLatex = buildPreviewFallbackLatex(latexCode, output);
-
-    if (fallbackLatex) {
-      try {
-        await writeFile(texPath, fallbackLatex, "utf8");
-        await runPdflatex(texPath, tempDir);
-        return await readFile(pdfPath);
-      } catch (fallbackError) {
-        const fallbackOutput = readLatexProcessOutput(fallbackError);
-
-        throw new Error(
-          fallbackOutput
-            ? extractRelevantLatexError(fallbackOutput)
-            : "Unable to compile the generated LaTeX preview.",
-        );
-      }
-    }
 
     throw new Error(
       output

@@ -96,6 +96,7 @@ export const henryDeutschExpectedLatex = String.raw`\documentclass[10pt]{article
 \newcommand{\descline}[1]{{\BodyFont #1\par}}
 
 \newenvironment{resumebullets}{
+  \vspace{0} % ENV: If you want space between description and bullets
   \begin{itemize}\BodyFont
 }{
   \end{itemize}
