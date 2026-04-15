@@ -29,7 +29,15 @@ test("runResumeLatexToolLoop retries with the exact compile error", async () => 
           type: "function_call",
           name: "validate_resume_latex",
           call_id: "call_1",
-          arguments: JSON.stringify({ latexCode: "\\documentclass{article}\nBAD" }),
+          arguments: JSON.stringify({
+            latexCode: "\\documentclass{article}\nBAD",
+            links: [
+              {
+                label: "Portfolio",
+                url: "https://example.com/bad-link",
+              },
+            ],
+          }),
         },
       ],
     },
@@ -43,6 +51,12 @@ test("runResumeLatexToolLoop retries with the exact compile error", async () => 
           call_id: "call_2",
           arguments: JSON.stringify({
             latexCode: "\\documentclass{article}\n\\begin{document}Fixed\\end{document}",
+            links: [
+              {
+                label: "Portfolio",
+                url: null,
+              },
+            ],
           }),
         },
       ],
@@ -111,6 +125,12 @@ test("runResumeLatexToolLoop retries with the exact compile error", async () => 
     result.latexCode,
     "\\documentclass{article}\n\\begin{document}Fixed\\end{document}",
   );
+  assert.deepEqual(result.extractedResumeLinks, [
+    {
+      label: "Portfolio",
+      url: null,
+    },
+  ]);
   assert.deepEqual(result.previewPdf, Buffer.from("pdf"));
   assert.deepEqual(
     result.linkSummary,
@@ -162,7 +182,10 @@ test("runResumeLatexToolLoop returns the last draft plus the final error after t
           type: "function_call",
           name: "validate_resume_latex",
           call_id: "call_1",
-          arguments: JSON.stringify({ latexCode: "draft-one" }),
+          arguments: JSON.stringify({
+            latexCode: "draft-one",
+            links: [],
+          }),
         },
       ],
     },
@@ -174,7 +197,10 @@ test("runResumeLatexToolLoop returns the last draft plus the final error after t
           type: "function_call",
           name: "validate_resume_latex",
           call_id: "call_2",
-          arguments: JSON.stringify({ latexCode: "draft-two" }),
+          arguments: JSON.stringify({
+            latexCode: "draft-two",
+            links: [],
+          }),
         },
       ],
     },
@@ -186,7 +212,10 @@ test("runResumeLatexToolLoop returns the last draft plus the final error after t
           type: "function_call",
           name: "validate_resume_latex",
           call_id: "call_3",
-          arguments: JSON.stringify({ latexCode: "draft-three" }),
+          arguments: JSON.stringify({
+            latexCode: "draft-three",
+            links: [],
+          }),
         },
       ],
     },
@@ -243,6 +272,7 @@ test("runResumeLatexToolLoop returns the last draft plus the final error after t
     },
   ]);
   assert.equal(result.latexCode, "draft-three");
+  assert.deepEqual(result.extractedResumeLinks, []);
   assert.equal(result.linkSummary, null);
   assert.equal(result.previewPdf, null);
   assert.equal(requests.length, 3);

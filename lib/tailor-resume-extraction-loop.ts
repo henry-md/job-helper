@@ -1,3 +1,4 @@
+import type { ExtractedTailorResumeLink } from "@/lib/tailor-resume-links";
 import type {
   TailorResumeLatexDocumentValidationResult,
   TailorResumeLinkValidationEntry,
@@ -18,8 +19,22 @@ export const resumeLatexValidationTool = {
     additionalProperties: false,
     properties: {
       latexCode: { type: "string" },
+      links: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            label: { type: "string" },
+            url: {
+              type: ["string", "null"],
+            },
+          },
+          required: ["label", "url"],
+        },
+      },
     },
-    required: ["latexCode"],
+    required: ["latexCode", "links"],
   },
 } as const;
 
@@ -94,6 +109,7 @@ export type RunResumeLatexToolLoopResult = {
   linkSummary: TailorResumeLinkValidationSummary | null;
   model: string;
   previewPdf: Buffer | null;
+  extractedResumeLinks: ExtractedTailorResumeLink[];
   validationError: string | null;
 };
 
@@ -119,7 +135,37 @@ function readOutputText(response: ResumeLatexLoopResponse) {
   return chunks.join("").trim();
 }
 
-function readExtractedLatexCode(value: unknown) {
+function readExtractedResumeLinks(value: unknown) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !("links" in value) ||
+    !Array.isArray(value.links)
+  ) {
+    return [] as ExtractedTailorResumeLink[];
+  }
+
+  return value.links.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+
+    const label =
+      "label" in entry && typeof entry.label === "string" ? entry.label.trim() : "";
+    const url =
+      "url" in entry && (typeof entry.url === "string" || entry.url === null)
+        ? entry.url
+        : null;
+
+    if (!label) {
+      return [];
+    }
+
+    return [{ label, url }];
+  });
+}
+
+function readExtractedLatexDocument(value: unknown) {
   if (
     !value ||
     typeof value !== "object" ||
@@ -135,7 +181,10 @@ function readExtractedLatexCode(value: unknown) {
     throw new Error("The model returned an empty LaTeX document.");
   }
 
-  return latexCode;
+  return {
+    latexCode,
+    links: readExtractedResumeLinks(value),
+  };
 }
 
 function buildRetryMessage(error: string): ResumeLatexRetryMessage[] {
@@ -148,7 +197,7 @@ function buildRetryMessage(error: string): ResumeLatexRetryMessage[] {
           text:
             `The previous response did not call ${resumeLatexValidationToolName} correctly.\n\n` +
             `Exact issue:\n${error}\n\n` +
-            `Return to the resume, produce the full corrected LaTeX document, and call ${resumeLatexValidationToolName} with the entire document in latexCode.`,
+            `Return to the resume, produce the full corrected LaTeX document, and call ${resumeLatexValidationToolName} with the entire document in latexCode plus a complete links array.`,
         },
       ],
     },
@@ -172,7 +221,7 @@ function buildValidationFailureOutput(input: {
         error: input.validation.error,
         failedLinks,
         instruction:
-          "Revise the full LaTeX document, preserve the visible resume content, and call validate_resume_latex again with the complete corrected latexCode. If a link fails validation, keep the visible text but remove hyperlink-specific styling instead of guessing a new destination.",
+          "Revise the full LaTeX document, preserve the visible resume content, and call validate_resume_latex again with the complete corrected latexCode and links array. If a link fails validation or you are not confident in its destination, keep the visible text, remove hyperlink-specific styling, and return that label in links with url set to null instead of guessing a new destination.",
         linkSummary: input.validation.linkSummary,
         ok: input.validation.ok,
         remainingAttempts: input.maxAttempts - input.attempt,
@@ -235,6 +284,7 @@ export async function runResumeLatexToolLoop(
   let lastLatexCode: string | null = null;
   let lastLinks: TailorResumeLinkValidationEntry[] = [];
   let lastLinkSummary: TailorResumeLinkValidationSummary | null = null;
+  let lastResumeLinks: ExtractedTailorResumeLink[] = [];
   let resolvedModel: string | null = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -258,9 +308,10 @@ export async function runResumeLatexToolLoop(
 
       if (outputText) {
         try {
-          const fallbackLatexCode = readExtractedLatexCode(JSON.parse(outputText));
-          lastLatexCode = fallbackLatexCode;
-          const validation = await args.validateLatex(fallbackLatexCode);
+          const fallbackDocument = readExtractedLatexDocument(JSON.parse(outputText));
+          lastLatexCode = fallbackDocument.latexCode;
+          lastResumeLinks = fallbackDocument.links;
+          const validation = await args.validateLatex(fallbackDocument.latexCode);
           lastLinks = validation.links;
           lastLinkSummary = validation.linkSummary;
 
@@ -295,11 +346,12 @@ export async function runResumeLatexToolLoop(
                 willRetry: false,
               },
             ],
-            latexCode: fallbackLatexCode,
+            latexCode: fallbackDocument.latexCode,
             links: validation.links,
             linkSummary: validation.linkSummary,
             model: resolvedModel ?? args.fallbackModel,
             previewPdf: validation.previewPdf,
+            extractedResumeLinks: fallbackDocument.links,
             validationError: null,
           };
         } catch (error) {
@@ -329,9 +381,10 @@ export async function runResumeLatexToolLoop(
     }
 
     try {
-      const latexCode = readExtractedLatexCode(JSON.parse(toolCall.arguments));
-      lastLatexCode = latexCode;
-      const validation = await args.validateLatex(latexCode);
+      const extractedDocument = readExtractedLatexDocument(JSON.parse(toolCall.arguments));
+      lastLatexCode = extractedDocument.latexCode;
+      lastResumeLinks = extractedDocument.links;
+      const validation = await args.validateLatex(extractedDocument.latexCode);
       lastLinks = validation.links;
       lastLinkSummary = validation.linkSummary;
 
@@ -371,11 +424,12 @@ export async function runResumeLatexToolLoop(
             willRetry: false,
           },
         ],
-        latexCode,
+        latexCode: extractedDocument.latexCode,
         links: validation.links,
         linkSummary: validation.linkSummary,
         model: resolvedModel ?? args.fallbackModel,
         previewPdf: validation.previewPdf,
+        extractedResumeLinks: extractedDocument.links,
         validationError: null,
       };
     } catch (error) {
@@ -412,6 +466,7 @@ export async function runResumeLatexToolLoop(
     linkSummary: lastLinkSummary,
     model: resolvedModel ?? args.fallbackModel,
     previewPdf: null,
+    extractedResumeLinks: lastResumeLinks,
     validationError: buildRetryExhaustedError(lastError, maxAttempts),
   };
 }

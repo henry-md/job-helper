@@ -6,6 +6,14 @@ export type SavedResumeRecord = {
   updatedAt: string;
 };
 
+export type TailorResumeLinkRecord = {
+  disabled: boolean;
+  key: string;
+  label: string;
+  updatedAt: string;
+  url: string | null;
+};
+
 export type TailorResumeExtractionStatus =
   | "failed"
   | "idle"
@@ -37,6 +45,7 @@ export type TailorResumeProfile = {
   extraction: TailorResumeExtractionState;
   jobDescription: string;
   latex: TailorResumeLatexState;
+  links: TailorResumeLinkRecord[];
   resume: SavedResumeRecord | null;
 };
 
@@ -76,8 +85,44 @@ export function emptyTailorResumeProfile(): TailorResumeProfile {
     extraction: emptyTailorResumeExtractionState(),
     jobDescription: "",
     latex: emptyTailorResumeLatexState(),
+    links: [],
     resume: null,
   };
+}
+
+function parseTailorResumeLinkRecord(value: unknown): TailorResumeLinkRecord | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const key = readNullableString(value.key);
+  const label = readNullableString(value.label);
+  const updatedAt = readNullableString(value.updatedAt);
+  const url = value.url === null ? null : readNullableString(value.url);
+  const disabled = value.disabled === true;
+
+  if (!key || !label || !updatedAt) {
+    return null;
+  }
+
+  return {
+    disabled,
+    key,
+    label,
+    updatedAt,
+    url,
+  };
+}
+
+function parseTailorResumeLinkRecords(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailorResumeLinkRecord[];
+  }
+
+  return value.flatMap((entry) => {
+    const parsedLink = parseTailorResumeLinkRecord(entry);
+    return parsedLink ? [parsedLink] : [];
+  });
 }
 
 function parseSavedResumeRecord(value: unknown): SavedResumeRecord | null {
@@ -167,6 +212,7 @@ export function parseTailorResumeProfile(value: unknown): TailorResumeProfile {
     extraction: parseTailorResumeExtractionState(value.extraction),
     jobDescription: readString(value.jobDescription),
     latex: parseTailorResumeLatexState(value.latex),
+    links: parseTailorResumeLinkRecords(value.links),
     resume: parseSavedResumeRecord(value.resume),
   };
 }

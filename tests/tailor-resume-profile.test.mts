@@ -14,6 +14,21 @@ test("parseTailorResumeProfile reads the current LaTeX-only shape", () => {
       updatedAt: "2026-04-15T12:00:00.000Z",
     },
     jobDescription: "Role text",
+    links: [
+      {
+        key: "linkedin",
+        label: "LinkedIn",
+        updatedAt: "2026-04-15T12:00:00.000Z",
+        url: "https://linkedin.com/in/example",
+      },
+      {
+        disabled: true,
+        key: "portfolio",
+        label: "Portfolio",
+        updatedAt: "2026-04-15T12:00:00.000Z",
+        url: null,
+      },
+    ],
     latex: {
       code: "\\documentclass{article}\n\\begin{document}Hello\\end{document}",
       error: null,
@@ -32,6 +47,10 @@ test("parseTailorResumeProfile reads the current LaTeX-only shape", () => {
 
   assert.equal(profile.latex.code.includes("\\begin{document}"), true);
   assert.equal(profile.extraction.model, "gpt-5-mini");
+  assert.equal(profile.links[0]?.disabled, false);
+  assert.equal(profile.links[0]?.url, "https://linkedin.com/in/example");
+  assert.equal(profile.links[1]?.disabled, true);
+  assert.equal(profile.links[1]?.url, null);
   assert.equal(profile.resume?.originalFilename, "resume.pdf");
 });
 
@@ -60,5 +79,6 @@ test("emptyTailorResumeProfile defaults to an empty LaTeX draft", () => {
 
   assert.equal(profile.latex.code, "");
   assert.equal(profile.extraction.status, "idle");
+  assert.deepEqual(profile.links, []);
   assert.equal(profile.resume, null);
 });

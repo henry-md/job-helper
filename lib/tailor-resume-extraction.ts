@@ -1,16 +1,29 @@
 import OpenAI, { toFile } from "openai";
-import { validateTailorResumeLatexDocument } from "@/lib/tailor-resume-link-validation";
+import {
+  extractResumeLatexLinks,
+  validateTailorResumeLatexDocument,
+} from "@/lib/tailor-resume-link-validation";
 import {
   maxResumeLatexAttempts,
   resumeLatexValidationTool,
   runResumeLatexToolLoop,
   type RunResumeLatexToolLoopResult,
 } from "@/lib/tailor-resume-extraction-loop";
+import {
+  buildTailorResumeLinkRecords,
+  type ExtractedTailorResumeLink,
+} from "@/lib/tailor-resume-links";
+import { applyTailorResumeLinkOverrides } from "@/lib/tailor-resume-link-overrides";
 import { fileBufferToDataUrl } from "@/lib/job-tracking";
 import {
   tailorResumeLatexExample,
   tailorResumeLatexTemplate,
 } from "@/lib/tailor-resume-latex-example";
+import {
+  extractEmbeddedPdfLinks,
+  type EmbeddedPdfLink,
+} from "@/lib/tailor-resume-pdf-links";
+import type { TailorResumeLinkRecord } from "@/lib/tailor-resume-types";
 
 const TEST_OPENAI_RESPONSE_MODEL = "test-openai-response";
 
@@ -29,6 +42,72 @@ function isTestOpenAIResponseEnabled() {
   return value === "true" || value === "1" || value === "yes";
 }
 
+function buildKnownResumeLinksText(knownLinks: TailorResumeLinkRecord[]) {
+  const resolvedLinks = knownLinks.filter(
+    (link) => !link.disabled && typeof link.url === "string",
+  );
+  const disabledLinks = knownLinks.filter((link) => link.disabled);
+
+  if (resolvedLinks.length === 0 && disabledLinks.length === 0) {
+    return null;
+  }
+
+  const resolvedLines = resolvedLinks.map(
+    (link) => `- ${link.label} -> ${link.url}`,
+  );
+  const disabledLines = disabledLinks.map((link) => `- ${link.label}`);
+
+  return [
+    ...(resolvedLines.length > 0
+      ? [
+          "Known saved link destinations for this resume:",
+          ...resolvedLines,
+          "Reuse these exact destinations when the visible label clearly matches.",
+        ]
+      : []),
+    ...(disabledLines.length > 0
+      ? [
+          "Saved labels that must remain plain text and must not be linked:",
+          ...disabledLines,
+          "For these labels, remove \\href and link-only styling such as \\tightul.",
+        ]
+      : []),
+  ].join("\n");
+}
+
+function buildEmbeddedPdfLinksText(embeddedPdfLinks: EmbeddedPdfLink[]) {
+  const uniqueLinks: EmbeddedPdfLink[] = [];
+  const seenUrls = new Set<string>();
+
+  for (const link of embeddedPdfLinks) {
+    if (seenUrls.has(link.url)) {
+      continue;
+    }
+
+    seenUrls.add(link.url);
+    uniqueLinks.push(link);
+  }
+
+  if (uniqueLinks.length === 0) {
+    return null;
+  }
+
+  const lines = uniqueLinks.map((link) => `- page ${link.pageNumber}: ${link.url}`);
+
+  return [
+    "Embedded PDF link destinations recovered from the uploaded resume:",
+    ...lines,
+    "Match these destinations to visible link text only when you are confident.",
+  ].join("\n");
+}
+
+function buildExtractedResumeLinksFromLatex(latexCode: string) {
+  return extractResumeLatexLinks(latexCode).map<ExtractedTailorResumeLink>((link) => ({
+    label: link.displayText?.trim() || link.url,
+    url: link.url,
+  }));
+}
+
 function buildResumeLatexInstructions() {
   return `Convert the provided resume into a complete standalone LaTeX document. Preserve every word from the resume exactly as written whenever it is legible. Never summarize, shorten, compress, or omit text. In particular, never truncate bullets to their first sentence. Keep the original section order and keep all bullets, dates, headings, labeled lines, links, and separators. Preserve visible bold, italics, underlines, bullet structure, and link styling when possible. Return a full LaTeX document from \\documentclass through \\end{document} that compiles with pdflatex. Prefer the exact template and macro vocabulary shown below. Use only standard LaTeX plus the packages already present in that template unless absolutely necessary. Inline formatting such as \\textbf, \\textit, \\tightul, and \\href may appear anywhere inside macro arguments when needed.
 
@@ -39,13 +118,17 @@ Pay particular attention to these details because they are easy to get wrong:
 4. Bolding: pay special attention to what is visibly bolded in the uploaded image and reproduce that emphasis faithfully in LaTeX. Do not flatten bold emphasis, and do not assume only headings are bold; important phrases inside bullets, links, labels, names, and other inline fragments may need \\textbf{} as shown by the source image.
 5. Vertical spacing: pay close attention to the tight vertical spacing in the source image and the reference example. Use small spacing adjustments, including negative \\vspace{...} values when appropriate, to pull sections closer together and match the visual density of the original resume, especially between the centered header and the first section and around section transitions. Avoid leaving the document with loose default spacing when the source image is visibly tighter.
 6. Unicode safety: do not emit unsupported raw Unicode glyphs such as replacement characters or private-use characters. Replace them with LaTeX-safe ASCII or explicit LaTeX commands.
-7. Link fidelity: only preserve hyperlink styling when the destination is explicitly supported by the visible resume content. If a destination fails validation or the visible text does not support a specific target, keep the visible text but remove \\href and link-only styling such as \\tightul instead of guessing a replacement.
+7. Link fidelity: only preserve hyperlink styling when the destination is explicitly supported by the visible resume content, saved known links, or embedded PDF link metadata. If a destination fails validation or the visible text does not support a specific target, keep the visible text but remove \\href and link-only styling such as \\tightul instead of guessing a replacement.
+8. Deleted links: if saved context says a label should remain plain text, do not recreate a hyperlink for it even if the label looks like a valid URL.
 
 Tool workflow:
 - Use the validate_resume_latex tool every time you draft or revise the full document.
 - Pass the complete standalone LaTeX document in the tool argument latexCode.
+- Always include a complete links array in the tool call. Each entry must describe one visible resume link or contact destination using { "label": "...", "url": "..." | null }.
+- Use the exact visible link text or label for links[].label whenever possible. If you are not confident about the destination URL, set links[].url to null.
 - The tool validates both pdflatex compilation and extracted hyperlinks.
-- If the tool reports a compile error or failed links, fix that exact issue while preserving the resume content. For failed links, preserve the visible text but remove hyperlink-specific styling instead of inventing a destination.
+- If the tool reports a compile error or failed links, fix that exact issue while preserving the resume content. For failed links, preserve the visible text, remove hyperlink-specific styling, and keep the affected entry in links with url set to null instead of inventing a destination.
+- Never add link-style formatting when the destination does not resolve confidently.
 - Stop as soon as the tool reports success. You have at most ${String(maxResumeLatexAttempts)} validation attempts.
 
 Preferred template:
@@ -57,14 +140,24 @@ Reference example:
 ${tailorResumeLatexExample}`;
 }
 
-function buildResumeExtractionInput(input: {
-  buffer: Buffer;
-  filename: string;
-  mimeType: string;
-}, uploadedFileId: string | null) {
+function buildResumeExtractionInput(
+  input: {
+    buffer: Buffer;
+    filename: string;
+    mimeType: string;
+  },
+  uploadedFileId: string | null,
+  context: {
+    embeddedPdfLinks: EmbeddedPdfLink[];
+    knownLinks: TailorResumeLinkRecord[];
+  },
+) {
   if (!input.mimeType.startsWith("image/") && !uploadedFileId) {
     throw new Error("Unable to upload the resume file for extraction.");
   }
+
+  const knownResumeLinksText = buildKnownResumeLinksText(context.knownLinks);
+  const embeddedPdfLinksText = buildEmbeddedPdfLinksText(context.embeddedPdfLinks);
 
   return [
     {
@@ -73,8 +166,24 @@ function buildResumeExtractionInput(input: {
         {
           type: "input_text" as const,
           text:
-            "Extract this resume into LaTeX using the preferred template as closely as possible. Preserve all content and keep the document faithful to the uploaded resume.",
+            "Extract this resume into LaTeX using the preferred template as closely as possible. Preserve all content and keep the document faithful to the uploaded resume. Return every visible link/contact label in the tool call's links array, and set url to null whenever the destination is uncertain.",
         },
+        ...(knownResumeLinksText
+          ? [
+              {
+                type: "input_text" as const,
+                text: knownResumeLinksText,
+              },
+            ]
+          : []),
+        ...(embeddedPdfLinksText
+          ? [
+              {
+                type: "input_text" as const,
+                text: embeddedPdfLinksText,
+              },
+            ]
+          : []),
         ...(input.mimeType.startsWith("image/")
           ? [
               {
@@ -102,10 +211,14 @@ function buildResumeExtractionInput(input: {
   ];
 }
 
-export type ExtractResumeLatexDocumentResult = RunResumeLatexToolLoopResult;
+export type ExtractResumeLatexDocumentResult = RunResumeLatexToolLoopResult & {
+  resumeLinks: TailorResumeLinkRecord[];
+};
 
 type ExtractResumeLatexDocumentDependencies = {
   client?: OpenAI;
+  extractPdfLinks?: (pdfBuffer: Buffer) => Promise<EmbeddedPdfLink[]>;
+  knownLinks?: TailorResumeLinkRecord[];
   validateLatexDocument?: (
     latexCode: string,
   ) => ReturnType<typeof validateTailorResumeLatexDocument>;
@@ -120,12 +233,28 @@ export async function extractResumeLatexDocument(
   dependencies: ExtractResumeLatexDocumentDependencies = {},
 ): Promise<ExtractResumeLatexDocumentResult> {
   const model = process.env.OPENAI_RESUME_EXTRACTION_MODEL ?? "gpt-5-mini";
+  const extractPdfLinks = dependencies.extractPdfLinks ?? extractEmbeddedPdfLinks;
+  const knownLinks = dependencies.knownLinks ?? [];
   const validateLatexDocument =
     dependencies.validateLatexDocument ?? validateTailorResumeLatexDocument;
+  const applySavedLinkOverrides = (latexCode: string) =>
+    applyTailorResumeLinkOverrides(latexCode, knownLinks);
+  const validateLatexWithOverrides = (latexCode: string) =>
+    validateLatexDocument(applySavedLinkOverrides(latexCode));
+  const embeddedPdfLinks =
+    input.mimeType === "application/pdf" ? await extractPdfLinks(input.buffer) : [];
 
   if (isTestOpenAIResponseEnabled()) {
     try {
-      const validation = await validateLatexDocument(tailorResumeLatexExample);
+      const finalizedLatexCode = applySavedLinkOverrides(tailorResumeLatexExample);
+      const validation = await validateLatexWithOverrides(tailorResumeLatexExample);
+      const extractedResumeLinks = buildExtractedResumeLinksFromLatex(
+        tailorResumeLatexExample,
+      );
+      const resumeLinks = buildTailorResumeLinkRecords({
+        existingLinks: knownLinks,
+        extractedLinks: extractedResumeLinks,
+      });
 
       if (!validation.ok) {
         return {
@@ -139,11 +268,13 @@ export async function extractResumeLatexDocument(
               willRetry: false,
             },
           ],
-          latexCode: tailorResumeLatexExample,
+          latexCode: finalizedLatexCode,
           links: validation.links,
           linkSummary: validation.linkSummary,
           model: TEST_OPENAI_RESPONSE_MODEL,
           previewPdf: null,
+          extractedResumeLinks,
+          resumeLinks,
           validationError: validation.error,
         };
       }
@@ -159,14 +290,20 @@ export async function extractResumeLatexDocument(
             willRetry: false,
           },
         ],
-        latexCode: tailorResumeLatexExample,
+        latexCode: finalizedLatexCode,
         links: validation.links,
         linkSummary: validation.linkSummary,
         model: TEST_OPENAI_RESPONSE_MODEL,
         previewPdf: validation.previewPdf,
+        extractedResumeLinks,
+        resumeLinks,
         validationError: null,
       };
     } catch (error) {
+      const extractedResumeLinks = buildExtractedResumeLinksFromLatex(
+        tailorResumeLatexExample,
+      );
+
       return {
         attempts: 1,
         attemptEvents: [
@@ -181,11 +318,16 @@ export async function extractResumeLatexDocument(
             willRetry: false,
           },
         ],
-        latexCode: tailorResumeLatexExample,
+        latexCode: applySavedLinkOverrides(tailorResumeLatexExample),
         links: [],
         linkSummary: null,
         model: TEST_OPENAI_RESPONSE_MODEL,
         previewPdf: null,
+        extractedResumeLinks,
+        resumeLinks: buildTailorResumeLinkRecords({
+          existingLinks: knownLinks,
+          extractedLinks: extractedResumeLinks,
+        }),
         validationError:
           error instanceof Error
             ? error.message
@@ -205,14 +347,17 @@ export async function extractResumeLatexDocument(
       });
 
   try {
-    return await runResumeLatexToolLoop({
+    const result = await runResumeLatexToolLoop({
       createResponse: async ({ previousResponseId, input: retryInput }) => {
         const response = await client.responses.create({
           model,
           instructions: buildResumeLatexInstructions(),
           input:
             retryInput ??
-            buildResumeExtractionInput(input, uploadedFile?.id ?? null),
+            buildResumeExtractionInput(input, uploadedFile?.id ?? null, {
+              embeddedPdfLinks,
+              knownLinks,
+            }),
           parallel_tool_calls: false,
           previous_response_id: previousResponseId,
           tool_choice: "required",
@@ -270,8 +415,17 @@ export async function extractResumeLatexDocument(
         };
       },
       fallbackModel: model,
-      validateLatex: validateLatexDocument,
+      validateLatex: validateLatexWithOverrides,
     });
+
+    return {
+      ...result,
+      latexCode: applySavedLinkOverrides(result.latexCode),
+      resumeLinks: buildTailorResumeLinkRecords({
+        existingLinks: knownLinks,
+        extractedLinks: result.extractedResumeLinks,
+      }),
+    };
   } finally {
     if (uploadedFile?.id) {
       await client.files.delete(uploadedFile.id);

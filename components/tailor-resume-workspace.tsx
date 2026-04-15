@@ -13,7 +13,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { ChevronsLeft, ChevronsRight } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, Trash2 } from "lucide-react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import { toast } from "sonner";
 import {
@@ -21,8 +21,10 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import { normalizeTailorResumeLinkUrl } from "@/lib/tailor-resume-links";
 import type {
   SavedResumeRecord,
+  TailorResumeLinkRecord,
   TailorResumeProfile,
 } from "@/lib/tailor-resume-types";
 
@@ -53,6 +55,15 @@ type TailorResumeLinkValidationEntry = {
   url: string;
 };
 
+type TailorResumeLatexLinkSyncSummary = {
+  addedCount: number;
+  addedLinks: Array<{
+    key: string;
+    label: string;
+    url: string | null;
+  }>;
+};
+
 const acceptedResumeMimeTypes = new Set([
   "application/pdf",
   "image/png",
@@ -61,11 +72,13 @@ const acceptedResumeMimeTypes = new Set([
   "image/webp",
 ]);
 const maxResumeBytes = 10 * 1024 * 1024;
-const defaultEditorPaneSize = 56;
-const defaultPreviewPaneSize = 44;
+const defaultEditorPaneSize = 50;
+const defaultPreviewPaneSize = 50;
 const jobDescriptionToastId = "tailor-resume-job-description-save";
 const latexSaveToastId = "tailor-resume-latex-save";
+const latexLinkSyncToastId = "tailor-resume-latex-link-sync";
 const linkValidationToastId = "tailor-resume-link-validation";
+const resumeLinkSaveToastId = "tailor-resume-link-save";
 const resumeUploadToastId = "tailor-resume-resume-upload";
 const failedLinkToastDurationMs = 5 * 60 * 1_000;
 
@@ -95,6 +108,32 @@ function resolveSavedLatexCode(profile: TailorResumeProfile) {
   return profile.latex.code;
 }
 
+function buildLinkUrlDrafts(links: TailorResumeLinkRecord[]) {
+  return links.reduce<Record<string, string>>((drafts, link) => {
+    drafts[link.key] = link.url ?? "";
+    return drafts;
+  }, {});
+}
+
+function hasLinkDraftChanged(
+  link: TailorResumeLinkRecord,
+  draftValue: string | undefined,
+) {
+  const trimmedDraftValue = draftValue?.trim() ?? "";
+  const currentUrl = link.url ?? "";
+
+  if (!trimmedDraftValue) {
+    return currentUrl.length > 0;
+  }
+
+  const normalizedDraftUrl = normalizeTailorResumeLinkUrl(trimmedDraftValue);
+  return (normalizedDraftUrl ?? trimmedDraftValue) !== currentUrl;
+}
+
+function readUnresolvedResumeLinks(profile: TailorResumeProfile) {
+  return profile.links.filter((link) => !link.disabled && link.url === null);
+}
+
 function buildPendingResumeRecord(file: File): SavedResumeRecord {
   return {
     mimeType: file.type || "application/octet-stream",
@@ -107,6 +146,10 @@ function buildPendingResumeRecord(file: File): SavedResumeRecord {
 
 function isObjectUrl(url: string) {
   return url.startsWith("blob:");
+}
+
+function hasActiveResumeLinks(profile: TailorResumeProfile) {
+  return profile.links.some((link) => !link.disabled);
 }
 
 function revokeObjectUrl(url: string | null | undefined) {
@@ -151,20 +194,37 @@ function showLinkValidationSummaryToast(
   }
 
   window.setTimeout(() => {
-    const passedUrls = [...new Set(
-      (links ?? [])
-        .filter((link) => link.outcome === "passed")
-        .map((link) => link.url),
-    )];
-    const notPassedUrls = [...new Set(
-      (links ?? [])
-        .filter((link) => link.outcome !== "passed")
-        .map((link) =>
-          link.outcome === "failed"
-            ? `${link.url} (failed)`
-            : `${link.url} (unverified)`,
-        ),
-    )];
+    const groupedLinks = (links ?? []).reduce<
+      Array<{
+        count: number;
+        outcome: TailorResumeLinkValidationEntry["outcome"];
+        reason: string | null;
+        url: string;
+      }>
+    >((accumulator, link) => {
+      const existingLink = accumulator.find(
+        (item) =>
+          item.outcome === link.outcome &&
+          item.reason === link.reason &&
+          item.url === link.url,
+      );
+
+      if (existingLink) {
+        existingLink.count += 1;
+        return accumulator;
+      }
+
+      accumulator.push({
+        count: 1,
+        outcome: link.outcome,
+        reason: link.reason,
+        url: link.url,
+      });
+
+      return accumulator;
+    }, []);
+    const passedLinks = groupedLinks.filter((link) => link.outcome === "passed");
+    const notPassedLinks = groupedLinks.filter((link) => link.outcome !== "passed");
     const unverifiedFragment =
       linkSummary.unverifiedCount > 0
         ? `, ${linkSummary.unverifiedCount} couldn't be verified`
@@ -173,10 +233,47 @@ function showLinkValidationSummaryToast(
       `Validated ${linkSummary.totalCount} extracted ` +
       `link${linkSummary.totalCount === 1 ? "" : "s"}: ` +
       `${linkSummary.passedCount} passed, ${linkSummary.failedCount} failed${unverifiedFragment}.`;
-    const description = [
-      `Passed: ${passedUrls.length > 0 ? passedUrls.join(", ") : "none"}`,
-      `Didn't pass: ${notPassedUrls.length > 0 ? notPassedUrls.join(", ") : "none"}`,
-    ].join("\n");
+    const description = (
+      <div className="space-y-3 text-left">
+        <div className="space-y-1">
+          <div className="text-xs font-medium text-zinc-100">Passed</div>
+          {passedLinks.length > 0 ? (
+            <ul className="space-y-1 text-xs text-zinc-300">
+              {passedLinks.map((link) => (
+                <li
+                  key={`${link.outcome}:${link.url}:${link.reason ?? ""}`}
+                  className="break-all"
+                >
+                  {link.url}
+                  {link.count > 1 ? ` (${link.count}x)` : ""}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="text-xs text-zinc-400">none</div>
+          )}
+        </div>
+        <div className="space-y-1">
+          <div className="text-xs font-medium text-zinc-100">Didn&apos;t pass</div>
+          {notPassedLinks.length > 0 ? (
+            <ul className="space-y-1 text-xs text-zinc-300">
+              {notPassedLinks.map((link) => (
+                <li
+                  key={`${link.outcome}:${link.url}:${link.reason ?? ""}`}
+                  className="break-all"
+                >
+                  {link.url}
+                  {link.count > 1 ? ` (${link.count}x)` : ""}
+                  {link.outcome === "failed" ? " (failed)" : " (unverified)"}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="text-xs text-zinc-400">none</div>
+          )}
+        </div>
+      </div>
+    );
 
     if (linkSummary.failedCount > 0) {
       toast.error(message, {
@@ -216,6 +313,7 @@ export default function TailorResumeWorkspace({
   const latestDraftLatexCodeRef = useRef(resolveSavedLatexCode(initialProfile));
   const pendingLatexCodeRef = useRef<string | null>(null);
   const isLatexSaveInFlightRef = useRef(false);
+  const lastAutoOpenedLinkReviewRef = useRef(initialProfile.extraction.updatedAt);
   const previousPreviewPdfUrlRef = useRef(
     buildPreviewPdfUrl(initialProfile.latex.pdfUpdatedAt),
   );
@@ -229,14 +327,18 @@ export default function TailorResumeWorkspace({
   const [draftLatexCode, setDraftLatexCode] = useState(
     resolveSavedLatexCode(initialProfile),
   );
+  const [pendingDeletedLinkKeys, setPendingDeletedLinkKeys] = useState<string[]>([]);
+  const [isLinkEditorOpen, setIsLinkEditorOpen] = useState(false);
   const [isPreviewMounted, setIsPreviewMounted] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isPreviewFrameLoading, setIsPreviewFrameLoading] = useState(false);
   const [isSavingJobDescription, setIsSavingJobDescription] = useState(false);
   const [isSavingLatex, setIsSavingLatex] = useState(false);
+  const [isSavingLinks, setIsSavingLinks] = useState(false);
   const [isUploadingResume, setIsUploadingResume] = useState(false);
   const [isWideLayout, setIsWideLayout] = useState(false);
   const [isPreviewCollapsed, setIsPreviewCollapsed] = useState(false);
+  const [draftLinkUrls, setDraftLinkUrls] = useState<Record<string, string>>({});
   const [jobDescriptionState, setJobDescriptionState] = useState<
     "idle" | "saved" | "saving"
   >("idle");
@@ -246,6 +348,20 @@ export default function TailorResumeWorkspace({
 
   const resume = profile.resume;
   const displayedResume = pendingResume ?? resume;
+  const pendingDeletedLinkKeySet = new Set(pendingDeletedLinkKeys);
+  const editableLinks = profile.links.filter(
+    (link) => !link.disabled && !pendingDeletedLinkKeySet.has(link.key),
+  );
+  const visibleLinkCount = editableLinks.length;
+  const queuedRemovalCount = pendingDeletedLinkKeys.length;
+  const hasEditableOrPendingLinks =
+    visibleLinkCount > 0 || queuedRemovalCount > 0;
+  const unresolvedLinks = editableLinks.filter((link) => link.url === null);
+  const hasLinkEdits =
+    queuedRemovalCount > 0 ||
+    editableLinks.some((link) =>
+      hasLinkDraftChanged(link, draftLinkUrls[link.key]),
+    );
   const previewAsImage = displayedResume?.mimeType.startsWith("image/") ?? false;
   const editorDisabled = isUploadingResume;
   const previewPdfUrl = buildPreviewPdfUrl(profile.latex.pdfUpdatedAt);
@@ -286,14 +402,61 @@ export default function TailorResumeWorkspace({
     latestDraftLatexCodeRef.current = resolvedLatexCode;
     pendingLatexCodeRef.current = null;
     isLatexSaveInFlightRef.current = false;
+    lastAutoOpenedLinkReviewRef.current = initialProfile.extraction.updatedAt;
     previousPreviewPdfUrlRef.current = buildPreviewPdfUrl(
       initialProfile.latex.pdfUpdatedAt,
     );
+    setPendingDeletedLinkKeys([]);
+    setIsLinkEditorOpen(false);
     setIsPreviewCollapsed(false);
     setIsPreviewFrameLoading(false);
+    setIsSavingLinks(false);
+    setDraftLinkUrls(buildLinkUrlDrafts(initialProfile.links));
     setJobDescriptionState("idle");
     setLatexState("idle");
   }, [initialProfile]);
+
+  useEffect(() => {
+    setDraftLinkUrls((currentDraftLinkUrls) => {
+      const nextDraftLinkUrls = { ...currentDraftLinkUrls };
+      const editableLinkKeys = new Set(editableLinks.map((link) => link.key));
+      let didChange = false;
+
+      for (const link of editableLinks) {
+        if (!(link.key in nextDraftLinkUrls)) {
+          nextDraftLinkUrls[link.key] = link.url ?? "";
+          didChange = true;
+        }
+      }
+
+      for (const linkKey of Object.keys(nextDraftLinkUrls)) {
+        if (!editableLinkKeys.has(linkKey)) {
+          delete nextDraftLinkUrls[linkKey];
+          didChange = true;
+        }
+      }
+
+      return didChange ? nextDraftLinkUrls : currentDraftLinkUrls;
+    });
+  }, [editableLinks]);
+
+  useEffect(() => {
+    if (
+      profile.extraction.status !== "ready" ||
+      !profile.extraction.updatedAt ||
+      editableLinks.length === 0 ||
+      lastAutoOpenedLinkReviewRef.current === profile.extraction.updatedAt
+    ) {
+      return;
+    }
+
+    lastAutoOpenedLinkReviewRef.current = profile.extraction.updatedAt;
+    setIsLinkEditorOpen(true);
+  }, [
+    editableLinks.length,
+    profile.extraction.status,
+    profile.extraction.updatedAt,
+  ]);
 
   useLayoutEffect(() => {
     if (!previewPdfUrl) {
@@ -359,6 +522,7 @@ export default function TailorResumeWorkspace({
       });
       const payload = (await response.json()) as {
         error?: string;
+        latexLinkSyncSummary?: TailorResumeLatexLinkSyncSummary | null;
         profile?: TailorResumeProfile;
       };
 
@@ -385,6 +549,26 @@ export default function TailorResumeWorkspace({
         toast.success("Saved the LaTeX draft.", {
           id: latexSaveToastId,
         });
+
+        if ((payload.latexLinkSyncSummary?.addedCount ?? 0) > 0) {
+          const addedLinks = payload.latexLinkSyncSummary?.addedLinks ?? [];
+          const labels = addedLinks
+            .map((link) => link.label)
+            .filter((label, index, values) => values.indexOf(label) === index);
+          const previewText = labels.slice(0, 3).join(", ");
+          const remainingCount = labels.length - Math.min(labels.length, 3);
+
+          toast(
+            `Found ${addedLinks.length} new link${addedLinks.length === 1 ? "" : "s"} in the LaTeX.`,
+            {
+              description:
+                labels.length > 0
+                  ? `${previewText}${remainingCount > 0 ? `, and ${remainingCount} more.` : "."}`
+                  : undefined,
+              id: latexLinkSyncToastId,
+            },
+          );
+        }
       }
     } catch (error) {
       if (latexSaveSequenceRef.current !== sequence) {
@@ -515,6 +699,24 @@ export default function TailorResumeWorkspace({
     };
   }, [isPreviewOpen]);
 
+  useEffect(() => {
+    if (!isLinkEditorOpen) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsLinkEditorOpen(false);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isLinkEditorOpen]);
+
   async function uploadResume(file: File) {
     const validationError = validateResumeFile(file);
 
@@ -560,6 +762,8 @@ export default function TailorResumeWorkspace({
       setProfile(payload.profile);
       setPendingResume(null);
       setDraftLatexCode(resolvedLatexCode);
+      setDraftLinkUrls(buildLinkUrlDrafts(payload.profile.links));
+      setIsLinkEditorOpen(hasActiveResumeLinks(payload.profile));
       lastSavedLatexCodeRef.current = resolvedLatexCode;
       latestDraftLatexCodeRef.current = resolvedLatexCode;
       showExtractionAttemptToasts(payload.extractionAttempts ?? []);
@@ -615,6 +819,119 @@ export default function TailorResumeWorkspace({
     void uploadResume(file);
   }
 
+  async function saveLinkUrls(links: TailorResumeLinkRecord[]) {
+    const linkUpdates = [
+      ...profile.links
+        .filter((link) => pendingDeletedLinkKeySet.has(link.key))
+        .map((link) => ({ key: link.key, url: null })),
+      ...links.flatMap((link) => {
+      const nextUrl = draftLinkUrls[link.key]?.trim();
+
+      if (!nextUrl) {
+        return [];
+      }
+
+      const normalizedNextUrl = normalizeTailorResumeLinkUrl(nextUrl);
+
+      if ((normalizedNextUrl ?? nextUrl) === (link.url ?? "")) {
+        return [];
+      }
+
+      return [{ key: link.key, url: nextUrl }];
+      }),
+    ];
+
+    if (linkUpdates.length === 0) {
+      toast("No link URL changes to save yet.", {
+        id: resumeLinkSaveToastId,
+      });
+      return;
+    }
+
+    setIsSavingLinks(true);
+    toast.loading("Saving link changes and updating LaTeX...", {
+      id: resumeLinkSaveToastId,
+    });
+
+    try {
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({
+          action: "saveLinksAndReextract",
+          links: linkUpdates,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        extractionError?: string | null;
+        extractionAttempts?: TailorResumeExtractionAttempt[];
+        linkValidationLinks?: TailorResumeLinkValidationEntry[] | null;
+        linkValidationSummary?: TailorResumeLinkValidationSummary | null;
+        profile?: TailorResumeProfile;
+      };
+
+      if (!response.ok || !payload.profile) {
+        throw new Error(payload.error ?? "Unable to save the link changes.");
+      }
+
+      const resolvedLatexCode = resolveSavedLatexCode(payload.profile);
+      const remainingUnresolvedLinks = readUnresolvedResumeLinks(payload.profile);
+
+      setProfile(payload.profile);
+      setPendingDeletedLinkKeys([]);
+      setDraftLatexCode(resolvedLatexCode);
+      setDraftLinkUrls(buildLinkUrlDrafts(payload.profile.links));
+      setIsLinkEditorOpen(hasActiveResumeLinks(payload.profile));
+      lastSavedLatexCodeRef.current = resolvedLatexCode;
+      latestDraftLatexCodeRef.current = resolvedLatexCode;
+      showExtractionAttemptToasts(payload.extractionAttempts ?? []);
+      showLinkValidationSummaryToast(
+        payload.linkValidationSummary,
+        payload.linkValidationLinks,
+        (payload.extractionAttempts?.length ?? 0) * 140,
+      );
+
+      if (payload.extractionError) {
+        toast.error(
+          `Saved the link changes, but LaTeX generation still needs review: ${payload.extractionError}`,
+          {
+            id: resumeLinkSaveToastId,
+          },
+        );
+      } else if (payload.profile.latex.status === "failed") {
+        toast.error(
+          "Saved the link changes, but the updated LaTeX still needs a rendering fix before the preview can display.",
+          {
+            id: resumeLinkSaveToastId,
+          },
+        );
+      } else if (remainingUnresolvedLinks.length > 0) {
+        toast.success(
+          `Saved ${linkUpdates.length} link change${linkUpdates.length === 1 ? "" : "s"}. ${remainingUnresolvedLinks.length} destination${remainingUnresolvedLinks.length === 1 ? "" : "s"} still need${remainingUnresolvedLinks.length === 1 ? "s" : ""} review.`,
+          {
+            id: resumeLinkSaveToastId,
+          },
+        );
+      } else {
+        toast.success("Saved the link changes and updated the LaTeX draft.", {
+          id: resumeLinkSaveToastId,
+        });
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Unable to save the link changes.",
+        {
+          id: resumeLinkSaveToastId,
+        },
+      );
+    } finally {
+      setIsSavingLinks(false);
+    }
+  }
+
   function handlePreviewPanelResize(panelSize: {
     asPercentage: number;
     inPixels: number;
@@ -640,7 +957,7 @@ export default function TailorResumeWorkspace({
   const editorPanelContent = (
     <section
       aria-busy={editorDisabled}
-      className="relative flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 bg-black/20 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
+      className="flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 bg-black/20 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
     >
       <div className="mb-3">
         <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
@@ -648,39 +965,50 @@ export default function TailorResumeWorkspace({
         </p>
       </div>
 
-      <div className="relative flex min-h-[640px] flex-col overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20">
-        {draftLatexCode.trim().length > 0 || resume ? (
-          <textarea
-            className={`min-h-[600px] w-full flex-1 resize-none bg-transparent px-4 py-4 font-mono text-[13px] leading-6 outline-none placeholder:text-zinc-500 transition ${
-              editorDisabled
-                ? "cursor-not-allowed text-zinc-500 opacity-35"
-                : "text-zinc-100"
-            }`}
-            disabled={editorDisabled}
-            onChange={(event) => setDraftLatexCode(event.target.value)}
-            spellCheck={false}
-            value={draftLatexCode}
-          />
-        ) : (
-          <div aria-hidden="true" className="min-h-[600px] flex-1" />
-        )}
+      <div
+        className={`relative flex min-h-[640px] flex-1 ${
+          showEditorLoadingOverlay
+            ? "overflow-hidden rounded-[1.25rem] bg-black/20"
+            : ""
+        }`}
+      >
+        {showEditorLoadingOverlay ? (
+          <div className="pointer-events-none absolute inset-0 rounded-[1.25rem] bg-black/20" />
+        ) : null}
 
-      </div>
+        <div className="relative z-10 flex min-h-[640px] flex-1 flex-col overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate">
+          {draftLatexCode.trim().length > 0 || resume ? (
+            <textarea
+              className={`min-h-[600px] w-full flex-1 resize-none bg-transparent px-4 py-4 font-mono text-[13px] leading-6 outline-none placeholder:text-zinc-500 transition ${
+                editorDisabled
+                  ? "cursor-not-allowed text-zinc-500 opacity-35"
+                  : "text-zinc-100"
+              }`}
+              disabled={editorDisabled}
+              onChange={(event) => setDraftLatexCode(event.target.value)}
+              spellCheck={false}
+              value={draftLatexCode}
+            />
+          ) : (
+            <div aria-hidden="true" className="min-h-[600px] flex-1" />
+          )}
 
-      {showEditorLoadingOverlay ? (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[1.25rem] bg-zinc-950/45 px-6 backdrop-blur-[2px]">
-          <div className="rounded-full border border-white/12 bg-black/42 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.28)]">
-            <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-white/15 border-t-emerald-300" />
-          </div>
+          {showEditorLoadingOverlay ? (
+            <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-zinc-950/65 px-6 backdrop-blur-[2px]">
+              <div className="rounded-full border border-white/12 bg-black/42 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.28)]">
+                <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-white/15 border-t-emerald-300" />
+              </div>
+            </div>
+          ) : null}
         </div>
-      ) : null}
+      </div>
     </section>
   );
 
   const previewPanelContent = (
     <section
       aria-busy={showPreviewLoadingOverlay}
-      className="relative flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 bg-black/20 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
+      className="flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 bg-black/20 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
     >
       <div className="mb-3">
         <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
@@ -688,38 +1016,43 @@ export default function TailorResumeWorkspace({
         </p>
       </div>
 
-      <div className="relative flex min-h-[500px] flex-1 overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate">
-        {previewErrorMessage ? (
-          <div className="h-full w-full overflow-auto bg-rose-950/70 p-5 text-sm leading-6 text-rose-100">
-            <p className="font-medium text-rose-50">
-              The current LaTeX draft did not render cleanly.
-            </p>
-            <pre className="mt-3 whitespace-pre-wrap font-mono text-xs leading-6 text-rose-100/90">
-              {previewErrorMessage}
-            </pre>
-          </div>
-        ) : previewPdfUrl ? (
-          <div className="h-full min-h-[500px] w-full">
-            <iframe
-              className="relative z-0 h-full min-h-[500px] w-full bg-white"
-              onLoad={() => setIsPreviewFrameLoading(false)}
-              src={previewPdfUrl}
-              title="Compiled resume preview"
-            />
-          </div>
-        ) : (
-          <div aria-hidden="true" className="h-full w-full" />
-        )}
+      <div className="relative flex min-h-[500px] flex-1">
+        {showPreviewLoadingOverlay ? (
+          <div className="pointer-events-none absolute inset-0 bg-black/14" />
+        ) : null}
 
-      </div>
+        <div className="relative z-10 flex min-h-[500px] flex-1 overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate">
+          {previewErrorMessage ? (
+            <div className="h-full w-full overflow-auto bg-rose-950/70 p-5 text-sm leading-6 text-rose-100">
+              <p className="font-medium text-rose-50">
+                The current LaTeX draft did not render cleanly.
+              </p>
+              <pre className="mt-3 whitespace-pre-wrap font-mono text-xs leading-6 text-rose-100/90">
+                {previewErrorMessage}
+              </pre>
+            </div>
+          ) : previewPdfUrl ? (
+            <div className="h-full min-h-[500px] w-full">
+              <iframe
+                className="relative z-0 h-full min-h-[500px] w-full bg-white"
+                onLoad={() => setIsPreviewFrameLoading(false)}
+                src={previewPdfUrl}
+                title="Compiled resume preview"
+              />
+            </div>
+          ) : (
+            <div aria-hidden="true" className="h-full w-full" />
+          )}
 
-      {showPreviewLoadingOverlay ? (
-        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[1.25rem] bg-black/14 backdrop-blur-[0.5px]">
-          <div className="relative z-30 rounded-full border border-white/12 bg-black/42 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.28)]">
-            <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-emerald-100/25 border-t-emerald-100" />
-          </div>
+          {showPreviewLoadingOverlay ? (
+            <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/14 backdrop-blur-[0.5px]">
+              <div className="relative z-30 rounded-full border border-white/12 bg-black/42 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.28)]">
+                <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-emerald-100/25 border-t-emerald-100" />
+              </div>
+            </div>
+          ) : null}
         </div>
-      ) : null}
+      </div>
     </section>
   );
 
@@ -743,6 +1076,16 @@ export default function TailorResumeWorkspace({
             </p>
 
             <div className="flex flex-wrap gap-2">
+              {hasEditableOrPendingLinks ? (
+                <button
+                  className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-[0.2em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                  onClick={() => setIsLinkEditorOpen(true)}
+                  type="button"
+                >
+                  Review links
+                </button>
+              ) : null}
+
               <button
                 className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-[0.2em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
                 onClick={() => setIsPreviewOpen(true)}
@@ -928,6 +1271,162 @@ export default function TailorResumeWorkspace({
                     title={displayedResume.originalFilename}
                   />
                 )}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+
+      {isPreviewMounted && isLinkEditorOpen && hasEditableOrPendingLinks
+        ? createPortal(
+            <div className="fixed inset-0 z-[190] flex bg-black/82 px-4 py-6 backdrop-blur-sm sm:px-6">
+              <button
+                aria-label="Close link review"
+                className="absolute right-5 top-5 rounded-full border border-white/15 bg-black/40 px-4 py-2 text-xs uppercase tracking-[0.18em] text-zinc-100 transition hover:border-white/30 hover:bg-black/60"
+                onClick={() => setIsLinkEditorOpen(false)}
+                type="button"
+              >
+                Close
+              </button>
+
+              <div className="mx-auto flex h-full w-full max-w-4xl items-center justify-center">
+                <section className="glass-panel soft-ring flex max-h-full w-full flex-col overflow-hidden rounded-[1.6rem] border border-white/10 bg-zinc-950/96 shadow-[0_30px_120px_rgba(0,0,0,0.58)] ring-1 ring-white/10 backdrop-blur-xl">
+                  <div className="border-b border-white/10 px-5 pb-4 pt-5 sm:px-6 sm:pb-5 sm:pt-6">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+                          Resume links
+                        </p>
+                        <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
+                          Review and edit the generated link URLs
+                        </h2>
+                        <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-400">
+                          OpenAI currently has {visibleLinkCount} link
+                          {visibleLinkCount === 1 ? "" : "s"} in this draft
+                          ready for review.
+                          {queuedRemovalCount > 0
+                            ? ` ${queuedRemovalCount} link${queuedRemovalCount === 1 ? "" : "s"} ${queuedRemovalCount === 1 ? "is" : "are"} queued for removal.`
+                            : ""}
+                          {" "}You can change any destination here, even if it
+                          already passed validation, and we&apos;ll save it on
+                          this resume for future extractions.
+                        </p>
+                      </div>
+
+                      <StatusPill>
+                        {isSavingLinks
+                          ? "Saving..."
+                          : unresolvedLinks.length > 0
+                            ? `${unresolvedLinks.length} need review`
+                            : `${visibleLinkCount} found`}
+                      </StatusPill>
+                    </div>
+                  </div>
+
+                  <form
+                    className="flex min-h-0 flex-1 flex-col"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void saveLinkUrls(editableLinks);
+                    }}
+                  >
+                    <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6">
+                      <div className="grid gap-3">
+                        {editableLinks.length > 0 ? (
+                          <div className="hidden grid-cols-[minmax(0,0.85fr)_minmax(0,1.35fr)_auto] items-center gap-3 px-4 text-[10px] uppercase tracking-[0.22em] text-zinc-500 sm:grid">
+                            <span>Link text</span>
+                            <span>Destination URL</span>
+                            <span aria-hidden="true" />
+                          </div>
+                        ) : null}
+                        {editableLinks.map((link) => (
+                          <div
+                            className="grid gap-3 rounded-[1.1rem] border border-white/10 bg-black/20 p-4 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.35fr)_auto] sm:items-center"
+                            key={link.key}
+                          >
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium text-zinc-100 sm:whitespace-normal sm:break-words">
+                                {link.label}
+                              </div>
+                            </div>
+
+                            <label
+                              className="min-w-0"
+                              htmlFor={`tailor-resume-link-${link.key}`}
+                            >
+                              <span className="sr-only">{`${link.label} destination URL`}</span>
+                              <input
+                                className="w-full rounded-[0.95rem] border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-300/45"
+                                disabled={isSavingLinks}
+                                id={`tailor-resume-link-${link.key}`}
+                                onChange={(event) =>
+                                  setDraftLinkUrls((currentDraftLinkUrls) => ({
+                                    ...currentDraftLinkUrls,
+                                    [link.key]: event.target.value,
+                                  }))
+                                }
+                                placeholder="https://example.com/your-link"
+                                spellCheck={false}
+                                value={draftLinkUrls[link.key] ?? ""}
+                              />
+                            </label>
+
+                            <button
+                              className="justify-self-end self-center rounded-full p-1.5 text-rose-300 transition hover:bg-rose-400/10 hover:text-rose-200 disabled:cursor-not-allowed disabled:text-zinc-600"
+                              disabled={isSavingLinks}
+                              onClick={() =>
+                                setPendingDeletedLinkKeys((currentKeys) =>
+                                  currentKeys.includes(link.key)
+                                    ? currentKeys
+                                    : [...currentKeys, link.key],
+                                )
+                              }
+                              title="Delete link"
+                              type="button"
+                            >
+                              <Trash2 aria-hidden="true" className="h-4 w-4" />
+                              <span className="sr-only">Delete link</span>
+                            </button>
+                          </div>
+                        ))}
+                        {visibleLinkCount === 0 ? (
+                          <div className="rounded-[1.1rem] border border-dashed border-white/10 bg-black/20 p-6 text-sm leading-6 text-zinc-400">
+                            All generated links in this draft are currently queued for removal. Save to apply the LaTeX cleanup.
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 bg-white/5 px-5 py-4 sm:px-6">
+                      <p className="text-xs leading-5 text-zinc-500">
+                        Blank fields stay unresolved. Changed URLs are saved to
+                        this resume and reused the next time we regenerate it.
+                        Saving rewrites the current LaTeX locally, with no model call. Deleted links keep the visible text and only strip the hyperlink styling.
+                      </p>
+
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                          onClick={() => setIsLinkEditorOpen(false)}
+                          type="button"
+                        >
+                          Close
+                        </button>
+                        <button
+                          className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
+                            isSavingLinks || !hasLinkEdits
+                              ? "cursor-wait border border-white/10 bg-white/5 text-zinc-500"
+                              : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
+                          }`}
+                          disabled={isSavingLinks || !hasLinkEdits}
+                          type="submit"
+                        >
+                          {isSavingLinks ? "Saving..." : "Save link changes"}
+                        </button>
+                      </div>
+                    </div>
+                  </form>
+                </section>
               </div>
             </div>,
             document.body,
