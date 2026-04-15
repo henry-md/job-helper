@@ -137,9 +137,6 @@ export default function TailorResumeWorkspace({
   const [isSavingJobDescription, setIsSavingJobDescription] = useState(false);
   const [isSavingLatex, setIsSavingLatex] = useState(false);
   const [isUploadingResume, setIsUploadingResume] = useState(false);
-  const [pendingUploadMimeType, setPendingUploadMimeType] = useState<
-    string | null
-  >(null);
   const [isWideLayout, setIsWideLayout] = useState(false);
   const [isPreviewCollapsed, setIsPreviewCollapsed] = useState(false);
   const [jobDescriptionState, setJobDescriptionState] = useState<
@@ -152,22 +149,14 @@ export default function TailorResumeWorkspace({
   const resume = profile.resume;
   const previewAsImage = resume?.mimeType.startsWith("image/") ?? false;
   const editorDisabled = isUploadingResume;
-  const isPendingPdfUpload = pendingUploadMimeType === "application/pdf";
-  const latexLockTitle = isUploadingResume
-    ? isPendingPdfUpload
-      ? "Parsing your newly uploaded PDF"
-      : "Parsing your newly uploaded resume"
-    : null;
-  const latexLockMessage = isUploadingResume
-    ? isPendingPdfUpload
-      ? "We're parsing your newly uploaded PDF now. The LaTeX draft will unlock as soon as the fresh extraction is ready."
-      : "We're parsing your newly uploaded resume now. The LaTeX draft will unlock as soon as the fresh extraction is ready."
-    : null;
   const previewPdfUrl = buildPreviewPdfUrl(profile.latex.pdfUpdatedAt);
-  const hasPreviewPdf = Boolean(previewPdfUrl);
-  const isPreviewRefreshing = hasPreviewPdf && (
-    isSavingLatex || isUploadingResume || isPreviewFrameLoading
-  );
+  const previewErrorMessage =
+    profile.latex.status === "failed"
+      ? profile.latex.error ?? "Unable to compile the LaTeX preview."
+      : null;
+  const showEditorLoadingOverlay = isUploadingResume;
+  const showPreviewLoadingOverlay =
+    isSavingLatex || isUploadingResume || isPreviewFrameLoading;
   useEffect(() => {
     setIsPreviewMounted(true);
   }, []);
@@ -433,7 +422,6 @@ export default function TailorResumeWorkspace({
       return;
     }
 
-    setPendingUploadMimeType(file.type);
     setIsUploadingResume(true);
     toast.loading("Uploading the resume and extracting LaTeX...", {
       id: resumeUploadToastId,
@@ -493,7 +481,6 @@ export default function TailorResumeWorkspace({
         },
       );
     } finally {
-      setPendingUploadMimeType(null);
       setIsUploadingResume(false);
 
       if (fileInputRef.current) {
@@ -537,13 +524,12 @@ export default function TailorResumeWorkspace({
   const editorPanelContent = (
     <section
       aria-busy={editorDisabled}
-      className="flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 bg-black/10 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
+      className="flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 bg-black/20 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
     >
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-3">
         <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
           LATEX SOURCE
         </p>
-        {latexLockTitle ? <StatusPill>{latexLockTitle}</StatusPill> : null}
       </div>
 
       <div className="relative flex min-h-[640px] flex-col overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20">
@@ -563,16 +549,10 @@ export default function TailorResumeWorkspace({
           <div aria-hidden="true" className="min-h-[600px] flex-1" />
         )}
 
-        {latexLockTitle && latexLockMessage ? (
+        {showEditorLoadingOverlay ? (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-zinc-950/65 px-6 backdrop-blur-[2px]">
-            <div className="max-w-md rounded-[1.25rem] border border-white/10 bg-black/55 px-5 py-4 text-center shadow-[0_16px_45px_rgba(0,0,0,0.34)]">
-              <div className="mx-auto h-9 w-9 animate-spin rounded-full border-[3px] border-white/15 border-t-emerald-300" />
-              <p className="mt-4 text-sm font-medium text-zinc-50">
-                {latexLockTitle}
-              </p>
-              <p className="mt-2 text-sm leading-6 text-zinc-300">
-                {latexLockMessage}
-              </p>
+            <div className="rounded-full border border-white/12 bg-black/42 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.28)]">
+              <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-white/15 border-t-emerald-300" />
             </div>
           </div>
         ) : null}
@@ -581,43 +561,46 @@ export default function TailorResumeWorkspace({
   );
 
   const previewPanelContent = (
-    <section className="flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 bg-black/10 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]">
+    <section
+      aria-busy={showPreviewLoadingOverlay}
+      className="flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 bg-black/20 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
+    >
       <div className="mb-3">
         <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
           Preview
         </p>
       </div>
 
-      {profile.latex.status === "failed" && profile.latex.error ? (
-        <div className="mb-3 rounded-[1.1rem] border border-rose-400/20 bg-rose-400/10 p-4 text-sm leading-6 text-rose-100">
-          <p className="font-medium">The current LaTeX draft did not render cleanly.</p>
-          <pre className="mt-3 overflow-auto whitespace-pre-wrap font-mono text-xs leading-6 text-rose-200/90">
-            {profile.latex.error}
-          </pre>
-        </div>
-      ) : null}
-
       <div className="relative flex min-h-[500px] flex-1 overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate">
-        {previewPdfUrl ? (
-          <div className="relative h-full min-h-[500px] w-full">
+        {previewErrorMessage ? (
+          <div className="h-full w-full overflow-auto bg-rose-950/70 p-5 text-sm leading-6 text-rose-100">
+            <p className="font-medium text-rose-50">
+              The current LaTeX draft did not render cleanly.
+            </p>
+            <pre className="mt-3 whitespace-pre-wrap font-mono text-xs leading-6 text-rose-100/90">
+              {previewErrorMessage}
+            </pre>
+          </div>
+        ) : previewPdfUrl ? (
+          <div className="h-full min-h-[500px] w-full">
             <iframe
               className="relative z-0 h-full min-h-[500px] w-full bg-white"
               onLoad={() => setIsPreviewFrameLoading(false)}
               src={previewPdfUrl}
               title="Compiled resume preview"
             />
-
-            {isPreviewRefreshing ? (
-              <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/14 backdrop-blur-[0.5px]">
-                <div className="relative z-30 rounded-full border border-white/12 bg-black/42 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.28)]">
-                  <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-emerald-100/25 border-t-emerald-100" />
-                </div>
-              </div>
-            ) : null}
           </div>
         ) : (
           <div aria-hidden="true" className="h-full w-full" />
         )}
+
+        {showPreviewLoadingOverlay ? (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/14 backdrop-blur-[0.5px]">
+            <div className="relative z-30 rounded-full border border-white/12 bg-black/42 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.28)]">
+              <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-emerald-100/25 border-t-emerald-100" />
+            </div>
+          </div>
+        ) : null}
       </div>
     </section>
   );
