@@ -129,6 +129,7 @@ export default function DashboardWorkspace({
   extractionModel,
   referrerOptions,
   statusMessage,
+  tailorResumeDebugUiEnabled,
   tailorResumeOpenAIReady,
   tailorResumeProfile,
   userImage,
@@ -145,6 +146,7 @@ export default function DashboardWorkspace({
     text: string;
     tone: "error" | "success";
   } | null;
+  tailorResumeDebugUiEnabled: boolean;
   tailorResumeOpenAIReady: boolean;
   tailorResumeProfile: TailorResumeProfile;
   userImage: string | null | undefined;
@@ -293,6 +295,7 @@ export default function DashboardWorkspace({
           </section>
         ) : activeTab === "tailor" ? (
           <TailorResumeWorkspace
+            debugUiEnabled={tailorResumeDebugUiEnabled}
             openAIReady={tailorResumeOpenAIReady}
             initialProfile={tailorResumeProfile}
           />

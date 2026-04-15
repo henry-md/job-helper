@@ -166,6 +166,100 @@ test("runResumeLatexToolLoop retries with the exact compile error", async () => 
   assert.equal(retryPayload.remainingAttempts, 2);
 });
 
+test("runResumeLatexToolLoop emits attempt events as each attempt resolves", async () => {
+  const streamedAttempts: Array<{
+    attempt: number;
+    error: string | null;
+    outcome: "failed" | "succeeded";
+    willRetry: boolean;
+  }> = [];
+
+  await runResumeLatexToolLoop({
+    createResponse: async ({ previousResponseId }) => {
+      if (!previousResponseId) {
+        return {
+          id: "resp_1",
+          model: "gpt-5-mini",
+          output: [
+            {
+              type: "function_call",
+              name: "validate_resume_latex",
+              call_id: "call_1",
+              arguments: JSON.stringify({
+                latexCode: "bad-draft",
+                links: [],
+              }),
+            },
+          ],
+        };
+      }
+
+      return {
+        id: "resp_2",
+        model: "gpt-5-mini",
+        output: [
+          {
+            type: "function_call",
+            name: "validate_resume_latex",
+            call_id: "call_2",
+            arguments: JSON.stringify({
+              latexCode: "\\documentclass{article}\n\\begin{document}Good\\end{document}",
+              links: [],
+            }),
+          },
+        ],
+      };
+    },
+    fallbackModel: "gpt-5-mini",
+    onAttemptEvent: async (attemptEvent) => {
+      streamedAttempts.push({
+        attempt: attemptEvent.attempt,
+        error: attemptEvent.error,
+        outcome: attemptEvent.outcome,
+        willRetry: attemptEvent.willRetry,
+      });
+    },
+    validateLatex: async (latexCode) => {
+      if (latexCode === "bad-draft") {
+        return {
+          error: "compile failed",
+          linkSummary: null,
+          links: [],
+          ok: false as const,
+          previewPdf: null,
+        };
+      }
+
+      return {
+        error: null,
+        linkSummary: buildLinkSummary({
+          failedCount: 0,
+          passedCount: 0,
+          totalCount: 0,
+        }),
+        links: [],
+        ok: true as const,
+        previewPdf: Buffer.from("pdf"),
+      };
+    },
+  });
+
+  assert.deepEqual(streamedAttempts, [
+    {
+      attempt: 1,
+      error: "compile failed",
+      outcome: "failed",
+      willRetry: true,
+    },
+    {
+      attempt: 2,
+      error: null,
+      outcome: "succeeded",
+      willRetry: false,
+    },
+  ]);
+});
+
 test("runResumeLatexToolLoop returns the last draft plus the final error after three failures", async () => {
   const compileErrors = [
     "resume.tex:31: Undefined control sequence.",

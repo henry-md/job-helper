@@ -1,9 +1,12 @@
 import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/auth";
-import { readTailorResumePreviewPdf } from "@/lib/tailor-resume-storage";
+import {
+  readTailoredResumePdf,
+  readTailorResumePreviewPdf,
+} from "@/lib/tailor-resume-storage";
 
-export async function GET() {
+export async function GET(request: Request) {
   const session = await getServerSession(authOptions);
 
   if (!session?.user?.id) {
@@ -14,7 +17,11 @@ export async function GET() {
   }
 
   try {
-    const previewPdf = await readTailorResumePreviewPdf(session.user.id);
+    const { searchParams } = new URL(request.url);
+    const tailoredResumeId = searchParams.get("tailoredResumeId");
+    const previewPdf = tailoredResumeId
+      ? await readTailoredResumePdf(session.user.id, tailoredResumeId)
+      : await readTailorResumePreviewPdf(session.user.id);
 
     return new NextResponse(previewPdf, {
       headers: {
@@ -26,7 +33,9 @@ export async function GET() {
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       return NextResponse.json(
-        { error: "No preview PDF is available yet." },
+        {
+          error: "No preview PDF is available yet.",
+        },
         { status: 404 },
       );
     }

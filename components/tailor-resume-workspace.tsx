@@ -13,7 +13,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { ChevronsLeft, ChevronsRight, Trash2 } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, Lock, LockOpen, Trash2 } from "lucide-react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import { toast } from "sonner";
 import {
@@ -26,9 +26,11 @@ import type {
   SavedResumeRecord,
   TailorResumeLinkRecord,
   TailorResumeProfile,
+  TailoredResumeRecord,
 } from "@/lib/tailor-resume-types";
 
 type TailorResumeWorkspaceProps = {
+  debugUiEnabled: boolean;
   initialProfile: TailorResumeProfile;
   openAIReady: boolean;
 };
@@ -63,6 +65,29 @@ type TailorResumeLatexLinkSyncSummary = {
     url: string | null;
   }>;
 };
+
+type TailorResumeUploadResponsePayload = {
+  error?: string;
+  extractionError?: string | null;
+  extractionAttempts?: TailorResumeExtractionAttempt[];
+  linkValidationLinks?: TailorResumeLinkValidationEntry[] | null;
+  linkValidationSummary?: TailorResumeLinkValidationSummary | null;
+  profile?: TailorResumeProfile;
+};
+
+type TailorResumeUploadStreamEvent =
+  | {
+      attemptEvent: TailorResumeExtractionAttempt;
+      type: "extraction-attempt";
+    }
+  | {
+      payload: TailorResumeUploadResponsePayload;
+      type: "done";
+    }
+  | {
+      error: string;
+      type: "error";
+    };
 
 const acceptedResumeMimeTypes = new Set([
   "application/pdf",
@@ -104,6 +129,12 @@ function buildPreviewPdfUrl(updatedAt: string | null) {
     : null;
 }
 
+function buildTailoredPreviewPdfUrl(record: TailoredResumeRecord) {
+  return record.pdfUpdatedAt
+    ? `/api/tailor-resume/preview?tailoredResumeId=${encodeURIComponent(record.id)}&updatedAt=${encodeURIComponent(record.pdfUpdatedAt)}`
+    : null;
+}
+
 function resolveSavedLatexCode(profile: TailorResumeProfile) {
   return profile.latex.code;
 }
@@ -115,19 +146,53 @@ function buildLinkUrlDrafts(links: TailorResumeLinkRecord[]) {
   }, {});
 }
 
-function hasLinkDraftChanged(
+function buildLinkLockDrafts(links: TailorResumeLinkRecord[]) {
+  return links.reduce<Record<string, boolean>>((drafts, link) => {
+    drafts[link.key] = link.locked === true;
+    return drafts;
+  }, {});
+}
+
+function hasPersistableLinkUrlChange(
   link: TailorResumeLinkRecord,
   draftValue: string | undefined,
 ) {
   const trimmedDraftValue = draftValue?.trim() ?? "";
-  const currentUrl = link.url ?? "";
 
   if (!trimmedDraftValue) {
-    return currentUrl.length > 0;
+    return false;
   }
 
   const normalizedDraftUrl = normalizeTailorResumeLinkUrl(trimmedDraftValue);
-  return (normalizedDraftUrl ?? trimmedDraftValue) !== currentUrl;
+  return (normalizedDraftUrl ?? trimmedDraftValue) !== (link.url ?? "");
+}
+
+function readEffectiveLinkUrl(
+  link: TailorResumeLinkRecord,
+  draftValue: string | undefined,
+) {
+  const trimmedDraftValue = draftValue?.trim() ?? "";
+
+  if (!trimmedDraftValue) {
+    return link.url;
+  }
+
+  const normalizedDraftUrl = normalizeTailorResumeLinkUrl(trimmedDraftValue);
+  return normalizedDraftUrl ?? trimmedDraftValue;
+}
+
+function hasLinkLockChanged(
+  link: TailorResumeLinkRecord,
+  draftLockedValue: boolean | undefined,
+) {
+  return (draftLockedValue ?? (link.locked === true)) !== (link.locked === true);
+}
+
+function canLockLink(
+  link: TailorResumeLinkRecord,
+  draftValue: string | undefined,
+) {
+  return Boolean(readEffectiveLinkUrl(link, draftValue));
 }
 
 function readUnresolvedResumeLinks(profile: TailorResumeProfile) {
@@ -160,27 +225,85 @@ function revokeObjectUrl(url: string | null | undefined) {
   URL.revokeObjectURL(url);
 }
 
+async function readTailorResumeUploadStream(
+  response: Response,
+  handlers: {
+    onAttemptEvent: (attemptEvent: TailorResumeExtractionAttempt) => void;
+  },
+) {
+  if (!response.body) {
+    throw new Error("The resume upload did not return a readable response stream.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalPayload: TailorResumeUploadResponsePayload | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+
+      if (!trimmedLine) {
+        continue;
+      }
+
+      const event = JSON.parse(trimmedLine) as TailorResumeUploadStreamEvent;
+
+      if (event.type === "extraction-attempt") {
+        handlers.onAttemptEvent(event.attemptEvent);
+        continue;
+      }
+
+      if (event.type === "error") {
+        throw new Error(event.error);
+      }
+
+      finalPayload = event.payload;
+    }
+
+    if (done) {
+      break;
+    }
+  }
+
+  if (!finalPayload) {
+    throw new Error("The resume upload finished without a final response payload.");
+  }
+
+  return finalPayload;
+}
+
 function showExtractionAttemptToasts(
   attempts: TailorResumeExtractionAttempt[],
 ) {
   attempts.forEach((attempt, index) => {
     window.setTimeout(() => {
-      if (attempt.outcome === "failed") {
-        toast.error(
-          attempt.willRetry
-            ? `LaTeX generation attempt ${attempt.attempt} failed, so we retried it automatically.${attempt.error ? ` ${attempt.error}` : ""}`
-            : `LaTeX generation attempt ${attempt.attempt} failed and no retries remain.${attempt.error ? ` ${attempt.error}` : ""}`,
-          {
-            id: `tailor-resume-extraction-attempt-${attempt.attempt}-failed`,
-          },
-        );
-        return;
-      }
-
-      toast.success(`LaTeX generation attempt ${attempt.attempt} succeeded.`, {
-        id: `tailor-resume-extraction-attempt-${attempt.attempt}-succeeded`,
-      });
+      showExtractionAttemptToast(attempt);
     }, index * 140);
+  });
+}
+
+function showExtractionAttemptToast(attempt: TailorResumeExtractionAttempt) {
+  if (attempt.outcome === "failed") {
+    toast.error(
+      attempt.willRetry
+        ? `LaTeX generation attempt ${attempt.attempt} failed, so we retried it automatically.${attempt.error ? ` ${attempt.error}` : ""}`
+        : `LaTeX generation attempt ${attempt.attempt} failed and no retries remain.${attempt.error ? ` ${attempt.error}` : ""}`,
+      {
+        id: `tailor-resume-extraction-attempt-${attempt.attempt}-failed`,
+      },
+    );
+    return;
+  }
+
+  toast.success(`LaTeX generation attempt ${attempt.attempt} succeeded.`, {
+    id: `tailor-resume-extraction-attempt-${attempt.attempt}-succeeded`,
   });
 }
 
@@ -300,6 +423,7 @@ function StatusPill({ children }: { children: ReactNode }) {
 }
 
 export default function TailorResumeWorkspace({
+  debugUiEnabled,
   initialProfile,
   openAIReady,
 }: TailorResumeWorkspaceProps) {
@@ -335,9 +459,14 @@ export default function TailorResumeWorkspace({
   const [isSavingJobDescription, setIsSavingJobDescription] = useState(false);
   const [isSavingLatex, setIsSavingLatex] = useState(false);
   const [isSavingLinks, setIsSavingLinks] = useState(false);
+  const [isTailoringResume, setIsTailoringResume] = useState(false);
   const [isUploadingResume, setIsUploadingResume] = useState(false);
   const [isWideLayout, setIsWideLayout] = useState(false);
   const [isPreviewCollapsed, setIsPreviewCollapsed] = useState(false);
+  const [activeLatexView, setActiveLatexView] = useState<"annotated" | "source">(
+    "source",
+  );
+  const [draftLinkLocks, setDraftLinkLocks] = useState<Record<string, boolean>>({});
   const [draftLinkUrls, setDraftLinkUrls] = useState<Record<string, string>>({});
   const [jobDescriptionState, setJobDescriptionState] = useState<
     "idle" | "saved" | "saving"
@@ -360,10 +489,15 @@ export default function TailorResumeWorkspace({
   const hasLinkEdits =
     queuedRemovalCount > 0 ||
     editableLinks.some((link) =>
-      hasLinkDraftChanged(link, draftLinkUrls[link.key]),
+      hasPersistableLinkUrlChange(link, draftLinkUrls[link.key]) ||
+      hasLinkLockChanged(link, draftLinkLocks[link.key]),
     );
   const previewAsImage = displayedResume?.mimeType.startsWith("image/") ?? false;
   const editorDisabled = isUploadingResume;
+  const displayedLatexCode =
+    debugUiEnabled && activeLatexView === "annotated"
+      ? profile.annotatedLatex.code
+      : draftLatexCode;
   const previewPdfUrl = buildPreviewPdfUrl(profile.latex.pdfUpdatedAt);
   const previewErrorMessage =
     profile.latex.status === "failed"
@@ -411,6 +545,9 @@ export default function TailorResumeWorkspace({
     setIsPreviewCollapsed(false);
     setIsPreviewFrameLoading(false);
     setIsSavingLinks(false);
+    setIsTailoringResume(false);
+    setActiveLatexView("source");
+    setDraftLinkLocks(buildLinkLockDrafts(initialProfile.links));
     setDraftLinkUrls(buildLinkUrlDrafts(initialProfile.links));
     setJobDescriptionState("idle");
     setLatexState("idle");
@@ -437,6 +574,30 @@ export default function TailorResumeWorkspace({
       }
 
       return didChange ? nextDraftLinkUrls : currentDraftLinkUrls;
+    });
+  }, [editableLinks]);
+
+  useEffect(() => {
+    setDraftLinkLocks((currentDraftLinkLocks) => {
+      const nextDraftLinkLocks = { ...currentDraftLinkLocks };
+      const editableLinkKeys = new Set(editableLinks.map((link) => link.key));
+      let didChange = false;
+
+      for (const link of editableLinks) {
+        if (!(link.key in nextDraftLinkLocks)) {
+          nextDraftLinkLocks[link.key] = link.locked === true;
+          didChange = true;
+        }
+      }
+
+      for (const linkKey of Object.keys(nextDraftLinkLocks)) {
+        if (!editableLinkKeys.has(linkKey)) {
+          delete nextDraftLinkLocks[linkKey];
+          didChange = true;
+        }
+      }
+
+      return didChange ? nextDraftLinkLocks : currentDraftLinkLocks;
     });
   }, [editableLinks]);
 
@@ -538,6 +699,8 @@ export default function TailorResumeWorkspace({
 
       lastSavedLatexCodeRef.current = resolvedLatexCode;
       setProfile(payload.profile);
+      setDraftLinkLocks(buildLinkLockDrafts(payload.profile.links));
+      setDraftLinkUrls(buildLinkUrlDrafts(payload.profile.links));
 
       if (pendingLatexCodeRef.current === resolvedLatexCode) {
         pendingLatexCodeRef.current = null;
@@ -742,16 +905,29 @@ export default function TailorResumeWorkspace({
 
       const response = await fetch("/api/tailor-resume", {
         body: formData,
+        headers: {
+          "x-tailor-resume-stream": "1",
+        },
         method: "POST",
       });
-      const payload = (await response.json()) as {
-        error?: string;
-        extractionError?: string | null;
-        extractionAttempts?: TailorResumeExtractionAttempt[];
-        linkValidationLinks?: TailorResumeLinkValidationEntry[] | null;
-        linkValidationSummary?: TailorResumeLinkValidationSummary | null;
-        profile?: TailorResumeProfile;
-      };
+
+      let payload: TailorResumeUploadResponsePayload;
+      let streamedAttemptEvents = false;
+
+      if (!response.ok) {
+        payload = (await response.json()) as TailorResumeUploadResponsePayload;
+      } else if (
+        response.headers.get("content-type")?.includes("text/x-ndjson")
+      ) {
+        streamedAttemptEvents = true;
+        payload = await readTailorResumeUploadStream(response, {
+          onAttemptEvent: (attemptEvent) => {
+            showExtractionAttemptToast(attemptEvent);
+          },
+        });
+      } else {
+        payload = (await response.json()) as TailorResumeUploadResponsePayload;
+      }
 
       if (!response.ok || !payload.profile) {
         throw new Error(payload.error ?? "Unable to save the resume.");
@@ -762,15 +938,17 @@ export default function TailorResumeWorkspace({
       setProfile(payload.profile);
       setPendingResume(null);
       setDraftLatexCode(resolvedLatexCode);
+      setDraftLinkLocks(buildLinkLockDrafts(payload.profile.links));
       setDraftLinkUrls(buildLinkUrlDrafts(payload.profile.links));
       setIsLinkEditorOpen(hasActiveResumeLinks(payload.profile));
       lastSavedLatexCodeRef.current = resolvedLatexCode;
       latestDraftLatexCodeRef.current = resolvedLatexCode;
-      showExtractionAttemptToasts(payload.extractionAttempts ?? []);
+      if (!streamedAttemptEvents) {
+        showExtractionAttemptToasts(payload.extractionAttempts ?? []);
+      }
       showLinkValidationSummaryToast(
         payload.linkValidationSummary,
         payload.linkValidationLinks,
-        (payload.extractionAttempts?.length ?? 0) * 140,
       );
 
       if (payload.extractionError) {
@@ -820,29 +998,53 @@ export default function TailorResumeWorkspace({
   }
 
   async function saveLinkUrls(links: TailorResumeLinkRecord[]) {
+    const invalidLockedLinks = links.filter((link) => {
+      const nextLocked = draftLinkLocks[link.key] ?? (link.locked === true);
+      return nextLocked && !readEffectiveLinkUrl(link, draftLinkUrls[link.key]);
+    });
+
+    if (invalidLockedLinks.length > 0) {
+      toast.error(
+        `Enter a destination URL before locking ${invalidLockedLinks[0]?.label}.`,
+        {
+          id: resumeLinkSaveToastId,
+        },
+      );
+      return;
+    }
+
     const linkUpdates = [
       ...profile.links
         .filter((link) => pendingDeletedLinkKeySet.has(link.key))
-        .map((link) => ({ key: link.key, url: null })),
+        .map((link) => ({ key: link.key, locked: false, url: null })),
       ...links.flatMap((link) => {
-      const nextUrl = draftLinkUrls[link.key]?.trim();
+        const nextLocked = draftLinkLocks[link.key] ?? (link.locked === true);
+        const effectiveUrl = readEffectiveLinkUrl(link, draftLinkUrls[link.key]);
+        const urlChanged = hasPersistableLinkUrlChange(
+          link,
+          draftLinkUrls[link.key],
+        );
+        const lockedChanged = hasLinkLockChanged(
+          link,
+          draftLinkLocks[link.key],
+        );
 
-      if (!nextUrl) {
-        return [];
-      }
+        if (!urlChanged && !lockedChanged) {
+          return [];
+        }
 
-      const normalizedNextUrl = normalizeTailorResumeLinkUrl(nextUrl);
-
-      if ((normalizedNextUrl ?? nextUrl) === (link.url ?? "")) {
-        return [];
-      }
-
-      return [{ key: link.key, url: nextUrl }];
+        return [
+          {
+            key: link.key,
+            locked: nextLocked,
+            url: effectiveUrl,
+          },
+        ];
       }),
     ];
 
     if (linkUpdates.length === 0) {
-      toast("No link URL changes to save yet.", {
+      toast("No link changes to save yet.", {
         id: resumeLinkSaveToastId,
       });
       return;
@@ -883,6 +1085,7 @@ export default function TailorResumeWorkspace({
       setProfile(payload.profile);
       setPendingDeletedLinkKeys([]);
       setDraftLatexCode(resolvedLatexCode);
+      setDraftLinkLocks(buildLinkLockDrafts(payload.profile.links));
       setDraftLinkUrls(buildLinkUrlDrafts(payload.profile.links));
       setIsLinkEditorOpen(hasActiveResumeLinks(payload.profile));
       lastSavedLatexCodeRef.current = resolvedLatexCode;
@@ -932,6 +1135,74 @@ export default function TailorResumeWorkspace({
     }
   }
 
+  async function tailorResume() {
+    if (!openAIReady) {
+      toast.error("Add OPENAI_API_KEY before tailoring the resume.");
+      return;
+    }
+
+    if (!profile.latex.code.trim()) {
+      toast.error("Upload or save a resume before tailoring it.");
+      return;
+    }
+
+    if (!draftJobDescription.trim()) {
+      toast.error("Paste a job description before tailoring the resume.");
+      return;
+    }
+
+    setIsTailoringResume(true);
+    toast.loading("Tailoring a job-specific LaTeX resume...", {
+      id: "tailor-resume-run",
+    });
+
+    try {
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({
+          action: "tailor",
+          jobDescription: draftJobDescription,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        profile?: TailorResumeProfile;
+        tailoredResumeError?: string | null;
+      };
+
+      if (!response.ok || !payload.profile) {
+        throw new Error(payload.error ?? "Unable to tailor the resume.");
+      }
+
+      setProfile(payload.profile);
+
+      if (payload.tailoredResumeError) {
+        toast.error(
+          `Saved a tailored draft, but it still needs review: ${payload.tailoredResumeError}`,
+          {
+            id: "tailor-resume-run",
+          },
+        );
+      } else {
+        toast.success("Saved a job-specific tailored resume.", {
+          id: "tailor-resume-run",
+        });
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Unable to tailor the resume.",
+        {
+          id: "tailor-resume-run",
+        },
+      );
+    } finally {
+      setIsTailoringResume(false);
+    }
+  }
+
   function handlePreviewPanelResize(panelSize: {
     asPercentage: number;
     inPixels: number;
@@ -957,27 +1228,51 @@ export default function TailorResumeWorkspace({
   const editorPanelContent = (
     <section
       aria-busy={editorDisabled}
-      className="flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 bg-black/20 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
+      className="flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
     >
-      <div className="mb-3">
+      <div className="mb-3 flex items-center justify-between gap-3">
         <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-          LATEX SOURCE
+          {debugUiEnabled && activeLatexView === "annotated"
+            ? "Annotated LaTeX"
+            : "LaTeX Source"}
         </p>
+        {debugUiEnabled ? (
+          <div className="flex items-center gap-2 rounded-full border border-white/10 bg-black/20 p-1">
+            <button
+              className={`rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.18em] transition ${
+                activeLatexView === "source"
+                  ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
+                  : "text-zinc-400 hover:text-zinc-200"
+              }`}
+              onClick={() => setActiveLatexView("source")}
+              type="button"
+            >
+              Source
+            </button>
+            <button
+              className={`rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.18em] transition ${
+                activeLatexView === "annotated"
+                  ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
+                  : "text-zinc-400 hover:text-zinc-200"
+              }`}
+              onClick={() => setActiveLatexView("annotated")}
+              type="button"
+            >
+              Annotated
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div
-        className={`relative flex min-h-[640px] flex-1 ${
-          showEditorLoadingOverlay
-            ? "overflow-hidden rounded-[1.25rem] bg-black/20"
-            : ""
-        }`}
+        className="relative flex min-h-[640px] flex-1 overflow-hidden rounded-[1.25rem]"
       >
         {showEditorLoadingOverlay ? (
           <div className="pointer-events-none absolute inset-0 rounded-[1.25rem] bg-black/20" />
         ) : null}
 
         <div className="relative z-10 flex min-h-[640px] flex-1 flex-col overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate">
-          {draftLatexCode.trim().length > 0 || resume ? (
+          {displayedLatexCode.trim().length > 0 || resume ? (
             <textarea
               className={`min-h-[600px] w-full flex-1 resize-none bg-transparent px-4 py-4 font-mono text-[13px] leading-6 outline-none placeholder:text-zinc-500 transition ${
                 editorDisabled
@@ -986,11 +1281,15 @@ export default function TailorResumeWorkspace({
               }`}
               disabled={editorDisabled}
               onChange={(event) => setDraftLatexCode(event.target.value)}
+              readOnly={activeLatexView === "annotated"}
               spellCheck={false}
-              value={draftLatexCode}
+              value={displayedLatexCode}
             />
           ) : (
-            <div aria-hidden="true" className="min-h-[600px] flex-1" />
+            <div
+              aria-hidden="true"
+              className="min-h-[600px] flex-1 rounded-[1.25rem]"
+            />
           )}
 
           {showEditorLoadingOverlay ? (
@@ -1008,7 +1307,7 @@ export default function TailorResumeWorkspace({
   const previewPanelContent = (
     <section
       aria-busy={showPreviewLoadingOverlay}
-      className="flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 bg-black/20 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
+      className="flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
     >
       <div className="mb-3">
         <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
@@ -1016,14 +1315,16 @@ export default function TailorResumeWorkspace({
         </p>
       </div>
 
-      <div className="relative flex min-h-[500px] flex-1">
+      <div
+        className="relative flex min-h-[500px] flex-1 overflow-hidden rounded-[1.25rem]"
+      >
         {showPreviewLoadingOverlay ? (
-          <div className="pointer-events-none absolute inset-0 bg-black/14" />
+          <div className="pointer-events-none absolute inset-0 rounded-[1.25rem] bg-black/20" />
         ) : null}
 
         <div className="relative z-10 flex min-h-[500px] flex-1 overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate">
           {previewErrorMessage ? (
-            <div className="h-full w-full overflow-auto bg-rose-950/70 p-5 text-sm leading-6 text-rose-100">
+            <div className="h-full w-full overflow-auto rounded-[1.25rem] bg-rose-950/70 p-5 text-sm leading-6 text-rose-100">
               <p className="font-medium text-rose-50">
                 The current LaTeX draft did not render cleanly.
               </p>
@@ -1032,16 +1333,16 @@ export default function TailorResumeWorkspace({
               </pre>
             </div>
           ) : previewPdfUrl ? (
-            <div className="h-full min-h-[500px] w-full">
+            <div className="h-full min-h-[500px] w-full rounded-[1.25rem]">
               <iframe
-                className="relative z-0 h-full min-h-[500px] w-full bg-white"
+                className="relative z-0 h-full min-h-[500px] w-full rounded-[1.25rem] bg-white"
                 onLoad={() => setIsPreviewFrameLoading(false)}
                 src={previewPdfUrl}
                 title="Compiled resume preview"
               />
             </div>
           ) : (
-            <div aria-hidden="true" className="h-full w-full" />
+            <div aria-hidden="true" className="h-full w-full rounded-[1.25rem]" />
           )}
 
           {showPreviewLoadingOverlay ? (
@@ -1078,11 +1379,15 @@ export default function TailorResumeWorkspace({
             <div className="flex flex-wrap gap-2">
               {hasEditableOrPendingLinks ? (
                 <button
-                  className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-[0.2em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                  aria-label={`Review links. ${visibleLinkCount} link${visibleLinkCount === 1 ? "" : "s"} currently listed.`}
+                  className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-[0.2em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
                   onClick={() => setIsLinkEditorOpen(true)}
                   type="button"
                 >
-                  Review links
+                  <span>Review links</span>
+                  <span className="inline-flex min-w-5 items-center justify-center rounded-full border border-emerald-300/20 bg-emerald-400/10 px-1.5 py-0.5 text-[10px] font-semibold tracking-normal text-emerald-200">
+                    {visibleLinkCount}
+                  </span>
                 </button>
               ) : null}
 
@@ -1216,13 +1521,33 @@ export default function TailorResumeWorkspace({
                 </h2>
               </div>
 
-              <StatusPill>
-                {isSavingJobDescription
-                  ? "Saving..."
-                  : jobDescriptionState === "saved"
-                    ? "Saved"
-                    : "Autosaves"}
-              </StatusPill>
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusPill>
+                  {isSavingJobDescription
+                    ? "Saving..."
+                    : jobDescriptionState === "saved"
+                      ? "Saved"
+                      : "Autosaves"}
+                </StatusPill>
+                <button
+                  className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
+                    !openAIReady ||
+                    isTailoringResume ||
+                    draftJobDescription.trim().length === 0
+                      ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
+                      : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
+                  }`}
+                  disabled={
+                    !openAIReady ||
+                    isTailoringResume ||
+                    draftJobDescription.trim().length === 0
+                  }
+                  onClick={() => void tailorResume()}
+                  type="button"
+                >
+                  {isTailoringResume ? "Tailoring..." : "Tailor resume"}
+                </button>
+              </div>
             </div>
 
             <textarea
@@ -1231,6 +1556,85 @@ export default function TailorResumeWorkspace({
               placeholder="Paste the full job description here. This saves separately from the LaTeX resume source."
               value={draftJobDescription}
             />
+          </section>
+
+          <section className="glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+                  Tailored jobs
+                </p>
+                <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
+                  Saved tailored resumes
+                </h2>
+              </div>
+              {debugUiEnabled ? (
+                <StatusPill>
+                  {profile.annotatedLatex.segmentCount} annotated segments
+                </StatusPill>
+              ) : null}
+            </div>
+
+            {profile.tailoredResumes.length === 0 ? (
+              <div className="mt-5 rounded-[1.25rem] border border-dashed border-white/12 bg-black/15 p-5 text-sm leading-6 text-zinc-400">
+                Tailored resumes you generate for specific jobs will appear here.
+              </div>
+            ) : (
+              <div className="mt-5 grid gap-3">
+                {profile.tailoredResumes.map((tailoredResume) => {
+                  const previewUrl = buildTailoredPreviewPdfUrl(tailoredResume);
+
+                  return (
+                    <div
+                      key={tailoredResume.id}
+                      className="rounded-[1.25rem] border border-white/10 bg-black/20 p-4"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-zinc-100">
+                            {tailoredResume.displayName}
+                          </p>
+                          <p className="mt-1 text-xs uppercase tracking-[0.18em] text-zinc-500">
+                            {tailoredResume.status === "ready"
+                              ? "Ready"
+                              : "Needs review"}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {previewUrl ? (
+                            <a
+                              className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                              href={previewUrl}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              Open PDF
+                            </a>
+                          ) : null}
+                          <button
+                            className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                            onClick={async () => {
+                              await navigator.clipboard.writeText(
+                                tailoredResume.latexCode,
+                              );
+                              toast.success("Copied tailored LaTeX.");
+                            }}
+                            type="button"
+                          >
+                            Copy LaTeX
+                          </button>
+                        </div>
+                      </div>
+                      {tailoredResume.error ? (
+                        <p className="mt-3 text-sm leading-6 text-rose-300">
+                          {tailoredResume.error}
+                        </p>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </section>
         </>
       ) : null}
@@ -1371,22 +1775,62 @@ export default function TailorResumeWorkspace({
                               />
                             </label>
 
-                            <button
-                              className="justify-self-end self-center rounded-full p-1.5 text-rose-300 transition hover:bg-rose-400/10 hover:text-rose-200 disabled:cursor-not-allowed disabled:text-zinc-600"
-                              disabled={isSavingLinks}
-                              onClick={() =>
-                                setPendingDeletedLinkKeys((currentKeys) =>
-                                  currentKeys.includes(link.key)
-                                    ? currentKeys
-                                    : [...currentKeys, link.key],
-                                )
-                              }
-                              title="Delete link"
-                              type="button"
-                            >
-                              <Trash2 aria-hidden="true" className="h-4 w-4" />
-                              <span className="sr-only">Delete link</span>
-                            </button>
+                            <div className="flex items-center justify-self-end gap-1 self-center">
+                              <button
+                                className={`rounded-full p-1.5 transition disabled:cursor-not-allowed ${
+                                  (draftLinkLocks[link.key] ?? (link.locked === true))
+                                    ? "text-amber-300 hover:bg-amber-400/10 hover:text-amber-200"
+                                    : "text-zinc-400 hover:bg-white/10 hover:text-zinc-200"
+                                } disabled:text-zinc-600`}
+                                disabled={
+                                  isSavingLinks ||
+                                  !canLockLink(link, draftLinkUrls[link.key])
+                                }
+                                onClick={() =>
+                                  setDraftLinkLocks((currentDraftLinkLocks) => ({
+                                    ...currentDraftLinkLocks,
+                                    [link.key]: !(
+                                      currentDraftLinkLocks[link.key] ??
+                                      (link.locked === true)
+                                    ),
+                                  }))
+                                }
+                                title={
+                                  (draftLinkLocks[link.key] ?? (link.locked === true))
+                                    ? "Unlock saved text-to-link preference"
+                                    : "Lock this text to this destination"
+                                }
+                                type="button"
+                              >
+                                {(draftLinkLocks[link.key] ?? (link.locked === true)) ? (
+                                  <Lock aria-hidden="true" className="h-4 w-4" />
+                                ) : (
+                                  <LockOpen aria-hidden="true" className="h-4 w-4" />
+                                )}
+                                <span className="sr-only">
+                                  {(draftLinkLocks[link.key] ?? (link.locked === true))
+                                    ? "Unlock link preference"
+                                    : "Lock link preference"}
+                                </span>
+                              </button>
+
+                              <button
+                                className="rounded-full p-1.5 text-rose-300 transition hover:bg-rose-400/10 hover:text-rose-200 disabled:cursor-not-allowed disabled:text-zinc-600"
+                                disabled={isSavingLinks}
+                                onClick={() =>
+                                  setPendingDeletedLinkKeys((currentKeys) =>
+                                    currentKeys.includes(link.key)
+                                      ? currentKeys
+                                      : [...currentKeys, link.key],
+                                  )
+                                }
+                                title="Delete link"
+                                type="button"
+                              >
+                                <Trash2 aria-hidden="true" className="h-4 w-4" />
+                                <span className="sr-only">Delete link</span>
+                              </button>
+                            </div>
                           </div>
                         ))}
                         {visibleLinkCount === 0 ? (
@@ -1402,6 +1846,7 @@ export default function TailorResumeWorkspace({
                         Blank fields stay unresolved. Changed URLs are saved to
                         this resume and reused the next time we regenerate it.
                         Saving rewrites the current LaTeX locally, with no model call. Deleted links keep the visible text and only strip the hyperlink styling.
+                        Locked links are reapplied on future uploads when the same text appears.
                       </p>
 
                       <div className="flex flex-wrap gap-2">

@@ -90,6 +90,9 @@ export type RunResumeLatexToolLoopArgs = {
   }) => Promise<ResumeLatexLoopResponse>;
   fallbackModel: string;
   maxAttempts?: number;
+  onAttemptEvent?: (
+    attemptEvent: RunResumeLatexToolLoopResult["attemptEvents"][number],
+  ) => void | Promise<void>;
   validateLatex: (
     latexCode: string,
   ) => Promise<TailorResumeLatexDocumentValidationResult>;
@@ -287,6 +290,13 @@ export async function runResumeLatexToolLoop(
   let lastResumeLinks: ExtractedTailorResumeLink[] = [];
   let resolvedModel: string | null = null;
 
+  async function recordAttemptEvent(
+    attemptEvent: RunResumeLatexToolLoopResult["attemptEvents"][number],
+  ) {
+    attemptEvents.push(attemptEvent);
+    await args.onAttemptEvent?.(attemptEvent);
+  }
+
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const response = await args.createResponse({
       input: nextInput,
@@ -318,7 +328,7 @@ export async function runResumeLatexToolLoop(
           if (!validation.ok) {
             lastError = validation.error;
 
-            attemptEvents.push({
+            await recordAttemptEvent({
               attempt,
               error: lastError,
               linkSummary: validation.linkSummary,
@@ -334,18 +344,17 @@ export async function runResumeLatexToolLoop(
             continue;
           }
 
+          await recordAttemptEvent({
+            attempt,
+            error: null,
+            linkSummary: validation.linkSummary,
+            outcome: "succeeded",
+            willRetry: false,
+          });
+
           return {
             attempts: attempt,
-            attemptEvents: [
-              ...attemptEvents,
-              {
-                attempt,
-                error: null,
-                linkSummary: validation.linkSummary,
-                outcome: "succeeded",
-                willRetry: false,
-              },
-            ],
+            attemptEvents,
             latexCode: fallbackDocument.latexCode,
             links: validation.links,
             linkSummary: validation.linkSummary,
@@ -364,7 +373,7 @@ export async function runResumeLatexToolLoop(
         lastError = `The model did not call ${resumeLatexValidationToolName}.`;
       }
 
-      attemptEvents.push({
+      await recordAttemptEvent({
         attempt,
         error: lastError,
         linkSummary: lastLinkSummary,
@@ -391,7 +400,7 @@ export async function runResumeLatexToolLoop(
       if (!validation.ok) {
         lastError = validation.error;
 
-        attemptEvents.push({
+        await recordAttemptEvent({
           attempt,
           error: lastError,
           linkSummary: validation.linkSummary,
@@ -412,18 +421,17 @@ export async function runResumeLatexToolLoop(
         continue;
       }
 
+      await recordAttemptEvent({
+        attempt,
+        error: null,
+        linkSummary: validation.linkSummary,
+        outcome: "succeeded",
+        willRetry: false,
+      });
+
       return {
         attempts: attempt,
-        attemptEvents: [
-          ...attemptEvents,
-          {
-            attempt,
-            error: null,
-            linkSummary: validation.linkSummary,
-            outcome: "succeeded",
-            willRetry: false,
-          },
-        ],
+        attemptEvents,
         latexCode: extractedDocument.latexCode,
         links: validation.links,
         linkSummary: validation.linkSummary,
@@ -438,7 +446,7 @@ export async function runResumeLatexToolLoop(
           ? error.message
           : "Unable to validate the generated LaTeX document.";
 
-      attemptEvents.push({
+      await recordAttemptEvent({
         attempt,
         error: lastError,
         linkSummary: lastLinkSummary,

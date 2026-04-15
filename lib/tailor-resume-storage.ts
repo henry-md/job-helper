@@ -18,6 +18,14 @@ function getTailorResumePreviewPdfPath(userId: string) {
   return path.join(getTailorResumePrivateDir(userId), "preview.pdf");
 }
 
+function getTailoredResumePdfPath(userId: string, tailoredResumeId: string) {
+  return path.join(
+    getTailorResumePrivateDir(userId),
+    "tailored",
+    `${tailoredResumeId}.pdf`,
+  );
+}
+
 export async function readTailorResumeProfile(userId: string) {
   try {
     const rawValue = await readFile(getTailorResumeProfilePath(userId), "utf8");
@@ -65,4 +73,29 @@ export async function writeTailorResumePreviewPdf(
 
 export async function deleteTailorResumePreviewPdf(userId: string) {
   await rm(getTailorResumePreviewPdfPath(userId), { force: true });
+}
+
+export async function readTailoredResumePdf(
+  userId: string,
+  tailoredResumeId: string,
+) {
+  return readFile(getTailoredResumePdfPath(userId, tailoredResumeId));
+}
+
+export async function writeTailoredResumePdf(
+  userId: string,
+  tailoredResumeId: string,
+  pdfBuffer: Buffer,
+) {
+  const privateDir = path.dirname(getTailoredResumePdfPath(userId, tailoredResumeId));
+
+  await mkdir(privateDir, { recursive: true });
+  await writeFile(getTailoredResumePdfPath(userId, tailoredResumeId), pdfBuffer);
+}
+
+export async function deleteTailoredResumePdf(
+  userId: string,
+  tailoredResumeId: string,
+) {
+  await rm(getTailoredResumePdfPath(userId, tailoredResumeId), { force: true });
 }

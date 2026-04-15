@@ -10,6 +10,7 @@ export type TailorResumeLinkRecord = {
   disabled: boolean;
   key: string;
   label: string;
+  locked?: boolean;
   updatedAt: string;
   url: string | null;
 };
@@ -41,12 +42,33 @@ export type TailorResumeLatexState = {
   updatedAt: string | null;
 };
 
+export type TailorResumeAnnotatedLatexState = {
+  code: string;
+  segmentCount: number;
+  updatedAt: string | null;
+};
+
+export type TailoredResumeRecord = {
+  annotatedLatexCode: string;
+  createdAt: string;
+  displayName: string;
+  error: string | null;
+  id: string;
+  jobDescription: string;
+  latexCode: string;
+  pdfUpdatedAt: string | null;
+  status: TailorResumeLatexStatus;
+  updatedAt: string;
+};
+
 export type TailorResumeProfile = {
+  annotatedLatex: TailorResumeAnnotatedLatexState;
   extraction: TailorResumeExtractionState;
   jobDescription: string;
   latex: TailorResumeLatexState;
   links: TailorResumeLinkRecord[];
   resume: SavedResumeRecord | null;
+  tailoredResumes: TailoredResumeRecord[];
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -80,13 +102,23 @@ export function emptyTailorResumeLatexState(): TailorResumeLatexState {
   };
 }
 
+export function emptyTailorResumeAnnotatedLatexState(): TailorResumeAnnotatedLatexState {
+  return {
+    code: "",
+    segmentCount: 0,
+    updatedAt: null,
+  };
+}
+
 export function emptyTailorResumeProfile(): TailorResumeProfile {
   return {
+    annotatedLatex: emptyTailorResumeAnnotatedLatexState(),
     extraction: emptyTailorResumeExtractionState(),
     jobDescription: "",
     latex: emptyTailorResumeLatexState(),
     links: [],
     resume: null,
+    tailoredResumes: [],
   };
 }
 
@@ -97,6 +129,7 @@ function parseTailorResumeLinkRecord(value: unknown): TailorResumeLinkRecord | n
 
   const key = readNullableString(value.key);
   const label = readNullableString(value.label);
+  const locked = value.locked === true;
   const updatedAt = readNullableString(value.updatedAt);
   const url = value.url === null ? null : readNullableString(value.url);
   const disabled = value.disabled === true;
@@ -109,6 +142,7 @@ function parseTailorResumeLinkRecord(value: unknown): TailorResumeLinkRecord | n
     disabled,
     key,
     label,
+    locked,
     updatedAt,
     url,
   };
@@ -203,16 +237,98 @@ function parseTailorResumeLatexState(value: unknown): TailorResumeLatexState {
   };
 }
 
+function parseTailorResumeAnnotatedLatexState(
+  value: unknown,
+): TailorResumeAnnotatedLatexState {
+  if (!isRecord(value)) {
+    return emptyTailorResumeAnnotatedLatexState();
+  }
+
+  const rawSegmentCount = value.segmentCount;
+  const segmentCount =
+    typeof rawSegmentCount === "number" && Number.isFinite(rawSegmentCount)
+      ? Math.max(0, Math.floor(rawSegmentCount))
+      : 0;
+
+  return {
+    code: readString(value.code),
+    segmentCount,
+    updatedAt: readNullableString(value.updatedAt),
+  };
+}
+
+function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = readNullableString(value.id);
+  const displayName = readNullableString(value.displayName);
+  const jobDescription = readNullableString(value.jobDescription);
+  const latexCode = readNullableString(value.latexCode);
+  const annotatedLatexCode = readNullableString(value.annotatedLatexCode);
+  const createdAt = readNullableString(value.createdAt);
+  const updatedAt = readNullableString(value.updatedAt);
+  const pdfUpdatedAt = readNullableString(value.pdfUpdatedAt);
+  const error = readNullableString(value.error);
+  const rawStatus = value.status;
+  const status =
+    rawStatus === "compiling" ||
+    rawStatus === "ready" ||
+    rawStatus === "failed" ||
+    rawStatus === "idle"
+      ? rawStatus
+      : "idle";
+
+  if (
+    !id ||
+    !displayName ||
+    jobDescription === null ||
+    !latexCode ||
+    !annotatedLatexCode ||
+    !createdAt ||
+    !updatedAt
+  ) {
+    return null;
+  }
+
+  return {
+    annotatedLatexCode,
+    createdAt,
+    displayName,
+    error,
+    id,
+    jobDescription,
+    latexCode,
+    pdfUpdatedAt,
+    status,
+    updatedAt,
+  };
+}
+
+function parseTailoredResumeRecords(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailoredResumeRecord[];
+  }
+
+  return value.flatMap((entry) => {
+    const parsedRecord = parseTailoredResumeRecord(entry);
+    return parsedRecord ? [parsedRecord] : [];
+  });
+}
+
 export function parseTailorResumeProfile(value: unknown): TailorResumeProfile {
   if (!isRecord(value)) {
     return emptyTailorResumeProfile();
   }
 
   return {
+    annotatedLatex: parseTailorResumeAnnotatedLatexState(value.annotatedLatex),
     extraction: parseTailorResumeExtractionState(value.extraction),
     jobDescription: readString(value.jobDescription),
     latex: parseTailorResumeLatexState(value.latex),
     links: parseTailorResumeLinkRecords(value.links),
     resume: parseSavedResumeRecord(value.resume),
+    tailoredResumes: parseTailoredResumeRecords(value.tailoredResumes),
   };
 }

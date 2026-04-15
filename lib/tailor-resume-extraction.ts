@@ -46,18 +46,34 @@ function buildKnownResumeLinksText(knownLinks: TailorResumeLinkRecord[]) {
   const resolvedLinks = knownLinks.filter(
     (link) => !link.disabled && typeof link.url === "string",
   );
+  const lockedResolvedLinks = resolvedLinks.filter((link) => link.locked);
+  const unlockedResolvedLinks = resolvedLinks.filter((link) => !link.locked);
   const disabledLinks = knownLinks.filter((link) => link.disabled);
 
-  if (resolvedLinks.length === 0 && disabledLinks.length === 0) {
+  if (
+    lockedResolvedLinks.length === 0 &&
+    unlockedResolvedLinks.length === 0 &&
+    disabledLinks.length === 0
+  ) {
     return null;
   }
 
-  const resolvedLines = resolvedLinks.map(
+  const lockedResolvedLines = lockedResolvedLinks.map(
+    (link) => `- ${link.label} -> ${link.url}`,
+  );
+  const resolvedLines = unlockedResolvedLinks.map(
     (link) => `- ${link.label} -> ${link.url}`,
   );
   const disabledLines = disabledLinks.map((link) => `- ${link.label}`);
 
   return [
+    ...(lockedResolvedLines.length > 0
+      ? [
+          "Locked saved link destinations for this resume:",
+          ...lockedResolvedLines,
+          "These label-to-destination pairs were explicitly locked by the user. When the same visible label appears, use exactly this destination.",
+        ]
+      : []),
     ...(resolvedLines.length > 0
       ? [
           "Known saved link destinations for this resume:",
@@ -219,6 +235,10 @@ type ExtractResumeLatexDocumentDependencies = {
   client?: OpenAI;
   extractPdfLinks?: (pdfBuffer: Buffer) => Promise<EmbeddedPdfLink[]>;
   knownLinks?: TailorResumeLinkRecord[];
+  onAttemptEvent?: (
+    attemptEvent: RunResumeLatexToolLoopResult["attemptEvents"][number],
+  ) => void | Promise<void>;
+  preserveUnusedKnownLinks?: boolean;
   validateLatexDocument?: (
     latexCode: string,
   ) => ReturnType<typeof validateTailorResumeLatexDocument>;
@@ -235,6 +255,8 @@ export async function extractResumeLatexDocument(
   const model = process.env.OPENAI_RESUME_EXTRACTION_MODEL ?? "gpt-5-mini";
   const extractPdfLinks = dependencies.extractPdfLinks ?? extractEmbeddedPdfLinks;
   const knownLinks = dependencies.knownLinks ?? [];
+  const preserveUnusedKnownLinks =
+    dependencies.preserveUnusedKnownLinks ?? true;
   const validateLatexDocument =
     dependencies.validateLatexDocument ?? validateTailorResumeLatexDocument;
   const applySavedLinkOverrides = (latexCode: string) =>
@@ -254,9 +276,18 @@ export async function extractResumeLatexDocument(
       const resumeLinks = buildTailorResumeLinkRecords({
         existingLinks: knownLinks,
         extractedLinks: extractedResumeLinks,
+        preserveUnusedExisting: preserveUnusedKnownLinks,
       });
 
       if (!validation.ok) {
+        await dependencies.onAttemptEvent?.({
+          attempt: 1,
+          error: validation.error,
+          linkSummary: validation.linkSummary,
+          outcome: "failed",
+          willRetry: false,
+        });
+
         return {
           attempts: 1,
           attemptEvents: [
@@ -278,6 +309,14 @@ export async function extractResumeLatexDocument(
           validationError: validation.error,
         };
       }
+
+      await dependencies.onAttemptEvent?.({
+        attempt: 1,
+        error: null,
+        linkSummary: validation.linkSummary,
+        outcome: "succeeded",
+        willRetry: false,
+      });
 
       return {
         attempts: 1,
@@ -303,16 +342,25 @@ export async function extractResumeLatexDocument(
       const extractedResumeLinks = buildExtractedResumeLinksFromLatex(
         tailorResumeLatexExample,
       );
+      const attemptError =
+        error instanceof Error
+          ? error.message
+          : "Unable to compile the test LaTeX document.";
+
+      await dependencies.onAttemptEvent?.({
+        attempt: 1,
+        error: attemptError,
+        linkSummary: null,
+        outcome: "failed",
+        willRetry: false,
+      });
 
       return {
         attempts: 1,
         attemptEvents: [
           {
             attempt: 1,
-            error:
-              error instanceof Error
-                ? error.message
-                : "Unable to compile the test LaTeX document.",
+            error: attemptError,
             linkSummary: null,
             outcome: "failed",
             willRetry: false,
@@ -327,11 +375,10 @@ export async function extractResumeLatexDocument(
         resumeLinks: buildTailorResumeLinkRecords({
           existingLinks: knownLinks,
           extractedLinks: extractedResumeLinks,
+          preserveUnusedExisting: preserveUnusedKnownLinks,
         }),
         validationError:
-          error instanceof Error
-            ? error.message
-            : "Unable to compile the test LaTeX document.",
+          attemptError,
       };
     }
   }
@@ -415,6 +462,7 @@ export async function extractResumeLatexDocument(
         };
       },
       fallbackModel: model,
+      onAttemptEvent: dependencies.onAttemptEvent,
       validateLatex: validateLatexWithOverrides,
     });
 
@@ -424,6 +472,7 @@ export async function extractResumeLatexDocument(
       resumeLinks: buildTailorResumeLinkRecords({
         existingLinks: knownLinks,
         extractedLinks: result.extractedResumeLinks,
+        preserveUnusedExisting: preserveUnusedKnownLinks,
       }),
     };
   } finally {
