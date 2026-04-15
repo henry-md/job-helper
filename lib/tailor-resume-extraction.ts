@@ -1,149 +1,19 @@
 import OpenAI, { toFile } from "openai";
 import { fileBufferToDataUrl } from "@/lib/job-tracking";
 import {
-  parseResumeDocument,
-  type ResumeDocument,
-} from "@/lib/tailor-resume-types";
+  tailorResumeLatexExample,
+  tailorResumeLatexTemplate,
+} from "@/lib/tailor-resume-latex-example";
 
 const TEST_OPENAI_RESPONSE_MODEL = "test-openai-response";
 
-const textSegmentSchema = {
+const extractedLatexSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    segmentType: {
-      type: "string",
-      enum: ["text"],
-    },
-    text: { type: "string" },
-    isBold: { type: "boolean" },
-    isItalic: { type: "boolean" },
-    isLinkStyle: { type: "boolean" },
-    linkUrl: {
-      type: ["string", "null"],
-    },
+    latexCode: { type: "string" },
   },
-  required: ["segmentType", "text", "isBold", "isItalic", "isLinkStyle"],
-} as const;
-
-const richTextSchema = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    segments: {
-      type: "array",
-      items: textSegmentSchema,
-    },
-  },
-  required: ["segments"],
-} as const;
-
-const indentedRichTextSchema = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    indentLevel: {
-      type: "integer",
-      minimum: 0,
-      maximum: 3,
-    },
-    segments: {
-      type: "array",
-      items: textSegmentSchema,
-    },
-  },
-  required: ["indentLevel", "segments"],
-} as const;
-
-const blockSchema = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    blockType: {
-      type: "string",
-      enum: ["entry", "paragraph", "labeled_line"],
-    },
-    subSectionText: {
-      ...richTextSchema,
-      type: ["object", "null"],
-    },
-    subSectionDates: {
-      ...richTextSchema,
-      type: ["object", "null"],
-    },
-    subSectionDescription: {
-      type: "array",
-      items: indentedRichTextSchema,
-    },
-    subSectionBullets: {
-      type: "array",
-      items: indentedRichTextSchema,
-    },
-    content: {
-      ...indentedRichTextSchema,
-      type: ["object", "null"],
-    },
-    label: {
-      ...richTextSchema,
-      type: ["object", "null"],
-    },
-    value: {
-      ...richTextSchema,
-      type: ["object", "null"],
-    },
-  },
-  required: [
-    "blockType",
-    "subSectionText",
-    "subSectionDates",
-    "subSectionDescription",
-    "subSectionBullets",
-    "content",
-    "label",
-    "value",
-  ],
-} as const;
-
-const extractionSchema = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    headerText: richTextSchema,
-    subHeadText: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          lineItems: {
-            type: "array",
-            items: richTextSchema,
-          },
-          separatorBetweenItems: {
-            type: ["string", "null"],
-            enum: ["bullet", "pipe", null],
-          },
-        },
-        required: ["lineItems", "separatorBetweenItems"],
-      },
-    },
-    sections: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          sectionText: richTextSchema,
-          blocks: {
-            type: "array",
-            items: blockSchema,
-          },
-        },
-        required: ["sectionText", "blocks"],
-      },
-    },
-  },
-  required: ["headerText", "subHeadText", "sections"],
+  required: ["latexCode"],
 } as const;
 
 function getOpenAIClient() {
@@ -189,220 +59,26 @@ function readOutputText(response: {
   return chunks.join("").trim();
 }
 
-function buildSampleResumeDocument(): ResumeDocument {
-  return parseResumeDocument({
-    headerText: {
-      segments: [
-        {
-          segmentType: "text",
-          text: "HENRY DEUTSCH",
-          isBold: true,
-          isItalic: false,
-          isLinkStyle: false,
-        },
-      ],
-    },
-    subHeadText: [
-      {
-        lineItems: [
-          {
-            segments: [
-              {
-                segmentType: "text",
-                text: "HenryMDeutsch@gmail.com",
-                isBold: false,
-                isItalic: false,
-                isLinkStyle: false,
-              },
-            ],
-          },
-          {
-            segments: [
-              {
-                segmentType: "text",
-                text: "914-272-5561",
-                isBold: false,
-                isItalic: false,
-                isLinkStyle: false,
-              },
-            ],
-          },
-          {
-            segments: [
-              {
-                segmentType: "text",
-                text: "linkedin.com/in/henry-deutsch",
-                isBold: false,
-                isItalic: false,
-                isLinkStyle: true,
-                linkUrl: "https://linkedin.com/in/henry-deutsch",
-              },
-            ],
-          },
-        ],
-        separatorBetweenItems: "bullet",
-      },
-      {
-        lineItems: [
-          {
-            segments: [
-              {
-                segmentType: "text",
-                text: "Portfolio: ",
-                isBold: false,
-                isItalic: false,
-                isLinkStyle: false,
-              },
-              {
-                segmentType: "text",
-                text: "henry-deutsch.com",
-                isBold: false,
-                isItalic: false,
-                isLinkStyle: true,
-                linkUrl: "https://henry-deutsch.com",
-              },
-            ],
-          },
-        ],
-        separatorBetweenItems: null,
-      },
-    ],
-    sections: [
-      {
-        sectionText: {
-          segments: [
-            {
-              segmentType: "text",
-              text: "WORK EXPERIENCE",
-              isBold: true,
-              isItalic: false,
-              isLinkStyle: false,
-            },
-          ],
-        },
-        blocks: [
-          {
-            blockType: "entry",
-            subSectionText: {
-              segments: [
-                {
-                  segmentType: "text",
-                  text: "NewForm AI",
-                  isBold: true,
-                  isItalic: false,
-                  isLinkStyle: false,
-                },
-                {
-                  segmentType: "text",
-                  text: "|",
-                  isBold: false,
-                  isItalic: false,
-                  isLinkStyle: false,
-                },
-                {
-                  segmentType: "text",
-                  text: "Software Engineer I — Full Time",
-                  isBold: false,
-                  isItalic: true,
-                  isLinkStyle: false,
-                },
-              ],
-            },
-            subSectionDates: {
-              segments: [
-                {
-                  segmentType: "text",
-                  text: "Aug 2025 - Feb 2026",
-                  isBold: false,
-                  isItalic: false,
-                  isLinkStyle: false,
-                },
-              ],
-            },
-            subSectionDescription: [
-              {
-                indentLevel: 0,
-                segments: [
-                  {
-                    segmentType: "text",
-                    text: "NewForm provides B2B analytics for consumer companies on their ads, synthesized using deep data modeling and AI.",
-                    isBold: false,
-                    isItalic: false,
-                    isLinkStyle: false,
-                  },
-                ],
-              },
-            ],
-            subSectionBullets: [
-              {
-                indentLevel: 1,
-                segments: [
-                  {
-                    segmentType: "text",
-                    text: "Led major refactor enabling $50K+/mo in TikTok ad spend by incorporating TikTok support for our entire suite of software.",
-                    isBold: false,
-                    isItalic: false,
-                    isLinkStyle: false,
-                  },
-                ],
-              },
-            ],
-            content: null,
-            label: null,
-            value: null,
-          },
-        ],
-      },
-      {
-        sectionText: {
-          segments: [
-            {
-              segmentType: "text",
-              text: "TECHNICAL SKILLS",
-              isBold: true,
-              isItalic: false,
-              isLinkStyle: false,
-            },
-          ],
-        },
-        blocks: [
-          {
-            blockType: "labeled_line",
-            subSectionText: null,
-            subSectionDates: null,
-            subSectionDescription: [],
-            subSectionBullets: [],
-            content: null,
-            label: {
-              segments: [
-                {
-                  segmentType: "text",
-                  text: "Languages:",
-                  isBold: true,
-                  isItalic: false,
-                  isLinkStyle: false,
-                },
-              ],
-            },
-            value: {
-              segments: [
-                {
-                  segmentType: "text",
-                  text: "TypeScript, JavaScript, Python",
-                  isBold: false,
-                  isItalic: false,
-                  isLinkStyle: false,
-                },
-              ],
-            },
-          },
-        ],
-      },
-    ],
-  });
+function readExtractedLatexCode(value: unknown) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !("latexCode" in value) ||
+    typeof value.latexCode !== "string"
+  ) {
+    throw new Error("The model did not return a LaTeX document.");
+  }
+
+  const latexCode = value.latexCode.trim();
+
+  if (!latexCode) {
+    throw new Error("The model returned an empty LaTeX document.");
+  }
+
+  return latexCode;
 }
 
-export async function extractResumeDocument(input: {
+export async function extractResumeLatexDocument(input: {
   buffer: Buffer;
   filename: string;
   mimeType: string;
@@ -410,12 +86,9 @@ export async function extractResumeDocument(input: {
   const model = process.env.OPENAI_RESUME_EXTRACTION_MODEL ?? "gpt-5-mini";
 
   if (isTestOpenAIResponseEnabled()) {
-    const document = buildSampleResumeDocument();
-
     return {
-      document,
+      latexCode: tailorResumeLatexExample,
       model: TEST_OPENAI_RESPONSE_MODEL,
-      rawText: JSON.stringify(document),
     };
   }
 
@@ -433,7 +106,10 @@ export async function extractResumeDocument(input: {
     const response = await client.responses.create({
       model,
       instructions:
-        "Extract a structured resume document from the provided resume. Preserve intentional header lines, section order, entries, paragraph lines, bullet lists, and labeled lines such as 'Languages:' or 'Awards:'. Each intentionally separate visual line in the resume header must be its own element in subHeadText. Do not combine multiple visual header lines into one subHeadText item with separatorBetweenItems null. Use blockType 'entry' for rows with main left-side content and optional right-side companion text such as dates. Put right-side dates or similar companion text into subSectionDates instead of encoding alignment. Use blockType 'paragraph' for standalone prose lines. Use blockType 'labeled_line' for lines with a label and value. Represent list bullets in subSectionBullets, not as inline separator characters. Use only segmentType 'text'. If inline content contains the literal '|' or '•' separators, keep them as normal text segments, preferably as their own standalone text segments. Keep em dashes and hyphens as normal text. Use isItalic only when text is visually italicized. Use isLinkStyle only when text visually appears link-styled, such as blue and underlined. When a link destination is explicitly visible or otherwise directly recoverable from the resume, include it in linkUrl; otherwise use null. Ignore exact spacing and visual centering. Never invent content that is not present in the resume.",
+        "Convert the provided resume into a complete standalone LaTeX document. The response schema only allows one field: latexCode. Preserve every word from the resume exactly as written whenever it is legible. Never summarize, shorten, compress, or omit text. In particular, never truncate bullets to their first sentence. Keep the original section order and keep all bullets, dates, headings, labeled lines, links, and separators. Preserve visible bold, italics, underlines, bullet structure, and link styling when possible. Return a full LaTeX document from \\documentclass through \\end{document} that compiles with pdflatex. Prefer the exact template and macro vocabulary shown below. Use only standard LaTeX plus the packages already present in that template unless absolutely necessary. Inline formatting such as \\textbf, \\textit, \\tightul, and \\href may appear anywhere inside macro arguments when needed. Do not include markdown fences or any explanation outside latexCode.\n\nPreferred template:\n\n" +
+        tailorResumeLatexTemplate +
+        "\n\nReference example:\n\n" +
+        tailorResumeLatexExample,
       input: [
         {
           role: "user",
@@ -441,7 +117,7 @@ export async function extractResumeDocument(input: {
             {
               type: "input_text",
               text:
-                "Extract the resume into the requested structured format. Keep the original section order. If a section mixes entries, labeled lines, and paragraphs, preserve that order in blocks. Use null for unused block fields and [] for empty arrays.",
+                "Extract this resume into LaTeX using the preferred template as closely as possible. Preserve all content and keep the document faithful to the uploaded resume.",
             },
             ...(input.mimeType.startsWith("image/")
               ? [
@@ -472,9 +148,9 @@ export async function extractResumeDocument(input: {
         verbosity: "low",
         format: {
           type: "json_schema",
-          name: "resume_document_extraction",
+          name: "resume_latex_extraction",
           strict: true,
-          schema: extractionSchema,
+          schema: extractedLatexSchema,
         },
       },
     });
@@ -482,13 +158,14 @@ export async function extractResumeDocument(input: {
     const outputText = readOutputText(response);
 
     if (!outputText) {
-      throw new Error("The model returned an empty resume extraction response.");
+      throw new Error("The model returned an empty LaTeX extraction response.");
     }
 
+    const latexCode = readExtractedLatexCode(JSON.parse(outputText));
+
     return {
-      document: parseResumeDocument(JSON.parse(outputText)),
+      latexCode,
       model: (response as { model?: string }).model ?? model,
-      rawText: outputText,
     };
   } finally {
     if (uploadedFile?.id) {

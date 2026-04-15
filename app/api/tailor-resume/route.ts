@@ -3,9 +3,8 @@ import path from "node:path";
 import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/auth";
-import { extractResumeDocument } from "@/lib/tailor-resume-extraction";
-import { compileTailorResumeLatex, renderTailorResumeLatex } from "@/lib/tailor-resume-latex";
-import { extractPdfLinkUrls, normalizeResumeDocument } from "@/lib/tailor-resume-source";
+import { extractResumeLatexDocument } from "@/lib/tailor-resume-extraction";
+import { compileTailorResumeLatex } from "@/lib/tailor-resume-latex";
 import {
   deleteTailorResumePreviewPdf,
   readTailorResumeProfile,
@@ -15,9 +14,6 @@ import {
 import {
   emptyTailorResumeExtractionState,
   emptyTailorResumeLatexState,
-  emptyTailorResumeSourceState,
-  parseResumeDocument,
-  parseTailorResumeSourceDocument,
   type TailorResumeProfile,
 } from "@/lib/tailor-resume-types";
 import {
@@ -48,6 +44,74 @@ function buildResumeRecord(input: {
   };
 }
 
+async function compileExtractedLatex(userId: string, latexCode: string) {
+  const updatedAt = new Date().toISOString();
+
+  try {
+    const previewPdf = await compileTailorResumeLatex(latexCode);
+
+    await writeTailorResumePreviewPdf(userId, previewPdf);
+
+    return {
+      code: latexCode,
+      error: null,
+      pdfUpdatedAt: updatedAt,
+      status: "ready" as const,
+      updatedAt,
+    };
+  } catch (error) {
+    await deleteTailorResumePreviewPdf(userId);
+
+    return {
+      code: latexCode,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unable to compile the extracted LaTeX preview.",
+      pdfUpdatedAt: null,
+      status: "failed" as const,
+      updatedAt,
+    };
+  }
+}
+
+async function compileLatexDraft(
+  userId: string,
+  code: string,
+  previousPdfUpdatedAt: string | null,
+) {
+  const updatedAt = new Date().toISOString();
+
+  try {
+    const previewPdf = await compileTailorResumeLatex(code);
+
+    await writeTailorResumePreviewPdf(userId, previewPdf);
+
+    return {
+      code,
+      error: null,
+      pdfUpdatedAt: updatedAt,
+      status: "ready" as const,
+      updatedAt,
+    };
+  } catch (error) {
+    if (!previousPdfUpdatedAt) {
+      await deleteTailorResumePreviewPdf(userId);
+    }
+
+    return {
+      code,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unable to compile the LaTeX preview.",
+      pdfUpdatedAt: previousPdfUpdatedAt,
+      status: "failed" as const,
+      updatedAt,
+    };
+  }
+}
+
 async function runResumeExtraction(
   userId: string,
   profile: TailorResumeProfile,
@@ -72,38 +136,28 @@ async function runResumeExtraction(
   try {
     const resumePath = path.join(process.cwd(), "public", savedResume.storagePath);
     const buffer = await readFile(resumePath);
-    const extraction = await extractResumeDocument({
+    const extraction = await extractResumeLatexDocument({
       buffer,
       filename: savedResume.originalFilename,
       mimeType: savedResume.mimeType,
     });
-    const derivedArtifacts = await buildDerivedResumeArtifacts({
-      document: extraction.document,
-      resumeMimeType: savedResume.mimeType,
-      resumePath,
-      userId,
-    });
+    const latex = await compileExtractedLatex(userId, extraction.latexCode);
 
     const readyProfile: TailorResumeProfile = {
       ...extractingProfile,
       extraction: {
-        editedDocument: extraction.document,
+        ...emptyTailorResumeExtractionState(),
         error: null,
-        extractedDocument: extraction.document,
         model: extraction.model,
-        rawText: extraction.rawText,
         status: "ready",
         updatedAt: new Date().toISOString(),
       },
-      latex: derivedArtifacts.latex,
-      source: derivedArtifacts.source,
+      latex,
     };
 
     await writeTailorResumeProfile(userId, readyProfile);
     return readyProfile;
   } catch (error) {
-    await deleteTailorResumePreviewPdf(userId);
-
     const failedProfile: TailorResumeProfile = {
       ...extractingProfile,
       extraction: {
@@ -115,112 +169,10 @@ async function runResumeExtraction(
         status: "failed",
         updatedAt: new Date().toISOString(),
       },
-      latex: emptyTailorResumeLatexState(),
-      source: emptyTailorResumeSourceState(),
     };
 
     await writeTailorResumeProfile(userId, failedProfile);
     return failedProfile;
-  }
-}
-
-async function buildDerivedResumeArtifacts(input: {
-  document: NonNullable<TailorResumeProfile["extraction"]["editedDocument"]>;
-  resumeMimeType: string;
-  resumePath: string;
-  userId: string;
-}) {
-  const pdfLinkUrls =
-    input.resumeMimeType === "application/pdf"
-      ? await extractPdfLinkUrls(input.resumePath)
-      : [];
-  const sourceDocument = normalizeResumeDocument(input.document, { pdfLinkUrls });
-  return buildArtifactsFromSourceDocument(input.userId, sourceDocument);
-}
-
-async function buildArtifactsFromSourceDocument(
-  userId: string,
-  sourceDocument: NonNullable<TailorResumeProfile["source"]["document"]>,
-) {
-  const generatedCode = renderTailorResumeLatex(sourceDocument);
-  const updatedAt = new Date().toISOString();
-
-  try {
-    const previewPdf = await compileTailorResumeLatex(generatedCode);
-
-    await writeTailorResumePreviewPdf(userId, previewPdf);
-
-    return {
-      latex: {
-        draftCode: generatedCode,
-        error: null,
-        generatedCode,
-        pdfUpdatedAt: updatedAt,
-        status: "ready" as const,
-        updatedAt,
-      },
-      source: {
-        document: sourceDocument,
-        updatedAt,
-      },
-    };
-  } catch (error) {
-    await deleteTailorResumePreviewPdf(userId);
-
-    return {
-      latex: {
-        draftCode: generatedCode,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unable to compile the generated LaTeX preview.",
-        generatedCode,
-        pdfUpdatedAt: null,
-        status: "failed" as const,
-        updatedAt,
-      },
-      source: {
-        document: sourceDocument,
-        updatedAt,
-      },
-    };
-  }
-}
-
-async function compileLatexDraft(
-  userId: string,
-  generatedCode: string | null,
-  draftCode: string,
-) {
-  const updatedAt = new Date().toISOString();
-
-  try {
-    const previewPdf = await compileTailorResumeLatex(draftCode);
-
-    await writeTailorResumePreviewPdf(userId, previewPdf);
-
-    return {
-      draftCode,
-      error: null,
-      generatedCode,
-      pdfUpdatedAt: updatedAt,
-      status: "ready" as const,
-      updatedAt,
-    };
-  } catch (error) {
-    await deleteTailorResumePreviewPdf(userId);
-
-    return {
-      draftCode,
-      error:
-        error instanceof Error
-          ? error.message
-          : "Unable to compile the LaTeX preview.",
-      generatedCode,
-      pdfUpdatedAt: null,
-      status: "failed" as const,
-      updatedAt,
-    };
   }
 }
 
@@ -297,56 +249,6 @@ export async function PATCH(request: Request) {
     didUpdate = true;
   }
 
-  if ("editedDocument" in body) {
-    const editedDocument =
-      body.editedDocument === null ? null : parseResumeDocument(body.editedDocument);
-
-    nextProfile.extraction.editedDocument = editedDocument;
-    nextProfile.extraction.updatedAt = new Date().toISOString();
-
-    if (editedDocument && profile.resume) {
-      const resumePath = path.join(process.cwd(), "public", profile.resume.storagePath);
-      const derivedArtifacts = await buildDerivedResumeArtifacts({
-        document: editedDocument,
-        resumeMimeType: profile.resume.mimeType,
-        resumePath,
-        userId: session.user.id,
-      });
-
-      nextProfile.latex = derivedArtifacts.latex;
-      nextProfile.source = derivedArtifacts.source;
-    } else {
-      nextProfile.latex = emptyTailorResumeLatexState();
-      nextProfile.source = emptyTailorResumeSourceState();
-      await deleteTailorResumePreviewPdf(session.user.id);
-    }
-
-    didUpdate = true;
-  }
-
-  if ("sourceDocument" in body) {
-    const sourceDocument =
-      body.sourceDocument === null
-        ? null
-        : parseTailorResumeSourceDocument(body.sourceDocument);
-
-    if (sourceDocument) {
-      const derivedArtifacts = await buildArtifactsFromSourceDocument(
-        session.user.id,
-        sourceDocument,
-      );
-
-      nextProfile.source = derivedArtifacts.source;
-      nextProfile.latex = derivedArtifacts.latex;
-    } else {
-      nextProfile.source = emptyTailorResumeSourceState();
-      nextProfile.latex = emptyTailorResumeLatexState();
-      await deleteTailorResumePreviewPdf(session.user.id);
-    }
-
-    didUpdate = true;
-  }
-
   if ("latexCode" in body) {
     if (typeof body.latexCode !== "string") {
       return NextResponse.json(
@@ -358,14 +260,21 @@ export async function PATCH(request: Request) {
     if (body.latexCode.length > maxLatexCodeLength) {
       return NextResponse.json(
         { error: "Keep the LaTeX under 300,000 characters." },
+        { status: 413 },
+      );
+    }
+
+    if (body.latexCode.trim().length === 0) {
+      return NextResponse.json(
+        { error: "Paste some LaTeX before saving." },
         { status: 400 },
       );
     }
 
     nextProfile.latex = await compileLatexDraft(
       session.user.id,
-      nextProfile.latex.generatedCode,
       body.latexCode,
+      nextProfile.latex.pdfUpdatedAt,
     );
     didUpdate = true;
   }
@@ -432,10 +341,10 @@ export async function POST(request: Request) {
       sizeBytes: persistedResume.sizeBytes,
       storagePath: persistedResume.storagePath,
     }),
-    source: emptyTailorResumeSourceState(),
   };
 
   await writeTailorResumeProfile(session.user.id, profileWithSavedResume);
+  await deleteTailorResumePreviewPdf(session.user.id);
 
   const updatedProfile = await runResumeExtraction(
     session.user.id,

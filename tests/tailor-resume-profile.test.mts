@@ -1,0 +1,64 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  emptyTailorResumeProfile,
+  parseTailorResumeProfile,
+} from "../lib/tailor-resume-types.ts";
+
+test("parseTailorResumeProfile reads the current LaTeX-only shape", () => {
+  const profile = parseTailorResumeProfile({
+    extraction: {
+      error: null,
+      model: "gpt-5-mini",
+      status: "ready",
+      updatedAt: "2026-04-15T12:00:00.000Z",
+    },
+    jobDescription: "Role text",
+    latex: {
+      code: "\\documentclass{article}\n\\begin{document}Hello\\end{document}",
+      error: null,
+      pdfUpdatedAt: "2026-04-15T12:00:00.000Z",
+      status: "ready",
+      updatedAt: "2026-04-15T12:00:00.000Z",
+    },
+    resume: {
+      mimeType: "application/pdf",
+      originalFilename: "resume.pdf",
+      sizeBytes: 1234,
+      storagePath: "/uploads/resumes/user/resume.pdf",
+      updatedAt: "2026-04-15T12:00:00.000Z",
+    },
+  });
+
+  assert.equal(profile.latex.code.includes("\\begin{document}"), true);
+  assert.equal(profile.extraction.model, "gpt-5-mini");
+  assert.equal(profile.resume?.originalFilename, "resume.pdf");
+});
+
+test("parseTailorResumeProfile upgrades legacy draft/generated fields into code", () => {
+  const profile = parseTailorResumeProfile({
+    latex: {
+      draftCode: "",
+      generatedCode: "\\documentclass{article}\n\\begin{document}Legacy\\end{document}",
+      error: null,
+      pdfUpdatedAt: null,
+      status: "ready",
+      updatedAt: "2026-04-15T12:00:00.000Z",
+    },
+    source: {
+      document: { old: true },
+      updatedAt: "2026-04-15T12:00:00.000Z",
+    },
+  });
+
+  assert.equal(profile.latex.code.includes("Legacy"), true);
+  assert.deepEqual(profile.resume, null);
+});
+
+test("emptyTailorResumeProfile defaults to an empty LaTeX draft", () => {
+  const profile = emptyTailorResumeProfile();
+
+  assert.equal(profile.latex.code, "");
+  assert.equal(profile.extraction.status, "idle");
+  assert.equal(profile.resume, null);
+});

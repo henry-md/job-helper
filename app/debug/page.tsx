@@ -29,10 +29,7 @@ export default async function DebugPage() {
     }
   })();
 
-  const initialLatexCode =
-    tailorResumeProfile.latex.draftCode ??
-    tailorResumeProfile.latex.generatedCode ??
-    "";
+  const initialLatexCode = tailorResumeProfile.latex.code;
 
   return (
     <main className="min-h-[100dvh] px-[clamp(1rem,2vw,1.5rem)] py-[clamp(0.75rem,1.6vh,1.25rem)]">

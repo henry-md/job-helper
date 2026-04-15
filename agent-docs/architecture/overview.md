@@ -10,7 +10,7 @@ Current request flow:
 2. `/dashboard` loads counts/recent applications from Prisma and reads the saved tailor-resume profile from the local filesystem.
 3. Client uploads screenshots to `POST /api/job-applications/extract` for draft extraction.
 4. Final form submit goes to `POST /api/job-applications`, which persists screenshots, upserts `Company`, then creates one `JobApplication`.
-5. `POST /api/tailor-resume` persists the uploaded resume file, runs resume extraction through OpenAI, normalizes the extraction into the simplified tailor-resume source document, and stores the derived LaTeX/PDF preview in the per-user tailor-resume profile.
+5. `POST /api/tailor-resume` persists the uploaded resume file, runs resume extraction through OpenAI, stores the extracted LaTeX as the saved draft, and compiles the preview PDF in the per-user tailor-resume profile.
 
 Important boundaries:
 - Auth config lives in `auth.ts`; route handler is `app/api/auth/[...nextauth]/route.ts`.

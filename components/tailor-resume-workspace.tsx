@@ -15,16 +15,12 @@ import { createPortal } from "react-dom";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import { toast } from "sonner";
-import ResumeSourceEditor from "@/components/resume-source-editor";
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import type {
-  TailorResumeProfile,
-  TailorResumeSourceDocument,
-} from "@/lib/tailor-resume-types";
+import type { TailorResumeProfile } from "@/lib/tailor-resume-types";
 
 type TailorResumeWorkspaceProps = {
   initialProfile: TailorResumeProfile;
@@ -39,8 +35,8 @@ const acceptedResumeMimeTypes = new Set([
   "image/webp",
 ]);
 const maxResumeBytes = 10 * 1024 * 1024;
-const defaultEditorPaneSize = 66;
-const defaultPreviewPaneSize = 34;
+const defaultEditorPaneSize = 56;
+const defaultPreviewPaneSize = 44;
 
 function formatFileSize(value: number) {
   if (value >= 1024 * 1024) {
@@ -73,14 +69,14 @@ function validateResumeFile(file: File) {
   return null;
 }
 
-function serializeSourceDocument(document: TailorResumeSourceDocument | null) {
-  return document ? JSON.stringify(document) : "";
-}
-
 function buildPreviewPdfUrl(updatedAt: string | null) {
   return updatedAt
     ? `/api/tailor-resume/preview?updatedAt=${encodeURIComponent(updatedAt)}`
     : null;
+}
+
+function resolveSavedLatexCode(profile: TailorResumeProfile) {
+  return profile.latex.code;
 }
 
 function StatusPill({ children }: { children: ReactNode }) {
@@ -99,29 +95,24 @@ export default function TailorResumeWorkspace({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewPanelRef = useRef<PanelImperativeHandle | null>(null);
   const jobDescriptionSaveSequenceRef = useRef(0);
-  const sourceSaveSequenceRef = useRef(0);
+  const latexSaveSequenceRef = useRef(0);
   const lastSavedJobDescriptionRef = useRef(initialProfile.jobDescription);
-  const lastSavedSourceDocumentRef = useRef(
-    serializeSourceDocument(initialProfile.source.document),
-  );
-  const previousReadyPreviewPdfUrlRef = useRef(
-    buildPreviewPdfUrl(
-      initialProfile.latex.status === "ready"
-        ? initialProfile.latex.pdfUpdatedAt
-        : null,
-    ),
+  const lastSavedLatexCodeRef = useRef(resolveSavedLatexCode(initialProfile));
+  const previousPreviewPdfUrlRef = useRef(
+    buildPreviewPdfUrl(initialProfile.latex.pdfUpdatedAt),
   );
   const [profile, setProfile] = useState(initialProfile);
   const [draftJobDescription, setDraftJobDescription] = useState(
     initialProfile.jobDescription,
   );
-  const [draftSourceDocument, setDraftSourceDocument] =
-    useState<TailorResumeSourceDocument | null>(initialProfile.source.document);
+  const [draftLatexCode, setDraftLatexCode] = useState(
+    resolveSavedLatexCode(initialProfile),
+  );
   const [isPreviewMounted, setIsPreviewMounted] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isPreviewFrameLoading, setIsPreviewFrameLoading] = useState(false);
   const [isSavingJobDescription, setIsSavingJobDescription] = useState(false);
-  const [isSavingSource, setIsSavingSource] = useState(false);
+  const [isSavingLatex, setIsSavingLatex] = useState(false);
   const [isUploadingResume, setIsUploadingResume] = useState(false);
   const [isReextracting, setIsReextracting] = useState(false);
   const [isWideLayout, setIsWideLayout] = useState(false);
@@ -129,7 +120,7 @@ export default function TailorResumeWorkspace({
   const [jobDescriptionState, setJobDescriptionState] = useState<
     "idle" | "saved" | "saving"
   >("idle");
-  const [sourceState, setSourceState] = useState<"idle" | "saved" | "saving">(
+  const [latexState, setLatexState] = useState<"idle" | "saved" | "saving">(
     "idle",
   );
 
@@ -138,15 +129,13 @@ export default function TailorResumeWorkspace({
   const previewAsImage = resume?.mimeType.startsWith("image/") ?? false;
   const editorDisabled = isUploadingResume || isReextracting;
   const previewPdfUrl = buildPreviewPdfUrl(profile.latex.pdfUpdatedAt);
-  const readyPreviewPdfUrl =
-    profile.latex.status === "ready" ? previewPdfUrl : null;
-  const isPreviewRefreshing = Boolean(readyPreviewPdfUrl) && (
-    isSavingSource ||
+  const hasPreviewPdf = Boolean(previewPdfUrl);
+  const isPreviewRefreshing = hasPreviewPdf && (
+    isSavingLatex ||
     isUploadingResume ||
     isReextracting ||
     isPreviewFrameLoading
   );
-
   useEffect(() => {
     setIsPreviewMounted(true);
   }, []);
@@ -166,41 +155,39 @@ export default function TailorResumeWorkspace({
   }, []);
 
   useEffect(() => {
+    const resolvedLatexCode = resolveSavedLatexCode(initialProfile);
+
     setProfile(initialProfile);
     setDraftJobDescription(initialProfile.jobDescription);
-    setDraftSourceDocument(initialProfile.source.document);
+    setDraftLatexCode(resolvedLatexCode);
     lastSavedJobDescriptionRef.current = initialProfile.jobDescription;
-    lastSavedSourceDocumentRef.current = serializeSourceDocument(
-      initialProfile.source.document,
-    );
-    previousReadyPreviewPdfUrlRef.current = buildPreviewPdfUrl(
-      initialProfile.latex.status === "ready"
-        ? initialProfile.latex.pdfUpdatedAt
-        : null,
+    lastSavedLatexCodeRef.current = resolvedLatexCode;
+    previousPreviewPdfUrlRef.current = buildPreviewPdfUrl(
+      initialProfile.latex.pdfUpdatedAt,
     );
     setIsPreviewCollapsed(false);
     setIsPreviewFrameLoading(false);
     setJobDescriptionState("idle");
-    setSourceState("idle");
+    setLatexState("idle");
   }, [initialProfile]);
 
   useLayoutEffect(() => {
-    if (!readyPreviewPdfUrl) {
-      previousReadyPreviewPdfUrlRef.current = null;
+    if (!previewPdfUrl) {
+      previousPreviewPdfUrlRef.current = null;
       setIsPreviewFrameLoading(false);
       return;
     }
 
-    if (!previousReadyPreviewPdfUrlRef.current) {
-      previousReadyPreviewPdfUrlRef.current = readyPreviewPdfUrl;
+    if (!previousPreviewPdfUrlRef.current) {
+      previousPreviewPdfUrlRef.current = previewPdfUrl;
       return;
     }
 
-    if (previousReadyPreviewPdfUrlRef.current !== readyPreviewPdfUrl) {
-      previousReadyPreviewPdfUrlRef.current = readyPreviewPdfUrl;
+    if (previousPreviewPdfUrlRef.current !== previewPdfUrl) {
+      previousPreviewPdfUrlRef.current = previewPdfUrl;
       setIsPreviewFrameLoading(true);
     }
-  }, [readyPreviewPdfUrl]);
+  }, [previewPdfUrl]);
 
   useEffect(() => {
     if (draftJobDescription === lastSavedJobDescriptionRef.current) {
@@ -263,29 +250,29 @@ export default function TailorResumeWorkspace({
   }, [draftJobDescription, jobDescriptionState]);
 
   useEffect(() => {
-    const serializedDraftSourceDocument = serializeSourceDocument(draftSourceDocument);
-
-    if (serializedDraftSourceDocument === lastSavedSourceDocumentRef.current) {
-      if (sourceState === "saving") {
-        setIsSavingSource(false);
-        setSourceState("saved");
+    if (draftLatexCode === lastSavedLatexCodeRef.current) {
+      if (latexState === "saving") {
+        setIsSavingLatex(false);
+        setLatexState("saved");
       }
       return;
     }
 
-    if (!draftSourceDocument) {
+    if (draftLatexCode.trim().length === 0) {
+      setIsSavingLatex(false);
+      setLatexState("idle");
       return;
     }
 
-    const sequence = sourceSaveSequenceRef.current + 1;
-    sourceSaveSequenceRef.current = sequence;
-    setIsSavingSource(true);
-    setSourceState("saving");
+    const sequence = latexSaveSequenceRef.current + 1;
+    latexSaveSequenceRef.current = sequence;
+    setIsSavingLatex(true);
+    setLatexState("saving");
 
     const timeoutId = window.setTimeout(async () => {
       try {
         const response = await fetch("/api/tailor-resume", {
-          body: JSON.stringify({ sourceDocument: draftSourceDocument }),
+          body: JSON.stringify({ latexCode: draftLatexCode }),
           headers: {
             "Content-Type": "application/json",
           },
@@ -297,31 +284,29 @@ export default function TailorResumeWorkspace({
         };
 
         if (!response.ok || !payload.profile) {
-          throw new Error(payload.error ?? "Unable to save resume corrections.");
+          throw new Error(payload.error ?? "Unable to save the LaTeX draft.");
         }
 
-        if (sourceSaveSequenceRef.current !== sequence) {
+        if (latexSaveSequenceRef.current !== sequence) {
           return;
         }
 
-        lastSavedSourceDocumentRef.current = serializeSourceDocument(
-          payload.profile.source.document,
-        );
+        const resolvedLatexCode = resolveSavedLatexCode(payload.profile);
+
+        lastSavedLatexCodeRef.current = resolvedLatexCode;
         setProfile(payload.profile);
-        setDraftSourceDocument(payload.profile.source.document);
-        setIsSavingSource(false);
-        setSourceState("saved");
+        setDraftLatexCode(resolvedLatexCode);
+        setIsSavingLatex(false);
+        setLatexState("saved");
       } catch (error) {
-        if (sourceSaveSequenceRef.current !== sequence) {
+        if (latexSaveSequenceRef.current !== sequence) {
           return;
         }
 
-        setIsSavingSource(false);
-        setSourceState("idle");
+        setIsSavingLatex(false);
+        setLatexState("idle");
         toast.error(
-          error instanceof Error
-            ? error.message
-            : "Unable to save resume corrections.",
+          error instanceof Error ? error.message : "Unable to save the LaTeX draft.",
         );
       }
     }, 700);
@@ -329,7 +314,7 @@ export default function TailorResumeWorkspace({
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [draftSourceDocument, sourceState]);
+  }, [draftLatexCode, latexState]);
 
   useEffect(() => {
     if (!isPreviewOpen) {
@@ -358,7 +343,7 @@ export default function TailorResumeWorkspace({
     }
 
     if (!openAIReady) {
-      toast.error("Add OPENAI_API_KEY before extracting resume structure.");
+      toast.error("Add OPENAI_API_KEY before extracting resume LaTeX.");
       return;
     }
 
@@ -382,22 +367,22 @@ export default function TailorResumeWorkspace({
         throw new Error(payload.error ?? "Unable to save the resume.");
       }
 
+      const resolvedLatexCode = resolveSavedLatexCode(payload.profile);
+
       setProfile(payload.profile);
-      setDraftSourceDocument(payload.profile.source.document);
-      lastSavedSourceDocumentRef.current = serializeSourceDocument(
-        payload.profile.source.document,
-      );
+      setDraftLatexCode(resolvedLatexCode);
+      lastSavedLatexCodeRef.current = resolvedLatexCode;
 
       if (payload.extractionError) {
         toast.error(
-          `Saved the resume, but extraction needs review: ${payload.extractionError}`,
+          `Saved the resume, but LaTeX extraction needs review: ${payload.extractionError}`,
         );
       } else if (payload.profile.latex.status === "failed") {
         toast.error(
-          "Saved the resume, but the preview needs a small rendering fix before it can display.",
+          "Saved the resume, but the extracted LaTeX still needs a rendering fix before the preview can display.",
         );
       } else {
-        toast.success("Saved the resume and built the editable resume draft.");
+        toast.success("Saved the resume and opened the extracted LaTeX draft.");
       }
     } catch (error) {
       toast.error(
@@ -418,7 +403,7 @@ export default function TailorResumeWorkspace({
     }
 
     if (!openAIReady) {
-      toast.error("Add OPENAI_API_KEY before extracting resume structure.");
+      toast.error("Add OPENAI_API_KEY before extracting resume LaTeX.");
       return;
     }
 
@@ -442,22 +427,22 @@ export default function TailorResumeWorkspace({
         throw new Error(payload.error ?? "Unable to re-extract the resume.");
       }
 
+      const resolvedLatexCode = resolveSavedLatexCode(payload.profile);
+
       setProfile(payload.profile);
-      setDraftSourceDocument(payload.profile.source.document);
-      lastSavedSourceDocumentRef.current = serializeSourceDocument(
-        payload.profile.source.document,
-      );
+      setDraftLatexCode(resolvedLatexCode);
+      lastSavedLatexCodeRef.current = resolvedLatexCode;
 
       if (payload.extractionError) {
         toast.error(
-          `Saved the resume, but extraction still failed: ${payload.extractionError}`,
+          `Saved the resume, but LaTeX extraction still failed: ${payload.extractionError}`,
         );
       } else if (payload.profile.latex.status === "failed") {
         toast.error(
-          "The resume was re-extracted, but the preview still needs a small rendering fix.",
+          "The resume was re-extracted, but the returned LaTeX still needs a rendering fix.",
         );
       } else {
-        toast.success("Re-extracted the resume and refreshed the editable draft.");
+        toast.success("Re-extracted the resume and refreshed the LaTeX draft.");
       }
     } catch (error) {
       toast.error(
@@ -505,23 +490,22 @@ export default function TailorResumeWorkspace({
       <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-            Resume editor
+            LaTeX source
           </p>
           <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-            Correct what the model got wrong
+            Edit the resume directly in LaTeX
           </h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">
-            Edit the structured resume directly. Drag the center divider to resize
-            the editor and preview, or collapse the preview from the handle when
-            you want full focus on the form.
+            This is now the real source of truth. The extracted LaTeX autosaves as
+            you type, then the PDF preview recompiles from that exact document.
           </p>
         </div>
 
         <div className="flex flex-wrap gap-2">
           <StatusPill>
-            {isSavingSource
+            {isSavingLatex
               ? "Saving..."
-              : sourceState === "saved"
+              : latexState === "saved"
                 ? "Saved"
                 : "Autosaves"}
           </StatusPill>
@@ -531,21 +515,33 @@ export default function TailorResumeWorkspace({
         </div>
       </div>
 
-      {draftSourceDocument ? (
-        <ResumeSourceEditor
-          disabled={editorDisabled}
-          onChange={setDraftSourceDocument}
-          value={draftSourceDocument}
-        />
-      ) : (
-        <div className="rounded-[1.25rem] border border-dashed border-white/12 bg-black/15 p-6 text-sm leading-6 text-zinc-400">
-          {resume
-            ? extraction.status === "failed"
-              ? "The resume is saved, but extraction failed. Use Re-extract after checking the file or your OpenAI setup."
-              : "The resume is saved, but there is no editable source document yet."
-            : "Upload a resume to populate the correction editor."}
+      <div className="flex min-h-[640px] flex-col overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3 text-xs uppercase tracking-[0.18em] text-zinc-500">
+          <span>
+            {draftLatexCode.trim().length > 0
+              ? `${draftLatexCode.split("\n").length} line${
+                  draftLatexCode.split("\n").length === 1 ? "" : "s"
+                } in the current source`
+              : "Upload a resume to seed the LaTeX editor"}
+          </span>
+          <span>Editing the left pane updates the compiled PDF on the right</span>
         </div>
-      )}
+
+        {draftLatexCode.trim().length > 0 || resume ? (
+          <textarea
+            className="min-h-[600px] w-full flex-1 resize-none bg-transparent px-4 py-4 font-mono text-[13px] leading-6 text-zinc-100 outline-none placeholder:text-zinc-500"
+            disabled={editorDisabled}
+            onChange={(event) => setDraftLatexCode(event.target.value)}
+            placeholder="Upload a resume to populate the LaTeX source."
+            spellCheck={false}
+            value={draftLatexCode}
+          />
+        ) : (
+          <div className="flex min-h-[600px] items-center justify-center p-6 text-center text-sm leading-6 text-zinc-400">
+            Upload a resume to generate the first LaTeX draft here.
+          </div>
+        )}
+      </div>
     </section>
   );
 
@@ -560,12 +556,13 @@ export default function TailorResumeWorkspace({
             Rendered PDF
           </h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-            Keep the PDF nearby while you edit, then drag the divider or collapse
-            the pane when you want the editor to take over the workspace.
+            The preview always compiles from the current saved LaTeX draft. If the
+            draft stops compiling, the error appears here so you can fix it in the
+            editor immediately.
           </p>
         </div>
 
-        {readyPreviewPdfUrl ? (
+        {hasPreviewPdf ? (
           <StatusPill>
             {isPreviewRefreshing
               ? "Updating preview..."
@@ -576,22 +573,22 @@ export default function TailorResumeWorkspace({
         ) : null}
       </div>
 
+      {profile.latex.status === "failed" && profile.latex.error ? (
+        <div className="mt-4 rounded-[1.1rem] border border-rose-400/20 bg-rose-400/10 p-4 text-sm leading-6 text-rose-100">
+          <p className="font-medium">The current LaTeX draft did not render cleanly.</p>
+          <pre className="mt-3 overflow-auto whitespace-pre-wrap font-mono text-xs leading-6 text-rose-200/90">
+            {profile.latex.error}
+          </pre>
+        </div>
+      ) : null}
+
       <div className="relative mt-4 flex min-h-[500px] flex-1 overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate">
-        {profile.latex.status === "failed" && profile.latex.error ? (
-          <div className="w-full overflow-auto p-4">
-            <p className="text-sm font-medium text-rose-100">
-              The current corrected resume did not render cleanly.
-            </p>
-            <pre className="mt-3 whitespace-pre-wrap font-mono text-xs leading-6 text-rose-200/90">
-              {profile.latex.error}
-            </pre>
-          </div>
-        ) : readyPreviewPdfUrl ? (
+        {previewPdfUrl ? (
           <div className="relative h-full min-h-[500px] w-full">
             <iframe
               className="relative z-0 h-full min-h-[500px] w-full bg-white"
               onLoad={() => setIsPreviewFrameLoading(false)}
-              src={readyPreviewPdfUrl}
+              src={previewPdfUrl}
               title="Compiled resume preview"
             />
 
@@ -608,7 +605,9 @@ export default function TailorResumeWorkspace({
             {resume
               ? extraction.status === "extracting"
                 ? "The preview will appear here as soon as extraction and rendering finish."
-                : "The preview will appear here after the next successful render."
+                : profile.latex.status === "failed" && profile.latex.error
+                  ? "Fix the LaTeX on the left, then the preview will return here after the next successful compile."
+                  : "The preview will appear here after the next successful render."
               : "Upload a resume to generate a live PDF preview."}
           </div>
         )}
@@ -629,8 +628,8 @@ export default function TailorResumeWorkspace({
                 Upload once, then replace whenever you want
               </h2>
               <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-400">
-                Replacing the saved file reruns extraction, rebuilds the editable
-                draft, and refreshes the PDF preview below.
+                Replacing the saved file reruns extraction, seeds a fresh LaTeX
+                draft, and refreshes the compiled preview below.
               </p>
             </div>
 
@@ -711,7 +710,7 @@ export default function TailorResumeWorkspace({
           ) : (
             <div className="mt-5 rounded-[1.35rem] border border-dashed border-white/12 bg-black/15 p-6 text-sm leading-6 text-zinc-400">
               No saved resume yet. Upload a PDF or image resume and the app will
-              keep the file, the editable source, and the preview on reload.
+              keep the file, the extracted LaTeX source, and the preview on reload.
             </div>
           )}
         </section>
@@ -720,15 +719,14 @@ export default function TailorResumeWorkspace({
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                Correction flow
+                LaTeX workflow
               </p>
               <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-                Fix the extracted resume directly
+                Extract once, then tailor the actual document
               </h2>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-                This editor is the real source of truth for future tailoring. Your
-                changes update the saved structured resume first, then the preview
-                regenerates from that corrected version.
+                The uploaded resume is converted straight into LaTeX. That LaTeX is
+                what you edit, save, and compile from here on out.
               </p>
             </div>
 
@@ -757,32 +755,32 @@ export default function TailorResumeWorkspace({
                       Source
                     </p>
                     <p className="mt-2 text-zinc-100">
-                      {profile.source.document
-                        ? `${profile.source.document.sections.length} section${
-                            profile.source.document.sections.length === 1 ? "" : "s"
-                          } ready to correct`
-                        : "Waiting for structure"}
+                      {draftLatexCode.trim().length > 0
+                        ? `${draftLatexCode.split("\n").length} editable line${
+                            draftLatexCode.split("\n").length === 1 ? "" : "s"
+                          }`
+                        : "Waiting for LaTeX"}
                     </p>
                     <p className="mt-2 text-zinc-500">
-                      {profile.source.updatedAt
-                        ? `Updated ${formatSavedAt(profile.source.updatedAt)}`
-                        : "No saved corrections yet"}
+                      {profile.latex.updatedAt
+                        ? `Updated ${formatSavedAt(profile.latex.updatedAt)}`
+                        : "No saved LaTeX yet"}
                     </p>
                   </div>
 
                   <div className="rounded-[1rem] border border-white/10 bg-black/20 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">
-                      Corrections
+                      Editing
                     </p>
                     <p className="mt-2 text-zinc-100">
-                      {isSavingSource
-                        ? "Saving your edits now"
-                        : sourceState === "saved"
-                          ? "Edits saved"
+                      {isSavingLatex
+                        ? "Saving your LaTeX now"
+                        : latexState === "saved"
+                          ? "Draft saved"
                           : "Autosaves as you work"}
                     </p>
                     <p className="mt-2 text-zinc-500">
-                      Edit the saved structure directly and let the preview keep up.
+                      Make changes in raw LaTeX and let the preview follow.
                     </p>
                   </div>
 
@@ -793,24 +791,24 @@ export default function TailorResumeWorkspace({
                     <p className="mt-2 text-zinc-100">
                       {isPreviewRefreshing
                         ? "Refreshing preview"
-                        : profile.latex.status === "ready"
+                        : previewPdfUrl
                           ? "PDF preview is ready"
-                        : profile.latex.status === "failed"
-                          ? "Preview needs a fix"
-                          : "Preview will appear after rendering"}
+                          : profile.latex.status === "failed"
+                            ? "Preview needs a fix"
+                            : "Preview will appear after rendering"}
                     </p>
                     <p className="mt-2 text-zinc-500">
                       {isPreviewRefreshing
                         ? "Keeping the current PDF visible while the update finishes."
                         : profile.latex.pdfUpdatedAt
-                        ? `Updated ${formatSavedAt(profile.latex.pdfUpdatedAt)}`
-                        : "Waiting for the next successful render"}
+                          ? `Updated ${formatSavedAt(profile.latex.pdfUpdatedAt)}`
+                          : "Waiting for the next successful render"}
                     </p>
                   </div>
                 </div>
               ) : extraction.status === "failed" ? (
                 <div className="space-y-2 text-sm leading-6 text-rose-100">
-                  <p>Extraction failed for the current resume.</p>
+                  <p>LaTeX extraction failed for the current resume.</p>
                   <p className="text-rose-200/80">
                     {extraction.error ?? "Try re-extracting the saved file."}
                   </p>
@@ -818,17 +816,17 @@ export default function TailorResumeWorkspace({
               ) : extraction.status === "extracting" ? (
                 <p className="text-sm leading-6 text-zinc-300">
                   The resume is being processed now. As soon as extraction finishes,
-                  the editor and PDF preview will appear below.
+                  the LaTeX editor and compiled preview will appear below.
                 </p>
               ) : (
                 <p className="text-sm leading-6 text-zinc-300">
-                  Upload a resume to generate the editable draft and preview.
+                  Upload a resume to generate the editable LaTeX draft and preview.
                 </p>
               )
             ) : (
               <p className="text-sm leading-6 text-zinc-300">
-                Upload a resume first. Once extraction finishes, the correction
-                editor and preview will persist here on reload.
+                Upload a resume first. Once extraction finishes, the LaTeX editor
+                and preview will persist here on reload.
               </p>
             )}
           </div>
@@ -918,7 +916,7 @@ export default function TailorResumeWorkspace({
         <textarea
           className="mt-5 min-h-[180px] w-full flex-1 resize-none rounded-[1.25rem] border border-white/10 bg-black/20 px-4 py-4 text-sm leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-300/45"
           onChange={(event) => setDraftJobDescription(event.target.value)}
-          placeholder="Paste the full job description here. This saves separately from the corrected resume source."
+          placeholder="Paste the full job description here. This saves separately from the LaTeX resume source."
           value={draftJobDescription}
         />
       </section>

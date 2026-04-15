@@ -1,139 +1,52 @@
 Tailor Resume object model:
 
-1. Extraction Document (`ResumeDocument`)
+1. Saved Resume Record (`SavedResumeRecord`)
 - File: `lib/tailor-resume-types.ts`
-- This is the deeply nested structured response returned from the first OpenAI extraction call.
-- It preserves the extractor-facing shape: `headerText`, `subHeadText`, `sections`, and nested `blocks`.
-- It is useful for capture fidelity and debugging, but it is not the long-term editing surface.
-- Condensed shape:
+- This tracks the uploaded source file under `public/uploads/resumes/<userId>/`.
+- It stores filename, mime type, size, storage path, and timestamp.
 
-```ts
-type ResumeDocument = {
-  headerText: ResumeRichText;
-  subHeadText: ResumeSubHeadLine[];
-  sections: {
-    sectionText: ResumeRichText;
-    blocks: ResumeSectionBlock[];
-  }[];
-};
-```
+2. Saved LaTeX (`TailorResumeLatexState`)
+- Files: `lib/tailor-resume-types.ts`, `app/api/tailor-resume/route.ts`
+- This is the only stored resume-content representation.
+- OpenAI extraction returns a small structured payload containing just `latexCode`.
+- The saved LaTeX lives in `latex.code`.
+- Main fields:
+  - `code`: the current saved LaTeX source of truth
+  - `status`: preview compile status
+  - `error`: last compile error when the draft does not render
+  - `pdfUpdatedAt`: timestamp of the last successfully compiled preview PDF
 
-2. Source Document (`TailorResumeSourceDocument`)
-- Files: `lib/tailor-resume-types.ts`, `lib/tailor-resume-source.ts`
-- This is the simplified, editable resume object created deterministically from the Extraction Document.
-- This is the product-facing source of truth for resume tailoring.
-- The UI edits this shape directly with stable ids on every editable unit and inline segment.
-- Main shape:
-  - `headerText`
-  - `subHeadLines[]`
-  - `sections[]`
-  - each section has `title` and `items[]`
-  - each item is `entry`, `paragraph`, or `labeled_line`
-  - each editable line is a `TailorResumeSourceUnit`
-  - each inline run is a `TailorResumeSourceSegment`
-- Condensed shape:
+3. Preview PDF (`Buffer`)
+- Files: `lib/tailor-resume-storage.ts`, `app/api/tailor-resume/preview/route.ts`
+- The preview PDF is compiled directly from `latex.code`.
+- Successful compiles overwrite `.job-helper-data/tailor-resumes/<userId>/preview.pdf`.
+- Failed edits keep the previous successful preview when one already exists.
 
-```ts
-type TailorResumeSourceDocument = {
-  version: 1;
-  headerText: TailorResumeSourceUnit;
-  subHeadLines: TailorResumeSourceUnit[];
-  sections: {
-    id: string;
-    title: TailorResumeSourceUnit;
-    items: TailorResumeSourceItem[];
-  }[];
-};
-
-type TailorResumeSourceItem =
-  | {
-      id: string;
-      itemType: "entry";
-      heading: TailorResumeSourceUnit;
-      dates: TailorResumeSourceUnit | null;
-      description: TailorResumeSourceUnit | null;
-      bulletLines: TailorResumeSourceUnit[];
-    }
-  | {
-      id: string;
-      itemType: "paragraph";
-      content: TailorResumeSourceUnit;
-    }
-  | {
-      id: string;
-      itemType: "labeled_line";
-      label: TailorResumeSourceUnit;
-      value: TailorResumeSourceUnit;
-    };
-
-type TailorResumeSourceUnit = {
-  id: string;
-  kind: TailorResumeSourceUnitKind;
-  indentLevel: number;
-  segments: TailorResumeSourceSegment[];
-};
-
-type TailorResumeSourceSegment = {
-  id: string;
-  segmentType: "text";
-  text: string;
-  isBold: boolean;
-  isItalic: boolean;
-  isUnderline: boolean;
-  isLinkStyle: boolean;
-  linkUrl: string | null;
-};
-```
-- Important rule:
-  - OpenAI tailoring should consume and patch this object, not raw LaTeX and not the original extraction shape.
-
-3. Rendered LaTeX Document (`string`)
-- File: `lib/tailor-resume-latex.ts`
-- This is the pure LaTeX string generated deterministically from the Source Document.
-- It is presentation output only.
-- The PDF preview is compiled from this string.
-- We do not parse edited LaTeX back into the Source Document.
-- Condensed shape:
-
-```ts
-type RenderedLatexDocument = string;
-```
-
-- Companion derived artifact:
-
-```ts
-type TailorResumePreviewPdf = Buffer;
-```
-
-Parsing/rendering flow:
+Current flow:
 
 1. Resume upload is saved locally.
-2. OpenAI extraction produces the Extraction Document (`ResumeDocument`).
-3. `normalizeResumeDocument(...)` converts that Extraction Document into the Source Document (`TailorResumeSourceDocument`).
-4. The dashboard rich-text editor edits the Source Document directly.
-5. `renderTailorResumeLatex(...)` converts the Source Document into the Rendered LaTeX Document.
-6. `compileTailorResumeLatex(...)` turns that LaTeX into the preview PDF.
+2. OpenAI extraction produces LaTeX directly.
+3. The extracted LaTeX is saved into `latex.code`.
+4. `compileTailorResumeLatex(...)` compiles that LaTeX into the preview PDF.
+5. The dashboard shows a split pane with raw LaTeX on the left and the rendered PDF on the right.
+6. User edits save `latex.code`, then the preview recompiles from that exact LaTeX.
 
-Why this split exists:
+Important rule:
 
-- `ResumeDocument -> TailorResumeSourceDocument` is deterministic and stable.
-- `TailorResumeSourceDocument -> LaTeX` is deterministic and stable.
-- `LaTeX -> TailorResumeSourceDocument` is intentionally unsupported because it is brittle and would break future tailoring correctness.
+- LaTeX is the authoritative editing surface.
+- Tailor Resume no longer stores or depends on a simplified structured resume object.
 
 Relevant code paths:
 
 - Extraction call: `lib/tailor-resume-extraction.ts`
-- Extraction schema + source schema: `lib/tailor-resume-types.ts`
-- Deterministic normalization: `lib/tailor-resume-source.ts`
-- Deterministic LaTeX rendering: `lib/tailor-resume-latex.ts`
+- Prompt reference example/template: `lib/tailor-resume-latex-example.ts`
+- LaTeX compile helper: `lib/tailor-resume-latex.ts`
 - Saved profile + preview persistence: `lib/tailor-resume-storage.ts`
 - API orchestration: `app/api/tailor-resume/route.ts`
 - Preview route: `app/api/tailor-resume/preview/route.ts`
-- Source editor UI: `components/resume-source-editor.tsx`
 - Tailor Resume workspace: `components/tailor-resume-workspace.tsx`
+- Raw LaTeX debug workspace: `components/debug-latex-workspace.tsx`
 
 Testing:
 
-- Henry reference fixture source object: `tests/fixtures/tailor-resume/henry-deutsch-source.ts`
-- Henry reference expected LaTeX: `tests/fixtures/tailor-resume/henry-deutsch-latex.ts`
-- Deterministic renderer regression test: `tests/tailor-resume-latex.test.mts`
+- Legacy profile compatibility + LaTeX-only defaults: `tests/tailor-resume-profile.test.mts`

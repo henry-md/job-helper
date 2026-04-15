@@ -1,135 +1,3 @@
-export type ResumeSegmentType = "text";
-
-export type ResumeTextSegment = {
-  isBold: boolean;
-  isItalic: boolean;
-  isLinkStyle: boolean;
-  linkUrl: string | null;
-  segmentType: ResumeSegmentType;
-  text: string;
-};
-
-export type ResumeRichText = {
-  segments: ResumeTextSegment[];
-};
-
-export type ResumeIndentedRichText = {
-  indentLevel: number;
-  segments: ResumeTextSegment[];
-};
-
-export type ResumeSubHeadSeparator = "bullet" | "pipe" | null;
-
-export type ResumeSubHeadLine = {
-  lineItems: ResumeRichText[];
-  separatorBetweenItems: ResumeSubHeadSeparator;
-};
-
-export type ResumeEntryBlock = {
-  blockType: "entry";
-  subSectionBullets: ResumeIndentedRichText[];
-  subSectionDates: ResumeRichText | null;
-  subSectionDescription: ResumeIndentedRichText[];
-  subSectionText: ResumeRichText;
-};
-
-export type ResumeParagraphBlock = {
-  blockType: "paragraph";
-  content: ResumeIndentedRichText;
-};
-
-export type ResumeLabeledLineBlock = {
-  blockType: "labeled_line";
-  label: ResumeRichText;
-  value: ResumeRichText;
-};
-
-export type ResumeSectionBlock =
-  | ResumeEntryBlock
-  | ResumeParagraphBlock
-  | ResumeLabeledLineBlock;
-
-export type ResumeSection = {
-  blocks: ResumeSectionBlock[];
-  sectionText: ResumeRichText;
-};
-
-export type ResumeDocument = {
-  headerText: ResumeRichText;
-  sections: ResumeSection[];
-  subHeadText: ResumeSubHeadLine[];
-};
-
-export type TailorResumeSourceSegment = {
-  id: string;
-  isBold: boolean;
-  isItalic: boolean;
-  isLinkStyle: boolean;
-  isUnderline: boolean;
-  linkUrl: string | null;
-  segmentType: ResumeSegmentType;
-  text: string;
-};
-
-export type TailorResumeSourceUnitKind =
-  | "bullet"
-  | "entry_description"
-  | "entry_dates"
-  | "entry_heading"
-  | "header_text"
-  | "labeled_line_label"
-  | "labeled_line_value"
-  | "paragraph"
-  | "section_title"
-  | "sub_head_line";
-
-export type TailorResumeSourceUnit = {
-  id: string;
-  indentLevel: number;
-  kind: TailorResumeSourceUnitKind;
-  segments: TailorResumeSourceSegment[];
-};
-
-export type TailorResumeSourceEntryItem = {
-  bulletLines: TailorResumeSourceUnit[];
-  dates: TailorResumeSourceUnit | null;
-  description: TailorResumeSourceUnit | null;
-  heading: TailorResumeSourceUnit;
-  id: string;
-  itemType: "entry";
-};
-
-export type TailorResumeSourceParagraphItem = {
-  content: TailorResumeSourceUnit;
-  id: string;
-  itemType: "paragraph";
-};
-
-export type TailorResumeSourceLabeledLineItem = {
-  id: string;
-  itemType: "labeled_line";
-  label: TailorResumeSourceUnit;
-  value: TailorResumeSourceUnit;
-};
-
-export type TailorResumeSourceItem =
-  | TailorResumeSourceEntryItem
-  | TailorResumeSourceParagraphItem
-  | TailorResumeSourceLabeledLineItem;
-
-export type TailorResumeSourceSection = {
-  id: string;
-  items: TailorResumeSourceItem[];
-  title: TailorResumeSourceUnit;
-};
-
-export type TailorResumeSourceDocument = {
-  headerText: TailorResumeSourceUnit;
-  sections: TailorResumeSourceSection[];
-  subHeadLines: TailorResumeSourceUnit[];
-  version: 1;
-};
-
 export type SavedResumeRecord = {
   mimeType: string;
   originalFilename: string;
@@ -145,17 +13,9 @@ export type TailorResumeExtractionStatus =
   | "extracting";
 
 export type TailorResumeExtractionState = {
-  editedDocument: ResumeDocument | null;
   error: string | null;
-  extractedDocument: ResumeDocument | null;
   model: string | null;
-  rawText: string | null;
   status: TailorResumeExtractionStatus;
-  updatedAt: string | null;
-};
-
-export type TailorResumeSourceState = {
-  document: TailorResumeSourceDocument | null;
   updatedAt: string | null;
 };
 
@@ -166,9 +26,8 @@ export type TailorResumeLatexStatus =
   | "ready";
 
 export type TailorResumeLatexState = {
-  draftCode: string;
+  code: string;
   error: string | null;
-  generatedCode: string | null;
   pdfUpdatedAt: string | null;
   status: TailorResumeLatexStatus;
   updatedAt: string | null;
@@ -179,38 +38,10 @@ export type TailorResumeProfile = {
   jobDescription: string;
   latex: TailorResumeLatexState;
   resume: SavedResumeRecord | null;
-  source: TailorResumeSourceState;
 };
-
-const separatorBetweenItemValues = new Set<ResumeSubHeadSeparator>([
-  null,
-  "bullet",
-  "pipe",
-]);
-const segmentTypeValues = new Set<ResumeSegmentType>(["text"]);
-const sourceUnitKindValues = new Set<TailorResumeSourceUnitKind>([
-  "bullet",
-  "entry_description",
-  "entry_dates",
-  "entry_heading",
-  "header_text",
-  "labeled_line_label",
-  "labeled_line_value",
-  "paragraph",
-  "section_title",
-  "sub_head_line",
-]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-function readBoolean(value: unknown, fallback = false) {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function readInteger(value: unknown, fallback = 0) {
-  return typeof value === "number" && Number.isInteger(value) ? value : fallback;
 }
 
 function readNullableString(value: unknown) {
@@ -221,159 +52,19 @@ function readString(value: unknown, fallback = "") {
   return typeof value === "string" ? value : fallback;
 }
 
-export function createEmptyResumeTextSegment(): ResumeTextSegment {
-  return {
-    isBold: false,
-    isItalic: false,
-    isLinkStyle: false,
-    linkUrl: null,
-    segmentType: "text",
-    text: "",
-  };
-}
-
-export function createEmptyResumeRichText(): ResumeRichText {
-  return {
-    segments: [createEmptyResumeTextSegment()],
-  };
-}
-
-export function createEmptyResumeIndentedRichText(
-  indentLevel = 0,
-): ResumeIndentedRichText {
-  return {
-    indentLevel,
-    segments: [createEmptyResumeTextSegment()],
-  };
-}
-
-export function createEmptyResumeEntryBlock(): ResumeEntryBlock {
-  return {
-    blockType: "entry",
-    subSectionBullets: [createEmptyResumeIndentedRichText(1)],
-    subSectionDates: createEmptyResumeRichText(),
-    subSectionDescription: [createEmptyResumeIndentedRichText(0)],
-    subSectionText: createEmptyResumeRichText(),
-  };
-}
-
-export function createEmptyResumeParagraphBlock(): ResumeParagraphBlock {
-  return {
-    blockType: "paragraph",
-    content: createEmptyResumeIndentedRichText(0),
-  };
-}
-
-export function createEmptyResumeLabeledLineBlock(): ResumeLabeledLineBlock {
-  return {
-    blockType: "labeled_line",
-    label: createEmptyResumeRichText(),
-    value: createEmptyResumeRichText(),
-  };
-}
-
-export function createEmptyResumeSection(): ResumeSection {
-  return {
-    blocks: [createEmptyResumeEntryBlock()],
-    sectionText: createEmptyResumeRichText(),
-  };
-}
-
-export function createEmptyResumeDocument(): ResumeDocument {
-  return {
-    headerText: createEmptyResumeRichText(),
-    sections: [createEmptyResumeSection()],
-    subHeadText: [
-      {
-        lineItems: [createEmptyResumeRichText()],
-        separatorBetweenItems: "bullet",
-      },
-    ],
-  };
-}
-
-function createEmptyTailorResumeSourceSegment(
-  id = "segment",
-): TailorResumeSourceSegment {
-  return {
-    id,
-    isBold: false,
-    isItalic: false,
-    isLinkStyle: false,
-    isUnderline: false,
-    linkUrl: null,
-    segmentType: "text",
-    text: "",
-  };
-}
-
-function createEmptyTailorResumeSourceUnit(
-  id = "unit",
-  kind: TailorResumeSourceUnitKind = "paragraph",
-  indentLevel = 0,
-): TailorResumeSourceUnit {
-  return {
-    id,
-    indentLevel,
-    kind,
-    segments: [createEmptyTailorResumeSourceSegment(`${id}_seg_01`)],
-  };
-}
-
-function createEmptyTailorResumeSourceDocument(): TailorResumeSourceDocument {
-  return {
-    headerText: createEmptyTailorResumeSourceUnit("header_text", "header_text"),
-    sections: [
-      {
-        id: "section_01",
-        items: [
-          {
-            bulletLines: [],
-            dates: null,
-            description: null,
-            heading: createEmptyTailorResumeSourceUnit(
-              "section_01_item_01_heading",
-              "entry_heading",
-            ),
-            id: "section_01_item_01",
-            itemType: "entry",
-          },
-        ],
-        title: createEmptyTailorResumeSourceUnit(
-          "section_01_title",
-          "section_title",
-        ),
-      },
-    ],
-    subHeadLines: [createEmptyTailorResumeSourceUnit("sub_head_line_01", "sub_head_line")],
-    version: 1,
-  };
-}
-
 export function emptyTailorResumeExtractionState(): TailorResumeExtractionState {
   return {
-    editedDocument: null,
     error: null,
-    extractedDocument: null,
     model: null,
-    rawText: null,
     status: "idle",
-    updatedAt: null,
-  };
-}
-
-export function emptyTailorResumeSourceState(): TailorResumeSourceState {
-  return {
-    document: null,
     updatedAt: null,
   };
 }
 
 export function emptyTailorResumeLatexState(): TailorResumeLatexState {
   return {
-    draftCode: "",
+    code: "",
     error: null,
-    generatedCode: null,
     pdfUpdatedAt: null,
     status: "idle",
     updatedAt: null,
@@ -386,432 +77,6 @@ export function emptyTailorResumeProfile(): TailorResumeProfile {
     jobDescription: "",
     latex: emptyTailorResumeLatexState(),
     resume: null,
-    source: emptyTailorResumeSourceState(),
-  };
-}
-
-export function serializeResumeDocument(document: ResumeDocument | null) {
-  return document ? JSON.stringify(document) : "";
-}
-
-function parseResumeTextSegment(value: unknown): ResumeTextSegment {
-  if (!isRecord(value)) {
-    return createEmptyResumeTextSegment();
-  }
-
-  const rawSegmentType = value.segmentType;
-  const segmentType = segmentTypeValues.has(rawSegmentType as ResumeSegmentType)
-    ? (rawSegmentType as ResumeSegmentType)
-    : "text";
-  const text = readString(value.text);
-
-  return {
-    isBold: readBoolean(value.isBold),
-    isItalic: readBoolean(value.isItalic),
-    isLinkStyle: readBoolean(value.isLinkStyle),
-    linkUrl: readNullableString(value.linkUrl),
-    segmentType,
-    text,
-  };
-}
-
-export function parseResumeRichText(value: unknown): ResumeRichText {
-  if (!isRecord(value)) {
-    return createEmptyResumeRichText();
-  }
-
-  const segments = Array.isArray(value.segments)
-    ? value.segments.map(parseResumeTextSegment)
-    : [];
-
-  return {
-    segments: segments.length > 0 ? segments : [createEmptyResumeTextSegment()],
-  };
-}
-
-export function parseResumeIndentedRichText(
-  value: unknown,
-): ResumeIndentedRichText {
-  if (!isRecord(value)) {
-    return createEmptyResumeIndentedRichText();
-  }
-
-  return {
-    indentLevel: Math.max(0, Math.min(3, readInteger(value.indentLevel))),
-    segments: parseResumeRichText(value).segments,
-  };
-}
-
-function parseResumeSubHeadLine(value: unknown): ResumeSubHeadLine {
-  if (!isRecord(value)) {
-    return {
-      lineItems: [createEmptyResumeRichText()],
-      separatorBetweenItems: "bullet",
-    };
-  }
-
-  const lineItems = Array.isArray(value.lineItems)
-    ? value.lineItems.map(parseResumeRichText)
-    : [];
-  const separatorBetweenItems = separatorBetweenItemValues.has(
-    (value.separatorBetweenItems as ResumeSubHeadSeparator) ?? null,
-  )
-    ? ((value.separatorBetweenItems as ResumeSubHeadSeparator) ?? null)
-    : null;
-
-  return {
-    lineItems: lineItems.length > 0 ? lineItems : [createEmptyResumeRichText()],
-    separatorBetweenItems,
-  };
-}
-
-function parseResumeSectionBlock(value: unknown): ResumeSectionBlock {
-  if (!isRecord(value) || typeof value.blockType !== "string") {
-    return createEmptyResumeParagraphBlock();
-  }
-
-  if (value.blockType === "entry") {
-    return {
-      blockType: "entry",
-      subSectionBullets: Array.isArray(value.subSectionBullets)
-        ? value.subSectionBullets.map(parseResumeIndentedRichText)
-        : [],
-      subSectionDates: value.subSectionDates
-        ? parseResumeRichText(value.subSectionDates)
-        : null,
-      subSectionDescription: Array.isArray(value.subSectionDescription)
-        ? value.subSectionDescription.map(parseResumeIndentedRichText)
-        : [],
-      subSectionText: parseResumeRichText(value.subSectionText),
-    };
-  }
-
-  if (value.blockType === "labeled_line") {
-    return {
-      blockType: "labeled_line",
-      label: parseResumeRichText(value.label),
-      value: parseResumeRichText(value.value),
-    };
-  }
-
-  return {
-    blockType: "paragraph",
-    content: parseResumeIndentedRichText(value.content),
-  };
-}
-
-function parseResumeSection(value: unknown): ResumeSection {
-  if (!isRecord(value)) {
-    return createEmptyResumeSection();
-  }
-
-  const blocks = Array.isArray(value.blocks)
-    ? value.blocks.map(parseResumeSectionBlock)
-    : [];
-
-  return {
-    blocks: blocks.length > 0 ? blocks : [createEmptyResumeParagraphBlock()],
-    sectionText: parseResumeRichText(value.sectionText),
-  };
-}
-
-export function parseResumeDocument(value: unknown): ResumeDocument {
-  if (!isRecord(value)) {
-    return createEmptyResumeDocument();
-  }
-
-  const sections = Array.isArray(value.sections)
-    ? value.sections.map(parseResumeSection)
-    : [];
-  const subHeadText = Array.isArray(value.subHeadText)
-    ? value.subHeadText.map(parseResumeSubHeadLine)
-    : [];
-
-  return {
-    headerText: parseResumeRichText(value.headerText),
-    sections: sections.length > 0 ? sections : [createEmptyResumeSection()],
-    subHeadText,
-  };
-}
-
-function parseTailorResumeSourceSegment(
-  value: unknown,
-  fallbackId: string,
-): TailorResumeSourceSegment {
-  if (!isRecord(value)) {
-    return createEmptyTailorResumeSourceSegment(fallbackId);
-  }
-
-  const rawSegmentType = value.segmentType;
-  const segmentType = segmentTypeValues.has(rawSegmentType as ResumeSegmentType)
-    ? (rawSegmentType as ResumeSegmentType)
-    : "text";
-
-  return {
-    id: readString(value.id, fallbackId),
-    isBold: readBoolean(value.isBold),
-    isItalic: readBoolean(value.isItalic),
-    isLinkStyle: readBoolean(value.isLinkStyle),
-    isUnderline: readBoolean(value.isUnderline),
-    linkUrl: readNullableString(value.linkUrl),
-    segmentType,
-    text: readString(value.text),
-  };
-}
-
-function parseTailorResumeSourceUnit(
-  value: unknown,
-  fallbackId: string,
-  fallbackKind: TailorResumeSourceUnitKind,
-): TailorResumeSourceUnit {
-  if (!isRecord(value)) {
-    return createEmptyTailorResumeSourceUnit(fallbackId, fallbackKind);
-  }
-
-  const rawKind = value.kind;
-  const kind = sourceUnitKindValues.has(rawKind as TailorResumeSourceUnitKind)
-    ? (rawKind as TailorResumeSourceUnitKind)
-    : fallbackKind;
-  const id = readString(value.id, fallbackId);
-  const segments = Array.isArray(value.segments)
-    ? value.segments.map((segment, index) =>
-        parseTailorResumeSourceSegment(segment, `${id}_seg_${String(index + 1).padStart(2, "0")}`),
-      )
-    : [];
-
-  return {
-    id,
-    indentLevel: Math.max(0, Math.min(3, readInteger(value.indentLevel))),
-    kind,
-    segments:
-      segments.length > 0
-        ? segments
-        : [createEmptyTailorResumeSourceSegment(`${id}_seg_01`)],
-  };
-}
-
-function hasMeaningfulSourceUnit(unit: TailorResumeSourceUnit) {
-  return unit.segments.some((segment) => segment.text.trim().length > 0);
-}
-
-function mergeTailorResumeSourceUnits(
-  units: TailorResumeSourceUnit[],
-  fallbackId: string,
-  fallbackKind: TailorResumeSourceUnitKind,
-) {
-  const nonEmptyUnits = units.filter(hasMeaningfulSourceUnit);
-
-  if (nonEmptyUnits.length === 0) {
-    return null;
-  }
-
-  const mergedSegments: TailorResumeSourceSegment[] = [];
-
-  nonEmptyUnits.forEach((unit, unitIndex) => {
-    if (unitIndex > 0) {
-      mergedSegments.push({
-        id: `${fallbackId}_seg_${String(mergedSegments.length + 1).padStart(2, "0")}`,
-        isBold: false,
-        isItalic: false,
-        isLinkStyle: false,
-        isUnderline: false,
-        linkUrl: null,
-        segmentType: "text",
-        text: " ",
-      });
-    }
-
-    unit.segments.forEach((segment) => {
-      mergedSegments.push({
-        ...segment,
-        id: `${fallbackId}_seg_${String(mergedSegments.length + 1).padStart(2, "0")}`,
-      });
-    });
-  });
-
-  return {
-    id: fallbackId,
-    indentLevel: 0,
-    kind: fallbackKind,
-    segments: mergedSegments,
-  };
-}
-
-function parseTailorResumeSourceItem(
-  value: unknown,
-  fallbackId: string,
-): TailorResumeSourceItem {
-  if (!isRecord(value) || typeof value.itemType !== "string") {
-    return {
-      content: createEmptyTailorResumeSourceUnit(
-        `${fallbackId}_content`,
-        "paragraph",
-      ),
-      id: fallbackId,
-      itemType: "paragraph",
-    };
-  }
-
-  const id = readString(value.id, fallbackId);
-
-  if (value.itemType === "entry") {
-    const legacyDescriptionUnits = Array.isArray(value.descriptionLines)
-      ? value.descriptionLines.map((unit, index) =>
-          parseTailorResumeSourceUnit(
-            unit,
-            `${id}_description_${String(index + 1).padStart(2, "0")}`,
-            "entry_description",
-          ),
-        )
-      : [];
-
-    return {
-      bulletLines: Array.isArray(value.bulletLines)
-        ? value.bulletLines.map((unit, index) =>
-            parseTailorResumeSourceUnit(
-              unit,
-              `${id}_bullet_${String(index + 1).padStart(2, "0")}`,
-              "bullet",
-            ),
-          )
-        : [],
-      dates: value.dates
-        ? parseTailorResumeSourceUnit(value.dates, `${id}_dates`, "entry_dates")
-        : null,
-      description: value.description
-        ? parseTailorResumeSourceUnit(
-            value.description,
-            `${id}_description`,
-            "entry_description",
-          )
-        : mergeTailorResumeSourceUnits(
-            legacyDescriptionUnits,
-            `${id}_description`,
-            "entry_description",
-          ),
-      heading: parseTailorResumeSourceUnit(
-        value.heading,
-        `${id}_heading`,
-        "entry_heading",
-      ),
-      id,
-      itemType: "entry",
-    };
-  }
-
-  if (value.itemType === "labeled_line") {
-    return {
-      id,
-      itemType: "labeled_line",
-      label: parseTailorResumeSourceUnit(
-        value.label,
-        `${id}_label`,
-        "labeled_line_label",
-      ),
-      value: parseTailorResumeSourceUnit(
-        value.value,
-        `${id}_value`,
-        "labeled_line_value",
-      ),
-    };
-  }
-
-  return {
-    content: parseTailorResumeSourceUnit(
-      value.content,
-      `${id}_content`,
-      "paragraph",
-    ),
-    id,
-    itemType: "paragraph",
-  };
-}
-
-function parseTailorResumeSourceSection(
-  value: unknown,
-  fallbackId: string,
-): TailorResumeSourceSection {
-  if (!isRecord(value)) {
-    return {
-      id: fallbackId,
-      items: [parseTailorResumeSourceItem(null, `${fallbackId}_item_01`)],
-      title: createEmptyTailorResumeSourceUnit(
-        `${fallbackId}_title`,
-        "section_title",
-      ),
-    };
-  }
-
-  const id = readString(value.id, fallbackId);
-  const items = Array.isArray(value.items)
-    ? value.items.map((item, index) =>
-        parseTailorResumeSourceItem(
-          item,
-          `${id}_item_${String(index + 1).padStart(2, "0")}`,
-        ),
-      )
-    : [];
-
-  return {
-    id,
-    items:
-      items.length > 0 ? items : [parseTailorResumeSourceItem(null, `${id}_item_01`)],
-    title: parseTailorResumeSourceUnit(
-      value.title,
-      `${id}_title`,
-      "section_title",
-    ),
-  };
-}
-
-export function parseTailorResumeSourceDocument(
-  value: unknown,
-): TailorResumeSourceDocument {
-  if (!isRecord(value)) {
-    return createEmptyTailorResumeSourceDocument();
-  }
-
-  const headerValue = isRecord(value.header) ? value.header : null;
-  const legacyHeaderLines = Array.isArray(headerValue?.lines)
-    ? headerValue.lines.map((line, index) =>
-        parseTailorResumeSourceUnit(
-          line,
-          `sub_head_line_${String(index + 1).padStart(2, "0")}`,
-          "sub_head_line",
-        ),
-      )
-    : [];
-  const subHeadLines = Array.isArray(value.subHeadLines)
-    ? value.subHeadLines.map((line, index) =>
-        parseTailorResumeSourceUnit(
-          line,
-          `sub_head_line_${String(index + 1).padStart(2, "0")}`,
-          "sub_head_line",
-        ),
-      )
-    : legacyHeaderLines;
-  const sections = Array.isArray(value.sections)
-    ? value.sections.map((section, index) =>
-        parseTailorResumeSourceSection(
-          section,
-          `section_${String(index + 1).padStart(2, "0")}`,
-        ),
-      )
-    : [];
-
-  return {
-    headerText: parseTailorResumeSourceUnit(
-      value.headerText ?? headerValue?.name,
-      "header_text",
-      "header_text",
-    ),
-    sections:
-      sections.length > 0 ? sections : createEmptyTailorResumeSourceDocument().sections,
-    subHeadLines:
-      subHeadLines.length > 0
-        ? subHeadLines
-        : [createEmptyTailorResumeSourceUnit("sub_head_line_01", "sub_head_line")],
-    version: value.version === 1 ? 1 : 1,
   };
 }
 
@@ -859,27 +124,9 @@ function parseTailorResumeExtractionState(
       : "idle";
 
   return {
-    editedDocument: value.editedDocument
-      ? parseResumeDocument(value.editedDocument)
-      : null,
     error: readNullableString(value.error),
-    extractedDocument: value.extractedDocument
-      ? parseResumeDocument(value.extractedDocument)
-      : null,
     model: readNullableString(value.model),
-    rawText: readNullableString(value.rawText),
     status,
-    updatedAt: readNullableString(value.updatedAt),
-  };
-}
-
-function parseTailorResumeSourceState(value: unknown): TailorResumeSourceState {
-  if (!isRecord(value)) {
-    return emptyTailorResumeSourceState();
-  }
-
-  return {
-    document: value.document ? parseTailorResumeSourceDocument(value.document) : null,
     updatedAt: readNullableString(value.updatedAt),
   };
 }
@@ -897,11 +144,14 @@ function parseTailorResumeLatexState(value: unknown): TailorResumeLatexState {
     rawStatus === "idle"
       ? rawStatus
       : "idle";
+  const rawCode = readString(value.code);
+  const legacyDraftCode = readString(value.draftCode);
+  const legacyGeneratedCode = readString(value.generatedCode);
+  const code = rawCode || legacyDraftCode || legacyGeneratedCode;
 
   return {
-    draftCode: readString(value.draftCode),
+    code,
     error: readNullableString(value.error),
-    generatedCode: readNullableString(value.generatedCode),
     pdfUpdatedAt: readNullableString(value.pdfUpdatedAt),
     status,
     updatedAt: readNullableString(value.updatedAt),
@@ -918,6 +168,5 @@ export function parseTailorResumeProfile(value: unknown): TailorResumeProfile {
     jobDescription: readString(value.jobDescription),
     latex: parseTailorResumeLatexState(value.latex),
     resume: parseSavedResumeRecord(value.resume),
-    source: parseTailorResumeSourceState(value.source),
   };
 }
