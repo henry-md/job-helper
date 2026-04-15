@@ -1,3 +1,9 @@
+import type {
+  TailorResumeLatexDocumentValidationResult,
+  TailorResumeLinkValidationEntry,
+  TailorResumeLinkValidationSummary,
+} from "@/lib/tailor-resume-link-validation";
+
 export const maxResumeLatexAttempts = 3;
 export const resumeLatexValidationToolName = "validate_resume_latex";
 
@@ -5,7 +11,7 @@ export const resumeLatexValidationTool = {
   type: "function",
   name: resumeLatexValidationToolName,
   description:
-    "Compile a full standalone LaTeX resume candidate with pdflatex and return any compile error so it can be fixed.",
+    "Compile a full standalone LaTeX resume candidate with pdflatex, validate any extracted hyperlinks, and return exact issues so they can be fixed.",
   strict: true,
   parameters: {
     type: "object",
@@ -69,7 +75,9 @@ export type RunResumeLatexToolLoopArgs = {
   }) => Promise<ResumeLatexLoopResponse>;
   fallbackModel: string;
   maxAttempts?: number;
-  validateLatex: (latexCode: string) => Promise<Buffer>;
+  validateLatex: (
+    latexCode: string,
+  ) => Promise<TailorResumeLatexDocumentValidationResult>;
 };
 
 export type RunResumeLatexToolLoopResult = {
@@ -77,10 +85,12 @@ export type RunResumeLatexToolLoopResult = {
   attemptEvents: Array<{
     attempt: number;
     error: string | null;
+    linkSummary: TailorResumeLinkValidationSummary | null;
     outcome: "failed" | "succeeded";
     willRetry: boolean;
   }>;
   latexCode: string;
+  linkSummary: TailorResumeLinkValidationSummary | null;
   model: string;
   previewPdf: Buffer | null;
   validationError: string | null;
@@ -147,19 +157,23 @@ function buildRetryMessage(error: string): ResumeLatexRetryMessage[] {
 function buildValidationFailureOutput(input: {
   attempt: number;
   callId: string;
-  error: string;
+  validation: Extract<TailorResumeLatexDocumentValidationResult, { ok: false }>;
   maxAttempts: number;
 }): ResumeLatexFunctionCallOutput[] {
+  const failedLinks = readFailedLinks(input.validation.links);
+
   return [
     {
       type: "function_call_output",
       call_id: input.callId,
       output: JSON.stringify({
         attempt: input.attempt,
-        error: input.error,
+        error: input.validation.error,
+        failedLinks,
         instruction:
-          "Revise the full LaTeX document, preserve the visible resume content, and call validate_resume_latex again with the complete corrected latexCode.",
-        ok: false,
+          "Revise the full LaTeX document, preserve the visible resume content, and call validate_resume_latex again with the complete corrected latexCode. If a link fails validation, keep the visible text but remove hyperlink-specific styling instead of guessing a new destination.",
+        linkSummary: input.validation.linkSummary,
+        ok: input.validation.ok,
         remainingAttempts: input.maxAttempts - input.attempt,
       }),
     },
@@ -199,6 +213,16 @@ function findResumeLatexToolCall(
   return null;
 }
 
+function readFailedLinks(links: TailorResumeLinkValidationEntry[]) {
+  return links
+    .filter((link) => link.outcome === "failed")
+    .map((link) => ({
+      displayText: link.displayText,
+      reason: link.reason,
+      url: link.url,
+    }));
+}
+
 export async function runResumeLatexToolLoop(
   args: RunResumeLatexToolLoopArgs,
 ): Promise<RunResumeLatexToolLoopResult> {
@@ -208,6 +232,7 @@ export async function runResumeLatexToolLoop(
   let nextInput: ResumeLatexLoopInput | undefined;
   let lastError: string | null = null;
   let lastLatexCode: string | null = null;
+  let lastLinkSummary: TailorResumeLinkValidationSummary | null = null;
   let resolvedModel: string | null = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -233,7 +258,27 @@ export async function runResumeLatexToolLoop(
         try {
           const fallbackLatexCode = readExtractedLatexCode(JSON.parse(outputText));
           lastLatexCode = fallbackLatexCode;
-          const previewPdf = await args.validateLatex(fallbackLatexCode);
+          const validation = await args.validateLatex(fallbackLatexCode);
+          lastLinkSummary = validation.linkSummary;
+
+          if (!validation.ok) {
+            lastError = validation.error;
+
+            attemptEvents.push({
+              attempt,
+              error: lastError,
+              linkSummary: validation.linkSummary,
+              outcome: "failed",
+              willRetry: attempt < maxAttempts,
+            });
+
+            if (attempt === maxAttempts) {
+              break;
+            }
+
+            nextInput = buildRetryMessage(lastError);
+            continue;
+          }
 
           return {
             attempts: attempt,
@@ -242,13 +287,15 @@ export async function runResumeLatexToolLoop(
               {
                 attempt,
                 error: null,
+                linkSummary: validation.linkSummary,
                 outcome: "succeeded",
                 willRetry: false,
               },
             ],
             latexCode: fallbackLatexCode,
+            linkSummary: validation.linkSummary,
             model: resolvedModel ?? args.fallbackModel,
-            previewPdf,
+            previewPdf: validation.previewPdf,
             validationError: null,
           };
         } catch (error) {
@@ -264,6 +311,7 @@ export async function runResumeLatexToolLoop(
       attemptEvents.push({
         attempt,
         error: lastError,
+        linkSummary: lastLinkSummary,
         outcome: "failed",
         willRetry: attempt < maxAttempts,
       });
@@ -279,7 +327,32 @@ export async function runResumeLatexToolLoop(
     try {
       const latexCode = readExtractedLatexCode(JSON.parse(toolCall.arguments));
       lastLatexCode = latexCode;
-      const previewPdf = await args.validateLatex(latexCode);
+      const validation = await args.validateLatex(latexCode);
+      lastLinkSummary = validation.linkSummary;
+
+      if (!validation.ok) {
+        lastError = validation.error;
+
+        attemptEvents.push({
+          attempt,
+          error: lastError,
+          linkSummary: validation.linkSummary,
+          outcome: "failed",
+          willRetry: attempt < maxAttempts,
+        });
+
+        if (attempt === maxAttempts) {
+          break;
+        }
+
+        nextInput = buildValidationFailureOutput({
+          attempt,
+          callId: toolCall.call_id,
+          maxAttempts,
+          validation,
+        });
+        continue;
+      }
 
       return {
         attempts: attempt,
@@ -288,13 +361,15 @@ export async function runResumeLatexToolLoop(
           {
             attempt,
             error: null,
+            linkSummary: validation.linkSummary,
             outcome: "succeeded",
             willRetry: false,
           },
         ],
         latexCode,
+        linkSummary: validation.linkSummary,
         model: resolvedModel ?? args.fallbackModel,
-        previewPdf,
+        previewPdf: validation.previewPdf,
         validationError: null,
       };
     } catch (error) {
@@ -306,6 +381,7 @@ export async function runResumeLatexToolLoop(
       attemptEvents.push({
         attempt,
         error: lastError,
+        linkSummary: lastLinkSummary,
         outcome: "failed",
         willRetry: attempt < maxAttempts,
       });
@@ -314,12 +390,7 @@ export async function runResumeLatexToolLoop(
         break;
       }
 
-      nextInput = buildValidationFailureOutput({
-        attempt,
-        callId: toolCall.call_id,
-        error: lastError,
-        maxAttempts,
-      });
+      nextInput = buildRetryMessage(lastError);
     }
   }
 
@@ -331,6 +402,7 @@ export async function runResumeLatexToolLoop(
     attempts: maxAttempts,
     attemptEvents,
     latexCode: lastLatexCode,
+    linkSummary: lastLinkSummary,
     model: resolvedModel ?? args.fallbackModel,
     previewPdf: null,
     validationError: buildRetryExhaustedError(lastError, maxAttempts),

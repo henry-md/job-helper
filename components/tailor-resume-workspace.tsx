@@ -31,8 +31,16 @@ type TailorResumeWorkspaceProps = {
 type TailorResumeExtractionAttempt = {
   attempt: number;
   error: string | null;
+  linkSummary: TailorResumeLinkValidationSummary | null;
   outcome: "failed" | "succeeded";
   willRetry: boolean;
+};
+
+type TailorResumeLinkValidationSummary = {
+  failedCount: number;
+  passedCount: number;
+  totalCount: number;
+  unverifiedCount: number;
 };
 
 const acceptedResumeMimeTypes = new Set([
@@ -47,6 +55,7 @@ const defaultEditorPaneSize = 56;
 const defaultPreviewPaneSize = 44;
 const jobDescriptionToastId = "tailor-resume-job-description-save";
 const latexSaveToastId = "tailor-resume-latex-save";
+const linkValidationToastId = "tailor-resume-link-validation";
 const resumeUploadToastId = "tailor-resume-resume-upload";
 
 function validateResumeFile(file: File) {
@@ -97,6 +106,37 @@ function showExtractionAttemptToasts(
       });
     }, index * 140);
   });
+}
+
+function showLinkValidationSummaryToast(
+  linkSummary: TailorResumeLinkValidationSummary | null | undefined,
+  delayMs = 0,
+) {
+  if (!linkSummary || linkSummary.totalCount === 0) {
+    return;
+  }
+
+  window.setTimeout(() => {
+    const unverifiedFragment =
+      linkSummary.unverifiedCount > 0
+        ? `, ${linkSummary.unverifiedCount} couldn't be verified`
+        : "";
+    const message =
+      `Validated ${linkSummary.totalCount} extracted ` +
+      `link${linkSummary.totalCount === 1 ? "" : "s"}: ` +
+      `${linkSummary.passedCount} passed, ${linkSummary.failedCount} failed${unverifiedFragment}.`;
+
+    if (linkSummary.failedCount > 0) {
+      toast.error(message, {
+        id: linkValidationToastId,
+      });
+      return;
+    }
+
+    toast.success(message, {
+      id: linkValidationToastId,
+    });
+  }, delayMs);
 }
 
 function StatusPill({ children }: { children: ReactNode }) {
@@ -439,6 +479,7 @@ export default function TailorResumeWorkspace({
         error?: string;
         extractionError?: string | null;
         extractionAttempts?: TailorResumeExtractionAttempt[];
+        linkValidationSummary?: TailorResumeLinkValidationSummary | null;
         profile?: TailorResumeProfile;
       };
 
@@ -453,6 +494,10 @@ export default function TailorResumeWorkspace({
       lastSavedLatexCodeRef.current = resolvedLatexCode;
       latestDraftLatexCodeRef.current = resolvedLatexCode;
       showExtractionAttemptToasts(payload.extractionAttempts ?? []);
+      showLinkValidationSummaryToast(
+        payload.linkValidationSummary,
+        (payload.extractionAttempts?.length ?? 0) * 140,
+      );
 
       if (payload.extractionError) {
         toast.error(

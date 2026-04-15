@@ -1,5 +1,5 @@
 import OpenAI, { toFile } from "openai";
-import { compileTailorResumeLatex } from "@/lib/tailor-resume-latex";
+import { validateTailorResumeLatexDocument } from "@/lib/tailor-resume-link-validation";
 import {
   maxResumeLatexAttempts,
   resumeLatexValidationTool,
@@ -30,14 +30,31 @@ function isTestOpenAIResponseEnabled() {
 }
 
 function buildResumeLatexInstructions() {
-  return (
-    "Convert the provided resume into a complete standalone LaTeX document. Preserve every word from the resume exactly as written whenever it is legible. Never summarize, shorten, compress, or omit text. In particular, never truncate bullets to their first sentence. Keep the original section order and keep all bullets, dates, headings, labeled lines, links, and separators. Preserve visible bold, italics, underlines, bullet structure, and link styling when possible. Return a full LaTeX document from \\documentclass through \\end{document} that compiles with pdflatex. Prefer the exact template and macro vocabulary shown below. Use only standard LaTeX plus the packages already present in that template unless absolutely necessary. Inline formatting such as \\textbf, \\textit, \\tightul, and \\href may appear anywhere inside macro arguments when needed.\n\nPay particular attention to these details because they are easy to get wrong:\n1. Header: match the centered header structure from the reference example, including how the name is centered and how the contact lines are centered beneath it.\n2. Education section: match the alignment pattern in the reference example, especially the left/right tabular alignment for school and dates, plus the indented follow-up lines below it.\n3. Technical skills section: do not align the text like the education section. Follow the reference example where each skills line continues naturally after the colon using the hanging-indent style rather than trying to force tabular left/right alignment.\n4. Bolding: pay special attention to what is visibly bolded in the uploaded image and reproduce that emphasis faithfully in LaTeX. Do not flatten bold emphasis, and do not assume only headings are bold; important phrases inside bullets, links, labels, names, and other inline fragments may need \\textbf{} as shown by the source image.\n5. Vertical spacing: pay close attention to the tight vertical spacing in the source image and the reference example. Use small spacing adjustments, including negative \\vspace{...} values when appropriate, to pull sections closer together and match the visual density of the original resume, especially between the centered header and the first section and around section transitions. Avoid leaving the document with loose default spacing when the source image is visibly tighter.\n6. Unicode safety: do not emit unsupported raw Unicode glyphs such as replacement characters or private-use characters. Replace them with LaTeX-safe ASCII or explicit LaTeX commands.\n\nTool workflow:\n- Use the validate_resume_latex tool every time you draft or revise the full document.\n- Pass the complete standalone LaTeX document in the tool argument latexCode.\n- If the tool reports a compile error, fix that exact error while preserving the resume content, then call the tool again.\n- Stop as soon as the tool reports success. You have at most " +
-    String(maxResumeLatexAttempts) +
-    " validation attempts.\n\nPreferred template:\n\n" +
-    tailorResumeLatexTemplate +
-    "\n\nReference example:\n\n" +
-    tailorResumeLatexExample
-  );
+  return `Convert the provided resume into a complete standalone LaTeX document. Preserve every word from the resume exactly as written whenever it is legible. Never summarize, shorten, compress, or omit text. In particular, never truncate bullets to their first sentence. Keep the original section order and keep all bullets, dates, headings, labeled lines, links, and separators. Preserve visible bold, italics, underlines, bullet structure, and link styling when possible. Return a full LaTeX document from \\documentclass through \\end{document} that compiles with pdflatex. Prefer the exact template and macro vocabulary shown below. Use only standard LaTeX plus the packages already present in that template unless absolutely necessary. Inline formatting such as \\textbf, \\textit, \\tightul, and \\href may appear anywhere inside macro arguments when needed.
+
+Pay particular attention to these details because they are easy to get wrong:
+1. Header: match the centered header structure from the reference example, including how the name is centered and how the contact lines are centered beneath it.
+2. Education section: match the alignment pattern in the reference example, especially the left/right tabular alignment for school and dates, plus the indented follow-up lines below it.
+3. Technical skills section: do not align the text like the education section. Follow the reference example where each skills line continues naturally after the colon using the hanging-indent style rather than trying to force tabular left/right alignment.
+4. Bolding: pay special attention to what is visibly bolded in the uploaded image and reproduce that emphasis faithfully in LaTeX. Do not flatten bold emphasis, and do not assume only headings are bold; important phrases inside bullets, links, labels, names, and other inline fragments may need \\textbf{} as shown by the source image.
+5. Vertical spacing: pay close attention to the tight vertical spacing in the source image and the reference example. Use small spacing adjustments, including negative \\vspace{...} values when appropriate, to pull sections closer together and match the visual density of the original resume, especially between the centered header and the first section and around section transitions. Avoid leaving the document with loose default spacing when the source image is visibly tighter.
+6. Unicode safety: do not emit unsupported raw Unicode glyphs such as replacement characters or private-use characters. Replace them with LaTeX-safe ASCII or explicit LaTeX commands.
+7. Link fidelity: only preserve hyperlink styling when the destination is explicitly supported by the visible resume content. If a destination fails validation or the visible text does not support a specific target, keep the visible text but remove \\href and link-only styling such as \\tightul instead of guessing a replacement.
+
+Tool workflow:
+- Use the validate_resume_latex tool every time you draft or revise the full document.
+- Pass the complete standalone LaTeX document in the tool argument latexCode.
+- The tool validates both pdflatex compilation and extracted hyperlinks.
+- If the tool reports a compile error or failed links, fix that exact issue while preserving the resume content. For failed links, preserve the visible text but remove hyperlink-specific styling instead of inventing a destination.
+- Stop as soon as the tool reports success. You have at most ${String(maxResumeLatexAttempts)} validation attempts.
+
+Preferred template:
+
+${tailorResumeLatexTemplate}
+
+Reference example:
+
+${tailorResumeLatexExample}`;
 }
 
 function buildResumeExtractionInput(input: {
@@ -89,7 +106,9 @@ export type ExtractResumeLatexDocumentResult = RunResumeLatexToolLoopResult;
 
 type ExtractResumeLatexDocumentDependencies = {
   client?: OpenAI;
-  compileLatex?: (latexCode: string) => Promise<Buffer>;
+  validateLatexDocument?: (
+    latexCode: string,
+  ) => ReturnType<typeof validateTailorResumeLatexDocument>;
 };
 
 export async function extractResumeLatexDocument(
@@ -101,11 +120,32 @@ export async function extractResumeLatexDocument(
   dependencies: ExtractResumeLatexDocumentDependencies = {},
 ): Promise<ExtractResumeLatexDocumentResult> {
   const model = process.env.OPENAI_RESUME_EXTRACTION_MODEL ?? "gpt-5-mini";
-  const compileLatex = dependencies.compileLatex ?? compileTailorResumeLatex;
+  const validateLatexDocument =
+    dependencies.validateLatexDocument ?? validateTailorResumeLatexDocument;
 
   if (isTestOpenAIResponseEnabled()) {
     try {
-      const previewPdf = await compileLatex(tailorResumeLatexExample);
+      const validation = await validateLatexDocument(tailorResumeLatexExample);
+
+      if (!validation.ok) {
+        return {
+          attempts: 1,
+          attemptEvents: [
+            {
+              attempt: 1,
+              error: validation.error,
+              linkSummary: validation.linkSummary,
+              outcome: "failed",
+              willRetry: false,
+            },
+          ],
+          latexCode: tailorResumeLatexExample,
+          linkSummary: validation.linkSummary,
+          model: TEST_OPENAI_RESPONSE_MODEL,
+          previewPdf: null,
+          validationError: validation.error,
+        };
+      }
 
       return {
         attempts: 1,
@@ -113,13 +153,15 @@ export async function extractResumeLatexDocument(
           {
             attempt: 1,
             error: null,
+            linkSummary: validation.linkSummary,
             outcome: "succeeded",
             willRetry: false,
           },
         ],
         latexCode: tailorResumeLatexExample,
+        linkSummary: validation.linkSummary,
         model: TEST_OPENAI_RESPONSE_MODEL,
-        previewPdf,
+        previewPdf: validation.previewPdf,
         validationError: null,
       };
     } catch (error) {
@@ -132,11 +174,13 @@ export async function extractResumeLatexDocument(
               error instanceof Error
                 ? error.message
                 : "Unable to compile the test LaTeX document.",
+            linkSummary: null,
             outcome: "failed",
             willRetry: false,
           },
         ],
         latexCode: tailorResumeLatexExample,
+        linkSummary: null,
         model: TEST_OPENAI_RESPONSE_MODEL,
         previewPdf: null,
         validationError:
@@ -223,7 +267,7 @@ export async function extractResumeLatexDocument(
         };
       },
       fallbackModel: model,
-      validateLatex: compileLatex,
+      validateLatex: validateLatexDocument,
     });
   } finally {
     if (uploadedFile?.id) {

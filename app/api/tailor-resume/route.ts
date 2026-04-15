@@ -161,6 +161,7 @@ async function runResumeExtraction(
     await writeTailorResumeProfile(userId, readyProfile);
     return {
       extractionAttempts: extraction.attemptEvents,
+      linkValidationSummary: extraction.linkSummary,
       profile: readyProfile,
     };
   } catch (error) {
@@ -180,6 +181,7 @@ async function runResumeExtraction(
     await writeTailorResumeProfile(userId, failedProfile);
     return {
       extractionAttempts: [],
+      linkValidationSummary: null,
       profile: failedProfile,
     };
   }
@@ -231,6 +233,7 @@ export async function PATCH(request: Request) {
           : updatedProfile.latex.status === "failed"
             ? updatedProfile.latex.error
           : null,
+      linkValidationSummary: extractionResult.linkValidationSummary,
       profile: updatedProfile,
     });
   }
@@ -380,6 +383,7 @@ export async function POST(request: Request) {
         : updatedProfile.latex.status === "failed"
           ? updatedProfile.latex.error
         : null,
+    linkValidationSummary: extractionResult.linkValidationSummary,
     profile: updatedProfile,
   });
 }
