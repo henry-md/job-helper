@@ -28,6 +28,13 @@ type TailorResumeWorkspaceProps = {
   openAIReady: boolean;
 };
 
+type TailorResumeExtractionAttempt = {
+  attempt: number;
+  error: string | null;
+  outcome: "failed" | "succeeded";
+  willRetry: boolean;
+};
+
 const acceptedResumeMimeTypes = new Set([
   "application/pdf",
   "image/png",
@@ -38,6 +45,9 @@ const acceptedResumeMimeTypes = new Set([
 const maxResumeBytes = 10 * 1024 * 1024;
 const defaultEditorPaneSize = 56;
 const defaultPreviewPaneSize = 44;
+const jobDescriptionToastId = "tailor-resume-job-description-save";
+const latexSaveToastId = "tailor-resume-latex-save";
+const resumeUploadToastId = "tailor-resume-resume-upload";
 
 function validateResumeFile(file: File) {
   if (!acceptedResumeMimeTypes.has(file.type)) {
@@ -63,6 +73,30 @@ function buildPreviewPdfUrl(updatedAt: string | null) {
 
 function resolveSavedLatexCode(profile: TailorResumeProfile) {
   return profile.latex.code;
+}
+
+function showExtractionAttemptToasts(
+  attempts: TailorResumeExtractionAttempt[],
+) {
+  attempts.forEach((attempt, index) => {
+    window.setTimeout(() => {
+      if (attempt.outcome === "failed") {
+        toast.error(
+          attempt.willRetry
+            ? `LaTeX extraction attempt ${attempt.attempt} failed, so we retried it automatically.${attempt.error ? ` ${attempt.error}` : ""}`
+            : `LaTeX extraction attempt ${attempt.attempt} failed and no retries remain.${attempt.error ? ` ${attempt.error}` : ""}`,
+          {
+            id: `tailor-resume-extraction-attempt-${attempt.attempt}-failed`,
+          },
+        );
+        return;
+      }
+
+      toast.success(`LaTeX extraction attempt ${attempt.attempt} succeeded.`, {
+        id: `tailor-resume-extraction-attempt-${attempt.attempt}-succeeded`,
+      });
+    }, index * 140);
+  });
 }
 
 function StatusPill({ children }: { children: ReactNode }) {
@@ -253,6 +287,9 @@ export default function TailorResumeWorkspace({
       if (latestDraftLatexCodeRef.current === resolvedLatexCode) {
         setIsSavingLatex(false);
         setLatexState("saved");
+        toast.success("Saved the LaTeX draft.", {
+          id: latexSaveToastId,
+        });
       }
     } catch (error) {
       if (latexSaveSequenceRef.current !== sequence) {
@@ -264,6 +301,9 @@ export default function TailorResumeWorkspace({
       setLatexState("idle");
       toast.error(
         error instanceof Error ? error.message : "Unable to save the LaTeX draft.",
+        {
+          id: latexSaveToastId,
+        },
       );
     } finally {
       isLatexSaveInFlightRef.current = false;
@@ -314,6 +354,9 @@ export default function TailorResumeWorkspace({
         setProfile(payload.profile);
         setIsSavingJobDescription(false);
         setJobDescriptionState("saved");
+        toast.success("Saved the job description.", {
+          id: jobDescriptionToastId,
+        });
       } catch (error) {
         if (jobDescriptionSaveSequenceRef.current !== sequence) {
           return;
@@ -325,6 +368,9 @@ export default function TailorResumeWorkspace({
           error instanceof Error
             ? error.message
             : "Unable to save the job description.",
+          {
+            id: jobDescriptionToastId,
+          },
         );
       }
     }, 700);
@@ -389,6 +435,9 @@ export default function TailorResumeWorkspace({
 
     setPendingUploadMimeType(file.type);
     setIsUploadingResume(true);
+    toast.loading("Uploading the resume and extracting LaTeX...", {
+      id: resumeUploadToastId,
+    });
 
     try {
       const formData = new FormData();
@@ -401,6 +450,7 @@ export default function TailorResumeWorkspace({
       const payload = (await response.json()) as {
         error?: string;
         extractionError?: string | null;
+        extractionAttempts?: TailorResumeExtractionAttempt[];
         profile?: TailorResumeProfile;
       };
 
@@ -413,21 +463,34 @@ export default function TailorResumeWorkspace({
       setProfile(payload.profile);
       setDraftLatexCode(resolvedLatexCode);
       lastSavedLatexCodeRef.current = resolvedLatexCode;
+      latestDraftLatexCodeRef.current = resolvedLatexCode;
+      showExtractionAttemptToasts(payload.extractionAttempts ?? []);
 
       if (payload.extractionError) {
         toast.error(
           `Saved the resume, but LaTeX extraction needs review: ${payload.extractionError}`,
+          {
+            id: resumeUploadToastId,
+          },
         );
       } else if (payload.profile.latex.status === "failed") {
         toast.error(
           "Saved the resume, but the extracted LaTeX still needs a rendering fix before the preview can display.",
+          {
+            id: resumeUploadToastId,
+          },
         );
       } else {
-        toast.success("Saved the resume and opened the extracted LaTeX draft.");
+        toast.success("Saved the resume and opened the extracted LaTeX draft.", {
+          id: resumeUploadToastId,
+        });
       }
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Unable to save the resume.",
+        {
+          id: resumeUploadToastId,
+        },
       );
     } finally {
       setPendingUploadMimeType(null);

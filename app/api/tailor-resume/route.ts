@@ -3,7 +3,10 @@ import path from "node:path";
 import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/auth";
-import { extractResumeLatexDocument } from "@/lib/tailor-resume-extraction";
+import {
+  extractResumeLatexDocument,
+  type ExtractResumeLatexDocumentResult,
+} from "@/lib/tailor-resume-extraction";
 import { compileTailorResumeLatex } from "@/lib/tailor-resume-latex";
 import {
   deleteTailorResumePreviewPdf,
@@ -44,35 +47,35 @@ function buildResumeRecord(input: {
   };
 }
 
-async function compileExtractedLatex(userId: string, latexCode: string) {
+async function persistExtractedLatexResult(
+  userId: string,
+  extraction: ExtractResumeLatexDocumentResult,
+) {
   const updatedAt = new Date().toISOString();
 
-  try {
-    const previewPdf = await compileTailorResumeLatex(latexCode);
-
-    await writeTailorResumePreviewPdf(userId, previewPdf);
+  if (extraction.previewPdf) {
+    await writeTailorResumePreviewPdf(userId, extraction.previewPdf);
 
     return {
-      code: latexCode,
+      code: extraction.latexCode,
       error: null,
       pdfUpdatedAt: updatedAt,
       status: "ready" as const,
       updatedAt,
     };
-  } catch (error) {
-    await deleteTailorResumePreviewPdf(userId);
-
-    return {
-      code: latexCode,
-      error:
-        error instanceof Error
-          ? error.message
-          : "Unable to compile the extracted LaTeX preview.",
-      pdfUpdatedAt: null,
-      status: "failed" as const,
-      updatedAt,
-    };
   }
+
+  await deleteTailorResumePreviewPdf(userId);
+
+  return {
+    code: extraction.latexCode,
+    error:
+      extraction.validationError ??
+      "Unable to compile the extracted LaTeX preview.",
+    pdfUpdatedAt: null,
+    status: "failed" as const,
+    updatedAt,
+  };
 }
 
 async function compileLatexDraft(
@@ -141,7 +144,7 @@ async function runResumeExtraction(
       filename: savedResume.originalFilename,
       mimeType: savedResume.mimeType,
     });
-    const latex = await compileExtractedLatex(userId, extraction.latexCode);
+    const latex = await persistExtractedLatexResult(userId, extraction);
 
     const readyProfile: TailorResumeProfile = {
       ...extractingProfile,
@@ -156,7 +159,10 @@ async function runResumeExtraction(
     };
 
     await writeTailorResumeProfile(userId, readyProfile);
-    return readyProfile;
+    return {
+      extractionAttempts: extraction.attemptEvents,
+      profile: readyProfile,
+    };
   } catch (error) {
     const failedProfile: TailorResumeProfile = {
       ...extractingProfile,
@@ -172,7 +178,10 @@ async function runResumeExtraction(
     };
 
     await writeTailorResumeProfile(userId, failedProfile);
-    return failedProfile;
+    return {
+      extractionAttempts: [],
+      profile: failedProfile,
+    };
   }
 }
 
@@ -211,12 +220,16 @@ export async function PATCH(request: Request) {
       );
     }
 
-    const updatedProfile = await runResumeExtraction(session.user.id, profile);
+    const extractionResult = await runResumeExtraction(session.user.id, profile);
+    const updatedProfile = extractionResult.profile;
 
     return NextResponse.json({
+      extractionAttempts: extractionResult.extractionAttempts,
       extractionError:
         updatedProfile.extraction.status === "failed"
           ? updatedProfile.extraction.error
+          : updatedProfile.latex.status === "failed"
+            ? updatedProfile.latex.error
           : null,
       profile: updatedProfile,
     });
@@ -346,10 +359,11 @@ export async function POST(request: Request) {
   await writeTailorResumeProfile(session.user.id, profileWithSavedResume);
   await deleteTailorResumePreviewPdf(session.user.id);
 
-  const updatedProfile = await runResumeExtraction(
+  const extractionResult = await runResumeExtraction(
     session.user.id,
     profileWithSavedResume,
   );
+  const updatedProfile = extractionResult.profile;
 
   if (
     previousResumeStoragePath &&
@@ -359,9 +373,12 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json({
+    extractionAttempts: extractionResult.extractionAttempts,
     extractionError:
       updatedProfile.extraction.status === "failed"
         ? updatedProfile.extraction.error
+        : updatedProfile.latex.status === "failed"
+          ? updatedProfile.latex.error
         : null,
     profile: updatedProfile,
   });
