@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   emptyTailorResumeProfile,
@@ -12,6 +12,10 @@ function getTailorResumePrivateDir(userId: string) {
 
 function getTailorResumeProfilePath(userId: string) {
   return path.join(getTailorResumePrivateDir(userId), "profile.json");
+}
+
+function getTailorResumePreviewPdfPath(userId: string) {
+  return path.join(getTailorResumePrivateDir(userId), "preview.pdf");
 }
 
 export async function readTailorResumeProfile(userId: string) {
@@ -43,4 +47,22 @@ export async function writeTailorResumeProfile(
     `${JSON.stringify(profile, null, 2)}\n`,
     "utf8",
   );
+}
+
+export async function readTailorResumePreviewPdf(userId: string) {
+  return readFile(getTailorResumePreviewPdfPath(userId));
+}
+
+export async function writeTailorResumePreviewPdf(
+  userId: string,
+  pdfBuffer: Buffer,
+) {
+  const privateDir = getTailorResumePrivateDir(userId);
+
+  await mkdir(privateDir, { recursive: true });
+  await writeFile(getTailorResumePreviewPdfPath(userId), pdfBuffer);
+}
+
+export async function deleteTailorResumePreviewPdf(userId: string) {
+  await rm(getTailorResumePreviewPdfPath(userId), { force: true });
 }

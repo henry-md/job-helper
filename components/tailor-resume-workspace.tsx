@@ -10,11 +10,10 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
-import ResumeDocumentEditor from "@/components/resume-document-editor";
-import {
-  serializeResumeDocument,
-  type ResumeDocument,
-  type TailorResumeProfile,
+import ResumeSourceEditor from "@/components/resume-source-editor";
+import type {
+  TailorResumeProfile,
+  TailorResumeSourceDocument,
 } from "@/lib/tailor-resume-types";
 
 type TailorResumeWorkspaceProps = {
@@ -62,6 +61,10 @@ function validateResumeFile(file: File) {
   return null;
 }
 
+function serializeSourceDocument(document: TailorResumeSourceDocument | null) {
+  return document ? JSON.stringify(document) : "";
+}
+
 function StatusPill({ children }: { children: ReactNode }) {
   return (
     <span className="rounded-full border border-white/10 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-zinc-400">
@@ -77,28 +80,27 @@ export default function TailorResumeWorkspace({
   const fileInputId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const jobDescriptionSaveSequenceRef = useRef(0);
-  const documentSaveSequenceRef = useRef(0);
+  const sourceSaveSequenceRef = useRef(0);
   const lastSavedJobDescriptionRef = useRef(initialProfile.jobDescription);
-  const lastSavedEditedDocumentRef = useRef(
-    serializeResumeDocument(initialProfile.extraction.editedDocument),
+  const lastSavedSourceDocumentRef = useRef(
+    serializeSourceDocument(initialProfile.source.document),
   );
   const [profile, setProfile] = useState(initialProfile);
   const [draftJobDescription, setDraftJobDescription] = useState(
     initialProfile.jobDescription,
   );
-  const [draftEditedDocument, setDraftEditedDocument] = useState<ResumeDocument | null>(
-    initialProfile.extraction.editedDocument,
-  );
+  const [draftSourceDocument, setDraftSourceDocument] =
+    useState<TailorResumeSourceDocument | null>(initialProfile.source.document);
   const [isPreviewMounted, setIsPreviewMounted] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isSavingJobDescription, setIsSavingJobDescription] = useState(false);
-  const [isSavingDocument, setIsSavingDocument] = useState(false);
+  const [isSavingSource, setIsSavingSource] = useState(false);
   const [isUploadingResume, setIsUploadingResume] = useState(false);
   const [isReextracting, setIsReextracting] = useState(false);
   const [jobDescriptionState, setJobDescriptionState] = useState<
     "idle" | "saved" | "saving"
   >("idle");
-  const [documentState, setDocumentState] = useState<"idle" | "saved" | "saving">(
+  const [sourceState, setSourceState] = useState<"idle" | "saved" | "saving">(
     "idle",
   );
 
@@ -106,6 +108,9 @@ export default function TailorResumeWorkspace({
   const extraction = profile.extraction;
   const previewAsImage = resume?.mimeType.startsWith("image/") ?? false;
   const editorDisabled = isUploadingResume || isReextracting;
+  const previewPdfUrl = profile.latex.pdfUpdatedAt
+    ? `/api/tailor-resume/preview?updatedAt=${encodeURIComponent(profile.latex.pdfUpdatedAt)}`
+    : null;
 
   useEffect(() => {
     setIsPreviewMounted(true);
@@ -114,13 +119,13 @@ export default function TailorResumeWorkspace({
   useEffect(() => {
     setProfile(initialProfile);
     setDraftJobDescription(initialProfile.jobDescription);
-    setDraftEditedDocument(initialProfile.extraction.editedDocument);
+    setDraftSourceDocument(initialProfile.source.document);
     lastSavedJobDescriptionRef.current = initialProfile.jobDescription;
-    lastSavedEditedDocumentRef.current = serializeResumeDocument(
-      initialProfile.extraction.editedDocument,
+    lastSavedSourceDocumentRef.current = serializeSourceDocument(
+      initialProfile.source.document,
     );
     setJobDescriptionState("idle");
-    setDocumentState("idle");
+    setSourceState("idle");
   }, [initialProfile]);
 
   useEffect(() => {
@@ -146,7 +151,6 @@ export default function TailorResumeWorkspace({
           },
           method: "PATCH",
         });
-
         const payload = (await response.json()) as {
           error?: string;
           profile?: TailorResumeProfile;
@@ -185,35 +189,34 @@ export default function TailorResumeWorkspace({
   }, [draftJobDescription, jobDescriptionState]);
 
   useEffect(() => {
-    const serializedDraftDocument = serializeResumeDocument(draftEditedDocument);
+    const serializedDraftSourceDocument = serializeSourceDocument(draftSourceDocument);
 
-    if (serializedDraftDocument === lastSavedEditedDocumentRef.current) {
-      if (documentState === "saving") {
-        setIsSavingDocument(false);
-        setDocumentState("saved");
+    if (serializedDraftSourceDocument === lastSavedSourceDocumentRef.current) {
+      if (sourceState === "saving") {
+        setIsSavingSource(false);
+        setSourceState("saved");
       }
       return;
     }
 
-    if (!draftEditedDocument) {
+    if (!draftSourceDocument) {
       return;
     }
 
-    const sequence = documentSaveSequenceRef.current + 1;
-    documentSaveSequenceRef.current = sequence;
-    setIsSavingDocument(true);
-    setDocumentState("saving");
+    const sequence = sourceSaveSequenceRef.current + 1;
+    sourceSaveSequenceRef.current = sequence;
+    setIsSavingSource(true);
+    setSourceState("saving");
 
     const timeoutId = window.setTimeout(async () => {
       try {
         const response = await fetch("/api/tailor-resume", {
-          body: JSON.stringify({ editedDocument: draftEditedDocument }),
+          body: JSON.stringify({ sourceDocument: draftSourceDocument }),
           headers: {
             "Content-Type": "application/json",
           },
           method: "PATCH",
         });
-
         const payload = (await response.json()) as {
           error?: string;
           profile?: TailorResumeProfile;
@@ -223,23 +226,24 @@ export default function TailorResumeWorkspace({
           throw new Error(payload.error ?? "Unable to save resume corrections.");
         }
 
-        if (documentSaveSequenceRef.current !== sequence) {
+        if (sourceSaveSequenceRef.current !== sequence) {
           return;
         }
 
-        lastSavedEditedDocumentRef.current = serializeResumeDocument(
-          payload.profile.extraction.editedDocument,
+        lastSavedSourceDocumentRef.current = serializeSourceDocument(
+          payload.profile.source.document,
         );
         setProfile(payload.profile);
-        setIsSavingDocument(false);
-        setDocumentState("saved");
+        setDraftSourceDocument(payload.profile.source.document);
+        setIsSavingSource(false);
+        setSourceState("saved");
       } catch (error) {
-        if (documentSaveSequenceRef.current !== sequence) {
+        if (sourceSaveSequenceRef.current !== sequence) {
           return;
         }
 
-        setIsSavingDocument(false);
-        setDocumentState("idle");
+        setIsSavingSource(false);
+        setSourceState("idle");
         toast.error(
           error instanceof Error
             ? error.message
@@ -251,7 +255,7 @@ export default function TailorResumeWorkspace({
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [documentState, draftEditedDocument]);
+  }, [draftSourceDocument, sourceState]);
 
   useEffect(() => {
     if (!isPreviewOpen) {
@@ -305,17 +309,21 @@ export default function TailorResumeWorkspace({
       }
 
       setProfile(payload.profile);
-      setDraftEditedDocument(payload.profile.extraction.editedDocument);
-      lastSavedEditedDocumentRef.current = serializeResumeDocument(
-        payload.profile.extraction.editedDocument,
+      setDraftSourceDocument(payload.profile.source.document);
+      lastSavedSourceDocumentRef.current = serializeSourceDocument(
+        payload.profile.source.document,
       );
 
       if (payload.extractionError) {
         toast.error(
           `Saved the resume, but extraction needs review: ${payload.extractionError}`,
         );
+      } else if (payload.profile.latex.status === "failed") {
+        toast.error(
+          "Saved the resume, but the preview needs a small rendering fix before it can display.",
+        );
       } else {
-        toast.success("Saved the resume and extracted its structure.");
+        toast.success("Saved the resume and built the editable resume draft.");
       }
     } catch (error) {
       toast.error(
@@ -361,17 +369,21 @@ export default function TailorResumeWorkspace({
       }
 
       setProfile(payload.profile);
-      setDraftEditedDocument(payload.profile.extraction.editedDocument);
-      lastSavedEditedDocumentRef.current = serializeResumeDocument(
-        payload.profile.extraction.editedDocument,
+      setDraftSourceDocument(payload.profile.source.document);
+      lastSavedSourceDocumentRef.current = serializeSourceDocument(
+        payload.profile.source.document,
       );
 
       if (payload.extractionError) {
         toast.error(
           `Saved the resume, but extraction still failed: ${payload.extractionError}`,
         );
+      } else if (payload.profile.latex.status === "failed") {
+        toast.error(
+          "The resume was re-extracted, but the preview still needs a small rendering fix.",
+        );
       } else {
-        toast.success("Re-extracted the resume structure.");
+        toast.success("Re-extracted the resume and refreshed the editable draft.");
       }
     } catch (error) {
       toast.error(
@@ -402,11 +414,11 @@ export default function TailorResumeWorkspace({
                 Resume
               </p>
               <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-                Upload once, then review the extracted structure
+                Upload once, then replace whenever you want
               </h2>
               <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-400">
-                Replacing the saved file reruns extraction and refreshes the
-                correction form below.
+                Replacing the saved file reruns extraction, rebuilds the editable
+                draft, and refreshes the PDF preview below.
               </p>
             </div>
 
@@ -438,7 +450,7 @@ export default function TailorResumeWorkspace({
 
           {!openAIReady ? (
             <div className="mt-5 rounded-[1.25rem] border border-amber-400/25 bg-amber-400/10 p-4 text-sm leading-6 text-amber-100">
-              Add `OPENAI_API_KEY` to extract a resume into the correction form.
+              Add `OPENAI_API_KEY` to extract your resume and build the editable draft.
             </div>
           ) : null}
 
@@ -487,7 +499,7 @@ export default function TailorResumeWorkspace({
           ) : (
             <div className="mt-5 rounded-[1.35rem] border border-dashed border-white/12 bg-black/15 p-6 text-sm leading-6 text-zinc-400">
               No saved resume yet. Upload a PDF or image resume and the app will
-              extract a structured draft you can correct below.
+              keep the file, the editable source, and the preview on reload.
             </div>
           )}
         </section>
@@ -496,14 +508,15 @@ export default function TailorResumeWorkspace({
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                Extraction
+                Correction flow
               </p>
               <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-                OpenAI turns the resume into editable structure
+                Fix the extracted resume directly, line by line
               </h2>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-                The editor below is driven by the extracted document, not raw OCR.
-                You can correct text, styling, separators, blocks, and section order.
+                This editor is the real source of truth for future tailoring. Your
+                changes update the saved structured resume first, then the PDF
+                preview regenerates from that corrected version.
               </p>
             </div>
 
@@ -526,12 +539,58 @@ export default function TailorResumeWorkspace({
           <div className="mt-5 rounded-[1.25rem] border border-white/10 bg-black/20 p-4">
             {resume ? (
               extraction.status === "ready" ? (
-                <div className="space-y-2 text-sm leading-6 text-zinc-300">
-                  <p>Structured extraction is ready to review.</p>
-                  <p className="text-zinc-500">
-                    Changes you make in the form below autosave back to your saved
-                    resume profile.
-                  </p>
+                <div className="grid gap-4 text-sm leading-6 text-zinc-300 sm:grid-cols-3">
+                  <div className="rounded-[1rem] border border-white/10 bg-black/20 p-4">
+                    <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">
+                      Source
+                    </p>
+                    <p className="mt-2 text-zinc-100">
+                      {profile.source.document
+                        ? `${profile.source.document.sections.length} section${
+                            profile.source.document.sections.length === 1 ? "" : "s"
+                          } ready to correct`
+                        : "Waiting for structure"}
+                    </p>
+                    <p className="mt-2 text-zinc-500">
+                      {profile.source.updatedAt
+                        ? `Updated ${formatSavedAt(profile.source.updatedAt)}`
+                        : "No saved corrections yet"}
+                    </p>
+                  </div>
+
+                  <div className="rounded-[1rem] border border-white/10 bg-black/20 p-4">
+                    <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">
+                      Corrections
+                    </p>
+                    <p className="mt-2 text-zinc-100">
+                      {isSavingSource
+                        ? "Saving your edits now"
+                        : sourceState === "saved"
+                          ? "Edits saved"
+                          : "Autosaves as you work"}
+                    </p>
+                    <p className="mt-2 text-zinc-500">
+                      Rich-text controls handle bold, italics, links, and separators.
+                    </p>
+                  </div>
+
+                  <div className="rounded-[1rem] border border-white/10 bg-black/20 p-4">
+                    <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">
+                      Preview
+                    </p>
+                    <p className="mt-2 text-zinc-100">
+                      {profile.latex.status === "ready"
+                        ? "PDF preview is ready"
+                        : profile.latex.status === "failed"
+                          ? "Preview needs a fix"
+                          : "Preview will appear after rendering"}
+                    </p>
+                    <p className="mt-2 text-zinc-500">
+                      {profile.latex.pdfUpdatedAt
+                        ? `Updated ${formatSavedAt(profile.latex.pdfUpdatedAt)}`
+                        : "Waiting for the next successful render"}
+                    </p>
+                  </div>
                 </div>
               ) : extraction.status === "failed" ? (
                 <div className="space-y-2 text-sm leading-6 text-rose-100">
@@ -542,19 +601,116 @@ export default function TailorResumeWorkspace({
                 </div>
               ) : extraction.status === "extracting" ? (
                 <p className="text-sm leading-6 text-zinc-300">
-                  The resume is being processed now. The correction form will
-                  appear as soon as extraction finishes.
+                  The resume is being processed now. As soon as extraction finishes,
+                  the editor and PDF preview will appear below.
                 </p>
               ) : (
                 <p className="text-sm leading-6 text-zinc-300">
-                  Upload a resume to generate the editable structure.
+                  Upload a resume to generate the editable draft and preview.
                 </p>
               )
             ) : (
               <p className="text-sm leading-6 text-zinc-300">
-                Upload a resume first. Once extraction finishes, the correction form
-                will appear here and persist on reload.
+                Upload a resume first. Once extraction finishes, the correction
+                editor and preview will persist here on reload.
               </p>
+            )}
+          </div>
+        </section>
+      </section>
+
+      <section className="grid gap-[clamp(0.75rem,1.2vh,1rem)] xl:grid-cols-[1.2fr_0.8fr]">
+        <section className="glass-panel soft-ring min-h-[620px] rounded-[1.5rem] p-4 sm:p-5">
+          <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+                Resume editor
+              </p>
+              <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
+                Correct what the model got wrong
+              </h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">
+                Edit headings, dates, descriptions, bullets, labels, and header
+                lines directly. Inline formatting controls let you bold words,
+                italicize titles, and manage link-style text without touching raw
+                LaTeX.
+              </p>
+            </div>
+
+            <StatusPill>
+              {isSavingSource
+                ? "Saving..."
+                : sourceState === "saved"
+                  ? "Saved"
+                  : "Autosaves"}
+            </StatusPill>
+          </div>
+
+          {draftSourceDocument ? (
+            <ResumeSourceEditor
+              disabled={editorDisabled}
+              onChange={setDraftSourceDocument}
+              value={draftSourceDocument}
+            />
+          ) : (
+            <div className="rounded-[1.25rem] border border-dashed border-white/12 bg-black/15 p-6 text-sm leading-6 text-zinc-400">
+              {resume
+                ? extraction.status === "failed"
+                  ? "The resume is saved, but extraction failed. Use Re-extract after checking the file or your OpenAI setup."
+                  : "The resume is saved, but there is no editable source document yet."
+                : "Upload a resume to populate the correction editor."}
+            </div>
+          )}
+        </section>
+
+        <section className="glass-panel soft-ring flex min-h-[620px] flex-col rounded-[1.5rem] p-4 sm:p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+                Preview
+              </p>
+              <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
+                Rendered PDF
+              </h2>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
+                The preview is generated from the saved structured resume, so it
+                stays aligned with the exact content that future tailoring will use.
+              </p>
+            </div>
+
+            {previewPdfUrl && profile.latex.status === "ready" ? (
+              <StatusPill>
+                {profile.latex.pdfUpdatedAt
+                  ? `Updated ${formatSavedAt(profile.latex.pdfUpdatedAt)}`
+                  : "Preview ready"}
+              </StatusPill>
+            ) : null}
+          </div>
+
+          <div className="mt-5 flex min-h-[520px] flex-1 overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20">
+            {profile.latex.status === "failed" && profile.latex.error ? (
+              <div className="w-full overflow-auto p-4">
+                <p className="text-sm font-medium text-rose-100">
+                  The current corrected resume did not render cleanly.
+                </p>
+                <pre className="mt-3 whitespace-pre-wrap font-mono text-xs leading-6 text-rose-200/90">
+                  {profile.latex.error}
+                </pre>
+              </div>
+            ) : previewPdfUrl && profile.latex.status === "ready" ? (
+              <iframe
+                className="h-full min-h-[520px] w-full bg-white"
+                src={previewPdfUrl}
+                title="Compiled resume preview"
+              />
+            ) : (
+              <div className="flex w-full items-center justify-center p-6 text-center text-sm leading-6 text-zinc-400">
+                {resume
+                  ? extraction.status === "extracting"
+                    ? "The preview will appear here as soon as extraction and rendering finish."
+                    : "The preview will appear here after the next successful render."
+                  : "Upload a resume to generate a live PDF preview."}
+              </div>
             )}
           </div>
         </section>
@@ -583,51 +739,9 @@ export default function TailorResumeWorkspace({
         <textarea
           className="mt-5 min-h-[180px] w-full flex-1 resize-none rounded-[1.25rem] border border-white/10 bg-black/20 px-4 py-4 text-sm leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-300/45"
           onChange={(event) => setDraftJobDescription(event.target.value)}
-          placeholder="Paste the full job description here. This saves separately from the extracted resume structure."
+          placeholder="Paste the full job description here. This saves separately from the corrected resume source."
           value={draftJobDescription}
         />
-      </section>
-
-      <section className="glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
-        <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-              Correction form
-            </p>
-            <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-              Correct anything the model got wrong
-            </h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">
-              Edit the extracted structure directly, including text segments,
-              italic/bold/link styling, separators, right-side dates, labeled lines,
-              and bullets.
-            </p>
-          </div>
-
-          <StatusPill>
-            {isSavingDocument
-              ? "Saving..."
-              : documentState === "saved"
-                ? "Saved"
-                : "Autosaves"}
-          </StatusPill>
-        </div>
-
-        {draftEditedDocument ? (
-          <ResumeDocumentEditor
-            disabled={editorDisabled}
-            onChange={setDraftEditedDocument}
-            value={draftEditedDocument}
-          />
-        ) : (
-          <div className="rounded-[1.25rem] border border-dashed border-white/12 bg-black/15 p-6 text-sm leading-6 text-zinc-400">
-            {resume
-              ? extraction.status === "failed"
-                ? "The resume is saved, but extraction failed. Use Re-extract after checking your OpenAI setup or trying the same file again."
-                : "The resume is saved, but there is no extracted document yet."
-              : "Upload a resume to populate the correction form."}
-          </div>
-        )}
       </section>
 
       {isPreviewMounted && isPreviewOpen && resume

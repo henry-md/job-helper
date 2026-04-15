@@ -10,7 +10,10 @@ import {
 import { getPrismaClient } from "@/lib/prisma";
 import { readTailorResumeProfile } from "@/lib/tailor-resume-storage";
 import type { CompanyOption, ReferrerOption } from "@/lib/job-application-types";
-import type { TailorResumeProfile } from "@/lib/tailor-resume-types";
+import {
+  emptyTailorResumeProfile,
+  type TailorResumeProfile,
+} from "@/lib/tailor-resume-types";
 
 type DashboardPageProps = {
   searchParams?: Promise<{
@@ -91,19 +94,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     try {
       return await readTailorResumeProfile(session.user.id);
     } catch {
-      return {
-        extraction: {
-          editedDocument: null,
-          error: null,
-          extractedDocument: null,
-          model: null,
-          rawText: null,
-          status: "idle",
-          updatedAt: null,
-        },
-        jobDescription: "",
-        resume: null,
-      } satisfies TailorResumeProfile;
+      return emptyTailorResumeProfile() satisfies TailorResumeProfile;
     }
   })();
 

@@ -4,10 +4,20 @@ import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/auth";
 import { extractResumeDocument } from "@/lib/tailor-resume-extraction";
-import { readTailorResumeProfile, writeTailorResumeProfile } from "@/lib/tailor-resume-storage";
+import { compileTailorResumeLatex, renderTailorResumeLatex } from "@/lib/tailor-resume-latex";
+import { extractPdfLinkUrls, normalizeResumeDocument } from "@/lib/tailor-resume-source";
+import {
+  deleteTailorResumePreviewPdf,
+  readTailorResumeProfile,
+  writeTailorResumePreviewPdf,
+  writeTailorResumeProfile,
+} from "@/lib/tailor-resume-storage";
 import {
   emptyTailorResumeExtractionState,
+  emptyTailorResumeLatexState,
+  emptyTailorResumeSourceState,
   parseResumeDocument,
+  parseTailorResumeSourceDocument,
   type TailorResumeProfile,
 } from "@/lib/tailor-resume-types";
 import {
@@ -17,6 +27,7 @@ import {
 } from "@/lib/job-tracking";
 
 const maxJobDescriptionLength = 200_000;
+const maxLatexCodeLength = 300_000;
 
 function unauthorizedResponse() {
   return NextResponse.json({ error: "Sign in to manage your resume." }, { status: 401 });
@@ -59,13 +70,18 @@ async function runResumeExtraction(
   await writeTailorResumeProfile(userId, extractingProfile);
 
   try {
-    const buffer = await readFile(
-      path.join(process.cwd(), "public", savedResume.storagePath),
-    );
+    const resumePath = path.join(process.cwd(), "public", savedResume.storagePath);
+    const buffer = await readFile(resumePath);
     const extraction = await extractResumeDocument({
       buffer,
       filename: savedResume.originalFilename,
       mimeType: savedResume.mimeType,
+    });
+    const derivedArtifacts = await buildDerivedResumeArtifacts({
+      document: extraction.document,
+      resumeMimeType: savedResume.mimeType,
+      resumePath,
+      userId,
     });
 
     const readyProfile: TailorResumeProfile = {
@@ -79,11 +95,15 @@ async function runResumeExtraction(
         status: "ready",
         updatedAt: new Date().toISOString(),
       },
+      latex: derivedArtifacts.latex,
+      source: derivedArtifacts.source,
     };
 
     await writeTailorResumeProfile(userId, readyProfile);
     return readyProfile;
   } catch (error) {
+    await deleteTailorResumePreviewPdf(userId);
+
     const failedProfile: TailorResumeProfile = {
       ...extractingProfile,
       extraction: {
@@ -95,10 +115,112 @@ async function runResumeExtraction(
         status: "failed",
         updatedAt: new Date().toISOString(),
       },
+      latex: emptyTailorResumeLatexState(),
+      source: emptyTailorResumeSourceState(),
     };
 
     await writeTailorResumeProfile(userId, failedProfile);
     return failedProfile;
+  }
+}
+
+async function buildDerivedResumeArtifacts(input: {
+  document: NonNullable<TailorResumeProfile["extraction"]["editedDocument"]>;
+  resumeMimeType: string;
+  resumePath: string;
+  userId: string;
+}) {
+  const pdfLinkUrls =
+    input.resumeMimeType === "application/pdf"
+      ? await extractPdfLinkUrls(input.resumePath)
+      : [];
+  const sourceDocument = normalizeResumeDocument(input.document, { pdfLinkUrls });
+  return buildArtifactsFromSourceDocument(input.userId, sourceDocument);
+}
+
+async function buildArtifactsFromSourceDocument(
+  userId: string,
+  sourceDocument: NonNullable<TailorResumeProfile["source"]["document"]>,
+) {
+  const generatedCode = renderTailorResumeLatex(sourceDocument);
+  const updatedAt = new Date().toISOString();
+
+  try {
+    const previewPdf = await compileTailorResumeLatex(generatedCode);
+
+    await writeTailorResumePreviewPdf(userId, previewPdf);
+
+    return {
+      latex: {
+        draftCode: generatedCode,
+        error: null,
+        generatedCode,
+        pdfUpdatedAt: updatedAt,
+        status: "ready" as const,
+        updatedAt,
+      },
+      source: {
+        document: sourceDocument,
+        updatedAt,
+      },
+    };
+  } catch (error) {
+    await deleteTailorResumePreviewPdf(userId);
+
+    return {
+      latex: {
+        draftCode: generatedCode,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to compile the generated LaTeX preview.",
+        generatedCode,
+        pdfUpdatedAt: null,
+        status: "failed" as const,
+        updatedAt,
+      },
+      source: {
+        document: sourceDocument,
+        updatedAt,
+      },
+    };
+  }
+}
+
+async function compileLatexDraft(
+  userId: string,
+  generatedCode: string | null,
+  draftCode: string,
+) {
+  const updatedAt = new Date().toISOString();
+
+  try {
+    const previewPdf = await compileTailorResumeLatex(draftCode);
+
+    await writeTailorResumePreviewPdf(userId, previewPdf);
+
+    return {
+      draftCode,
+      error: null,
+      generatedCode,
+      pdfUpdatedAt: updatedAt,
+      status: "ready" as const,
+      updatedAt,
+    };
+  } catch (error) {
+    await deleteTailorResumePreviewPdf(userId);
+
+    return {
+      draftCode,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unable to compile the LaTeX preview.",
+      generatedCode,
+      pdfUpdatedAt: null,
+      status: "failed" as const,
+      updatedAt,
+    };
   }
 }
 
@@ -176,9 +298,75 @@ export async function PATCH(request: Request) {
   }
 
   if ("editedDocument" in body) {
-    nextProfile.extraction.editedDocument =
+    const editedDocument =
       body.editedDocument === null ? null : parseResumeDocument(body.editedDocument);
+
+    nextProfile.extraction.editedDocument = editedDocument;
     nextProfile.extraction.updatedAt = new Date().toISOString();
+
+    if (editedDocument && profile.resume) {
+      const resumePath = path.join(process.cwd(), "public", profile.resume.storagePath);
+      const derivedArtifacts = await buildDerivedResumeArtifacts({
+        document: editedDocument,
+        resumeMimeType: profile.resume.mimeType,
+        resumePath,
+        userId: session.user.id,
+      });
+
+      nextProfile.latex = derivedArtifacts.latex;
+      nextProfile.source = derivedArtifacts.source;
+    } else {
+      nextProfile.latex = emptyTailorResumeLatexState();
+      nextProfile.source = emptyTailorResumeSourceState();
+      await deleteTailorResumePreviewPdf(session.user.id);
+    }
+
+    didUpdate = true;
+  }
+
+  if ("sourceDocument" in body) {
+    const sourceDocument =
+      body.sourceDocument === null
+        ? null
+        : parseTailorResumeSourceDocument(body.sourceDocument);
+
+    if (sourceDocument) {
+      const derivedArtifacts = await buildArtifactsFromSourceDocument(
+        session.user.id,
+        sourceDocument,
+      );
+
+      nextProfile.source = derivedArtifacts.source;
+      nextProfile.latex = derivedArtifacts.latex;
+    } else {
+      nextProfile.source = emptyTailorResumeSourceState();
+      nextProfile.latex = emptyTailorResumeLatexState();
+      await deleteTailorResumePreviewPdf(session.user.id);
+    }
+
+    didUpdate = true;
+  }
+
+  if ("latexCode" in body) {
+    if (typeof body.latexCode !== "string") {
+      return NextResponse.json(
+        { error: "Provide LaTeX code to save." },
+        { status: 400 },
+      );
+    }
+
+    if (body.latexCode.length > maxLatexCodeLength) {
+      return NextResponse.json(
+        { error: "Keep the LaTeX under 300,000 characters." },
+        { status: 400 },
+      );
+    }
+
+    nextProfile.latex = await compileLatexDraft(
+      session.user.id,
+      nextProfile.latex.generatedCode,
+      body.latexCode,
+    );
     didUpdate = true;
   }
 
@@ -237,12 +425,14 @@ export async function POST(request: Request) {
       status: "extracting",
       updatedAt: new Date().toISOString(),
     },
+    latex: emptyTailorResumeLatexState(),
     resume: buildResumeRecord({
       mimeType: resumeFile.type || "application/octet-stream",
       originalFilename: resumeFile.name || "resume",
       sizeBytes: persistedResume.sizeBytes,
       storagePath: persistedResume.storagePath,
     }),
+    source: emptyTailorResumeSourceState(),
   };
 
   await writeTailorResumeProfile(session.user.id, profileWithSavedResume);
