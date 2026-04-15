@@ -252,6 +252,33 @@ function readDraftSegmentText(segments: DraftSourceSegment[]) {
   return segments.map((segment) => segment.text).join("");
 }
 
+function joinDraftSegmentGroupsWithSpaces(groups: DraftSourceSegment[][]) {
+  const nonEmptyGroups = groups.filter(
+    (group) => readDraftSegmentText(group).trim().length > 0,
+  );
+
+  if (nonEmptyGroups.length === 0) {
+    return [] as DraftSourceSegment[];
+  }
+
+  return nonEmptyGroups.flatMap((group, index) =>
+    index === 0
+      ? group
+      : [
+          {
+            isBold: false,
+            isItalic: false,
+            isLinkStyle: false,
+            isUnderline: false,
+            linkUrl: null,
+            segmentType: "text" as const,
+            text: " ",
+          },
+          ...group,
+        ],
+  );
+}
+
 function splitAwardValueIntoLinkedTail(segments: DraftSourceSegment[]) {
   const nextSegments = [...segments];
 
@@ -373,6 +400,12 @@ function normalizeEntryItem(
     }
   }
 
+  const descriptionSegments = joinDraftSegmentGroupsWithSpaces(
+    subSectionDescription.map((line) =>
+      normalizeResumeSegments(line.segments, availablePdfLinks),
+    ),
+  );
+
   return {
     bulletLines: subSectionBullets.map((bullet, index) =>
       createSourceUnit(
@@ -389,14 +422,14 @@ function normalizeEntryItem(
           normalizeResumeSegments(subSectionDates.segments, availablePdfLinks),
         )
       : null,
-    descriptionLines: subSectionDescription.map((line, index) =>
-      createSourceUnit(
-        `${itemId}_description_${String(index + 1).padStart(2, "0")}`,
-        "description_line",
-        normalizeResumeSegments(line.segments, availablePdfLinks),
-        line.indentLevel,
-      ),
-    ),
+    description:
+      descriptionSegments.length > 0
+        ? createSourceUnit(
+            `${itemId}_description`,
+            "entry_description",
+            descriptionSegments,
+          )
+        : null,
     heading: createSourceUnit(`${itemId}_heading`, "entry_heading", headingSegments),
     id: itemId,
     itemType: "entry",
@@ -549,28 +582,25 @@ export function normalizeResumeDocument(
   },
 ): TailorResumeSourceDocument {
   const availablePdfLinks = [...(options?.pdfLinkUrls ?? [])];
-  const headerName = createSourceUnit(
-    "header_name",
-    "header_name",
+  const headerText = createSourceUnit(
+    "header_text",
+    "header_text",
     normalizeResumeSegments(document.headerText.segments, availablePdfLinks),
   );
-  const headerLines = document.subHeadText.map((line, index) =>
+  const subHeadLines = document.subHeadText.map((line, index) =>
     createSourceUnit(
-      `header_line_${String(index + 1).padStart(2, "0")}`,
-      "header_line",
+      `sub_head_line_${String(index + 1).padStart(2, "0")}`,
+      "sub_head_line",
       flattenSubHeadLine(line, availablePdfLinks),
     ),
   );
 
   return {
-    header: {
-      id: "header",
-      lines: headerLines,
-      name: headerName,
-    },
+    headerText,
     sections: document.sections.map((section, sectionIndex) =>
       normalizeSection(section, sectionIndex, availablePdfLinks),
     ),
+    subHeadLines,
     version: 1,
   };
 }

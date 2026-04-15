@@ -450,7 +450,7 @@ export default function TailorResumeWorkspace({
 
           {!openAIReady ? (
             <div className="mt-5 rounded-[1.25rem] border border-amber-400/25 bg-amber-400/10 p-4 text-sm leading-6 text-amber-100">
-              Add `OPENAI_API_KEY` to extract your resume and build the editable draft.
+              Resume extraction is not configured yet, so uploads cannot be processed.
             </div>
           ) : null}
 
@@ -511,12 +511,12 @@ export default function TailorResumeWorkspace({
                 Correction flow
               </p>
               <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-                Fix the extracted resume directly, line by line
+                Fix the extracted resume directly
               </h2>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
                 This editor is the real source of truth for future tailoring. Your
-                changes update the saved structured resume first, then the PDF
-                preview regenerates from that corrected version.
+                changes update the saved structured resume first, then the preview
+                regenerates from that corrected version.
               </p>
             </div>
 
@@ -570,7 +570,7 @@ export default function TailorResumeWorkspace({
                           : "Autosaves as you work"}
                     </p>
                     <p className="mt-2 text-zinc-500">
-                      Rich-text controls handle bold, italics, links, and separators.
+                      Edit the saved structure directly and let the preview keep up.
                     </p>
                   </div>
 
@@ -630,10 +630,9 @@ export default function TailorResumeWorkspace({
                 Correct what the model got wrong
               </h2>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">
-                Edit headings, dates, descriptions, bullets, labels, and header
-                lines directly. Inline formatting controls let you bold words,
-                italicize titles, and manage link-style text without touching raw
-                LaTeX.
+                Edit header text, subhead lines, headings, dates, descriptions,
+                bullets, labels, and paragraphs directly. The saved structure stays
+                aligned with whatever the preview renders next.
               </p>
             </div>
 

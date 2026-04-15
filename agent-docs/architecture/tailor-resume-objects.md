@@ -24,8 +24,8 @@ type ResumeDocument = {
 - This is the product-facing source of truth for resume tailoring.
 - The UI edits this shape directly with stable ids on every editable unit and inline segment.
 - Main shape:
-  - `header.name`
-  - `header.lines[]`
+  - `headerText`
+  - `subHeadLines[]`
   - `sections[]`
   - each section has `title` and `items[]`
   - each item is `entry`, `paragraph`, or `labeled_line`
@@ -36,11 +36,8 @@ type ResumeDocument = {
 ```ts
 type TailorResumeSourceDocument = {
   version: 1;
-  header: {
-    id: string;
-    name: TailorResumeSourceUnit;
-    lines: TailorResumeSourceUnit[];
-  };
+  headerText: TailorResumeSourceUnit;
+  subHeadLines: TailorResumeSourceUnit[];
   sections: {
     id: string;
     title: TailorResumeSourceUnit;
@@ -54,7 +51,7 @@ type TailorResumeSourceItem =
       itemType: "entry";
       heading: TailorResumeSourceUnit;
       dates: TailorResumeSourceUnit | null;
-      descriptionLines: TailorResumeSourceUnit[];
+      description: TailorResumeSourceUnit | null;
       bulletLines: TailorResumeSourceUnit[];
     }
   | {

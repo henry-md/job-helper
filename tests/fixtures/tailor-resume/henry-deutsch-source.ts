@@ -81,40 +81,9 @@ function unit(
 }
 
 export const henryDeutschSourceDocument = {
-  header: {
-    id: "header",
-    name: unit("header_name", "header_name", [
-      { text: "HENRY DEUTSCH", isBold: true },
-    ]),
-    lines: [
-      unit("header_line_01", "header_line", [
-        { text: "HenryMDeutsch@gmail.com" },
-        { segmentType: "separator_bullet" },
-        { text: "914-272-5561" },
-        { segmentType: "separator_bullet" },
-        {
-          text: "linkedin.com/in/henry-deutsch",
-          isLinkStyle: true,
-          linkUrl: "https://linkedin.com/in/henry-deutsch",
-        },
-        { segmentType: "separator_bullet" },
-        {
-          text: "github.com/henry-md",
-          isLinkStyle: true,
-          linkUrl: "https://github.com/henry-md",
-        },
-      ]),
-      unit("header_line_02", "header_line", [
-        { text: "Portfolio: " },
-        {
-          text: "henry-deutsch.com",
-          isBold: true,
-          isLinkStyle: true,
-          linkUrl: "https://henry-deutsch.com",
-        },
-      ]),
-    ],
-  },
+  headerText: unit("header_text", "header_text", [
+    { text: "HENRY DEUTSCH", isBold: true },
+  ]),
   sections: [
     {
       id: "section_01",
@@ -133,18 +102,11 @@ export const henryDeutschSourceDocument = {
           dates: unit("section_01_item_01_dates", "entry_dates", [
             { text: "Aug 2025 - Feb 2026" },
           ]),
-          descriptionLines: [
-            unit("section_01_item_01_description_01", "description_line", [
-              {
-                text: "NewForm provides B2B analytics for consumer companies on their ads, synthesized using deep data modeling and AI.",
-              },
-            ]),
-            unit("section_01_item_01_description_02", "description_line", [
-              {
-                text: "Reported to the CTO and took ownership of 6 major initiatives from inception to implementation in direct collaboration with C-suite",
-              },
-            ]),
-          ],
+          description: unit("section_01_item_01_description", "entry_description", [
+            {
+              text: "NewForm provides B2B analytics for consumer companies on their ads, synthesized using deep data modeling and AI. Reported to the CTO and took ownership of 6 major initiatives from inception to implementation in direct collaboration with C-suite",
+            },
+          ]),
           bulletLines: [
             unit("section_01_item_01_bullet_01", "bullet", [
               { text: "Led major refactor enabling " },
@@ -184,13 +146,11 @@ export const henryDeutschSourceDocument = {
           dates: unit("section_01_item_02_dates", "entry_dates", [
             { text: "May 2024 - Sep 2024" },
           ]),
-          descriptionLines: [
-            unit("section_01_item_02_description_01", "description_line", [
-              {
-                text: "Developed full-stack features for LLM-based AI learning platform that serves 4.3K+ monthly active users",
-              },
-            ]),
-          ],
+          description: unit("section_01_item_02_description", "entry_description", [
+            {
+              text: "Developed full-stack features for LLM-based AI learning platform that serves 4.3K+ monthly active users",
+            },
+          ]),
           bulletLines: [
             unit("section_01_item_02_bullet_01", "bullet", [
               {
@@ -228,13 +188,11 @@ export const henryDeutschSourceDocument = {
           dates: unit("section_01_item_03_dates", "entry_dates", [
             { text: "May 2024 - Sep 2024" },
           ]),
-          descriptionLines: [
-            unit("section_01_item_03_description_01", "description_line", [
-              {
-                text: "Led development of internal onboarding platform enabling 18,000 volunteers to collaborate on open source projects",
-              },
-            ]),
-          ],
+          description: unit("section_01_item_03_description", "entry_description", [
+            {
+              text: "Led development of internal onboarding platform enabling 18,000 volunteers to collaborate on open source projects",
+            },
+          ]),
           bulletLines: [
             unit("section_01_item_03_bullet_01", "bullet", [
               { text: "Used " },
@@ -265,13 +223,11 @@ export const henryDeutschSourceDocument = {
           dates: unit("section_01_item_04_dates", "entry_dates", [
             { text: "May 2023 - Aug 2023" },
           ]),
-          descriptionLines: [
-            unit("section_01_item_04_description_01", "description_line", [
-              {
-                text: "Built full-stack disaster relief analytics platform for the National Institute of Standards and Technology (NIST)",
-              },
-            ]),
-          ],
+          description: unit("section_01_item_04_description", "entry_description", [
+            {
+              text: "Built full-stack disaster relief analytics platform for the National Institute of Standards and Technology (NIST)",
+            },
+          ]),
           bulletLines: [
             unit("section_01_item_04_bullet_01", "bullet", [
               { text: "Developed a " },
@@ -319,14 +275,12 @@ export const henryDeutschSourceDocument = {
           dates: unit("section_02_item_01_dates", "entry_dates", [
             { text: "Aug 2021 - May 2025" },
           ]),
-          descriptionLines: [
-            unit("section_02_item_01_description_01", "description_line", [
-              {
-                text: "Graduated with Departmental Honors in Computer Science",
-                isBold: true,
-              },
-            ]),
-          ],
+          description: unit("section_02_item_01_description", "entry_description", [
+            {
+              text: "Graduated with Departmental Honors in Computer Science",
+              isBold: true,
+            },
+          ]),
           bulletLines: [],
         },
         {
@@ -382,7 +336,7 @@ export const henryDeutschSourceDocument = {
           dates: unit("section_03_item_01_dates", "entry_dates", [
             { text: "Sep 2021 - Present" },
           ]),
-          descriptionLines: [],
+          description: null,
           bulletLines: [
             unit("section_03_item_01_bullet_01", "bullet", [
               { text: "Improved SEO, increasing traffic from " },
@@ -420,7 +374,7 @@ export const henryDeutschSourceDocument = {
             },
           ]),
           dates: null,
-          descriptionLines: [],
+          description: null,
           bulletLines: [
             unit("section_03_item_02_bullet_01", "bullet", [
               { text: "Architected ray tracing engine with " },
@@ -461,15 +415,13 @@ export const henryDeutschSourceDocument = {
             { text: "Research at Johns Hopkins" },
           ]),
           dates: null,
-          descriptionLines: [
-            unit("section_03_item_03_description_01", "description_line", [
-              {
-                text: "Developed AI-powered orbit analysis system using autoencoder ",
-              },
-              { text: "neural network", isBold: true },
-              { text: ", and latent space analysis with clustering algorithms" },
-            ]),
-          ],
+          description: unit("section_03_item_03_description", "entry_description", [
+            {
+              text: "Developed AI-powered orbit analysis system using autoencoder ",
+            },
+            { text: "neural network", isBold: true },
+            { text: ", and latent space analysis with clustering algorithms" },
+          ]),
           bulletLines: [
             unit("section_03_item_03_bullet_01", "bullet", [
               { text: "Built convolutional autoencoder with " },
@@ -535,6 +487,34 @@ export const henryDeutschSourceDocument = {
         },
       ],
     },
+  ],
+  subHeadLines: [
+    unit("sub_head_line_01", "sub_head_line", [
+      { text: "HenryMDeutsch@gmail.com" },
+      { segmentType: "separator_bullet" },
+      { text: "914-272-5561" },
+      { segmentType: "separator_bullet" },
+      {
+        text: "linkedin.com/in/henry-deutsch",
+        isLinkStyle: true,
+        linkUrl: "https://linkedin.com/in/henry-deutsch",
+      },
+      { segmentType: "separator_bullet" },
+      {
+        text: "github.com/henry-md",
+        isLinkStyle: true,
+        linkUrl: "https://github.com/henry-md",
+      },
+    ]),
+    unit("sub_head_line_02", "sub_head_line", [
+      { text: "Portfolio: " },
+      {
+        text: "henry-deutsch.com",
+        isBold: true,
+        isLinkStyle: true,
+        linkUrl: "https://henry-deutsch.com",
+      },
+    ]),
   ],
   version: 1,
 } satisfies TailorResumeSourceDocument;

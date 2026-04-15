@@ -75,15 +75,15 @@ export type TailorResumeSourceSegment = {
 
 export type TailorResumeSourceUnitKind =
   | "bullet"
-  | "description_line"
+  | "entry_description"
   | "entry_dates"
   | "entry_heading"
-  | "header_line"
-  | "header_name"
+  | "header_text"
   | "labeled_line_label"
   | "labeled_line_value"
   | "paragraph"
-  | "section_title";
+  | "section_title"
+  | "sub_head_line";
 
 export type TailorResumeSourceUnit = {
   id: string;
@@ -95,7 +95,7 @@ export type TailorResumeSourceUnit = {
 export type TailorResumeSourceEntryItem = {
   bulletLines: TailorResumeSourceUnit[];
   dates: TailorResumeSourceUnit | null;
-  descriptionLines: TailorResumeSourceUnit[];
+  description: TailorResumeSourceUnit | null;
   heading: TailorResumeSourceUnit;
   id: string;
   itemType: "entry";
@@ -125,15 +125,10 @@ export type TailorResumeSourceSection = {
   title: TailorResumeSourceUnit;
 };
 
-export type TailorResumeSourceHeader = {
-  id: string;
-  lines: TailorResumeSourceUnit[];
-  name: TailorResumeSourceUnit;
-};
-
 export type TailorResumeSourceDocument = {
-  header: TailorResumeSourceHeader;
+  headerText: TailorResumeSourceUnit;
   sections: TailorResumeSourceSection[];
+  subHeadLines: TailorResumeSourceUnit[];
   version: 1;
 };
 
@@ -201,15 +196,15 @@ const segmentTypeValues = new Set<ResumeSegmentType>([
 ]);
 const sourceUnitKindValues = new Set<TailorResumeSourceUnitKind>([
   "bullet",
-  "description_line",
+  "entry_description",
   "entry_dates",
   "entry_heading",
-  "header_line",
-  "header_name",
+  "header_text",
   "labeled_line_label",
   "labeled_line_value",
   "paragraph",
   "section_title",
+  "sub_head_line",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -332,11 +327,7 @@ function createEmptyTailorResumeSourceUnit(
 
 function createEmptyTailorResumeSourceDocument(): TailorResumeSourceDocument {
   return {
-    header: {
-      id: "header",
-      lines: [createEmptyTailorResumeSourceUnit("header_line_01", "header_line")],
-      name: createEmptyTailorResumeSourceUnit("header_name", "header_name"),
-    },
+    headerText: createEmptyTailorResumeSourceUnit("header_text", "header_text"),
     sections: [
       {
         id: "section_01",
@@ -344,7 +335,7 @@ function createEmptyTailorResumeSourceDocument(): TailorResumeSourceDocument {
           {
             bulletLines: [],
             dates: null,
-            descriptionLines: [],
+            description: null,
             heading: createEmptyTailorResumeSourceUnit(
               "section_01_item_01_heading",
               "entry_heading",
@@ -359,6 +350,7 @@ function createEmptyTailorResumeSourceDocument(): TailorResumeSourceDocument {
         ),
       },
     ],
+    subHeadLines: [createEmptyTailorResumeSourceUnit("sub_head_line_01", "sub_head_line")],
     version: 1,
   };
 }
@@ -612,6 +604,55 @@ function parseTailorResumeSourceUnit(
   };
 }
 
+function hasMeaningfulSourceUnit(unit: TailorResumeSourceUnit) {
+  return unit.segments.some(
+    (segment) => segment.segmentType !== "text" || segment.text.trim().length > 0,
+  );
+}
+
+function mergeTailorResumeSourceUnits(
+  units: TailorResumeSourceUnit[],
+  fallbackId: string,
+  fallbackKind: TailorResumeSourceUnitKind,
+) {
+  const nonEmptyUnits = units.filter(hasMeaningfulSourceUnit);
+
+  if (nonEmptyUnits.length === 0) {
+    return null;
+  }
+
+  const mergedSegments: TailorResumeSourceSegment[] = [];
+
+  nonEmptyUnits.forEach((unit, unitIndex) => {
+    if (unitIndex > 0) {
+      mergedSegments.push({
+        id: `${fallbackId}_seg_${String(mergedSegments.length + 1).padStart(2, "0")}`,
+        isBold: false,
+        isItalic: false,
+        isLinkStyle: false,
+        isUnderline: false,
+        linkUrl: null,
+        segmentType: "text",
+        text: " ",
+      });
+    }
+
+    unit.segments.forEach((segment) => {
+      mergedSegments.push({
+        ...segment,
+        id: `${fallbackId}_seg_${String(mergedSegments.length + 1).padStart(2, "0")}`,
+      });
+    });
+  });
+
+  return {
+    id: fallbackId,
+    indentLevel: 0,
+    kind: fallbackKind,
+    segments: mergedSegments,
+  };
+}
+
 function parseTailorResumeSourceItem(
   value: unknown,
   fallbackId: string,
@@ -630,6 +671,16 @@ function parseTailorResumeSourceItem(
   const id = readString(value.id, fallbackId);
 
   if (value.itemType === "entry") {
+    const legacyDescriptionUnits = Array.isArray(value.descriptionLines)
+      ? value.descriptionLines.map((unit, index) =>
+          parseTailorResumeSourceUnit(
+            unit,
+            `${id}_description_${String(index + 1).padStart(2, "0")}`,
+            "entry_description",
+          ),
+        )
+      : [];
+
     return {
       bulletLines: Array.isArray(value.bulletLines)
         ? value.bulletLines.map((unit, index) =>
@@ -643,15 +694,17 @@ function parseTailorResumeSourceItem(
       dates: value.dates
         ? parseTailorResumeSourceUnit(value.dates, `${id}_dates`, "entry_dates")
         : null,
-      descriptionLines: Array.isArray(value.descriptionLines)
-        ? value.descriptionLines.map((unit, index) =>
-            parseTailorResumeSourceUnit(
-              unit,
-              `${id}_description_${String(index + 1).padStart(2, "0")}`,
-              "description_line",
-            ),
+      description: value.description
+        ? parseTailorResumeSourceUnit(
+            value.description,
+            `${id}_description`,
+            "entry_description",
           )
-        : [],
+        : mergeTailorResumeSourceUnits(
+            legacyDescriptionUnits,
+            `${id}_description`,
+            "entry_description",
+          ),
       heading: parseTailorResumeSourceUnit(
         value.heading,
         `${id}_heading`,
@@ -735,16 +788,24 @@ export function parseTailorResumeSourceDocument(
   }
 
   const headerValue = isRecord(value.header) ? value.header : null;
-  const headerId = readString(headerValue?.id, "header");
-  const lines = Array.isArray(headerValue?.lines)
+  const legacyHeaderLines = Array.isArray(headerValue?.lines)
     ? headerValue.lines.map((line, index) =>
         parseTailorResumeSourceUnit(
           line,
-          `header_line_${String(index + 1).padStart(2, "0")}`,
-          "header_line",
+          `sub_head_line_${String(index + 1).padStart(2, "0")}`,
+          "sub_head_line",
         ),
       )
     : [];
+  const subHeadLines = Array.isArray(value.subHeadLines)
+    ? value.subHeadLines.map((line, index) =>
+        parseTailorResumeSourceUnit(
+          line,
+          `sub_head_line_${String(index + 1).padStart(2, "0")}`,
+          "sub_head_line",
+        ),
+      )
+    : legacyHeaderLines;
   const sections = Array.isArray(value.sections)
     ? value.sections.map((section, index) =>
         parseTailorResumeSourceSection(
@@ -755,20 +816,17 @@ export function parseTailorResumeSourceDocument(
     : [];
 
   return {
-    header: {
-      id: headerId,
-      lines:
-        lines.length > 0
-          ? lines
-          : [createEmptyTailorResumeSourceUnit("header_line_01", "header_line")],
-      name: parseTailorResumeSourceUnit(
-        headerValue?.name,
-        "header_name",
-        "header_name",
-      ),
-    },
+    headerText: parseTailorResumeSourceUnit(
+      value.headerText ?? headerValue?.name,
+      "header_text",
+      "header_text",
+    ),
     sections:
       sections.length > 0 ? sections : createEmptyTailorResumeSourceDocument().sections,
+    subHeadLines:
+      subHeadLines.length > 0
+        ? subHeadLines
+        : [createEmptyTailorResumeSourceUnit("sub_head_line_01", "sub_head_line")],
     version: value.version === 1 ? 1 : 1,
   };
 }

@@ -98,7 +98,6 @@ const latexHeadingMacros = String.raw`% ---------- HEADINGS ----------
 \newcommand{\descline}[1]{{\BodyFont #1\par}}
 
 \newenvironment{resumebullets}{
-  \vspace{0} % ENV: If you want space between description and bullets
   \begin{itemize}\BodyFont
 }{
   \end{itemize}
@@ -278,7 +277,7 @@ function renderHeaderLastLine(unit: TailorResumeSourceUnit) {
 }
 
 function renderResumeHeaderMacro(document: TailorResumeSourceDocument) {
-  const lines = document.header.lines;
+  const lines = document.subHeadLines;
   const renderedLines = lines.map((line, index) => {
     const isLastLine = index === lines.length - 1;
 
@@ -325,7 +324,7 @@ function renderResumeHeaderMacro(document: TailorResumeSourceDocument) {
   return [
     String.raw`\newcommand{\resumeHeader}{%`,
     String.raw`  \begin{center}`,
-    `    {\\NameFont\\textbf{${renderHeaderName(document.header.name)}}}\\par`,
+    `    {\\NameFont\\textbf{${renderHeaderName(document.headerText)}}}\\par`,
     String.raw`    \vspace{2.4pt}`,
     String.raw`    {\BodyFont`,
     headerBody,
@@ -376,9 +375,9 @@ function renderWorkExperienceSection(section: TailorResumeSourceSection) {
     .map((item, index, items) => {
       const lines = [
         renderEntryHeading(item),
-        ...item.descriptionLines.map(
-          (line) => `\\descline{${renderSegments(line.segments)}}`,
-        ),
+        ...(item.description
+          ? [`\\descline{${renderSegments(item.description.segments)}}`]
+          : []),
         renderBulletBlock(item),
       ].filter(Boolean);
 
@@ -415,13 +414,9 @@ function renderEducationSection(section: TailorResumeSourceSection) {
       blocks.push(`  {\\BodyFont ${dates}}`);
       blocks.push(String.raw`\end{tabular*}\par`);
 
-      if (item.descriptionLines.length > 0) {
+      if (item.description) {
         blocks.push("");
-        blocks.push(
-          ...item.descriptionLines.map(
-            (line) => `{\\BodyFont\\hspace*{20pt}${renderSegments(line.segments)}\\par}`,
-          ),
-        );
+        blocks.push(`{\\BodyFont\\hspace*{20pt}${renderSegments(item.description.segments)}\\par}`);
       }
       continue;
     }
@@ -462,9 +457,9 @@ function renderSoftwareProjectsSection(section: TailorResumeSourceSection) {
       item.dates
         ? `\\projectheading{${heading}}{${renderSegments(item.dates.segments)}}`
         : `{\\BodyFont${heading}\\par}`,
-      ...item.descriptionLines.map(
-        (line) => `\\descline{${renderSegments(line.segments)}}`,
-      ),
+      ...(item.description
+        ? [`\\descline{${renderSegments(item.description.segments)}}`]
+        : []),
       renderBulletBlock(item),
     ].filter(Boolean);
 
@@ -532,9 +527,9 @@ function renderGenericSection(section: TailorResumeSourceSection) {
           item.dates
             ? `\\projectheading{${renderProjectHeadingUnit(item.heading)}}{${renderSegments(item.dates.segments)}}`
             : `{\\BodyFont${renderProjectHeadingUnit(item.heading)}\\par}`,
-          ...item.descriptionLines.map(
-            (line) => `\\descline{${renderSegments(line.segments)}}`,
-          ),
+          ...(item.description
+            ? [`\\descline{${renderSegments(item.description.segments)}}`]
+            : []),
           renderBulletBlock(item),
         ].filter(Boolean);
 
@@ -588,6 +583,43 @@ function extractRelevantLatexError(output: string) {
   return lines.slice(-12).join("\n");
 }
 
+function buildPreviewFallbackLatex(latexCode: string, compileOutput: string) {
+  if (/newtx(text|math)\.sty/i.test(compileOutput)) {
+    return latexCode.replace(
+      String.raw`\usepackage{newtxtext,newtxmath}`,
+      String.raw`\usepackage{lmodern}`,
+    );
+  }
+
+  return null;
+}
+
+async function runPdflatex(texPath: string, outputDirectory: string) {
+  await execFile(
+    "pdflatex",
+    [
+      "-interaction=nonstopmode",
+      "-halt-on-error",
+      "-file-line-error",
+      "-output-directory",
+      outputDirectory,
+      texPath,
+    ],
+    {
+      maxBuffer: 8 * 1024 * 1024,
+      timeout: 20_000,
+    },
+  );
+}
+
+function readLatexProcessOutput(error: unknown) {
+  return error instanceof Error && "stdout" in error
+    ? `${String((error as { stdout?: string }).stdout ?? "")}\n${String(
+        (error as { stderr?: string }).stderr ?? "",
+      )}`
+    : "";
+}
+
 export function renderTailorResumeLatex(document: TailorResumeSourceDocument) {
   const headerMacro = renderResumeHeaderMacro(document);
   const sections = document.sections.map((section) => renderSection(section)).join("\n\n");
@@ -609,31 +641,28 @@ export async function compileTailorResumeLatex(latexCode: string) {
 
   try {
     await writeFile(texPath, latexCode, "utf8");
-
-    await execFile(
-      "pdflatex",
-      [
-        "-interaction=nonstopmode",
-        "-halt-on-error",
-        "-file-line-error",
-        "-output-directory",
-        tempDir,
-        texPath,
-      ],
-      {
-        maxBuffer: 8 * 1024 * 1024,
-        timeout: 20_000,
-      },
-    );
+    await runPdflatex(texPath, tempDir);
 
     return await readFile(pdfPath);
   } catch (error) {
-    const output =
-      error instanceof Error && "stdout" in error
-        ? `${String((error as { stdout?: string }).stdout ?? "")}\n${String(
-            (error as { stderr?: string }).stderr ?? "",
-          )}`
-        : "";
+    const output = readLatexProcessOutput(error);
+    const fallbackLatex = buildPreviewFallbackLatex(latexCode, output);
+
+    if (fallbackLatex) {
+      try {
+        await writeFile(texPath, fallbackLatex, "utf8");
+        await runPdflatex(texPath, tempDir);
+        return await readFile(pdfPath);
+      } catch (fallbackError) {
+        const fallbackOutput = readLatexProcessOutput(fallbackError);
+
+        throw new Error(
+          fallbackOutput
+            ? extractRelevantLatexError(fallbackOutput)
+            : "Unable to compile the generated LaTeX preview.",
+        );
+      }
+    }
 
     throw new Error(
       output

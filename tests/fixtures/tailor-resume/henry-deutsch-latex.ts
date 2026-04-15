@@ -96,7 +96,6 @@ export const henryDeutschExpectedLatex = String.raw`\documentclass[10pt]{article
 \newcommand{\descline}[1]{{\BodyFont #1\par}}
 
 \newenvironment{resumebullets}{
-  \vspace{0} % ENV: If you want space between description and bullets
   \begin{itemize}\BodyFont
 }{
   \end{itemize}
@@ -119,8 +118,7 @@ export const henryDeutschExpectedLatex = String.raw`\documentclass[10pt]{article
 \resumeSection{WORK EXPERIENCE}
 
 \entryheading{NewForm AI}{Software Engineer I --- Full Time}{Aug 2025 - Feb 2026}
-\descline{NewForm provides B2B analytics for consumer companies on their ads, synthesized using deep data modeling and AI.}
-\descline{Reported to the CTO and took ownership of 6 major initiatives from inception to implementation in direct collaboration with C-suite}
+\descline{NewForm provides B2B analytics for consumer companies on their ads, synthesized using deep data modeling and AI. Reported to the CTO and took ownership of 6 major initiatives from inception to implementation in direct collaboration with C-suite}
 \begin{resumebullets}
   \resumeitem{Led major refactor enabling \textbf{\$50K+/mo in TikTok ad spend} by incorporating TikTok support for our entire suite of software. Refactored \textbf{31K+ LOC in 365 files}, reworking \textbf{140+ tRPC endpoints \& Bayesian inference engine} for platform-agnostic objects}
   \resumeitem{Conceived and led ad similarity detection service, authoring white paper and deploying \textbf{p-hashing to 359K ads across 20 clients}}

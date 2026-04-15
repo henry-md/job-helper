@@ -80,7 +80,7 @@ function createEntryItem(sectionId: string): TailorResumeSourceEntryItem {
   return {
     bulletLines: [],
     dates: createEmptySourceUnit(`${id}_dates`, "entry_dates"),
-    descriptionLines: [],
+    description: null,
     heading: createEmptySourceUnit(`${id}_heading`, "entry_heading"),
     id,
     itemType: "entry",
@@ -307,30 +307,6 @@ function parseSegmentsFromEditor(
   return mergeAdjacentSegments(rawSegments, unitId);
 }
 
-function ToolbarButton({
-  children,
-  disabled,
-  onClick,
-  title,
-}: {
-  children: ReactNode;
-  disabled?: boolean;
-  onClick: () => void;
-  title: string;
-}) {
-  return (
-    <button
-      className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] uppercase tracking-[0.16em] text-zinc-300 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:border-white/8 disabled:text-zinc-600"
-      disabled={disabled}
-      onClick={onClick}
-      title={title}
-      type="button"
-    >
-      {children}
-    </button>
-  );
-}
-
 function RichTextLineEditor({
   ariaLabel,
   className,
@@ -388,13 +364,13 @@ function RichTextLineEditor({
     emitChangeFromDom();
   }
 
-  function handleLinkClick() {
+  function promptForLink() {
     if (disabled) {
       return;
     }
 
     const nextUrl = window.prompt(
-      "Enter the destination URL for the selected text. Leave blank to remove the link.",
+      "Enter a URL for the selected text. Leave blank to remove the link.",
       "",
     );
 
@@ -412,40 +388,6 @@ function RichTextLineEditor({
 
   return (
     <div className="grid gap-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <ToolbarButton
-          disabled={disabled}
-          onClick={() => runFormattingCommand("bold")}
-          title="Bold the selected text"
-        >
-          Bold
-        </ToolbarButton>
-        <ToolbarButton
-          disabled={disabled}
-          onClick={() => runFormattingCommand("italic")}
-          title="Italicize the selected text"
-        >
-          Italic
-        </ToolbarButton>
-        <ToolbarButton
-          disabled={disabled}
-          onClick={handleLinkClick}
-          title="Add or remove link styling"
-        >
-          Link
-        </ToolbarButton>
-        <ToolbarButton
-          disabled={disabled}
-          onClick={() => {
-            runFormattingCommand("removeFormat");
-            runFormattingCommand("unlink");
-          }}
-          title="Remove inline formatting"
-        >
-          Clear
-        </ToolbarButton>
-      </div>
-
       <div
         aria-label={ariaLabel}
         className={classNames(
@@ -458,6 +400,12 @@ function RichTextLineEditor({
         onBlur={emitChangeFromDom}
         onInput={emitChangeFromDom}
         onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+            event.preventDefault();
+            promptForLink();
+            return;
+          }
+
           if (event.key === "Enter") {
             event.preventDefault();
           }
@@ -527,17 +475,17 @@ export default function ResumeSourceEditor({
 
   function replaceUnit(nextUnit: TailorResumeSourceUnit) {
     updateDocument((draft) => {
-      if (draft.header.name.id === nextUnit.id) {
-        draft.header.name = nextUnit;
+      if (draft.headerText.id === nextUnit.id) {
+        draft.headerText = nextUnit;
         return;
       }
 
-      const headerLineIndex = draft.header.lines.findIndex(
+      const headerLineIndex = draft.subHeadLines.findIndex(
         (line) => line.id === nextUnit.id,
       );
 
       if (headerLineIndex !== -1) {
-        draft.header.lines[headerLineIndex] = nextUnit;
+        draft.subHeadLines[headerLineIndex] = nextUnit;
         return;
       }
 
@@ -559,12 +507,8 @@ export default function ResumeSourceEditor({
               return;
             }
 
-            const descriptionIndex = item.descriptionLines.findIndex(
-              (line) => line.id === nextUnit.id,
-            );
-
-            if (descriptionIndex !== -1) {
-              item.descriptionLines[descriptionIndex] = nextUnit;
+            if (item.description?.id === nextUnit.id) {
+              item.description = nextUnit;
               return;
             }
 
@@ -601,14 +545,14 @@ export default function ResumeSourceEditor({
 
   function removeHeaderLine(lineId: string) {
     updateDocument((draft) => {
-      draft.header.lines = draft.header.lines.filter((line) => line.id !== lineId);
+      draft.subHeadLines = draft.subHeadLines.filter((line) => line.id !== lineId);
     });
   }
 
   function addHeaderLine() {
     updateDocument((draft) => {
-      draft.header.lines.push(
-        createEmptySourceUnit(createId("header_line"), "header_line"),
+      draft.subHeadLines.push(
+        createEmptySourceUnit(createId("sub_head_line"), "sub_head_line"),
       );
     });
   }
@@ -637,7 +581,7 @@ export default function ResumeSourceEditor({
     });
   }
 
-  function addEntryDescriptionLine(sectionId: string, itemId: string) {
+  function addEntryDescription(sectionId: string, itemId: string) {
     updateDocument((draft) => {
       const targetSection = draft.sections.find((section) => section.id === sectionId);
       const targetItem = targetSection?.items.find(
@@ -645,17 +589,18 @@ export default function ResumeSourceEditor({
           item.itemType === "entry" && item.id === itemId,
       );
 
-      if (!targetItem) {
+      if (!targetItem || targetItem.description) {
         return;
       }
 
-      targetItem.descriptionLines.push(
-        createEmptySourceUnit(createId(`${itemId}_description`), "description_line"),
+      targetItem.description = createEmptySourceUnit(
+        createId(`${itemId}_description`),
+        "entry_description",
       );
     });
   }
 
-  function removeEntryDescriptionLine(sectionId: string, itemId: string, unitId: string) {
+  function removeEntryDescription(sectionId: string, itemId: string) {
     updateDocument((draft) => {
       const targetSection = draft.sections.find((section) => section.id === sectionId);
       const targetItem = targetSection?.items.find(
@@ -667,9 +612,7 @@ export default function ResumeSourceEditor({
         return;
       }
 
-      targetItem.descriptionLines = targetItem.descriptionLines.filter(
-        (line) => line.id !== unitId,
-      );
+      targetItem.description = null;
     });
   }
 
@@ -746,22 +689,24 @@ export default function ResumeSourceEditor({
 
   return (
     <div className="grid gap-5">
-      <SectionCard title="Header">
+      <SectionCard title="Header + Subhead">
         <div className="grid gap-3">
-          <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Name</p>
+          <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">
+            Header text
+          </p>
           <RichTextLineEditor
-            ariaLabel="Resume name"
+            ariaLabel="Header text"
             disabled={disabled}
             onChange={replaceUnit}
-            placeholder="Name"
-            unit={value.header.name}
+            placeholder="Header text"
+            unit={value.headerText}
           />
         </div>
 
         <div className="grid gap-3">
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">
-              Header lines
+              Subhead lines
             </p>
             <SubtleButton disabled={disabled} onClick={addHeaderLine}>
               Add line
@@ -769,7 +714,7 @@ export default function ResumeSourceEditor({
           </div>
 
           <div className="grid gap-3">
-            {value.header.lines.map((line, index) => (
+            {value.subHeadLines.map((line, index) => (
               <div
                 className="rounded-[1rem] border border-white/8 bg-black/15 p-3"
                 key={line.id}
@@ -778,7 +723,7 @@ export default function ResumeSourceEditor({
                   <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">
                     Line {index + 1}
                   </p>
-                  {value.header.lines.length > 1 ? (
+                  {value.subHeadLines.length > 1 ? (
                     <SubtleButton
                       disabled={disabled}
                       onClick={() => removeHeaderLine(line.id)}
@@ -789,10 +734,10 @@ export default function ResumeSourceEditor({
                 </div>
 
                 <RichTextLineEditor
-                  ariaLabel={`Header line ${index + 1}`}
+                  ariaLabel={`Subhead line ${index + 1}`}
                   disabled={disabled}
                   onChange={replaceUnit}
-                  placeholder="Contact line"
+                  placeholder="Subhead line"
                   unit={line}
                 />
               </div>
@@ -894,47 +839,36 @@ export default function ResumeSourceEditor({
                     <div className="grid gap-3">
                       <div className="flex items-center justify-between gap-3">
                         <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">
-                          Description lines
+                          Description
                         </p>
-                        <SubtleButton
-                          disabled={disabled}
-                          onClick={() => addEntryDescriptionLine(section.id, item.id)}
-                        >
-                          Add line
-                        </SubtleButton>
+                        {item.description ? (
+                          <SubtleButton
+                            disabled={disabled}
+                            onClick={() => removeEntryDescription(section.id, item.id)}
+                          >
+                            Remove
+                          </SubtleButton>
+                        ) : (
+                          <SubtleButton
+                            disabled={disabled}
+                            onClick={() => addEntryDescription(section.id, item.id)}
+                          >
+                            Add
+                          </SubtleButton>
+                        )}
                       </div>
 
-                      {item.descriptionLines.length > 0 ? (
-                        <div className="grid gap-3">
-                          {item.descriptionLines.map((line) => (
-                            <div className="grid gap-2" key={line.id}>
-                              <div className="flex justify-end">
-                                <SubtleButton
-                                  disabled={disabled}
-                                  onClick={() =>
-                                    removeEntryDescriptionLine(
-                                      section.id,
-                                      item.id,
-                                      line.id,
-                                    )
-                                  }
-                                >
-                                  Remove
-                                </SubtleButton>
-                              </div>
-                              <RichTextLineEditor
-                                ariaLabel="Entry description line"
-                                disabled={disabled}
-                                onChange={replaceUnit}
-                                placeholder="Description line"
-                                unit={line}
-                              />
-                            </div>
-                          ))}
-                        </div>
+                      {item.description ? (
+                        <RichTextLineEditor
+                          ariaLabel="Entry description"
+                          disabled={disabled}
+                          onChange={replaceUnit}
+                          placeholder="Description"
+                          unit={item.description}
+                        />
                       ) : (
                         <div className="rounded-[1rem] border border-dashed border-white/10 bg-black/10 px-4 py-3 text-sm text-zinc-500">
-                          No description lines yet.
+                          No description yet.
                         </div>
                       )}
                     </div>
