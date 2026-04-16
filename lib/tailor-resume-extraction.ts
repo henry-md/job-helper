@@ -4,7 +4,6 @@ import {
   validateTailorResumeLatexDocument,
 } from "@/lib/tailor-resume-link-validation";
 import {
-  maxResumeLatexAttempts,
   resumeLatexValidationTool,
   runResumeLatexToolLoop,
   type RunResumeLatexToolLoopResult,
@@ -14,6 +13,7 @@ import {
   type ExtractedTailorResumeLink,
 } from "@/lib/tailor-resume-links";
 import { applyTailorResumeLinkOverridesWithSummary } from "@/lib/tailor-resume-link-overrides";
+import { getRetryAttemptsToGenerateLatexFromPdf } from "@/lib/tailor-resume-retry-config";
 import { fileBufferToDataUrl } from "@/lib/job-tracking";
 import {
   tailorResumeLatexExample,
@@ -127,7 +127,7 @@ function buildExtractedResumeLinksFromLatex(latexCode: string) {
   }));
 }
 
-function buildResumeLatexInstructions() {
+function buildResumeLatexInstructions(maxAttempts: number) {
   return `Convert the provided resume into a complete standalone LaTeX document. Preserve every word from the resume exactly as written whenever it is legible. Never summarize, shorten, compress, or omit text. In particular, never truncate bullets to their first sentence. Keep the original section order and keep all bullets, dates, headings, labeled lines, links, and separators. Preserve visible bold, italics, underlines, bullet structure, and link styling when possible. Return a full LaTeX document from \\documentclass through \\end{document} that compiles with pdflatex. Prefer the exact template and macro vocabulary shown below. Use only standard LaTeX plus the packages already present in that template unless absolutely necessary. Inline formatting such as \\textbf, \\textit, \\tightul, and \\href may appear anywhere inside macro arguments when needed.
 
 Pay particular attention to these details because they are easy to get wrong:
@@ -148,7 +148,7 @@ Tool workflow:
 - The tool validates both pdflatex compilation and extracted hyperlinks.
 - If the tool reports a compile error or failed links, fix that exact issue while preserving the resume content. For failed links, preserve the visible text, remove hyperlink-specific styling, and keep the affected entry in links with url set to null instead of inventing a destination.
 - Never add link-style formatting when the destination does not resolve confidently.
-- Stop as soon as the tool reports success. You have at most ${String(maxResumeLatexAttempts)} validation attempts.
+- Stop as soon as the tool reports success. You have at most ${String(maxAttempts)} validation attempts.
 
 Preferred template:
 
@@ -258,6 +258,7 @@ export async function extractResumeLatexDocument(
   dependencies: ExtractResumeLatexDocumentDependencies = {},
 ): Promise<ExtractResumeLatexDocumentResult> {
   const model = process.env.OPENAI_RESUME_EXTRACTION_MODEL ?? "gpt-5-mini";
+  const retryAttempts = getRetryAttemptsToGenerateLatexFromPdf();
   const extractPdfLinks = dependencies.extractPdfLinks ?? extractEmbeddedPdfLinks;
   const knownLinks = dependencies.knownLinks ?? [];
   const preserveUnusedKnownLinks =
@@ -410,7 +411,7 @@ export async function extractResumeLatexDocument(
       createResponse: async ({ previousResponseId, input: retryInput }) => {
         const response = await client.responses.create({
           model,
-          instructions: buildResumeLatexInstructions(),
+          instructions: buildResumeLatexInstructions(retryAttempts),
           input:
             retryInput ??
             buildResumeExtractionInput(input, uploadedFile?.id ?? null, {
@@ -474,6 +475,7 @@ export async function extractResumeLatexDocument(
         };
       },
       fallbackModel: model,
+      maxAttempts: retryAttempts,
       onAttemptEvent: dependencies.onAttemptEvent,
       validateLatex: validateLatexWithOverrides,
     });

@@ -9,11 +9,13 @@ import type {
   JobLocationType,
 } from "@/lib/job-application-types";
 import {
-  assertSupportedImageFile,
-  normalizeSalaryRange,
   normalizeCompanyName,
-  persistJobScreenshot,
+  normalizeSalaryRange,
   resolveAppliedAt,
+} from "@/lib/job-tracking-shared";
+import {
+  assertSupportedImageFile,
+  persistJobScreenshot,
 } from "@/lib/job-tracking";
 
 type DraftUploadSnapshot = {

@@ -290,6 +290,11 @@ export default function JobApplicationIntake({
   }, [draft]);
 
   useEffect(() => {
+    setReferrerOptions(initialReferrerOptions);
+    referrerOptionsRef.current = initialReferrerOptions;
+  }, [initialReferrerOptions]);
+
+  useEffect(() => {
     referrerOptionsRef.current = referrerOptions;
   }, [referrerOptions]);
 

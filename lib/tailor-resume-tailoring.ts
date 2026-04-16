@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { applyTailorResumeLinkOverridesWithSummary } from "./tailor-resume-link-overrides.ts";
 import { validateTailorResumeLatexDocument } from "./tailor-resume-link-validation.ts";
+import { getRetryAttemptsToGenerateLatexEdits } from "./tailor-resume-retry-config.ts";
 import {
   normalizeTailorResumeLatex,
   stripTailorResumeSegmentIds,
@@ -10,7 +11,6 @@ import type {
   TailorResumeSavedLinkUpdate,
 } from "./tailor-resume-types.ts";
 
-const maxTailoredResumeAttempts = 3;
 const TEST_OPENAI_RESPONSE_MODEL = "test-openai-response";
 const segmentMarkerPattern = /^[ \t]*% JOBHELPER_SEGMENT_ID:\s*([^\n]+)\s*(?:\n|$)/gm;
 const tailorResumeBlockChangesSchema = {
@@ -385,6 +385,7 @@ export async function generateTailoredResume(input: {
   linkOverrides?: TailorResumeLinkRecord[];
 }): Promise<GenerateTailoredResumeResult> {
   const model = process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
+  const maxTailoredResumeAttempts = getRetryAttemptsToGenerateLatexEdits();
   const normalizedInput = normalizeTailorResumeLatex(input.annotatedLatexCode);
   const linkOverrides = input.linkOverrides ?? [];
   const fallbackMetadata = normalizeTailoredResumeMetadata({});

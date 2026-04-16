@@ -22,6 +22,7 @@ import type {
   JobApplicationRecord,
   ReferrerOption,
 } from "@/lib/job-application-types";
+import type { TailoredResumeRecord } from "@/lib/tailor-resume-types";
 
 function getEmptyDraft(): JobApplicationDraft {
   return {
@@ -83,16 +84,56 @@ function matchesSearch(application: JobApplicationRecord, query: string) {
     .includes(normalizedQuery);
 }
 
+function matchesTailoredResumeSearch(
+  tailoredResume: TailoredResumeRecord,
+  query: string,
+) {
+  const normalizedQuery = query.trim().toLowerCase();
+
+  if (!normalizedQuery) {
+    return true;
+  }
+
+  return [
+    tailoredResume.displayName,
+    tailoredResume.companyName,
+    tailoredResume.positionTitle,
+    tailoredResume.jobIdentifier,
+    tailoredResume.status,
+  ]
+    .join(" ")
+    .toLowerCase()
+    .includes(normalizedQuery);
+}
+
+function buildTailoredResumePreviewPdfUrl(record: TailoredResumeRecord) {
+  return record.pdfUpdatedAt
+    ? `/api/tailor-resume/preview?tailoredResumeId=${encodeURIComponent(record.id)}&updatedAt=${encodeURIComponent(record.pdfUpdatedAt)}`
+    : null;
+}
+
+function buildTailoredResumeDescriptionPreview(jobDescription: string) {
+  const normalizedDescription = jobDescription.replace(/\s+/g, " ").trim();
+
+  if (normalizedDescription.length <= 220) {
+    return normalizedDescription;
+  }
+
+  return `${normalizedDescription.slice(0, 217).trimEnd()}...`;
+}
+
 export default function ApplicationStatsWorkspace({
   companyOptions,
   initialExpandedId = null,
   applications: initialApplications,
   referrerOptions: initialReferrerOptions,
+  tailoredResumes,
 }: {
   companyOptions: CompanyOption[];
   initialExpandedId?: string | null;
   applications: JobApplicationRecord[];
   referrerOptions: ReferrerOption[];
+  tailoredResumes: TailoredResumeRecord[];
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -107,10 +148,16 @@ export default function ApplicationStatsWorkspace({
   const [pendingDeleteApplication, setPendingDeleteApplication] =
     useState<JobApplicationRecord | null>(null);
   const [referrerOptions, setReferrerOptions] = useState(initialReferrerOptions);
+  const [historyView, setHistoryView] = useState<"applications" | "tailored">(
+    "applications",
+  );
   const [searchQuery, setSearchQuery] = useState("");
 
   const filteredApplications = applications.filter((application) =>
     matchesSearch(application, searchQuery),
+  );
+  const filteredTailoredResumes = tailoredResumes.filter((tailoredResume) =>
+    matchesTailoredResumeSearch(tailoredResume, searchQuery),
   );
   const selectedApplication =
     applications.find((application) => application.id === expandedId) ?? null;
@@ -127,6 +174,14 @@ export default function ApplicationStatsWorkspace({
       label: status,
     }),
   );
+  const activeHistoryCount =
+    historyView === "applications"
+      ? filteredApplications.length
+      : filteredTailoredResumes.length;
+  const historySearchPlaceholder =
+    historyView === "applications"
+      ? "Search title, company, status..."
+      : "Search company, role, identifier...";
   const includeYearInDates = shouldIncludeShortYear(
     applications.flatMap((application) => [
       application.appliedAt,
@@ -145,6 +200,10 @@ export default function ApplicationStatsWorkspace({
   useEffect(() => {
     setExpandedId(initialExpandedId);
   }, [initialExpandedId]);
+
+  useEffect(() => {
+    setSearchQuery("");
+  }, [historyView]);
 
   useEffect(() => {
     if (applications.length === 0) {
@@ -416,138 +475,262 @@ export default function ApplicationStatsWorkspace({
         </aside>
 
         <section className="glass-panel soft-ring flex min-h-0 flex-col rounded-[1.5rem] p-4 sm:p-5">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-            Application history
-          </p>
-          <span className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
-            {filteredApplications.length}
-          </span>
-        </div>
-        <input
-          className="mt-3 rounded-[1rem] border border-white/10 bg-zinc-950/70 px-3 py-2.5 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-emerald-300/45"
-          onChange={(event) => setSearchQuery(event.target.value)}
-          placeholder="Search title, company, status..."
-          type="search"
-          value={searchQuery}
-        />
-
-        <div className="app-scrollbar mt-3 min-h-0 flex-1 overflow-visible pr-1 xl:overflow-y-auto">
-          {filteredApplications.length === 0 ? (
-            <div className="flex h-full min-h-[220px] items-center justify-center rounded-[1.25rem] border border-white/8 bg-black/20 p-6 text-center text-sm text-zinc-400">
-              No applications match this filter.
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+              History
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1 rounded-full border border-white/10 bg-black/20 p-1">
+                <button
+                  className={`rounded-full px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] transition ${
+                    historyView === "applications"
+                      ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
+                      : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                  onClick={() => setHistoryView("applications")}
+                  type="button"
+                >
+                  Applications
+                </button>
+                <button
+                  className={`rounded-full px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] transition ${
+                    historyView === "tailored"
+                      ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
+                      : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                  onClick={() => setHistoryView("tailored")}
+                  type="button"
+                >
+                  Tailored resumes
+                </button>
+              </div>
+              <span className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
+                {activeHistoryCount}
+              </span>
             </div>
-          ) : (
-            <div className="grid gap-3">
-              {filteredApplications.map((application) => {
-                const isExpanded = application.id === expandedId;
-                const isDeleting = deletingId === application.id;
+          </div>
+          <input
+            className="mt-3 rounded-[1rem] border border-white/10 bg-zinc-950/70 px-3 py-2.5 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-emerald-300/45"
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder={historySearchPlaceholder}
+            type="search"
+            value={searchQuery}
+          />
 
-                return (
-                  <article
-                    key={application.id}
-                    className={`group overflow-hidden rounded-[1.25rem] border transition ${
-                      isExpanded
-                        ? "border-emerald-400/25 bg-emerald-400/6"
-                        : "border-white/8 bg-black/20 hover:border-white/12 hover:bg-white/[0.03]"
-                    }`}
-                    >
-                    <div className="flex items-start justify-between gap-3 px-4 py-4">
-                      <button
-                        className="flex min-w-0 flex-1 items-start rounded-[1.05rem] px-4 py-3 text-left transition"
-                        onClick={() => {
-                          setExpandedId((currentId) =>
-                            currentId === application.id ? null : application.id,
-                          );
-                        }}
-                        type="button"
+          <div className="app-scrollbar mt-3 min-h-0 flex-1 overflow-visible pr-1 xl:overflow-y-auto">
+            {historyView === "applications" ? (
+              filteredApplications.length === 0 ? (
+                <div className="flex h-full min-h-[220px] items-center justify-center rounded-[1.25rem] border border-white/8 bg-black/20 p-6 text-center text-sm text-zinc-400">
+                  No applications match this filter.
+                </div>
+              ) : (
+                <div className="grid gap-3">
+                  {filteredApplications.map((application) => {
+                    const isExpanded = application.id === expandedId;
+                    const isDeleting = deletingId === application.id;
+
+                    return (
+                      <article
+                        key={application.id}
+                        className={`group overflow-hidden rounded-[1.25rem] border transition ${
+                          isExpanded
+                            ? "border-emerald-400/25 bg-emerald-400/6"
+                            : "border-white/8 bg-black/20 hover:border-white/12 hover:bg-white/[0.03]"
+                        }`}
                       >
+                        <div className="flex items-start justify-between gap-3 px-4 py-4">
+                          <button
+                            className="flex min-w-0 flex-1 items-start rounded-[1.05rem] px-4 py-3 text-left transition"
+                            onClick={() => {
+                              setExpandedId((currentId) =>
+                                currentId === application.id ? null : application.id,
+                              );
+                            }}
+                            type="button"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-base font-medium text-zinc-100">
+                                {application.jobTitle}
+                              </p>
+                              <p className="mt-1 truncate text-sm text-zinc-400">
+                                {application.companyName}
+                              </p>
+                              <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-500">
+                                <span>
+                                  Submitted{" "}
+                                  {formatCompactDate(
+                                    application.appliedAt,
+                                    includeYearInDates,
+                                  )}
+                                </span>
+                                <span>
+                                  Updated{" "}
+                                  {formatCompactDate(
+                                    application.updatedAt,
+                                    includeYearInDates,
+                                  )}
+                                </span>
+                              </div>
+                            </div>
+                          </button>
+
+                          <div className="flex shrink-0 flex-col items-center gap-3 pt-1">
+                            <button
+                              className="rounded-full border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs uppercase tracking-[0.18em] text-rose-200 transition hover:border-rose-300/35 hover:bg-rose-400/15 disabled:cursor-not-allowed disabled:opacity-60"
+                              disabled={isDeleting}
+                              onClick={() => {
+                                requestDelete(application);
+                              }}
+                              type="button"
+                            >
+                              {isDeleting ? "Deleting..." : "Delete"}
+                            </button>
+                            <button
+                              aria-label={isExpanded ? "Collapse application" : "Expand application"}
+                              className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-zinc-400 transition hover:border-white/15 hover:text-zinc-300"
+                              onClick={() => {
+                                setExpandedId((currentId) =>
+                                  currentId === application.id ? null : application.id,
+                                );
+                              }}
+                              type="button"
+                            >
+                              <ChevronDown
+                                aria-hidden="true"
+                                className={`h-4 w-4 transition-transform ${
+                                  isExpanded ? "rotate-180" : ""
+                                }`}
+                              />
+                            </button>
+                          </div>
+                        </div>
+
+                        {isExpanded ? (
+                          <div className="border-t border-white/8 px-3 pb-3 pt-3">
+                            <ApplicationWindow
+                              companyOptions={companyOptions}
+                              draft={draft}
+                              footerMessage="Edit the application, then save changes."
+                              isFormLocked={isSaving}
+                              isMoreOpen={isMoreOpen}
+                              isSaving={isSaving}
+                              onReset={resetSelectedDraft}
+                              onSubmit={handleSubmit}
+                              referrerOptions={referrerOptions}
+                              saveDisabled={
+                                isSaving ||
+                                draft.jobTitle.trim().length === 0 ||
+                                draft.companyName.trim().length === 0
+                              }
+                              setDraft={setDraft}
+                              setIsMoreOpen={setIsMoreOpen}
+                              setReferrerOptions={setReferrerOptions}
+                            />
+                          </div>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              )
+            ) : filteredTailoredResumes.length === 0 ? (
+              <div className="flex h-full min-h-[220px] items-center justify-center rounded-[1.25rem] border border-white/8 bg-black/20 p-6 text-center text-sm text-zinc-400">
+                No tailored resumes match this filter yet.
+              </div>
+            ) : (
+              <div className="grid gap-3">
+                {filteredTailoredResumes.map((tailoredResume) => {
+                  const previewUrl = buildTailoredResumePreviewPdfUrl(tailoredResume);
+                  const descriptionPreview = buildTailoredResumeDescriptionPreview(
+                    tailoredResume.jobDescription,
+                  );
+
+                  return (
+                    <article
+                      key={tailoredResume.id}
+                      className="overflow-hidden rounded-[1.25rem] border border-white/8 bg-black/20"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-4">
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-base font-medium text-zinc-100">
-                            {application.jobTitle}
+                            {tailoredResume.displayName}
                           </p>
-                          <p className="mt-1 truncate text-sm text-zinc-400">
-                            {application.companyName}
-                          </p>
+                          <div className="mt-2 flex flex-wrap gap-2 text-xs uppercase tracking-[0.16em] text-zinc-500">
+                            {tailoredResume.companyName ? (
+                              <span>{tailoredResume.companyName}</span>
+                            ) : null}
+                            {tailoredResume.positionTitle ? (
+                              <span>{tailoredResume.positionTitle}</span>
+                            ) : null}
+                            {tailoredResume.jobIdentifier &&
+                            tailoredResume.jobIdentifier !== "General" ? (
+                              <span>{tailoredResume.jobIdentifier}</span>
+                            ) : null}
+                            <span>
+                              {tailoredResume.status === "ready"
+                                ? "Ready"
+                                : "Needs review"}
+                            </span>
+                          </div>
                           <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-500">
                             <span>
-                              Submitted{" "}
+                              Created{" "}
                               {formatCompactDate(
-                                application.appliedAt,
+                                tailoredResume.createdAt,
                                 includeYearInDates,
                               )}
                             </span>
                             <span>
                               Updated{" "}
                               {formatCompactDate(
-                                application.updatedAt,
+                                tailoredResume.updatedAt,
                                 includeYearInDates,
                               )}
                             </span>
                           </div>
+                          {descriptionPreview ? (
+                            <p className="mt-3 text-sm leading-6 text-zinc-400">
+                              {descriptionPreview}
+                            </p>
+                          ) : null}
+                          {tailoredResume.error ? (
+                            <p className="mt-3 text-sm leading-6 text-rose-300">
+                              {tailoredResume.error}
+                            </p>
+                          ) : null}
                         </div>
-                      </button>
 
-                      <div className="flex shrink-0 flex-col items-center gap-3 pt-1">
-                        <button
-                          className="rounded-full border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs uppercase tracking-[0.18em] text-rose-200 transition hover:border-rose-300/35 hover:bg-rose-400/15 disabled:cursor-not-allowed disabled:opacity-60"
-                          disabled={isDeleting}
-                          onClick={() => {
-                            requestDelete(application);
-                          }}
-                          type="button"
-                        >
-                          {isDeleting ? "Deleting..." : "Delete"}
-                        </button>
-                        <button
-                          aria-label={isExpanded ? "Collapse application" : "Expand application"}
-                          className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-zinc-400 transition hover:border-white/15 hover:text-zinc-300"
-                          onClick={() => {
-                            setExpandedId((currentId) =>
-                              currentId === application.id ? null : application.id,
-                            );
-                          }}
-                          type="button"
-                        >
-                          <ChevronDown
-                            aria-hidden="true"
-                            className={`h-4 w-4 transition-transform ${
-                              isExpanded ? "rotate-180" : ""
-                            }`}
-                          />
-                        </button>
+                        <div className="flex shrink-0 flex-wrap gap-2">
+                          {previewUrl ? (
+                            <a
+                              className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                              href={previewUrl}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              Open PDF
+                            </a>
+                          ) : null}
+                          <button
+                            className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                            onClick={async () => {
+                              await navigator.clipboard.writeText(
+                                tailoredResume.latexCode,
+                              );
+                              toast.success("Copied tailored LaTeX.");
+                            }}
+                            type="button"
+                          >
+                            Copy LaTeX
+                          </button>
+                        </div>
                       </div>
-                    </div>
-
-                    {isExpanded ? (
-                      <div className="border-t border-white/8 px-3 pb-3 pt-3">
-                        <ApplicationWindow
-                          companyOptions={companyOptions}
-                          draft={draft}
-                          footerMessage="Edit the application, then save changes."
-                          isFormLocked={isSaving}
-                          isMoreOpen={isMoreOpen}
-                          isSaving={isSaving}
-                          onReset={resetSelectedDraft}
-                          onSubmit={handleSubmit}
-                          referrerOptions={referrerOptions}
-                          saveDisabled={
-                            isSaving ||
-                            draft.jobTitle.trim().length === 0 ||
-                            draft.companyName.trim().length === 0
-                          }
-                          setDraft={setDraft}
-                          setIsMoreOpen={setIsMoreOpen}
-                          setReferrerOptions={setReferrerOptions}
-                        />
-                      </div>
-                    ) : null}
-                  </article>
-                );
-              })}
-            </div>
-          )}
-        </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </section>
       </section>
     </>

@@ -8,10 +8,12 @@ import type {
   JobLocationType,
 } from "@/lib/job-application-types";
 import {
-  deletePersistedJobScreenshot,
   normalizeCompanyName,
   normalizeSalaryRange,
   resolveAppliedAt,
+} from "@/lib/job-tracking-shared";
+import {
+  deletePersistedJobScreenshot,
 } from "@/lib/job-tracking";
 
 const allowedLocationTypes = new Set<JobLocationType>([

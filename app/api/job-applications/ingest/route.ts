@@ -12,12 +12,14 @@ import type {
   JobLocationType,
 } from "@/lib/job-application-types";
 import {
-  assertSupportedImageFile,
-  fileBufferToDataUrl,
   normalizeCompanyName,
   normalizeSalaryRange,
-  persistJobScreenshot,
   resolveAppliedAt,
+} from "@/lib/job-tracking-shared";
+import {
+  assertSupportedImageFile,
+  fileBufferToDataUrl,
+  persistJobScreenshot,
 } from "@/lib/job-tracking";
 
 export const runtime = "nodejs";

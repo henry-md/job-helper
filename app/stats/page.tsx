@@ -8,6 +8,7 @@ import {
   toReferrerOption,
 } from "@/lib/job-application-records";
 import { getPrismaClient } from "@/lib/prisma";
+import { readTailorResumeProfile } from "@/lib/tailor-resume-storage";
 import type {
   CompanyOption,
 } from "@/lib/job-application-types";
@@ -28,7 +29,14 @@ export default async function StatsPage() {
     }),
     prisma.person.findMany({
       where: { userId: session.user.id },
-      include: { company: { select: { name: true } } },
+      include: {
+        company: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+      },
       orderBy: { name: "asc" },
     }),
     prisma.jobApplication.findMany({
@@ -44,6 +52,7 @@ export default async function StatsPage() {
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
     }),
   ]);
+  const tailorResumeProfile = await readTailorResumeProfile(session.user.id);
 
   return (
     <main className="h-[100dvh] overflow-hidden px-[clamp(1rem,2vw,1.5rem)] py-[clamp(0.75rem,1.6vh,1.25rem)]">
@@ -58,6 +67,7 @@ export default async function StatsPage() {
           companyOptions={companies as CompanyOption[]}
           applications={applications.map(toJobApplicationRecord)}
           referrerOptions={people.map(toReferrerOption)}
+          tailoredResumes={tailorResumeProfile.tailoredResumes}
         />
       </div>
     </main>

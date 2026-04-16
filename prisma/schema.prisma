@@ -104,17 +104,20 @@ model Company {
 }
 
 model Person {
-  id             String           @id @default(cuid())
-  userId         String
-  companyId      String?
-  name           String
-  normalizedName String
-  recruiterContact String?
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
-  company        Company?         @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  id                   String           @id @default(cuid())
+  userId               String
+  companyId            String?
+  name                 String
+  normalizedName       String
+  email                String?
+  phoneNumber          String?
+  notes                String?
+  recruiterContact     String?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+  company              Company?         @relation(fields: [companyId], references: [id], onDelete: SetNull)
   referredApplications JobApplication[] @relation("JobApplicationReferrer")
-  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                 User             @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, normalizedName])
   @@index([userId, createdAt(sort: Desc)])

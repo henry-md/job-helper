@@ -12,7 +12,10 @@ import type {
   JobApplicationRecord,
   ReferrerOption,
 } from "@/lib/job-application-types";
-import type { TailorResumeProfile } from "@/lib/tailor-resume-types";
+import type {
+  TailorResumeProfile,
+  TailoredResumeRecord,
+} from "@/lib/tailor-resume-types";
 
 function getValidProfileImageSrc(value: string | null | undefined) {
   const normalizedValue = value?.trim();
@@ -156,6 +159,9 @@ export default function DashboardWorkspace({
   const [historyApplicationId, setHistoryApplicationId] = useState<string | null>(
     null,
   );
+  const [tailoredResumes, setTailoredResumes] = useState<TailoredResumeRecord[]>(
+    () => tailorResumeProfile.tailoredResumes,
+  );
   const displayName = userName?.trim()?.split(" ")[0] || userName || "there";
   const profileImageSrc = getValidProfileImageSrc(userImage);
   const includeYearInDates = shouldIncludeShortYear(
@@ -298,6 +304,7 @@ export default function DashboardWorkspace({
             debugUiEnabled={tailorResumeDebugUiEnabled}
             openAIReady={tailorResumeOpenAIReady}
             initialProfile={tailorResumeProfile}
+            onTailoredResumesChange={setTailoredResumes}
           />
         ) : (
           <ApplicationStatsWorkspace
@@ -305,6 +312,7 @@ export default function DashboardWorkspace({
             applications={applications}
             initialExpandedId={historyApplicationId}
             referrerOptions={referrerOptions}
+            tailoredResumes={tailoredResumes}
           />
         )}
       </div>

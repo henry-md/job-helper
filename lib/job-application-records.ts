@@ -2,7 +2,7 @@ import type {
   JobApplicationRecord,
   ReferrerOption,
 } from "@/lib/job-application-types";
-import { normalizeCompanyName } from "@/lib/job-tracking";
+import { normalizeCompanyName } from "@/lib/job-tracking-shared";
 
 export function countDistinctApplicationCompanies(
   applications: Array<{ company: { name: string } }>,

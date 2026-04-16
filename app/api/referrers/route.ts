@@ -2,7 +2,7 @@ import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/auth";
 import { getPrismaClient } from "@/lib/prisma";
-import { normalizeCompanyName } from "@/lib/job-tracking";
+import { normalizeCompanyName } from "@/lib/job-tracking-shared";
 
 function normalizePersonName(name: string) {
   return name
