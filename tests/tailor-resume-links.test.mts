@@ -637,6 +637,14 @@ test("applyTailorResumeLinkOverridesWithSummary counts only actual saved-link re
   );
 
   assert.equal(overrideResult.updatedCount, 1);
+  assert.deepEqual(overrideResult.updatedLinks, [
+    {
+      key: "linkedin",
+      label: "LinkedIn",
+      nextUrl: "https://linkedin.com/in/henry-deutsch",
+      previousUrl: "https://old.example/profile",
+    },
+  ]);
   assert.match(
     overrideResult.latexCode,
     /\\href\{https:\/\/linkedin\.com\/in\/henry-deutsch\}\{\\tightul\{LinkedIn\}\}/,
@@ -773,6 +781,14 @@ Portfolio
   );
 
   assert.equal(overrideResult.updatedCount, 1);
+  assert.deepEqual(overrideResult.updatedLinks, [
+    {
+      key: "linkedin",
+      label: "LinkedIn",
+      nextUrl: "https://linkedin.com/in/henry-deutsch",
+      previousUrl: null,
+    },
+  ]);
   assert.match(
     overrideResult.latexCode,
     /\\href\{https:\/\/linkedin\.com\/in\/henry-deutsch\}\{\\tightul\{LinkedIn\}\}/,

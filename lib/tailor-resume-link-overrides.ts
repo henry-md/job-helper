@@ -7,11 +7,13 @@ import { mergeTailorResumeLinksWithLockedLinks } from "./tailor-resume-locked-li
 import type {
   TailorResumeLinkRecord,
   TailorResumeLockedLinkRecord,
+  TailorResumeSavedLinkUpdate,
 } from "./tailor-resume-types.ts";
 
 export type TailorResumeLinkOverrideResult = {
   latexCode: string;
   updatedCount: number;
+  updatedLinks: TailorResumeSavedLinkUpdate[];
 };
 
 function isEscaped(value: string, index: number) {
@@ -307,7 +309,7 @@ function applyPlainTextLinkOverrides(
   linksByKey: Map<string, TailorResumeLinkRecord>,
   labelPatterns: Array<[string, string[]]>,
   occurrencesByLabel: Map<string, number>,
-  onLinkUpdated?: () => void,
+  onLinkUpdated?: (update: TailorResumeSavedLinkUpdate) => void,
 ) {
   if (labelPatterns.length === 0 || !value) {
     return value;
@@ -332,7 +334,12 @@ function applyPlainTextLinkOverrides(
     const matchedText = value.slice(nextMatch.startIndex, matchEndIndex);
 
     if (link && !link.disabled && link.url) {
-      onLinkUpdated?.();
+      onLinkUpdated?.({
+        key: link.key,
+        label: link.label,
+        nextUrl: link.url,
+        previousUrl: null,
+      });
       result += `\\href{${link.url}}{\\tightul{${matchedText}}}`;
     } else {
       result += matchedText;
@@ -464,15 +471,18 @@ export function applyTailorResumeLinkOverridesWithSummary(
     return {
       latexCode,
       updatedCount: 0,
+      updatedLinks: [],
     };
   }
 
   let result = "";
   let index = 0;
   let updatedCount = 0;
+  const updatedLinks: TailorResumeSavedLinkUpdate[] = [];
   const occurrencesByLabel = new Map<string, number>();
-  const onLinkUpdated = () => {
+  const onLinkUpdated = (update: TailorResumeSavedLinkUpdate) => {
     updatedCount += 1;
+    updatedLinks.push(update);
   };
 
   while (index < latexCode.length) {
@@ -532,6 +542,12 @@ export function applyTailorResumeLinkOverridesWithSummary(
 
       if (nextHref !== originalHref) {
         updatedCount += 1;
+        updatedLinks.push({
+          key: link.key,
+          label: link.label,
+          nextUrl: link.url,
+          previousUrl: urlGroup.value.trim() || null,
+        });
       }
 
       result += nextHref;
@@ -545,6 +561,7 @@ export function applyTailorResumeLinkOverridesWithSummary(
   return {
     latexCode: result,
     updatedCount,
+    updatedLinks,
   };
 }
 

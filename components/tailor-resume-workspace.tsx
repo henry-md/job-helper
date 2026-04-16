@@ -26,6 +26,7 @@ import type {
   SavedResumeRecord,
   TailorResumeLinkRecord,
   TailorResumeProfile,
+  TailorResumeSavedLinkUpdate,
 } from "@/lib/tailor-resume-types";
 
 type TailorResumeWorkspaceProps = {
@@ -76,6 +77,7 @@ type TailorResumeUploadResponsePayload = {
   linkValidationSummary?: TailorResumeLinkValidationSummary | null;
   profile?: TailorResumeProfile;
   savedLinkUpdateCount?: number;
+  savedLinkUpdates?: TailorResumeSavedLinkUpdate[];
 };
 
 type TailorResumeUploadStreamEvent =
@@ -412,16 +414,64 @@ function showLinkValidationSummaryToast(
   }, delayMs);
 }
 
-function showSavedLinkUpdateToast(updatedCount: number | null | undefined) {
-  if (!updatedCount || updatedCount < 1) {
+function formatSavedLinkUpdateValue(url: string | null) {
+  if (!url) {
+    return "no link";
+  }
+
+  let formattedUrl = url.trim();
+
+  while (formattedUrl.length > 1 && formattedUrl.endsWith("/")) {
+    const withoutTrailingSlashes = formattedUrl.replace(/\/+$/, "");
+
+    if (/^[a-zA-Z][a-zA-Z\d+\-.]*:$/.test(withoutTrailingSlashes)) {
+      break;
+    }
+
+    formattedUrl = withoutTrailingSlashes;
+  }
+
+  return formattedUrl;
+}
+
+function showSavedLinkUpdateToast(
+  updatedCount: number | null | undefined,
+  savedLinkUpdates: TailorResumeSavedLinkUpdate[] | null | undefined,
+) {
+  const resolvedUpdates = (savedLinkUpdates ?? [])
+    .map((update) => ({
+      ...update,
+      displayNextUrl: formatSavedLinkUpdateValue(update.nextUrl),
+      displayPreviousUrl: formatSavedLinkUpdateValue(update.previousUrl),
+    }))
+    .filter((update) => update.displayPreviousUrl !== update.displayNextUrl);
+  const resolvedCount =
+    savedLinkUpdates !== undefined && savedLinkUpdates !== null
+      ? resolvedUpdates.length
+      : updatedCount ?? 0;
+
+  if (resolvedCount < 1) {
     return;
   }
 
   toast.success(
-    updatedCount === 1
+    resolvedCount === 1
       ? "1 link was updated based on saved links."
-      : `${updatedCount} links were updated based on saved links.`,
+      : `${resolvedCount} links were updated based on saved links.`,
     {
+      description:
+        resolvedUpdates.length > 0 ? (
+          <div className="space-y-1 text-xs text-zinc-300">
+            {resolvedUpdates.map((update, index) => (
+              <div
+                key={`${update.key}:${update.previousUrl ?? "none"}:${update.nextUrl}:${String(index)}`}
+                className="break-all"
+              >
+                {update.displayPreviousUrl} -&gt; {update.displayNextUrl}
+              </div>
+            ))}
+          </div>
+        ) : undefined,
       id: savedLinkUpdateToastId,
     },
   );
@@ -714,6 +764,7 @@ export default function TailorResumeWorkspace({
       const payload = (await response.json()) as {
         error?: string;
         savedLinkUpdateCount?: number;
+        savedLinkUpdates?: TailorResumeSavedLinkUpdate[];
         latexLinkSyncSummary?: TailorResumeLatexLinkSyncSummary | null;
         profile?: TailorResumeProfile;
       };
@@ -764,7 +815,10 @@ export default function TailorResumeWorkspace({
           );
         }
 
-        showSavedLinkUpdateToast(payload.savedLinkUpdateCount);
+        showSavedLinkUpdateToast(
+          payload.savedLinkUpdateCount,
+          payload.savedLinkUpdates,
+        );
       } else if (latestDraftLatexCodeRef.current === submittedLatexCode) {
         // The server normalized or reprocessed the saved LaTeX, but the user
         // has not typed anything newer since this request started. Accept the
@@ -798,7 +852,10 @@ export default function TailorResumeWorkspace({
           );
         }
 
-        showSavedLinkUpdateToast(payload.savedLinkUpdateCount);
+        showSavedLinkUpdateToast(
+          payload.savedLinkUpdateCount,
+          payload.savedLinkUpdates,
+        );
       }
     } catch (error) {
       if (latexSaveSequenceRef.current !== sequence) {
@@ -952,7 +1009,10 @@ export default function TailorResumeWorkspace({
         payload.linkValidationSummary,
         payload.linkValidationLinks,
       );
-      showSavedLinkUpdateToast(payload.savedLinkUpdateCount);
+      showSavedLinkUpdateToast(
+        payload.savedLinkUpdateCount,
+        payload.savedLinkUpdates,
+      );
 
       if (payload.extractionError) {
         toast.error(
@@ -1077,6 +1137,7 @@ export default function TailorResumeWorkspace({
         linkValidationSummary?: TailorResumeLinkValidationSummary | null;
         profile?: TailorResumeProfile;
         savedLinkUpdateCount?: number;
+        savedLinkUpdates?: TailorResumeSavedLinkUpdate[];
       };
 
       if (!response.ok || !payload.profile) {
@@ -1100,7 +1161,10 @@ export default function TailorResumeWorkspace({
         payload.linkValidationLinks,
         (payload.extractionAttempts?.length ?? 0) * 140,
       );
-      showSavedLinkUpdateToast(payload.savedLinkUpdateCount);
+      showSavedLinkUpdateToast(
+        payload.savedLinkUpdateCount,
+        payload.savedLinkUpdates,
+      );
 
       if (payload.extractionError) {
         toast.error(
@@ -1307,6 +1371,7 @@ export default function TailorResumeWorkspace({
         error?: string;
         profile?: TailorResumeProfile;
         savedLinkUpdateCount?: number;
+        savedLinkUpdates?: TailorResumeSavedLinkUpdate[];
         tailoredResumeError?: string | null;
       };
 
@@ -1324,7 +1389,10 @@ export default function TailorResumeWorkspace({
             : "idle"
           : "dirty",
       );
-      showSavedLinkUpdateToast(payload.savedLinkUpdateCount);
+      showSavedLinkUpdateToast(
+        payload.savedLinkUpdateCount,
+        payload.savedLinkUpdates,
+      );
 
       if (payload.tailoredResumeError) {
         toast.error(

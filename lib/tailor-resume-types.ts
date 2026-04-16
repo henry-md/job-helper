@@ -22,6 +22,13 @@ export type TailorResumeLockedLinkRecord = {
   url: string;
 };
 
+export type TailorResumeSavedLinkUpdate = {
+  key: string;
+  label: string;
+  nextUrl: string;
+  previousUrl: string | null;
+};
+
 export type TailorResumeExtractionStatus =
   | "failed"
   | "idle"

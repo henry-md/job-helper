@@ -5,7 +5,10 @@ import {
   normalizeTailorResumeLatex,
   stripTailorResumeSegmentIds,
 } from "./tailor-resume-segmentation.ts";
-import type { TailorResumeLinkRecord } from "./tailor-resume-types.ts";
+import type {
+  TailorResumeLinkRecord,
+  TailorResumeSavedLinkUpdate,
+} from "./tailor-resume-types.ts";
 
 const maxTailoredResumeAttempts = 3;
 const TEST_OPENAI_RESPONSE_MODEL = "test-openai-response";
@@ -83,6 +86,7 @@ export type GenerateTailoredResumeResult = {
   positionTitle: string;
   previewPdf: Buffer | null;
   savedLinkUpdateCount: number;
+  savedLinkUpdates: TailorResumeSavedLinkUpdate[];
   validationError: string | null;
 };
 
@@ -340,6 +344,7 @@ function applySavedTailoredResumeLinks(
     return {
       normalizedLatex: normalizeTailorResumeLatex(annotatedLatexCode),
       updatedCount: 0,
+      updatedLinks: [],
     };
   }
 
@@ -351,6 +356,7 @@ function applySavedTailoredResumeLinks(
   return {
     normalizedLatex: normalizeTailorResumeLatex(overrideResult.latexCode),
     updatedCount: overrideResult.updatedCount,
+    updatedLinks: overrideResult.updatedLinks,
   };
 }
 
@@ -405,6 +411,7 @@ export async function generateTailoredResume(input: {
       positionTitle: fallbackMetadata.positionTitle,
       previewPdf: validation.ok ? validation.previewPdf : null,
       savedLinkUpdateCount: finalizedTestCandidate.updatedCount,
+      savedLinkUpdates: finalizedTestCandidate.updatedLinks,
       validationError: validation.ok ? null : validation.error,
     };
   }
@@ -415,6 +422,7 @@ export async function generateTailoredResume(input: {
   let lastMetadata = fallbackMetadata;
   let lastAnnotatedLatex = normalizedInput.annotatedLatex;
   let lastSavedLinkUpdateCount = 0;
+  let lastSavedLinkUpdates: TailorResumeSavedLinkUpdate[] = [];
   let lastModel = model;
 
   for (let attempt = 1; attempt <= maxTailoredResumeAttempts; attempt += 1) {
@@ -490,6 +498,7 @@ export async function generateTailoredResume(input: {
 
     lastAnnotatedLatex = normalizedCandidate.normalizedLatex.annotatedLatex;
     lastSavedLinkUpdateCount = normalizedCandidate.updatedCount;
+    lastSavedLinkUpdates = normalizedCandidate.updatedLinks;
 
     if (validation.ok) {
       return {
@@ -505,6 +514,7 @@ export async function generateTailoredResume(input: {
         positionTitle: lastMetadata.positionTitle,
         previewPdf: validation.previewPdf,
         savedLinkUpdateCount: normalizedCandidate.updatedCount,
+        savedLinkUpdates: normalizedCandidate.updatedLinks,
         validationError: null,
       };
     }
@@ -527,6 +537,7 @@ export async function generateTailoredResume(input: {
     positionTitle: lastMetadata.positionTitle,
     previewPdf: null,
     savedLinkUpdateCount: lastSavedLinkUpdateCount,
+    savedLinkUpdates: lastSavedLinkUpdates,
     validationError:
       lastError ??
       `Unable to produce a tailored resume after ${maxTailoredResumeAttempts} attempts.`,

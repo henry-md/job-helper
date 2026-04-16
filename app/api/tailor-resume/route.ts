@@ -50,6 +50,7 @@ import {
   emptyTailorResumeWorkspaceState,
   type TailorResumeLockedLinkRecord,
   type TailorResumeProfile,
+  type TailorResumeSavedLinkUpdate,
 } from "@/lib/tailor-resume-types";
 import {
   assertSupportedResumeFile,
@@ -114,6 +115,7 @@ function buildExtractionResponse(input: {
   >["linkValidationSummary"];
   profile: TailorResumeProfile;
   savedLinkUpdateCount: number;
+  savedLinkUpdates: TailorResumeSavedLinkUpdate[];
 }) {
   return {
     extractionAttempts: input.extractionAttempts,
@@ -122,6 +124,7 @@ function buildExtractionResponse(input: {
     linkValidationSummary: input.linkValidationSummary,
     profile: input.profile,
     savedLinkUpdateCount: input.savedLinkUpdateCount,
+    savedLinkUpdates: input.savedLinkUpdates,
   };
 }
 
@@ -431,6 +434,7 @@ async function runResumeExtraction(
         },
       ),
       savedLinkUpdateCount: extraction.savedLinkUpdateCount,
+      savedLinkUpdates: extraction.savedLinkUpdates,
     };
   } catch (error) {
     const failedRawProfile: TailorResumeProfile = {
@@ -459,6 +463,7 @@ async function runResumeExtraction(
         },
       ),
       savedLinkUpdateCount: 0,
+      savedLinkUpdates: [],
     };
   }
 }
@@ -653,6 +658,7 @@ export async function PATCH(request: Request) {
       linkValidationSummary,
       profile: nextProfile,
       savedLinkUpdateCount: sourceCompileLatex.updatedCount,
+      savedLinkUpdates: sourceCompileLatex.updatedLinks,
     });
   }
 
@@ -744,6 +750,10 @@ export async function PATCH(request: Request) {
       savedLinkUpdateCount:
         processedBaseAnnotatedLatex.updatedCount +
         tailoringResult.savedLinkUpdateCount,
+      savedLinkUpdates: [
+        ...processedBaseAnnotatedLatex.updatedLinks,
+        ...tailoringResult.savedLinkUpdates,
+      ],
       tailoredResumeError: tailoringResult.validationError,
     });
   }
@@ -765,6 +775,7 @@ export async function PATCH(request: Request) {
       }
     | null = null;
   let savedLinkUpdateCount = 0;
+  let savedLinkUpdates: TailorResumeSavedLinkUpdate[] = [];
   let didUpdate = false;
 
   if ("jobDescription" in body) {
@@ -863,6 +874,7 @@ export async function PATCH(request: Request) {
       ).links,
     );
     savedLinkUpdateCount = sourceCompileLatex.updatedCount;
+    savedLinkUpdates = sourceCompileLatex.updatedLinks;
     didUpdate = true;
   }
 
@@ -887,6 +899,7 @@ export async function PATCH(request: Request) {
     latexLinkSyncSummary,
     profile: nextProfile,
     savedLinkUpdateCount,
+    savedLinkUpdates,
   });
 }
 

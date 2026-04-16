@@ -23,7 +23,10 @@ import {
   extractEmbeddedPdfLinks,
   type EmbeddedPdfLink,
 } from "@/lib/tailor-resume-pdf-links";
-import type { TailorResumeLinkRecord } from "@/lib/tailor-resume-types";
+import type {
+  TailorResumeLinkRecord,
+  TailorResumeSavedLinkUpdate,
+} from "@/lib/tailor-resume-types";
 
 const TEST_OPENAI_RESPONSE_MODEL = "test-openai-response";
 
@@ -230,6 +233,7 @@ function buildResumeExtractionInput(
 export type ExtractResumeLatexDocumentResult = RunResumeLatexToolLoopResult & {
   resumeLinks: TailorResumeLinkRecord[];
   savedLinkUpdateCount: number;
+  savedLinkUpdates: TailorResumeSavedLinkUpdate[];
 };
 
 type ExtractResumeLatexDocumentDependencies = {
@@ -308,6 +312,7 @@ export async function extractResumeLatexDocument(
           extractedResumeLinks,
           resumeLinks,
           savedLinkUpdateCount: finalizedLatex.updatedCount,
+          savedLinkUpdates: finalizedLatex.updatedLinks,
           validationError: validation.error,
         };
       }
@@ -339,6 +344,7 @@ export async function extractResumeLatexDocument(
         extractedResumeLinks,
         resumeLinks,
         savedLinkUpdateCount: finalizedLatex.updatedCount,
+        savedLinkUpdates: finalizedLatex.updatedLinks,
         validationError: null,
       };
     } catch (error) {
@@ -382,6 +388,7 @@ export async function extractResumeLatexDocument(
           preserveUnusedExisting: preserveUnusedKnownLinks,
         }),
         savedLinkUpdateCount: finalizedLatex.updatedCount,
+        savedLinkUpdates: finalizedLatex.updatedLinks,
         validationError:
           attemptError,
       };
@@ -482,6 +489,7 @@ export async function extractResumeLatexDocument(
         preserveUnusedExisting: preserveUnusedKnownLinks,
       }),
       savedLinkUpdateCount: finalizedLatex.updatedCount,
+      savedLinkUpdates: finalizedLatex.updatedLinks,
     };
   } finally {
     if (uploadedFile?.id) {
