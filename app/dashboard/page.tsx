@@ -2,7 +2,6 @@ import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 import DashboardWorkspace from "@/components/dashboard-workspace";
 import { authOptions } from "@/auth";
-import { isDebugUiEnabled } from "@/lib/debug-tools";
 import {
   countDistinctApplicationCompanies,
   toJobApplicationRecord,
@@ -107,8 +106,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     testOpenAIResponseEnabled || Boolean(process.env.OPENAI_API_KEY);
   const extractionModel = process.env.OPENAI_JOB_EXTRACTION_MODEL ?? "gpt-5-mini";
   const uploadDisabled = !databaseStatus.ok || !openAIReady;
-  const debugUiEnabled = isDebugUiEnabled();
-
   const statusMessage = params?.ingested
     ? {
         tone: "success" as const,
@@ -134,7 +131,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             extractionModel={extractionModel}
             referrerOptions={databaseStatus.people}
             statusMessage={statusMessage}
-            tailorResumeDebugUiEnabled={debugUiEnabled}
+            tailorResumeDebugUiEnabled={Boolean(process.env.DEBUG_UI)}
             tailorResumeOpenAIReady={openAIReady}
             tailorResumeProfile={tailorResumeProfile}
             userImage={session.user.image}
