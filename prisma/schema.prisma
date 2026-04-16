@@ -8,17 +8,32 @@ datasource db {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  name          String?
-  email         String?   @unique
-  emailVerified DateTime?
-  image         String?
-  accounts      Account[]
-  applications  JobApplication[]
-  companies     Company[]
-  people        Person[]
-  sessions      Session[]
-  screenshots   JobApplicationScreenshot[]
+  id                      String                   @id @default(cuid())
+  name                    String?
+  email                   String?                  @unique
+  emailVerified           DateTime?
+  image                   String?
+  accounts                Account[]
+  applications            JobApplication[]
+  companies               Company[]
+  people                  Person[]
+  sessions                Session[]
+  screenshots             JobApplicationScreenshot[]
+  tailorResumeLockedLinks TailorResumeLockedLink[]
+}
+
+model TailorResumeLockedLink {
+  id        String   @id @default(cuid())
+  userId    String
+  key       String
+  label     String
+  url       String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@index([userId, updatedAt(sort: Desc)])
 }
 
 model Account {

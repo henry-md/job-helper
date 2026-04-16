@@ -8,7 +8,17 @@ import {
   extractResumeLatexDocument,
   type ExtractResumeLatexDocumentResult,
 } from "@/lib/tailor-resume-extraction";
-import { applyTailorResumeLinkOverrides } from "@/lib/tailor-resume-link-overrides";
+import {
+  applyTailorResumeSourceLinkOverridesWithSummary,
+  extractTailorResumeTrackedLinks,
+} from "@/lib/tailor-resume-link-overrides";
+import {
+  mergeTailorResumeLinksWithLockedLinks,
+  mergeTailorResumeProfileWithLockedLinks,
+  readLockedTailorResumeLinksFromLinks,
+  replaceTailorResumeLockedLinks,
+  stripTailorResumeLinkLocks,
+} from "@/lib/tailor-resume-locked-links";
 import {
   buildTailorResumeLinkRecords,
   normalizeTailorResumeLinkUrl,
@@ -27,16 +37,18 @@ import {
 import {
   deleteTailoredResumePdf,
   deleteTailorResumePreviewPdf,
-  readTailorResumeProfile,
   writeTailoredResumePdf,
   writeTailorResumePreviewPdf,
   writeTailorResumeProfile,
 } from "@/lib/tailor-resume-storage";
+import { readTailorResumeProfileState } from "@/lib/tailor-resume-profile-state";
 import { generateTailoredResume } from "@/lib/tailor-resume-tailoring";
 import {
   emptyTailorResumeAnnotatedLatexState,
   emptyTailorResumeExtractionState,
   emptyTailorResumeLatexState,
+  emptyTailorResumeWorkspaceState,
+  type TailorResumeLockedLinkRecord,
   type TailorResumeProfile,
 } from "@/lib/tailor-resume-types";
 import {
@@ -101,6 +113,7 @@ function buildExtractionResponse(input: {
     ReturnType<typeof runResumeExtraction>
   >["linkValidationSummary"];
   profile: TailorResumeProfile;
+  savedLinkUpdateCount: number;
 }) {
   return {
     extractionAttempts: input.extractionAttempts,
@@ -108,6 +121,7 @@ function buildExtractionResponse(input: {
     linkValidationLinks: input.linkValidationLinks,
     linkValidationSummary: input.linkValidationSummary,
     profile: input.profile,
+    savedLinkUpdateCount: input.savedLinkUpdateCount,
   };
 }
 
@@ -177,6 +191,45 @@ async function validateLatexLinks(latexCode: string) {
     links,
     summary: buildLinkValidationSummary(links),
   };
+}
+
+function buildSourceLatexLinkRecords(
+  latexCode: string,
+  currentLinks: TailorResumeProfile["links"],
+  lockedLinks: TailorResumeLockedLinkRecord[],
+) {
+  const trackedLinks = mergeTailorResumeLinksWithLockedLinks(
+    currentLinks,
+    lockedLinks,
+    {
+      includeLockedOnly: true,
+    },
+  );
+
+  const parsedLinks = buildTailorResumeLinkRecords({
+    existingLinks: trackedLinks,
+    extractedLinks: extractTailorResumeTrackedLinks(
+      latexCode,
+      trackedLinks.filter((link) => link.disabled || link.locked === true),
+    ),
+    preferExtractedUrls: true,
+    preserveUnusedExisting: false,
+  });
+
+  return stripTailorResumeLinkLocks(
+    mergeTailorResumeLinksWithLockedLinks(parsedLinks, lockedLinks, {
+      includeLockedOnly: true,
+    }),
+  );
+}
+
+function buildKnownTailorResumeLinks(
+  currentLinks: TailorResumeProfile["links"],
+  lockedLinks: TailorResumeLockedLinkRecord[],
+) {
+  return mergeTailorResumeLinksWithLockedLinks(currentLinks, lockedLinks, {
+    includeLockedOnly: true,
+  });
 }
 
 function readLinkUpdates(value: unknown) {
@@ -253,21 +306,29 @@ async function persistExtractedLatexResult(
 
 async function compileLatexDraft(
   userId: string,
-  code: string,
+  input: {
+    compileCode?: string;
+    sourceCode: string;
+  },
   previousPdfUpdatedAt: string | null,
 ) {
   const updatedAt = new Date().toISOString();
-  const normalized = normalizeAnnotatedLatexState(code, updatedAt);
+  const normalizedSource = normalizeAnnotatedLatexState(input.sourceCode, updatedAt);
+  const normalizedCompile = normalizeAnnotatedLatexState(
+    input.compileCode ?? input.sourceCode,
+    updatedAt,
+  );
 
   try {
-    const previewPdf = await compileTailorResumeLatex(normalized.latexCode);
+    const previewPdf = await compileTailorResumeLatex(normalizedCompile.latexCode);
 
     await writeTailorResumePreviewPdf(userId, previewPdf);
 
     return {
-      annotatedLatex: normalized.annotatedLatex,
+      annotatedLatex: normalizedSource.annotatedLatex,
+      compiledLatexCode: normalizedCompile.latexCode,
       latex: {
-        code: normalized.latexCode,
+        code: normalizedSource.latexCode,
         error: null,
         pdfUpdatedAt: updatedAt,
         status: "ready" as const,
@@ -280,9 +341,10 @@ async function compileLatexDraft(
     }
 
     return {
-      annotatedLatex: normalized.annotatedLatex,
+      annotatedLatex: normalizedSource.annotatedLatex,
+      compiledLatexCode: normalizedCompile.latexCode,
       latex: {
-        code: normalized.latexCode,
+        code: normalizedSource.latexCode,
         error:
           error instanceof Error
             ? error.message
@@ -297,7 +359,10 @@ async function compileLatexDraft(
 
 async function runResumeExtraction(
   userId: string,
-  profile: TailorResumeProfile,
+  input: {
+    lockedLinks: TailorResumeLockedLinkRecord[];
+    rawProfile: TailorResumeProfile;
+  },
   options: {
     onAttemptEvent?: (
       attemptEvent: ExtractResumeLatexDocumentResult["attemptEvents"][number],
@@ -305,14 +370,14 @@ async function runResumeExtraction(
     preserveUnusedKnownLinks?: boolean;
   } = {},
 ) {
-  const savedResume = profile.resume;
+  const savedResume = input.rawProfile.resume;
 
   if (!savedResume) {
     throw new Error("Upload a resume before extracting.");
   }
 
   const extractingProfile: TailorResumeProfile = {
-    ...profile,
+    ...input.rawProfile,
     extraction: {
       ...emptyTailorResumeExtractionState(),
       status: "extracting",
@@ -330,13 +395,16 @@ async function runResumeExtraction(
       filename: savedResume.originalFilename,
       mimeType: savedResume.mimeType,
     }, {
-      knownLinks: profile.links,
+      knownLinks: buildKnownTailorResumeLinks(
+        input.rawProfile.links,
+        input.lockedLinks,
+      ),
       onAttemptEvent: options.onAttemptEvent,
       preserveUnusedKnownLinks: options.preserveUnusedKnownLinks,
     });
     const persistedLatex = await persistExtractedLatexResult(userId, extraction);
 
-    const readyProfile: TailorResumeProfile = {
+    const readyRawProfile: TailorResumeProfile = {
       ...extractingProfile,
       annotatedLatex: persistedLatex.annotatedLatex,
       extraction: {
@@ -350,15 +418,22 @@ async function runResumeExtraction(
       links: extraction.resumeLinks,
     };
 
-    await writeTailorResumeProfile(userId, readyProfile);
+    await writeTailorResumeProfile(userId, readyRawProfile);
     return {
       extractionAttempts: extraction.attemptEvents,
       linkValidationLinks: extraction.links,
       linkValidationSummary: extraction.linkSummary,
-      profile: readyProfile,
+      profile: mergeTailorResumeProfileWithLockedLinks(
+        readyRawProfile,
+        input.lockedLinks,
+        {
+          includeLockedOnly: true,
+        },
+      ),
+      savedLinkUpdateCount: extraction.savedLinkUpdateCount,
     };
   } catch (error) {
-    const failedProfile: TailorResumeProfile = {
+    const failedRawProfile: TailorResumeProfile = {
       ...extractingProfile,
       extraction: {
         ...emptyTailorResumeExtractionState(),
@@ -371,12 +446,19 @@ async function runResumeExtraction(
       },
     };
 
-    await writeTailorResumeProfile(userId, failedProfile);
+    await writeTailorResumeProfile(userId, failedRawProfile);
     return {
       extractionAttempts: [],
       linkValidationLinks: [],
       linkValidationSummary: null,
-      profile: failedProfile,
+      profile: mergeTailorResumeProfileWithLockedLinks(
+        failedRawProfile,
+        input.lockedLinks,
+        {
+          includeLockedOnly: true,
+        },
+      ),
+      savedLinkUpdateCount: 0,
     };
   }
 }
@@ -406,7 +488,9 @@ export async function PATCH(request: Request) {
     );
   }
 
-  const profile = await readTailorResumeProfile(session.user.id);
+  const { lockedLinks, profile, rawProfile } = await readTailorResumeProfileState(
+    session.user.id,
+  );
 
   if ("action" in body && body.action === "reextract") {
     if (!profile.resume) {
@@ -416,7 +500,10 @@ export async function PATCH(request: Request) {
       );
     }
 
-    const extractionResult = await runResumeExtraction(session.user.id, profile);
+    const extractionResult = await runResumeExtraction(session.user.id, {
+      lockedLinks,
+      rawProfile,
+    });
     return NextResponse.json(buildExtractionResponse(extractionResult));
   }
 
@@ -494,47 +581,70 @@ export async function PATCH(request: Request) {
     }
 
     const updatedAt = new Date().toISOString();
-    const nextProfile: TailorResumeProfile = {
-      ...profile,
-      links: profile.links.map((link) => {
-        if (!normalizedUpdates.has(link.key)) {
-          return link;
-        }
+    const updatedLinks = profile.links.map((link) => {
+      if (!normalizedUpdates.has(link.key)) {
+        return link;
+      }
 
-        const update = normalizedUpdates.get(link.key) ?? {
-          locked: false,
-          url: null,
-        };
-        const updatedUrl = update.url;
+      const update = normalizedUpdates.get(link.key) ?? {
+        locked: false,
+        url: null,
+      };
+      const updatedUrl = update.url;
 
-        return {
-          ...link,
-          disabled: updatedUrl === null,
-          locked: updatedUrl === null ? false : update.locked,
-          updatedAt,
-          url: updatedUrl,
-        };
-      }),
+      return {
+        ...link,
+        disabled: updatedUrl === null,
+        locked: updatedUrl === null ? false : update.locked,
+        updatedAt,
+        url: updatedUrl,
+      };
+    });
+    const nextLockedLinks = readLockedTailorResumeLinksFromLinks(updatedLinks);
+    const nextRawProfile: TailorResumeProfile = {
+      ...rawProfile,
+      links: stripTailorResumeLinkLocks(updatedLinks),
     };
+
+    await replaceTailorResumeLockedLinks(session.user.id, nextLockedLinks);
+
+    const sourceCompileLatex = applyTailorResumeSourceLinkOverridesWithSummary(
+      rawProfile.latex.code,
+      {
+        currentLinks: nextRawProfile.links,
+        lockedLinks: nextLockedLinks,
+      },
+    );
 
     const compiledLatex = await compileLatexDraft(
       session.user.id,
-      applyTailorResumeLinkOverrides(profile.latex.code, nextProfile.links),
-      nextProfile.latex.pdfUpdatedAt,
+      {
+        compileCode: sourceCompileLatex.latexCode,
+        sourceCode: sourceCompileLatex.latexCode,
+      },
+      rawProfile.latex.pdfUpdatedAt,
     );
-    nextProfile.annotatedLatex = compiledLatex.annotatedLatex;
-    nextProfile.latex = compiledLatex.latex;
+    nextRawProfile.annotatedLatex = compiledLatex.annotatedLatex;
+    nextRawProfile.latex = compiledLatex.latex;
 
     let linkValidationLinks: TailorResumeLinkValidationEntry[] = [];
     let linkValidationSummary: TailorResumeLinkValidationSummary | null = null;
 
-    if (nextProfile.latex.status === "ready") {
-      const validation = await validateLatexLinks(nextProfile.latex.code);
+    if (nextRawProfile.latex.status === "ready") {
+      const validation = await validateLatexLinks(compiledLatex.compiledLatexCode);
       linkValidationLinks = validation.links;
       linkValidationSummary = validation.summary;
     }
 
-    await writeTailorResumeProfile(session.user.id, nextProfile);
+    await writeTailorResumeProfile(session.user.id, nextRawProfile);
+
+    const nextProfile = mergeTailorResumeProfileWithLockedLinks(
+      nextRawProfile,
+      nextLockedLinks,
+      {
+        includeLockedOnly: true,
+      },
+    );
 
     return NextResponse.json({
       extractionAttempts: [],
@@ -542,6 +652,7 @@ export async function PATCH(request: Request) {
       linkValidationLinks,
       linkValidationSummary,
       profile: nextProfile,
+      savedLinkUpdateCount: sourceCompileLatex.updatedCount,
     });
   }
 
@@ -566,12 +677,20 @@ export async function PATCH(request: Request) {
     }
 
     const normalizedBaseLatex = normalizeAnnotatedLatexState(
-      profile.annotatedLatex.code || profile.latex.code,
+      rawProfile.latex.code,
       new Date().toISOString(),
     );
+    const processedBaseAnnotatedLatex = applyTailorResumeSourceLinkOverridesWithSummary(
+      normalizedBaseLatex.annotatedLatex.code,
+      {
+        currentLinks: rawProfile.links,
+        lockedLinks,
+      },
+    );
     const tailoringResult = await generateTailoredResume({
-      annotatedLatexCode: normalizedBaseLatex.annotatedLatex.code,
+      annotatedLatexCode: processedBaseAnnotatedLatex.latexCode,
       jobDescription,
+      linkOverrides: buildKnownTailorResumeLinks(rawProfile.links, lockedLinks),
     });
     const tailoredResumeId = randomUUID();
     const tailoredResumeUpdatedAt = new Date().toISOString();
@@ -586,39 +705,53 @@ export async function PATCH(request: Request) {
       await deleteTailoredResumePdf(session.user.id, tailoredResumeId);
     }
 
-    const nextProfile: TailorResumeProfile = {
-      ...profile,
+    const nextRawProfile: TailorResumeProfile = {
+      ...rawProfile,
       annotatedLatex: normalizedBaseLatex.annotatedLatex,
       jobDescription,
       tailoredResumes: [
         {
           annotatedLatexCode: tailoringResult.annotatedLatexCode,
+          companyName: tailoringResult.companyName,
           createdAt: tailoredResumeUpdatedAt,
           displayName: tailoringResult.displayName,
           error: tailoringResult.validationError,
           id: tailoredResumeId,
           jobDescription,
+          jobIdentifier: tailoringResult.jobIdentifier,
           latexCode: tailoringResult.latexCode,
           pdfUpdatedAt: tailoringResult.previewPdf ? tailoredResumeUpdatedAt : null,
+          positionTitle: tailoringResult.positionTitle,
           status: tailoringResult.previewPdf ? "ready" : "failed",
           updatedAt: tailoredResumeUpdatedAt,
         },
-        ...profile.tailoredResumes,
+        ...rawProfile.tailoredResumes,
       ],
     };
 
-    await writeTailorResumeProfile(session.user.id, nextProfile);
+    await writeTailorResumeProfile(session.user.id, nextRawProfile);
+
+    const nextProfile = mergeTailorResumeProfileWithLockedLinks(
+      nextRawProfile,
+      lockedLinks,
+      {
+        includeLockedOnly: true,
+      },
+    );
 
     return NextResponse.json({
       profile: nextProfile,
+      savedLinkUpdateCount:
+        processedBaseAnnotatedLatex.updatedCount +
+        tailoringResult.savedLinkUpdateCount,
       tailoredResumeError: tailoringResult.validationError,
     });
   }
 
-  const nextProfile: TailorResumeProfile = {
-    ...profile,
+  const nextRawProfile: TailorResumeProfile = {
+    ...rawProfile,
     extraction: {
-      ...profile.extraction,
+      ...rawProfile.extraction,
     },
   };
   let latexLinkSyncSummary:
@@ -631,6 +764,7 @@ export async function PATCH(request: Request) {
         }>;
       }
     | null = null;
+  let savedLinkUpdateCount = 0;
   let didUpdate = false;
 
   if ("jobDescription" in body) {
@@ -648,7 +782,22 @@ export async function PATCH(request: Request) {
       );
     }
 
-    nextProfile.jobDescription = body.jobDescription;
+    nextRawProfile.jobDescription = body.jobDescription;
+    didUpdate = true;
+  }
+
+  if ("baseResumeStepComplete" in body) {
+    if (typeof body.baseResumeStepComplete !== "boolean") {
+      return NextResponse.json(
+        { error: "Provide a boolean step completion value." },
+        { status: 400 },
+      );
+    }
+
+    nextRawProfile.workspace = {
+      isBaseResumeStepComplete: body.baseResumeStepComplete,
+      updatedAt: new Date().toISOString(),
+    };
     didUpdate = true;
   }
 
@@ -678,26 +827,42 @@ export async function PATCH(request: Request) {
       normalizeTailorResumeLatex(body.latexCode).annotatedLatex,
     );
 
-    nextProfile.links = buildTailorResumeLinkRecords({
-      existingLinks: profile.links,
-      extractedLinks: extractResumeLatexLinks(normalizedLatexCode).map((link) => ({
-        label: link.displayText?.trim() || link.url,
-        url: link.url,
-      })),
-      preferExtractedUrls: true,
-      preserveUnusedExisting: false,
-    });
-    latexLinkSyncSummary = buildLatexLinkSyncSummary(
-      profile.links,
-      nextProfile.links,
+    nextRawProfile.links = buildSourceLatexLinkRecords(
+      normalizedLatexCode,
+      rawProfile.links,
+      lockedLinks,
+    );
+    const sourceCompileLatex = applyTailorResumeSourceLinkOverridesWithSummary(
+      normalizedLatexCode,
+      {
+        currentLinks: nextRawProfile.links,
+        lockedLinks,
+      },
     );
     const compiledLatex = await compileLatexDraft(
       session.user.id,
-      normalizedLatexCode,
-      nextProfile.latex.pdfUpdatedAt,
+      {
+        compileCode: sourceCompileLatex.latexCode,
+        sourceCode: sourceCompileLatex.latexCode,
+      },
+      rawProfile.latex.pdfUpdatedAt,
     );
-    nextProfile.annotatedLatex = compiledLatex.annotatedLatex;
-    nextProfile.latex = compiledLatex.latex;
+    nextRawProfile.annotatedLatex = compiledLatex.annotatedLatex;
+    nextRawProfile.latex = compiledLatex.latex;
+    latexLinkSyncSummary = buildLatexLinkSyncSummary(
+      profile.links,
+      mergeTailorResumeProfileWithLockedLinks(
+        {
+          ...nextRawProfile,
+          links: nextRawProfile.links,
+        },
+        lockedLinks,
+        {
+          includeLockedOnly: true,
+        },
+      ).links,
+    );
+    savedLinkUpdateCount = sourceCompileLatex.updatedCount;
     didUpdate = true;
   }
 
@@ -708,11 +873,20 @@ export async function PATCH(request: Request) {
     );
   }
 
-  await writeTailorResumeProfile(session.user.id, nextProfile);
+  await writeTailorResumeProfile(session.user.id, nextRawProfile);
+
+  const nextProfile = mergeTailorResumeProfileWithLockedLinks(
+    nextRawProfile,
+    lockedLinks,
+    {
+      includeLockedOnly: true,
+    },
+  );
 
   return NextResponse.json({
     latexLinkSyncSummary,
     profile: nextProfile,
+    savedLinkUpdateCount,
   });
 }
 
@@ -747,12 +921,11 @@ export async function POST(request: Request) {
     );
   }
 
-  const existingProfile = await readTailorResumeProfile(session.user.id);
-  const previousResumeStoragePath = existingProfile.resume?.storagePath ?? null;
+  const existingState = await readTailorResumeProfileState(session.user.id);
+  const previousResumeStoragePath = existingState.rawProfile.resume?.storagePath ?? null;
   const persistedResume = await persistUserResume(resumeFile, session.user.id);
-  const lockedLinkPreferences = existingProfile.links.filter((link) => link.locked);
   const profileWithSavedResume: TailorResumeProfile = {
-    ...existingProfile,
+    ...existingState.rawProfile,
     annotatedLatex: emptyTailorResumeAnnotatedLatexState(),
     extraction: {
       ...emptyTailorResumeExtractionState(),
@@ -760,7 +933,7 @@ export async function POST(request: Request) {
       updatedAt: new Date().toISOString(),
     },
     latex: emptyTailorResumeLatexState(),
-    links: lockedLinkPreferences,
+    links: [],
     resume: buildResumeRecord({
       mimeType: resumeFile.type || "application/octet-stream",
       originalFilename: resumeFile.name || "resume",
@@ -768,6 +941,10 @@ export async function POST(request: Request) {
       storagePath: persistedResume.storagePath,
     }),
     tailoredResumes: [],
+    workspace: {
+      ...emptyTailorResumeWorkspaceState(),
+      updatedAt: new Date().toISOString(),
+    },
   };
 
   await writeTailorResumeProfile(session.user.id, profileWithSavedResume);
@@ -785,7 +962,10 @@ export async function POST(request: Request) {
           try {
             const extractionResult = await runResumeExtraction(
               session.user.id,
-              profileWithSavedResume,
+              {
+                lockedLinks: existingState.lockedLinks,
+                rawProfile: profileWithSavedResume,
+              },
               {
                 onAttemptEvent: (attemptEvent) => {
                   sendEvent({
@@ -832,7 +1012,10 @@ export async function POST(request: Request) {
     });
   }
 
-  const extractionResult = await runResumeExtraction(session.user.id, profileWithSavedResume, {
+  const extractionResult = await runResumeExtraction(session.user.id, {
+    lockedLinks: existingState.lockedLinks,
+    rawProfile: profileWithSavedResume,
+  }, {
     preserveUnusedKnownLinks: false,
   });
 

@@ -26,12 +26,14 @@ import type {
   SavedResumeRecord,
   TailorResumeLinkRecord,
   TailorResumeProfile,
-  TailoredResumeRecord,
 } from "@/lib/tailor-resume-types";
 
 type TailorResumeWorkspaceProps = {
   debugUiEnabled: boolean;
   initialProfile: TailorResumeProfile;
+  onTailoredResumesChange?: (
+    tailoredResumes: TailorResumeProfile["tailoredResumes"],
+  ) => void;
   openAIReady: boolean;
 };
 
@@ -73,6 +75,7 @@ type TailorResumeUploadResponsePayload = {
   linkValidationLinks?: TailorResumeLinkValidationEntry[] | null;
   linkValidationSummary?: TailorResumeLinkValidationSummary | null;
   profile?: TailorResumeProfile;
+  savedLinkUpdateCount?: number;
 };
 
 type TailorResumeUploadStreamEvent =
@@ -105,6 +108,7 @@ const latexLinkSyncToastId = "tailor-resume-latex-link-sync";
 const linkValidationToastId = "tailor-resume-link-validation";
 const resumeLinkSaveToastId = "tailor-resume-link-save";
 const resumeUploadToastId = "tailor-resume-resume-upload";
+const savedLinkUpdateToastId = "tailor-resume-saved-link-updates";
 const failedLinkToastDurationMs = 5 * 60 * 1_000;
 
 function validateResumeFile(file: File) {
@@ -126,12 +130,6 @@ function validateResumeFile(file: File) {
 function buildPreviewPdfUrl(updatedAt: string | null) {
   return updatedAt
     ? `/api/tailor-resume/preview?updatedAt=${encodeURIComponent(updatedAt)}`
-    : null;
-}
-
-function buildTailoredPreviewPdfUrl(record: TailoredResumeRecord) {
-  return record.pdfUpdatedAt
-    ? `/api/tailor-resume/preview?tailoredResumeId=${encodeURIComponent(record.id)}&updatedAt=${encodeURIComponent(record.pdfUpdatedAt)}`
     : null;
 }
 
@@ -414,6 +412,21 @@ function showLinkValidationSummaryToast(
   }, delayMs);
 }
 
+function showSavedLinkUpdateToast(updatedCount: number | null | undefined) {
+  if (!updatedCount || updatedCount < 1) {
+    return;
+  }
+
+  toast.success(
+    updatedCount === 1
+      ? "1 link was updated based on saved links."
+      : `${updatedCount} links were updated based on saved links.`,
+    {
+      id: savedLinkUpdateToastId,
+    },
+  );
+}
+
 function StatusPill({ children }: { children: ReactNode }) {
   return (
     <span className="rounded-full border border-white/10 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-zinc-400">
@@ -425,6 +438,7 @@ function StatusPill({ children }: { children: ReactNode }) {
 export default function TailorResumeWorkspace({
   debugUiEnabled,
   initialProfile,
+  onTailoredResumesChange,
   openAIReady,
 }: TailorResumeWorkspaceProps) {
   const fileInputId = useId();
@@ -433,6 +447,7 @@ export default function TailorResumeWorkspace({
   const jobDescriptionSaveSequenceRef = useRef(0);
   const latexSaveSequenceRef = useRef(0);
   const lastSavedJobDescriptionRef = useRef(initialProfile.jobDescription);
+  const latestDraftJobDescriptionRef = useRef(initialProfile.jobDescription);
   const lastSavedLatexCodeRef = useRef(resolveSavedLatexCode(initialProfile));
   const latestDraftLatexCodeRef = useRef(resolveSavedLatexCode(initialProfile));
   const pendingLatexCodeRef = useRef<string | null>(null);
@@ -460,6 +475,7 @@ export default function TailorResumeWorkspace({
   const [isSavingLatex, setIsSavingLatex] = useState(false);
   const [isSavingLinks, setIsSavingLinks] = useState(false);
   const [isTailoringResume, setIsTailoringResume] = useState(false);
+  const [isUpdatingBaseResumeStep, setIsUpdatingBaseResumeStep] = useState(false);
   const [isUploadingResume, setIsUploadingResume] = useState(false);
   const [isWideLayout, setIsWideLayout] = useState(false);
   const [isPreviewCollapsed, setIsPreviewCollapsed] = useState(false);
@@ -469,7 +485,7 @@ export default function TailorResumeWorkspace({
   const [draftLinkLocks, setDraftLinkLocks] = useState<Record<string, boolean>>({});
   const [draftLinkUrls, setDraftLinkUrls] = useState<Record<string, string>>({});
   const [jobDescriptionState, setJobDescriptionState] = useState<
-    "idle" | "saved" | "saving"
+    "dirty" | "idle" | "saved" | "saving"
   >("idle");
   const [latexState, setLatexState] = useState<"idle" | "saved" | "saving">(
     "idle",
@@ -493,6 +509,10 @@ export default function TailorResumeWorkspace({
       hasLinkLockChanged(link, draftLinkLocks[link.key]),
     );
   const previewAsImage = displayedResume?.mimeType.startsWith("image/") ?? false;
+  const isBaseResumeStepComplete = profile.workspace.isBaseResumeStepComplete;
+  const isJobDescriptionLocked = !isBaseResumeStepComplete;
+  const hasUnsavedJobDescriptionChanges =
+    draftJobDescription !== lastSavedJobDescriptionRef.current;
   const editorDisabled = isUploadingResume;
   const displayedLatexCode =
     debugUiEnabled && activeLatexView === "annotated"
@@ -530,7 +550,9 @@ export default function TailorResumeWorkspace({
     setProfile(initialProfile);
     setPendingResume(null);
     setDraftJobDescription(initialProfile.jobDescription);
+    latestDraftJobDescriptionRef.current = initialProfile.jobDescription;
     setDraftLatexCode(resolvedLatexCode);
+    jobDescriptionSaveSequenceRef.current = 0;
     lastSavedJobDescriptionRef.current = initialProfile.jobDescription;
     lastSavedLatexCodeRef.current = resolvedLatexCode;
     latestDraftLatexCodeRef.current = resolvedLatexCode;
@@ -546,10 +568,13 @@ export default function TailorResumeWorkspace({
     setIsPreviewFrameLoading(false);
     setIsSavingLinks(false);
     setIsTailoringResume(false);
+    setIsUpdatingBaseResumeStep(false);
     setActiveLatexView("source");
     setDraftLinkLocks(buildLinkLockDrafts(initialProfile.links));
     setDraftLinkUrls(buildLinkUrlDrafts(initialProfile.links));
-    setJobDescriptionState("idle");
+    setJobDescriptionState(
+      initialProfile.jobDescription.trim().length > 0 ? "saved" : "idle",
+    );
     setLatexState("idle");
   }, [initialProfile]);
 
@@ -638,6 +663,10 @@ export default function TailorResumeWorkspace({
   }, [previewPdfUrl]);
 
   useEffect(() => {
+    latestDraftJobDescriptionRef.current = draftJobDescription;
+  }, [draftJobDescription]);
+
+  useEffect(() => {
     latestDraftLatexCodeRef.current = draftLatexCode;
   }, [draftLatexCode]);
 
@@ -674,8 +703,9 @@ export default function TailorResumeWorkspace({
     setLatexState("saving");
 
     try {
+      const submittedLatexCode = nextLatexCode;
       const response = await fetch("/api/tailor-resume", {
-        body: JSON.stringify({ latexCode: nextLatexCode }),
+        body: JSON.stringify({ latexCode: submittedLatexCode }),
         headers: {
           "Content-Type": "application/json",
         },
@@ -683,6 +713,7 @@ export default function TailorResumeWorkspace({
       });
       const payload = (await response.json()) as {
         error?: string;
+        savedLinkUpdateCount?: number;
         latexLinkSyncSummary?: TailorResumeLatexLinkSyncSummary | null;
         profile?: TailorResumeProfile;
       };
@@ -732,6 +763,42 @@ export default function TailorResumeWorkspace({
             },
           );
         }
+
+        showSavedLinkUpdateToast(payload.savedLinkUpdateCount);
+      } else if (latestDraftLatexCodeRef.current === submittedLatexCode) {
+        // The server normalized or reprocessed the saved LaTeX, but the user
+        // has not typed anything newer since this request started. Accept the
+        // server-returned document so we do not immediately resave forever.
+        pendingLatexCodeRef.current = null;
+        latestDraftLatexCodeRef.current = resolvedLatexCode;
+        setDraftLatexCode(resolvedLatexCode);
+        setIsSavingLatex(false);
+        setLatexState("saved");
+        toast.success("Saved the LaTeX draft.", {
+          id: latexSaveToastId,
+        });
+
+        if ((payload.latexLinkSyncSummary?.addedCount ?? 0) > 0) {
+          const addedLinks = payload.latexLinkSyncSummary?.addedLinks ?? [];
+          const labels = addedLinks
+            .map((link) => link.label)
+            .filter((label, index, values) => values.indexOf(label) === index);
+          const previewText = labels.slice(0, 3).join(", ");
+          const remainingCount = labels.length - Math.min(labels.length, 3);
+
+          toast(
+            `Found ${addedLinks.length} new link${addedLinks.length === 1 ? "" : "s"} in the LaTeX.`,
+            {
+              description:
+                labels.length > 0
+                  ? `${previewText}${remainingCount > 0 ? `, and ${remainingCount} more.` : "."}`
+                  : undefined,
+              id: latexLinkSyncToastId,
+            },
+          );
+        }
+
+        showSavedLinkUpdateToast(payload.savedLinkUpdateCount);
       }
     } catch (error) {
       if (latexSaveSequenceRef.current !== sequence) {
@@ -755,72 +822,6 @@ export default function TailorResumeWorkspace({
       }
     }
   }, []);
-
-  useEffect(() => {
-    if (draftJobDescription === lastSavedJobDescriptionRef.current) {
-      if (jobDescriptionState === "saving") {
-        setIsSavingJobDescription(false);
-        setJobDescriptionState("saved");
-      }
-      return;
-    }
-
-    const sequence = jobDescriptionSaveSequenceRef.current + 1;
-    jobDescriptionSaveSequenceRef.current = sequence;
-    setIsSavingJobDescription(true);
-    setJobDescriptionState("saving");
-
-    const timeoutId = window.setTimeout(async () => {
-      try {
-        const response = await fetch("/api/tailor-resume", {
-          body: JSON.stringify({ jobDescription: draftJobDescription }),
-          headers: {
-            "Content-Type": "application/json",
-          },
-          method: "PATCH",
-        });
-        const payload = (await response.json()) as {
-          error?: string;
-          profile?: TailorResumeProfile;
-        };
-
-        if (!response.ok || !payload.profile) {
-          throw new Error(payload.error ?? "Unable to save the job description.");
-        }
-
-        if (jobDescriptionSaveSequenceRef.current !== sequence) {
-          return;
-        }
-
-        lastSavedJobDescriptionRef.current = payload.profile.jobDescription;
-        setProfile(payload.profile);
-        setIsSavingJobDescription(false);
-        setJobDescriptionState("saved");
-        toast.success("Saved the job description.", {
-          id: jobDescriptionToastId,
-        });
-      } catch (error) {
-        if (jobDescriptionSaveSequenceRef.current !== sequence) {
-          return;
-        }
-
-        setIsSavingJobDescription(false);
-        setJobDescriptionState("idle");
-        toast.error(
-          error instanceof Error
-            ? error.message
-            : "Unable to save the job description.",
-          {
-            id: jobDescriptionToastId,
-          },
-        );
-      }
-    }, 700);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [draftJobDescription, jobDescriptionState]);
 
   useEffect(() => {
     if (draftLatexCode === lastSavedLatexCodeRef.current) {
@@ -936,6 +937,7 @@ export default function TailorResumeWorkspace({
       const resolvedLatexCode = resolveSavedLatexCode(payload.profile);
 
       setProfile(payload.profile);
+      onTailoredResumesChange?.(payload.profile.tailoredResumes);
       setPendingResume(null);
       setDraftLatexCode(resolvedLatexCode);
       setDraftLinkLocks(buildLinkLockDrafts(payload.profile.links));
@@ -950,6 +952,7 @@ export default function TailorResumeWorkspace({
         payload.linkValidationSummary,
         payload.linkValidationLinks,
       );
+      showSavedLinkUpdateToast(payload.savedLinkUpdateCount);
 
       if (payload.extractionError) {
         toast.error(
@@ -1051,7 +1054,7 @@ export default function TailorResumeWorkspace({
     }
 
     setIsSavingLinks(true);
-    toast.loading("Saving link changes and updating LaTeX...", {
+    toast.loading("Saving link changes and refreshing the preview...", {
       id: resumeLinkSaveToastId,
     });
 
@@ -1073,6 +1076,7 @@ export default function TailorResumeWorkspace({
         linkValidationLinks?: TailorResumeLinkValidationEntry[] | null;
         linkValidationSummary?: TailorResumeLinkValidationSummary | null;
         profile?: TailorResumeProfile;
+        savedLinkUpdateCount?: number;
       };
 
       if (!response.ok || !payload.profile) {
@@ -1096,6 +1100,7 @@ export default function TailorResumeWorkspace({
         payload.linkValidationLinks,
         (payload.extractionAttempts?.length ?? 0) * 140,
       );
+      showSavedLinkUpdateToast(payload.savedLinkUpdateCount);
 
       if (payload.extractionError) {
         toast.error(
@@ -1135,6 +1140,137 @@ export default function TailorResumeWorkspace({
     }
   }
 
+  async function setBaseResumeStepComplete(nextValue: boolean) {
+    if (!resume || isUpdatingBaseResumeStep) {
+      return;
+    }
+
+    setIsUpdatingBaseResumeStep(true);
+
+    try {
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({
+          baseResumeStepComplete: nextValue,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        profile?: TailorResumeProfile;
+      };
+
+      if (!response.ok || !payload.profile) {
+        throw new Error(payload.error ?? "Unable to update the resume step.");
+      }
+
+      setProfile(payload.profile);
+
+      if (nextValue) {
+        toast.success("Step 1 marked complete. You can tailor for a job below.");
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Unable to update the resume step.",
+      );
+    } finally {
+      setIsUpdatingBaseResumeStep(false);
+    }
+  }
+
+  function handleJobDescriptionChange(event: ChangeEvent<HTMLTextAreaElement>) {
+    const nextValue = event.target.value;
+    setDraftJobDescription(nextValue);
+
+    if (nextValue === lastSavedJobDescriptionRef.current) {
+      setJobDescriptionState(nextValue.trim().length > 0 ? "saved" : "idle");
+      return;
+    }
+
+    setJobDescriptionState("dirty");
+  }
+
+  async function saveJobDescription() {
+    if (isJobDescriptionLocked) {
+      return;
+    }
+
+    if (!hasUnsavedJobDescriptionChanges) {
+      toast("No job description changes to save yet.", {
+        id: jobDescriptionToastId,
+      });
+      return;
+    }
+
+    const sequence = jobDescriptionSaveSequenceRef.current + 1;
+    jobDescriptionSaveSequenceRef.current = sequence;
+    setIsSavingJobDescription(true);
+    setJobDescriptionState("saving");
+
+    try {
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({
+          jobDescription: latestDraftJobDescriptionRef.current,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        profile?: TailorResumeProfile;
+      };
+
+      if (!response.ok || !payload.profile) {
+        throw new Error(payload.error ?? "Unable to save the job description.");
+      }
+
+      if (jobDescriptionSaveSequenceRef.current !== sequence) {
+        return;
+      }
+
+      lastSavedJobDescriptionRef.current = payload.profile.jobDescription;
+      setProfile(payload.profile);
+      setIsSavingJobDescription(false);
+      setJobDescriptionState(
+        latestDraftJobDescriptionRef.current === payload.profile.jobDescription
+          ? payload.profile.jobDescription.trim().length > 0
+            ? "saved"
+            : "idle"
+          : "dirty",
+      );
+      toast.success("Saved the job description.", {
+        id: jobDescriptionToastId,
+      });
+    } catch (error) {
+      if (jobDescriptionSaveSequenceRef.current !== sequence) {
+        return;
+      }
+
+      setIsSavingJobDescription(false);
+      setJobDescriptionState(
+        latestDraftJobDescriptionRef.current === lastSavedJobDescriptionRef.current
+          ? latestDraftJobDescriptionRef.current.trim().length > 0
+            ? "saved"
+            : "idle"
+          : "dirty",
+      );
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Unable to save the job description.",
+        {
+          id: jobDescriptionToastId,
+        },
+      );
+    }
+  }
+
   async function tailorResume() {
     if (!openAIReady) {
       toast.error("Add OPENAI_API_KEY before tailoring the resume.");
@@ -1170,6 +1306,7 @@ export default function TailorResumeWorkspace({
       const payload = (await response.json()) as {
         error?: string;
         profile?: TailorResumeProfile;
+        savedLinkUpdateCount?: number;
         tailoredResumeError?: string | null;
       };
 
@@ -1178,6 +1315,16 @@ export default function TailorResumeWorkspace({
       }
 
       setProfile(payload.profile);
+      lastSavedJobDescriptionRef.current = payload.profile.jobDescription;
+      onTailoredResumesChange?.(payload.profile.tailoredResumes);
+      setJobDescriptionState(
+        latestDraftJobDescriptionRef.current === payload.profile.jobDescription
+          ? payload.profile.jobDescription.trim().length > 0
+            ? "saved"
+            : "idle"
+          : "dirty",
+      );
+      showSavedLinkUpdateToast(payload.savedLinkUpdateCount);
 
       if (payload.tailoredResumeError) {
         toast.error(
@@ -1187,7 +1334,7 @@ export default function TailorResumeWorkspace({
           },
         );
       } else {
-        toast.success("Saved a job-specific tailored resume.", {
+        toast.success("Saved a job-specific tailored resume. Find it in History.", {
           id: "tailor-resume-run",
         });
       }
@@ -1371,12 +1518,33 @@ export default function TailorResumeWorkspace({
 
       {resume ? (
         <section className="glass-panel soft-ring overflow-hidden rounded-[1.5rem]">
-          <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3 sm:px-4 sm:py-4">
-            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-              Resume
-            </p>
+          <div className="flex flex-wrap items-start justify-between gap-4 px-4 py-4 sm:px-5 sm:py-5">
+            <div>
+              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+                Step 1
+              </p>
+              <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
+                Review the base resume
+              </h2>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">
+                Start in the split-screen editor, confirm the LaTeX and preview
+                look right, then mark this step complete to collapse it before
+                tailoring for a specific job.
+              </p>
+            </div>
 
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusPill>
+                {isUpdatingBaseResumeStep
+                  ? "Updating..."
+                  : isBaseResumeStepComplete
+                    ? "Completed"
+                    : isSavingLatex
+                      ? "Saving edits..."
+                      : latexState === "saved"
+                        ? "Ready"
+                        : "In progress"}
+              </StatusPill>
               {hasEditableOrPendingLinks ? (
                 <button
                   aria-label={`Review links. ${visibleLinkCount} link${visibleLinkCount === 1 ? "" : "s"} currently listed.`}
@@ -1409,64 +1577,110 @@ export default function TailorResumeWorkspace({
               >
                 {isUploadingResume ? "Saving..." : "Re-upload"}
               </label>
+
+              <button
+                className={`rounded-full px-3 py-2 text-[11px] uppercase tracking-[0.2em] transition ${
+                  isUpdatingBaseResumeStep
+                    ? "cursor-wait border border-white/10 bg-white/5 text-zinc-500"
+                    : isBaseResumeStepComplete
+                      ? "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
+                      : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
+                }`}
+                disabled={isUpdatingBaseResumeStep}
+                onClick={() =>
+                  void setBaseResumeStepComplete(!isBaseResumeStepComplete)
+                }
+                type="button"
+              >
+                {isUpdatingBaseResumeStep
+                  ? "Updating..."
+                  : isBaseResumeStepComplete
+                    ? "Edit again"
+                    : "Mark complete"}
+              </button>
             </div>
           </div>
 
-          <div className="px-3 pb-3 sm:px-4 sm:pb-4">
-            {isWideLayout ? (
-              <section className="min-h-[560px] pt-1">
-                <ResizablePanelGroup
-                  className="min-h-[560px] gap-0"
-                  orientation="horizontal"
-                >
-                  <ResizablePanel
-                    className="min-w-0 overflow-hidden pr-2"
-                    defaultSize={defaultEditorPaneSize}
-                    minSize={42}
+          {isBaseResumeStepComplete ? (
+            <div className="border-t border-white/8 px-4 pb-4 pt-4 sm:px-5 sm:pb-5">
+              <div className="rounded-[1.25rem] border border-white/10 bg-black/20 p-4">
+                <p className="text-sm font-medium text-zinc-100">
+                  Base resume locked in for tailoring.
+                </p>
+                <p className="mt-2 text-sm leading-6 text-zinc-400">
+                  Reopen this step any time if you want to keep editing the
+                  LaTeX, review links, or replace the uploaded source file.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                  <span>{resume.originalFilename}</span>
+                  {debugUiEnabled ? (
+                    <span>{profile.annotatedLatex.segmentCount} annotated segments</span>
+                  ) : null}
+                  <span>
+                    {profile.latex.status === "ready"
+                      ? "Preview ready"
+                      : "Preview needs review"}
+                  </span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="px-3 pb-3 sm:px-4 sm:pb-4">
+              {isWideLayout ? (
+                <section className="min-h-[560px] pt-1">
+                  <ResizablePanelGroup
+                    className="min-h-[560px] gap-0"
+                    orientation="horizontal"
                   >
-                    {editorPanelContent}
-                  </ResizablePanel>
-
-                  <ResizableHandle className="group relative w-4 bg-transparent after:hidden focus-visible:ring-0">
-                    <button
-                      aria-label={isPreviewCollapsed ? "Show preview" : "Hide preview"}
-                      className="absolute left-1/2 top-3 z-20 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-white/14 bg-zinc-950/96 text-zinc-100 shadow-[0_10px_26px_rgba(0,0,0,0.32)] transition hover:border-white/25 hover:bg-zinc-900"
-                      onClick={(event) => {
-                        stopHandleButtonEvent(event);
-                        togglePreviewPane();
-                      }}
-                      onMouseDown={stopHandleButtonEvent}
-                      onPointerDown={stopHandleButtonEvent}
-                      type="button"
+                    <ResizablePanel
+                      className="min-w-0 overflow-hidden pr-2"
+                      defaultSize={defaultEditorPaneSize}
+                      minSize={42}
                     >
-                      {isPreviewCollapsed ? (
-                        <ChevronsLeft className="h-4 w-4" />
-                      ) : (
-                        <ChevronsRight className="h-4 w-4" />
-                      )}
-                    </button>
-                  </ResizableHandle>
+                      {editorPanelContent}
+                    </ResizablePanel>
 
-                  <ResizablePanel
-                    className="min-w-0 overflow-hidden pl-2"
-                    collapsedSize={0}
-                    collapsible
-                    defaultSize={defaultPreviewPaneSize}
-                    minSize={22}
-                    onResize={handlePreviewPanelResize}
-                    panelRef={previewPanelRef}
-                  >
-                    {previewPanelContent}
-                  </ResizablePanel>
-                </ResizablePanelGroup>
-              </section>
-            ) : (
-              <section className="grid gap-[clamp(0.75rem,1.2vh,1rem)] pt-1">
-                {editorPanelContent}
-                {previewPanelContent}
-              </section>
-            )}
-          </div>
+                    <ResizableHandle className="group relative w-4 bg-transparent after:hidden focus-visible:ring-0">
+                      <button
+                        aria-label={isPreviewCollapsed ? "Show preview" : "Hide preview"}
+                        className="absolute left-1/2 top-3 z-20 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-white/14 bg-zinc-950/96 text-zinc-100 shadow-[0_10px_26px_rgba(0,0,0,0.32)] transition hover:border-white/25 hover:bg-zinc-900"
+                        onClick={(event) => {
+                          stopHandleButtonEvent(event);
+                          togglePreviewPane();
+                        }}
+                        onMouseDown={stopHandleButtonEvent}
+                        onPointerDown={stopHandleButtonEvent}
+                        type="button"
+                      >
+                        {isPreviewCollapsed ? (
+                          <ChevronsLeft className="h-4 w-4" />
+                        ) : (
+                          <ChevronsRight className="h-4 w-4" />
+                        )}
+                      </button>
+                    </ResizableHandle>
+
+                    <ResizablePanel
+                      className="min-w-0 overflow-hidden pl-2"
+                      collapsedSize={0}
+                      collapsible
+                      defaultSize={defaultPreviewPaneSize}
+                      minSize={22}
+                      onResize={handlePreviewPanelResize}
+                      panelRef={previewPanelRef}
+                    >
+                      {previewPanelContent}
+                    </ResizablePanel>
+                  </ResizablePanelGroup>
+                </section>
+              ) : (
+                <section className="grid gap-[clamp(0.75rem,1.2vh,1rem)] pt-1">
+                  {editorPanelContent}
+                  {previewPanelContent}
+                </section>
+              )}
+            </div>
+          )}
         </section>
       ) : (
         <section
@@ -1477,10 +1691,10 @@ export default function TailorResumeWorkspace({
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
               <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                Resume
+                Step 1
               </p>
               <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-                Upload a resume
+                Upload and review your base resume
               </h2>
             </div>
 
@@ -1514,25 +1728,57 @@ export default function TailorResumeWorkspace({
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                  Job description
+                  Step 2
                 </p>
                 <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-                  Paste the role you want to tailor for
+                  Paste the job description
                 </h2>
+                <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">
+                  Submitting this creates a separate tailored resume with saved
+                  company, role, and job-specific identifier metadata.
+                </p>
+                {isJobDescriptionLocked ? (
+                  <p className="mt-3 rounded-[1rem] border border-white/10 bg-black/20 px-3 py-2 text-sm leading-6 text-zinc-400">
+                    Mark step 1 complete to unlock job descriptions and resume tailoring.
+                  </p>
+                ) : null}
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
                 <StatusPill>
-                  {isSavingJobDescription
+                  {isJobDescriptionLocked
+                    ? "Step 1 required"
+                    : isSavingJobDescription
                     ? "Saving..."
                     : jobDescriptionState === "saved"
-                      ? "Saved"
-                      : "Autosaves"}
+                      ? "Draft saved"
+                      : jobDescriptionState === "dirty"
+                        ? "Unsaved changes"
+                        : "Draft idle"}
                 </StatusPill>
+                <button
+                  className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
+                    isJobDescriptionLocked ||
+                    isSavingJobDescription ||
+                    !hasUnsavedJobDescriptionChanges
+                      ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
+                      : "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
+                  }`}
+                  disabled={
+                    isJobDescriptionLocked ||
+                    isSavingJobDescription ||
+                    !hasUnsavedJobDescriptionChanges
+                  }
+                  onClick={() => void saveJobDescription()}
+                  type="button"
+                >
+                  {isSavingJobDescription ? "Saving..." : "Save description"}
+                </button>
                 <button
                   className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
                     !openAIReady ||
                     isTailoringResume ||
+                    isJobDescriptionLocked ||
                     draftJobDescription.trim().length === 0
                       ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
                       : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
@@ -1540,101 +1786,34 @@ export default function TailorResumeWorkspace({
                   disabled={
                     !openAIReady ||
                     isTailoringResume ||
+                    isJobDescriptionLocked ||
                     draftJobDescription.trim().length === 0
                   }
                   onClick={() => void tailorResume()}
                   type="button"
                 >
-                  {isTailoringResume ? "Tailoring..." : "Tailor resume"}
+                  {isTailoringResume
+                    ? "Creating..."
+                    : "Create tailored resume"}
                 </button>
               </div>
             </div>
 
             <textarea
-              className="mt-5 min-h-[180px] w-full flex-1 resize-none rounded-[1.25rem] border border-white/10 bg-black/20 px-4 py-4 text-sm leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-300/45"
-              onChange={(event) => setDraftJobDescription(event.target.value)}
-              placeholder="Paste the full job description here. This saves separately from the LaTeX resume source."
+              className={`mt-5 min-h-[180px] w-full flex-1 resize-none rounded-[1.25rem] border px-4 py-4 text-sm leading-6 outline-none transition placeholder:text-zinc-500 ${
+                isJobDescriptionLocked
+                  ? "cursor-not-allowed border-white/8 bg-black/10 text-zinc-500"
+                  : "border-white/10 bg-black/20 text-zinc-100 focus:border-emerald-300/45"
+              }`}
+              disabled={isJobDescriptionLocked}
+              onChange={handleJobDescriptionChange}
+              placeholder={
+                isJobDescriptionLocked
+                  ? "Complete step 1 to unlock the job description field."
+                  : "Paste job-description snippets here from as many sources as you need, then save or create the tailored resume."
+              }
               value={draftJobDescription}
             />
-          </section>
-
-          <section className="glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                  Tailored jobs
-                </p>
-                <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-                  Saved tailored resumes
-                </h2>
-              </div>
-              {debugUiEnabled ? (
-                <StatusPill>
-                  {profile.annotatedLatex.segmentCount} annotated segments
-                </StatusPill>
-              ) : null}
-            </div>
-
-            {profile.tailoredResumes.length === 0 ? (
-              <div className="mt-5 rounded-[1.25rem] border border-dashed border-white/12 bg-black/15 p-5 text-sm leading-6 text-zinc-400">
-                Tailored resumes you generate for specific jobs will appear here.
-              </div>
-            ) : (
-              <div className="mt-5 grid gap-3">
-                {profile.tailoredResumes.map((tailoredResume) => {
-                  const previewUrl = buildTailoredPreviewPdfUrl(tailoredResume);
-
-                  return (
-                    <div
-                      key={tailoredResume.id}
-                      className="rounded-[1.25rem] border border-white/10 bg-black/20 p-4"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium text-zinc-100">
-                            {tailoredResume.displayName}
-                          </p>
-                          <p className="mt-1 text-xs uppercase tracking-[0.18em] text-zinc-500">
-                            {tailoredResume.status === "ready"
-                              ? "Ready"
-                              : "Needs review"}
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {previewUrl ? (
-                            <a
-                              className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
-                              href={previewUrl}
-                              rel="noreferrer"
-                              target="_blank"
-                            >
-                              Open PDF
-                            </a>
-                          ) : null}
-                          <button
-                            className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
-                            onClick={async () => {
-                              await navigator.clipboard.writeText(
-                                tailoredResume.latexCode,
-                              );
-                              toast.success("Copied tailored LaTeX.");
-                            }}
-                            type="button"
-                          >
-                            Copy LaTeX
-                          </button>
-                        </div>
-                      </div>
-                      {tailoredResume.error ? (
-                        <p className="mt-3 text-sm leading-6 text-rose-300">
-                          {tailoredResume.error}
-                        </p>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
           </section>
         </>
       ) : null}
@@ -1845,8 +2024,11 @@ export default function TailorResumeWorkspace({
                       <p className="text-xs leading-5 text-zinc-500">
                         Blank fields stay unresolved. Changed URLs are saved to
                         this resume and reused the next time we regenerate it.
-                        Saving rewrites the current LaTeX locally, with no model call. Deleted links keep the visible text and only strip the hyperlink styling.
-                        Locked links are reapplied on future uploads when the same text appears.
+                        Saving refreshes the preview from the stored link
+                        preferences, with no model call. Deleted links keep the
+                        visible text and only strip the hyperlink styling.
+                        Locked links are reapplied when the same text appears in
+                        the source LaTeX or a future upload.
                       </p>
 
                       <div className="flex flex-wrap gap-2">

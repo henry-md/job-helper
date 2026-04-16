@@ -1,48 +1,88 @@
 import OpenAI from "openai";
-import { stripTailorResumeSegmentIds, normalizeTailorResumeLatex } from "@/lib/tailor-resume-segmentation";
-import { validateTailorResumeLatexDocument } from "@/lib/tailor-resume-link-validation";
+import { applyTailorResumeLinkOverridesWithSummary } from "./tailor-resume-link-overrides.ts";
+import { validateTailorResumeLatexDocument } from "./tailor-resume-link-validation.ts";
+import {
+  normalizeTailorResumeLatex,
+  stripTailorResumeSegmentIds,
+} from "./tailor-resume-segmentation.ts";
+import type { TailorResumeLinkRecord } from "./tailor-resume-types.ts";
 
 const maxTailoredResumeAttempts = 3;
-const submitTailoredResumeToolName = "submit_tailored_resume";
 const TEST_OPENAI_RESPONSE_MODEL = "test-openai-response";
-
-const submitTailoredResumeTool = {
-  type: "function",
-  name: submitTailoredResumeToolName,
-  description:
-    "Submit a complete tailored LaTeX resume document plus the user-facing display name for this job-specific resume.",
-  strict: true,
-  parameters: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      displayName: { type: "string" },
-      latexCode: { type: "string" },
+const segmentMarkerPattern = /^[ \t]*% JOBHELPER_SEGMENT_ID:\s*([^\n]+)\s*(?:\n|$)/gm;
+const tailorResumeBlockChangesSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    changes: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          latexCode: { type: "string" },
+          segmentId: { type: "string" },
+        },
+        required: ["segmentId", "latexCode"],
+      },
     },
-    required: ["displayName", "latexCode"],
+    companyName: { type: "string" },
+    displayName: { type: "string" },
+    jobIdentifier: { type: "string" },
+    positionTitle: { type: "string" },
   },
+  required: [
+    "changes",
+    "companyName",
+    "displayName",
+    "jobIdentifier",
+    "positionTitle",
+  ],
 } as const;
 
-type TailoredResumeOutputItem = {
-  arguments?: string;
-  call_id?: string;
-  name?: string;
-  type?: string;
+type TailoredResumeBlockChange = {
+  latexCode: string;
+  segmentId: string;
+};
+
+type TailoredResumeStructuredResponse = {
+  changes: TailoredResumeBlockChange[];
+  companyName: string;
+  displayName: string;
+  jobIdentifier: string;
+  positionTitle: string;
 };
 
 type TailoredResumeResponse = {
   id?: string;
   model?: string;
-  output?: TailoredResumeOutputItem[];
+  output?: Array<{
+    content?: Array<{
+      text?: string;
+      type?: string;
+    }>;
+    type?: string;
+  }>;
+  output_text?: string;
+};
+
+type AnnotatedTailorResumeBlock = {
+  contentEnd: number;
+  id: string;
+  markerStart: number;
 };
 
 export type GenerateTailoredResumeResult = {
   annotatedLatexCode: string;
   attempts: number;
+  companyName: string;
   displayName: string;
+  jobIdentifier: string;
   latexCode: string;
   model: string;
+  positionTitle: string;
   previewPdf: Buffer | null;
+  savedLinkUpdateCount: number;
   validationError: string | null;
 };
 
@@ -61,190 +101,432 @@ function isTestOpenAIResponseEnabled() {
   return value === "true" || value === "1" || value === "yes";
 }
 
-function readToolCall(response: TailoredResumeResponse) {
+function readOutputText(response: TailoredResumeResponse) {
+  if (response.output_text) {
+    return response.output_text.trim();
+  }
+
+  const chunks: string[] = [];
+
   for (const outputItem of response.output ?? []) {
-    if (
-      outputItem.type === "function_call" &&
-      outputItem.name === submitTailoredResumeToolName &&
-      typeof outputItem.call_id === "string" &&
-      typeof outputItem.arguments === "string"
-    ) {
-      return {
-        arguments: outputItem.arguments,
-        callId: outputItem.call_id,
-      };
+    if (outputItem.type !== "message") {
+      continue;
+    }
+
+    for (const content of outputItem.content ?? []) {
+      if (content.type === "output_text" && typeof content.text === "string") {
+        chunks.push(content.text);
+      }
     }
   }
 
-  throw new Error("The model did not call submit_tailored_resume.");
+  return chunks.join("").trim();
 }
 
-function readCandidate(argumentsText: string) {
-  const value = JSON.parse(argumentsText) as {
-    displayName?: unknown;
-    latexCode?: unknown;
-  };
+function readTrimmedString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function buildDisplayName(input: {
+  companyName: string;
+  positionTitle: string;
+}) {
+  const companyName = input.companyName.trim();
+  const positionTitle = input.positionTitle.trim();
+
+  if (companyName && positionTitle) {
+    return `${companyName} - ${positionTitle}`;
+  }
+
+  return companyName || positionTitle || "Tailored Resume";
+}
+
+function normalizeTailoredResumeMetadata(
+  value: Partial<TailoredResumeStructuredResponse>,
+) {
+  const companyName = readTrimmedString(value.companyName);
+  const positionTitle = readTrimmedString(value.positionTitle);
   const displayName =
-    typeof value.displayName === "string" ? value.displayName.trim() : "";
-  const latexCode = typeof value.latexCode === "string" ? value.latexCode.trim() : "";
-
-  if (!displayName) {
-    throw new Error("The model returned an empty tailored resume display name.");
-  }
-
-  if (!latexCode) {
-    throw new Error("The model returned an empty tailored LaTeX document.");
-  }
+    readTrimmedString(value.displayName) ||
+    buildDisplayName({ companyName, positionTitle });
+  const jobIdentifier = readTrimmedString(value.jobIdentifier) || "General";
 
   return {
+    companyName,
     displayName,
-    latexCode,
+    jobIdentifier,
+    positionTitle,
   };
 }
 
-function buildTailoringInstructions() {
-  return `Tailor the provided resume LaTeX for the provided job description. You will receive the resume as a full LaTeX document with server-owned segment comments in the form % JOBHELPER_SEGMENT_ID: ... before each logical block. Treat those comments as immutable metadata that helps map the document structure. You may revise any part of the LaTeX document for a job-specific version of the resume, including preamble and layout blocks when truly necessary, but do not invent or rename segment IDs. If your draft changes their placement, the server will normalize them again.
+function parseTailoredResumeResponse(
+  value: unknown,
+): TailoredResumeStructuredResponse {
+  if (!value || typeof value !== "object") {
+    throw new Error("The model did not return a valid tailoring payload.");
+  }
 
-Goals:
-1. Preserve factual accuracy. Never invent achievements, employers, dates, titles, technologies, metrics, degrees, or certifications.
-2. Tailor wording toward the target role by rephrasing existing content, reordering emphasis, and selectively removing less relevant content when helpful.
-3. Return a complete standalone LaTeX document.
-4. Produce a concise displayName for the saved tailored resume in the form "Company - Role" whenever the company and role can be inferred from the job description. If only one is clear, use the clearest available value.
-5. Prefer content edits over visual/style edits. It is heavily discouraged to change styling, page layout, margins, fonts, text sizing, spacing systems, or macro structure unless the user explicitly asked for visual/layout changes or the document cannot compile without such a fix.
+  const rawChanges = "changes" in value ? value.changes : null;
 
-Submission rules:
-- Always call ${submitTailoredResumeToolName}.
-- Pass the full LaTeX document in latexCode.
-- Pass the user-facing saved name in displayName.
-- Keep the document pdflatex-compatible.
-- Do not add claims that are not supported by the source resume.
-- If the company and role are unclear, still provide a deterministic fallback displayName using the clearest available role, company, or "Tailored Resume".`;
+  if (!Array.isArray(rawChanges)) {
+    throw new Error("The model did not return a changes array.");
+  }
+
+  const changes = rawChanges.map((entry) => {
+    if (!entry || typeof entry !== "object") {
+      throw new Error("The model returned an invalid block change.");
+    }
+
+    const segmentId =
+      "segmentId" in entry ? readTrimmedString(entry.segmentId) : "";
+    const latexCode =
+      "latexCode" in entry && typeof entry.latexCode === "string"
+        ? entry.latexCode
+        : "";
+
+    if (!segmentId) {
+      throw new Error("The model returned a block change without a segmentId.");
+    }
+
+    return {
+      latexCode,
+      segmentId,
+    };
+  });
+
+  return {
+    changes,
+    ...normalizeTailoredResumeMetadata(
+      value as Partial<TailoredResumeStructuredResponse>,
+    ),
+  };
+}
+
+function buildTailoringInstructions(input: { feedback?: string }) {
+  const feedbackBlock = input.feedback?.trim()
+    ? `Previous attempt feedback:\n${input.feedback.trim()}\n\n`
+    : "";
+
+  return (
+    `${feedbackBlock}` +
+    "Tailor the provided resume LaTeX for the provided job description. " +
+    "The resume includes immutable server-owned comments in the form % JOBHELPER_SEGMENT_ID: ... directly above each logical LaTeX block.\n\n" +
+    "You must return a strict JSON object describing only the block replacements to make.\n\n" +
+    "How block replacements work:\n" +
+    "1. Each change targets one existing segmentId from the provided annotated LaTeX.\n" +
+    "2. Replacing a segment swaps the entire block that starts at that segment comment and ends right before the next segment comment.\n" +
+    "3. Your replacement latexCode can contain multiple logical LaTeX blocks when you need to expand or reorder content.\n" +
+    "4. Use an empty string for latexCode only when removing that block entirely is clearly helpful.\n" +
+    "5. Never invent, rename, or return % JOBHELPER_SEGMENT_ID comments. The server re-adds them deterministically after applying your edits.\n" +
+    "6. Never reference the same segmentId more than once.\n\n" +
+    "Metadata rules:\n" +
+    "1. companyName should be the employer if identifiable.\n" +
+    "2. positionTitle should be the role title if identifiable.\n" +
+    "3. jobIdentifier should be the best short disambiguator for this job: prefer the team name, otherwise location, otherwise a brief identifying phrase.\n" +
+    "4. displayName should be the user-facing saved name, preferably \"Company - Role\".\n\n" +
+    "Guardrails:\n" +
+    "1. Preserve factual accuracy. Never invent achievements, employers, dates, titles, technologies, metrics, degrees, or certifications.\n" +
+    "2. Prefer the smallest set of content edits that materially improve fit.\n" +
+    "3. It is heavily discouraged to change styling, page layout, margins, font sizing, spacing systems, or macro structure unless the user explicitly asked for layout changes or the document cannot work without that fix.\n" +
+    "4. Keep the final document pdflatex-compatible after your replacements are applied.\n"
+  );
+}
+
+function readAnnotatedTailorResumeBlocks(annotatedLatexCode: string) {
+  const blocks: AnnotatedTailorResumeBlock[] = [];
+  const matches: Array<{
+    id: string;
+    markerEnd: number;
+    markerStart: number;
+  }> = [];
+
+  for (const match of annotatedLatexCode.matchAll(new RegExp(segmentMarkerPattern))) {
+    const markerStart = match.index ?? 0;
+    const markerText = match[0] ?? "";
+    const rawId = match[1] ?? "";
+    const id = rawId.trim();
+
+    if (!id || !markerText) {
+      continue;
+    }
+
+    matches.push({
+      id,
+      markerEnd: markerStart + markerText.length,
+      markerStart,
+    });
+  }
+
+  for (let index = 0; index < matches.length; index += 1) {
+    const currentMatch = matches[index];
+    const nextMatch = matches[index + 1];
+
+    blocks.push({
+      contentEnd: nextMatch?.markerStart ?? annotatedLatexCode.length,
+      id: currentMatch.id,
+      markerStart: currentMatch.markerStart,
+    });
+  }
+
+  return blocks;
+}
+
+export function applyTailorResumeBlockChanges(input: {
+  annotatedLatexCode: string;
+  changes: TailoredResumeBlockChange[];
+}) {
+  const normalizedInput = normalizeTailorResumeLatex(input.annotatedLatexCode);
+  const blocks = readAnnotatedTailorResumeBlocks(normalizedInput.annotatedLatex);
+  const blocksById = new Map(blocks.map((block) => [block.id, block]));
+  const changesById = new Map<string, TailoredResumeBlockChange>();
+
+  for (const change of input.changes) {
+    if (changesById.has(change.segmentId)) {
+      throw new Error(
+        `The model returned duplicate edits for segment ${change.segmentId}.`,
+      );
+    }
+
+    if (!blocksById.has(change.segmentId)) {
+      throw new Error(
+        `The model referenced unknown segment ${change.segmentId}.`,
+      );
+    }
+
+    changesById.set(change.segmentId, change);
+  }
+
+  const chunks: string[] = [];
+  let cursor = 0;
+
+  for (const block of blocks) {
+    const change = changesById.get(block.id);
+
+    chunks.push(
+      normalizedInput.annotatedLatex.slice(cursor, block.markerStart),
+    );
+
+    if (!change) {
+      chunks.push(
+        normalizedInput.annotatedLatex.slice(block.markerStart, block.contentEnd),
+      );
+      cursor = block.contentEnd;
+      continue;
+    }
+
+    const replacementLatex = stripTailorResumeSegmentIds(change.latexCode);
+
+    if (replacementLatex.trim()) {
+      chunks.push(replacementLatex);
+
+      if (!replacementLatex.endsWith("\n") && block.contentEnd < normalizedInput.annotatedLatex.length) {
+        chunks.push("\n");
+      }
+    }
+
+    cursor = block.contentEnd;
+  }
+
+  chunks.push(normalizedInput.annotatedLatex.slice(cursor));
+
+  return normalizeTailorResumeLatex(chunks.join(""));
+}
+
+function applySavedTailoredResumeLinks(
+  annotatedLatexCode: string,
+  linkOverrides: TailorResumeLinkRecord[],
+) {
+  if (linkOverrides.length === 0) {
+    return {
+      normalizedLatex: normalizeTailorResumeLatex(annotatedLatexCode),
+      updatedCount: 0,
+    };
+  }
+
+  const overrideResult = applyTailorResumeLinkOverridesWithSummary(
+    annotatedLatexCode,
+    linkOverrides,
+  );
+
+  return {
+    normalizedLatex: normalizeTailorResumeLatex(overrideResult.latexCode),
+    updatedCount: overrideResult.updatedCount,
+  };
+}
+
+function buildTailoringInput(input: {
+  annotatedLatexCode: string;
+  jobDescription: string;
+}) {
+  return [
+    {
+      role: "user" as const,
+      content: [
+        {
+          type: "input_text" as const,
+          text:
+            `Job description:\n${input.jobDescription}\n\n` +
+            `Annotated base resume LaTeX:\n${input.annotatedLatexCode}`,
+        },
+      ],
+    },
+  ];
 }
 
 export async function generateTailoredResume(input: {
   annotatedLatexCode: string;
   jobDescription: string;
-}) : Promise<GenerateTailoredResumeResult> {
+  linkOverrides?: TailorResumeLinkRecord[];
+}): Promise<GenerateTailoredResumeResult> {
   const model = process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
   const normalizedInput = normalizeTailorResumeLatex(input.annotatedLatexCode);
+  const linkOverrides = input.linkOverrides ?? [];
+  const fallbackMetadata = normalizeTailoredResumeMetadata({});
 
   if (isTestOpenAIResponseEnabled()) {
+    const finalizedTestCandidate = applySavedTailoredResumeLinks(
+      normalizedInput.annotatedLatex,
+      linkOverrides,
+    );
     const validation = await validateTailorResumeLatexDocument(
-      stripTailorResumeSegmentIds(normalizedInput.annotatedLatex),
+      stripTailorResumeSegmentIds(finalizedTestCandidate.normalizedLatex.annotatedLatex),
     );
 
     return {
-      annotatedLatexCode: normalizedInput.annotatedLatex,
+      annotatedLatexCode: finalizedTestCandidate.normalizedLatex.annotatedLatex,
       attempts: 1,
-      displayName: "Tailored Resume",
-      latexCode: stripTailorResumeSegmentIds(normalizedInput.annotatedLatex),
+      companyName: fallbackMetadata.companyName,
+      displayName: fallbackMetadata.displayName,
+      jobIdentifier: fallbackMetadata.jobIdentifier,
+      latexCode: stripTailorResumeSegmentIds(
+        finalizedTestCandidate.normalizedLatex.annotatedLatex,
+      ),
       model: TEST_OPENAI_RESPONSE_MODEL,
+      positionTitle: fallbackMetadata.positionTitle,
       previewPdf: validation.ok ? validation.previewPdf : null,
+      savedLinkUpdateCount: finalizedTestCandidate.updatedCount,
       validationError: validation.ok ? null : validation.error,
     };
   }
 
   const client = getOpenAIClient();
-  let previousResponseId: string | undefined;
-  let nextInput:
-    | Array<{
-        role: "user";
-        content: Array<{ type: "input_text"; text: string }>;
-      }>
-    | Array<{
-        type: "function_call_output";
-        call_id: string;
-        output: string;
-      }>
-    | undefined = [
-    {
-      role: "user",
-      content: [
-        {
-          type: "input_text",
-          text:
-            `Job description:\n${input.jobDescription}\n\n` +
-            `Base resume LaTeX with segment IDs:\n${normalizedInput.annotatedLatex}`,
-        },
-      ],
-    },
-  ];
+  let feedback = "";
   let lastError: string | null = null;
-  let lastDisplayName = "Tailored Resume";
+  let lastMetadata = fallbackMetadata;
   let lastAnnotatedLatex = normalizedInput.annotatedLatex;
+  let lastSavedLinkUpdateCount = 0;
+  let lastModel = model;
 
   for (let attempt = 1; attempt <= maxTailoredResumeAttempts; attempt += 1) {
     const response = await client.responses.create({
-      input: nextInput as never,
-      instructions: buildTailoringInstructions(),
+      input: buildTailoringInput({
+        annotatedLatexCode: normalizedInput.annotatedLatex,
+        jobDescription: input.jobDescription,
+      }),
+      instructions: buildTailoringInstructions({ feedback }),
       model,
-      parallel_tool_calls: false,
-      previous_response_id: previousResponseId,
-      tool_choice: "required",
-      tools: [submitTailoredResumeTool],
+      text: {
+        verbosity: "low",
+        format: {
+          type: "json_schema",
+          name: "tailor_resume_block_changes",
+          strict: true,
+          schema: tailorResumeBlockChangesSchema,
+        },
+      },
     });
 
-    previousResponseId = response.id;
+    lastModel = (response as { model?: string }).model ?? model;
 
-    const toolCall = readToolCall({
-      id: response.id,
-      model: response.model ?? undefined,
-      output: response.output.map((outputItem) => ({
-        arguments:
-          "arguments" in outputItem && typeof outputItem.arguments === "string"
-            ? outputItem.arguments
-            : undefined,
-        call_id:
-          "call_id" in outputItem && typeof outputItem.call_id === "string"
-            ? outputItem.call_id
-            : undefined,
-        name: "name" in outputItem ? outputItem.name : undefined,
-        type: outputItem.type,
-      })),
-    });
-    const candidate = readCandidate(toolCall.arguments);
-    const normalizedCandidate = normalizeTailorResumeLatex(candidate.latexCode);
+    const outputText = readOutputText(response);
+
+    if (!outputText) {
+      lastError = "The model returned an empty tailoring response.";
+      feedback =
+        "The previous response was empty. Return the full structured response with metadata and block changes.";
+      continue;
+    }
+
+    let candidate: TailoredResumeStructuredResponse;
+
+    try {
+      candidate = parseTailoredResumeResponse(JSON.parse(outputText));
+    } catch (error) {
+      lastError =
+        error instanceof Error
+          ? error.message
+          : "The model returned an unreadable tailoring payload.";
+      feedback =
+        `The previous response could not be parsed.\n\nExact issue:\n${lastError}`;
+      continue;
+    }
+
+    lastMetadata = normalizeTailoredResumeMetadata(candidate);
+
+    let appliedCandidate;
+
+    try {
+      appliedCandidate = applyTailorResumeBlockChanges({
+        annotatedLatexCode: normalizedInput.annotatedLatex,
+        changes: candidate.changes,
+      });
+    } catch (error) {
+      lastError =
+        error instanceof Error
+          ? error.message
+          : "Unable to apply the requested block replacements.";
+      feedback =
+        `The previous structured response referenced invalid segment edits.\n\nExact issue:\n${lastError}\n\nReturn a corrected full response.`;
+      continue;
+    }
+
+    const normalizedCandidate = applySavedTailoredResumeLinks(
+      appliedCandidate.annotatedLatex,
+      linkOverrides,
+    );
     const validation = await validateTailorResumeLatexDocument(
-      stripTailorResumeSegmentIds(normalizedCandidate.annotatedLatex),
+      stripTailorResumeSegmentIds(normalizedCandidate.normalizedLatex.annotatedLatex),
     );
 
-    lastDisplayName = candidate.displayName;
-    lastAnnotatedLatex = normalizedCandidate.annotatedLatex;
+    lastAnnotatedLatex = normalizedCandidate.normalizedLatex.annotatedLatex;
+    lastSavedLinkUpdateCount = normalizedCandidate.updatedCount;
 
     if (validation.ok) {
       return {
-        annotatedLatexCode: normalizedCandidate.annotatedLatex,
+        annotatedLatexCode: normalizedCandidate.normalizedLatex.annotatedLatex,
         attempts: attempt,
-        displayName: candidate.displayName,
-        latexCode: stripTailorResumeSegmentIds(normalizedCandidate.annotatedLatex),
-        model: response.model ?? model,
+        companyName: lastMetadata.companyName,
+        displayName: lastMetadata.displayName,
+        jobIdentifier: lastMetadata.jobIdentifier,
+        latexCode: stripTailorResumeSegmentIds(
+          normalizedCandidate.normalizedLatex.annotatedLatex,
+        ),
+        model: lastModel,
+        positionTitle: lastMetadata.positionTitle,
         previewPdf: validation.previewPdf,
+        savedLinkUpdateCount: normalizedCandidate.updatedCount,
         validationError: null,
       };
     }
 
     lastError = validation.error;
-    nextInput = [
-      {
-        type: "function_call_output",
-        call_id: toolCall.callId,
-        output: JSON.stringify({
-          error: validation.error,
-          instruction:
-            "Revise the tailored resume, keep it factually grounded in the source resume, and call submit_tailored_resume again with a complete corrected latexCode and displayName.",
-          remainingAttempts: maxTailoredResumeAttempts - attempt,
-        }),
-      },
-    ];
+    feedback =
+      `Applying your previous block changes produced a compile failure.\n\n` +
+      `Compiler error:\n${validation.error}\n\n` +
+      "Return a corrected full structured response with revised metadata and block changes.";
   }
 
   return {
     annotatedLatexCode: lastAnnotatedLatex,
     attempts: maxTailoredResumeAttempts,
-    displayName: lastDisplayName,
+    companyName: lastMetadata.companyName,
+    displayName: lastMetadata.displayName,
+    jobIdentifier: lastMetadata.jobIdentifier,
     latexCode: stripTailorResumeSegmentIds(lastAnnotatedLatex),
-    model,
+    model: lastModel,
+    positionTitle: lastMetadata.positionTitle,
     previewPdf: null,
+    savedLinkUpdateCount: lastSavedLinkUpdateCount,
     validationError:
       lastError ??
       `Unable to produce a tailored resume after ${maxTailoredResumeAttempts} attempts.`,

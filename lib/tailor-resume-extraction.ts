@@ -13,7 +13,7 @@ import {
   buildTailorResumeLinkRecords,
   type ExtractedTailorResumeLink,
 } from "@/lib/tailor-resume-links";
-import { applyTailorResumeLinkOverrides } from "@/lib/tailor-resume-link-overrides";
+import { applyTailorResumeLinkOverridesWithSummary } from "@/lib/tailor-resume-link-overrides";
 import { fileBufferToDataUrl } from "@/lib/job-tracking";
 import {
   tailorResumeLatexExample,
@@ -229,6 +229,7 @@ function buildResumeExtractionInput(
 
 export type ExtractResumeLatexDocumentResult = RunResumeLatexToolLoopResult & {
   resumeLinks: TailorResumeLinkRecord[];
+  savedLinkUpdateCount: number;
 };
 
 type ExtractResumeLatexDocumentDependencies = {
@@ -260,15 +261,15 @@ export async function extractResumeLatexDocument(
   const validateLatexDocument =
     dependencies.validateLatexDocument ?? validateTailorResumeLatexDocument;
   const applySavedLinkOverrides = (latexCode: string) =>
-    applyTailorResumeLinkOverrides(latexCode, knownLinks);
+    applyTailorResumeLinkOverridesWithSummary(latexCode, knownLinks);
   const validateLatexWithOverrides = (latexCode: string) =>
-    validateLatexDocument(applySavedLinkOverrides(latexCode));
+    validateLatexDocument(applySavedLinkOverrides(latexCode).latexCode);
   const embeddedPdfLinks =
     input.mimeType === "application/pdf" ? await extractPdfLinks(input.buffer) : [];
 
   if (isTestOpenAIResponseEnabled()) {
     try {
-      const finalizedLatexCode = applySavedLinkOverrides(tailorResumeLatexExample);
+      const finalizedLatex = applySavedLinkOverrides(tailorResumeLatexExample);
       const validation = await validateLatexWithOverrides(tailorResumeLatexExample);
       const extractedResumeLinks = buildExtractedResumeLinksFromLatex(
         tailorResumeLatexExample,
@@ -299,13 +300,14 @@ export async function extractResumeLatexDocument(
               willRetry: false,
             },
           ],
-          latexCode: finalizedLatexCode,
+          latexCode: finalizedLatex.latexCode,
           links: validation.links,
           linkSummary: validation.linkSummary,
           model: TEST_OPENAI_RESPONSE_MODEL,
           previewPdf: null,
           extractedResumeLinks,
           resumeLinks,
+          savedLinkUpdateCount: finalizedLatex.updatedCount,
           validationError: validation.error,
         };
       }
@@ -329,16 +331,18 @@ export async function extractResumeLatexDocument(
             willRetry: false,
           },
         ],
-        latexCode: finalizedLatexCode,
+        latexCode: finalizedLatex.latexCode,
         links: validation.links,
         linkSummary: validation.linkSummary,
         model: TEST_OPENAI_RESPONSE_MODEL,
         previewPdf: validation.previewPdf,
         extractedResumeLinks,
         resumeLinks,
+        savedLinkUpdateCount: finalizedLatex.updatedCount,
         validationError: null,
       };
     } catch (error) {
+      const finalizedLatex = applySavedLinkOverrides(tailorResumeLatexExample);
       const extractedResumeLinks = buildExtractedResumeLinksFromLatex(
         tailorResumeLatexExample,
       );
@@ -366,7 +370,7 @@ export async function extractResumeLatexDocument(
             willRetry: false,
           },
         ],
-        latexCode: applySavedLinkOverrides(tailorResumeLatexExample),
+        latexCode: finalizedLatex.latexCode,
         links: [],
         linkSummary: null,
         model: TEST_OPENAI_RESPONSE_MODEL,
@@ -377,6 +381,7 @@ export async function extractResumeLatexDocument(
           extractedLinks: extractedResumeLinks,
           preserveUnusedExisting: preserveUnusedKnownLinks,
         }),
+        savedLinkUpdateCount: finalizedLatex.updatedCount,
         validationError:
           attemptError,
       };
@@ -466,14 +471,17 @@ export async function extractResumeLatexDocument(
       validateLatex: validateLatexWithOverrides,
     });
 
+    const finalizedLatex = applySavedLinkOverrides(result.latexCode);
+
     return {
       ...result,
-      latexCode: applySavedLinkOverrides(result.latexCode),
+      latexCode: finalizedLatex.latexCode,
       resumeLinks: buildTailorResumeLinkRecords({
         existingLinks: knownLinks,
         extractedLinks: result.extractedResumeLinks,
         preserveUnusedExisting: preserveUnusedKnownLinks,
       }),
+      savedLinkUpdateCount: finalizedLatex.updatedCount,
     };
   } finally {
     if (uploadedFile?.id) {

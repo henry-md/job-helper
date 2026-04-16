@@ -23,4 +23,5 @@ Important boundaries:
 Current persistence nuance:
 - A saved application can own multiple `JobApplicationScreenshot` records through `JobApplicationScreenshot.applicationId`.
 - Screenshot records may store extraction payload/model/error snapshots from the client-side draft state.
-- Tailor Resume does not use Prisma right now; it stores the public resume asset under `public/uploads/resumes/<userId>/` and the private editable profile JSON under `.job-helper-data/tailor-resumes/<userId>/profile.json`.
+- Tailor Resume stores the public resume asset under `public/uploads/resumes/<userId>/` and the private editable profile JSON under `.job-helper-data/tailor-resumes/<userId>/profile.json`.
+- Tailor Resume locked links are the exception: they are persisted in Prisma (`TailorResumeLockedLink`) so lock state remains independent from raw LaTeX reparsing.

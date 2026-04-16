@@ -57,6 +57,7 @@ test("parseTailorResumeProfile reads the current LaTeX-only shape", () => {
   assert.equal(profile.links[1]?.url, null);
   assert.equal(profile.resume?.originalFilename, "resume.pdf");
   assert.deepEqual(profile.tailoredResumes, []);
+  assert.equal(profile.workspace.isBaseResumeStepComplete, false);
 });
 
 test("parseTailorResumeProfile upgrades legacy draft/generated fields into code", () => {
@@ -78,6 +79,7 @@ test("parseTailorResumeProfile upgrades legacy draft/generated fields into code"
   assert.equal(profile.latex.code.includes("Legacy"), true);
   assert.equal(profile.annotatedLatex.code, "");
   assert.deepEqual(profile.resume, null);
+  assert.equal(profile.workspace.isBaseResumeStepComplete, false);
 });
 
 test("emptyTailorResumeProfile defaults to an empty LaTeX draft", () => {
@@ -90,4 +92,61 @@ test("emptyTailorResumeProfile defaults to an empty LaTeX draft", () => {
   assert.deepEqual(profile.links, []);
   assert.equal(profile.resume, null);
   assert.deepEqual(profile.tailoredResumes, []);
+  assert.equal(profile.workspace.isBaseResumeStepComplete, false);
+});
+
+test("parseTailorResumeProfile keeps tailored resume metadata and workspace state", () => {
+  const profile = parseTailorResumeProfile({
+    tailoredResumes: [
+      {
+        annotatedLatexCode:
+          "% JOBHELPER_SEGMENT_ID: document.documentclass-article-1\n\\documentclass{article}",
+        companyName: "OpenAI",
+        createdAt: "2026-04-15T12:00:00.000Z",
+        displayName: "OpenAI - Research Engineer",
+        error: null,
+        id: "tailored-1",
+        jobDescription: "Job description text",
+        jobIdentifier: "Applied research",
+        latexCode: "\\documentclass{article}",
+        pdfUpdatedAt: "2026-04-15T12:00:00.000Z",
+        positionTitle: "Research Engineer",
+        status: "ready",
+        updatedAt: "2026-04-15T12:00:00.000Z",
+      },
+    ],
+    workspace: {
+      isBaseResumeStepComplete: true,
+      updatedAt: "2026-04-15T12:00:00.000Z",
+    },
+  });
+
+  assert.equal(profile.workspace.isBaseResumeStepComplete, true);
+  assert.equal(profile.tailoredResumes[0]?.companyName, "OpenAI");
+  assert.equal(profile.tailoredResumes[0]?.positionTitle, "Research Engineer");
+  assert.equal(profile.tailoredResumes[0]?.jobIdentifier, "Applied research");
+});
+
+test("parseTailorResumeProfile backfills tailored resume metadata from displayName", () => {
+  const profile = parseTailorResumeProfile({
+    tailoredResumes: [
+      {
+        annotatedLatexCode:
+          "% JOBHELPER_SEGMENT_ID: document.documentclass-article-1\n\\documentclass{article}",
+        createdAt: "2026-04-15T12:00:00.000Z",
+        displayName: "Anthropic - Product Engineer",
+        error: null,
+        id: "tailored-legacy",
+        jobDescription: "Legacy job description",
+        latexCode: "\\documentclass{article}",
+        pdfUpdatedAt: null,
+        status: "ready",
+        updatedAt: "2026-04-15T12:00:00.000Z",
+      },
+    ],
+  });
+
+  assert.equal(profile.tailoredResumes[0]?.companyName, "Anthropic");
+  assert.equal(profile.tailoredResumes[0]?.positionTitle, "Product Engineer");
+  assert.equal(profile.tailoredResumes[0]?.jobIdentifier, "General");
 });

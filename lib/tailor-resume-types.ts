@@ -15,6 +15,13 @@ export type TailorResumeLinkRecord = {
   url: string | null;
 };
 
+export type TailorResumeLockedLinkRecord = {
+  key: string;
+  label: string;
+  updatedAt: string;
+  url: string;
+};
+
 export type TailorResumeExtractionStatus =
   | "failed"
   | "idle"
@@ -48,15 +55,23 @@ export type TailorResumeAnnotatedLatexState = {
   updatedAt: string | null;
 };
 
+export type TailorResumeWorkspaceState = {
+  isBaseResumeStepComplete: boolean;
+  updatedAt: string | null;
+};
+
 export type TailoredResumeRecord = {
   annotatedLatexCode: string;
+  companyName: string;
   createdAt: string;
   displayName: string;
   error: string | null;
   id: string;
   jobDescription: string;
+  jobIdentifier: string;
   latexCode: string;
   pdfUpdatedAt: string | null;
+  positionTitle: string;
   status: TailorResumeLatexStatus;
   updatedAt: string;
 };
@@ -69,6 +84,7 @@ export type TailorResumeProfile = {
   links: TailorResumeLinkRecord[];
   resume: SavedResumeRecord | null;
   tailoredResumes: TailoredResumeRecord[];
+  workspace: TailorResumeWorkspaceState;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -110,6 +126,13 @@ export function emptyTailorResumeAnnotatedLatexState(): TailorResumeAnnotatedLat
   };
 }
 
+export function emptyTailorResumeWorkspaceState(): TailorResumeWorkspaceState {
+  return {
+    isBaseResumeStepComplete: false,
+    updatedAt: null,
+  };
+}
+
 export function emptyTailorResumeProfile(): TailorResumeProfile {
   return {
     annotatedLatex: emptyTailorResumeAnnotatedLatexState(),
@@ -119,6 +142,7 @@ export function emptyTailorResumeProfile(): TailorResumeProfile {
     links: [],
     resume: null,
     tailoredResumes: [],
+    workspace: emptyTailorResumeWorkspaceState(),
   };
 }
 
@@ -257,13 +281,38 @@ function parseTailorResumeAnnotatedLatexState(
   };
 }
 
+function buildTailoredResumeDisplayName(input: {
+  companyName: string;
+  positionTitle: string;
+}) {
+  const companyName = input.companyName.trim();
+  const positionTitle = input.positionTitle.trim();
+
+  if (companyName && positionTitle) {
+    return `${companyName} - ${positionTitle}`;
+  }
+
+  return companyName || positionTitle || "Tailored Resume";
+}
+
+function parseTailorResumeWorkspaceState(value: unknown): TailorResumeWorkspaceState {
+  if (!isRecord(value)) {
+    return emptyTailorResumeWorkspaceState();
+  }
+
+  return {
+    isBaseResumeStepComplete: value.isBaseResumeStepComplete === true,
+    updatedAt: readNullableString(value.updatedAt),
+  };
+}
+
 function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null {
   if (!isRecord(value)) {
     return null;
   }
 
   const id = readNullableString(value.id);
-  const displayName = readNullableString(value.displayName);
+  const rawDisplayName = readNullableString(value.displayName);
   const jobDescription = readNullableString(value.jobDescription);
   const latexCode = readNullableString(value.latexCode);
   const annotatedLatexCode = readNullableString(value.annotatedLatexCode);
@@ -271,6 +320,21 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
   const updatedAt = readNullableString(value.updatedAt);
   const pdfUpdatedAt = readNullableString(value.pdfUpdatedAt);
   const error = readNullableString(value.error);
+  const companyName =
+    readNullableString(value.companyName) ??
+    rawDisplayName?.split(" - ")[0]?.trim() ??
+    "";
+  const positionTitle =
+    readNullableString(value.positionTitle) ??
+    rawDisplayName?.split(" - ")[1]?.trim() ??
+    "";
+  const jobIdentifier = readNullableString(value.jobIdentifier) ?? "General";
+  const displayName =
+    rawDisplayName ??
+    buildTailoredResumeDisplayName({
+      companyName,
+      positionTitle,
+    });
   const rawStatus = value.status;
   const status =
     rawStatus === "compiling" ||
@@ -294,13 +358,16 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
 
   return {
     annotatedLatexCode,
+    companyName,
     createdAt,
     displayName,
     error,
     id,
     jobDescription,
+    jobIdentifier,
     latexCode,
     pdfUpdatedAt,
+    positionTitle,
     status,
     updatedAt,
   };
@@ -330,5 +397,6 @@ export function parseTailorResumeProfile(value: unknown): TailorResumeProfile {
     links: parseTailorResumeLinkRecords(value.links),
     resume: parseSavedResumeRecord(value.resume),
     tailoredResumes: parseTailoredResumeRecords(value.tailoredResumes),
+    workspace: parseTailorResumeWorkspaceState(value.workspace),
   };
 }

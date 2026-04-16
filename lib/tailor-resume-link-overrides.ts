@@ -1,8 +1,18 @@
 import {
   buildTailorResumeLinkKey,
   normalizeTailorResumeLinkLabel,
+  type ExtractedTailorResumeLink,
 } from "./tailor-resume-links.ts";
-import type { TailorResumeLinkRecord } from "./tailor-resume-types.ts";
+import { mergeTailorResumeLinksWithLockedLinks } from "./tailor-resume-locked-links.ts";
+import type {
+  TailorResumeLinkRecord,
+  TailorResumeLockedLinkRecord,
+} from "./tailor-resume-types.ts";
+
+export type TailorResumeLinkOverrideResult = {
+  latexCode: string;
+  updatedCount: number;
+};
 
 function isEscaped(value: string, index: number) {
   let backslashCount = 0;
@@ -297,6 +307,7 @@ function applyPlainTextLinkOverrides(
   linksByKey: Map<string, TailorResumeLinkRecord>,
   labelPatterns: Array<[string, string[]]>,
   occurrencesByLabel: Map<string, number>,
+  onLinkUpdated?: () => void,
 ) {
   if (labelPatterns.length === 0 || !value) {
     return value;
@@ -321,6 +332,7 @@ function applyPlainTextLinkOverrides(
     const matchedText = value.slice(nextMatch.startIndex, matchEndIndex);
 
     if (link && !link.disabled && link.url) {
+      onLinkUpdated?.();
       result += `\\href{${link.url}}{\\tightul{${matchedText}}}`;
     } else {
       result += matchedText;
@@ -332,20 +344,136 @@ function applyPlainTextLinkOverrides(
   return result;
 }
 
+function collectPlainTextLinkCandidates(
+  value: string,
+  labelPatterns: Array<[string, string[]]>,
+  occurrencesByLabel: Map<string, number>,
+) {
+  if (labelPatterns.length === 0 || !value) {
+    return [] as ExtractedTailorResumeLink[];
+  }
+
+  const matches: ExtractedTailorResumeLink[] = [];
+  let index = 0;
+
+  while (index < value.length) {
+    const nextMatch = findNextPlainTextLabelMatch(value, index, labelPatterns);
+
+    if (!nextMatch) {
+      break;
+    }
+
+    const occurrence = readLinkOccurrence(nextMatch.label, occurrencesByLabel);
+
+    if (occurrence) {
+      matches.push({
+        label: occurrence.normalizedLabel,
+        url: null,
+      });
+    }
+
+    index = nextMatch.startIndex + nextMatch.pattern.length;
+  }
+
+  return matches;
+}
+
+export function extractTailorResumeTrackedLinks(
+  latexCode: string,
+  trackedLinks: TailorResumeLinkRecord[],
+) {
+  const labelPatterns = buildLabelPatterns(trackedLinks);
+  const extractedLinks: ExtractedTailorResumeLink[] = [];
+  const occurrencesByLabel = new Map<string, number>();
+
+  let index = 0;
+
+  while (index < latexCode.length) {
+    const hrefIndex = latexCode.indexOf("\\href", index);
+
+    if (hrefIndex === -1) {
+      extractedLinks.push(
+        ...collectPlainTextLinkCandidates(
+          latexCode.slice(index),
+          labelPatterns,
+          occurrencesByLabel,
+        ),
+      );
+      break;
+    }
+
+    extractedLinks.push(
+      ...collectPlainTextLinkCandidates(
+        latexCode.slice(index, hrefIndex),
+        labelPatterns,
+        occurrencesByLabel,
+      ),
+    );
+
+    let cursor = hrefIndex + "\\href".length;
+    cursor = skipWhitespace(latexCode, cursor);
+
+    const urlGroup = readBalancedGroup(latexCode, cursor);
+
+    if (!urlGroup) {
+      index = hrefIndex + "\\href".length;
+      continue;
+    }
+
+    cursor = skipWhitespace(latexCode, urlGroup.nextIndex);
+    const textGroup = readBalancedGroup(latexCode, cursor);
+
+    if (!textGroup) {
+      index = urlGroup.nextIndex;
+      continue;
+    }
+
+    const occurrence = readLinkOccurrence(
+      simplifyLatexText(textGroup.value),
+      occurrencesByLabel,
+    );
+
+    if (occurrence) {
+      extractedLinks.push({
+        label: occurrence.normalizedLabel,
+        url: urlGroup.value.trim(),
+      });
+    }
+
+    index = textGroup.nextIndex;
+  }
+
+  return extractedLinks;
+}
+
 export function applyTailorResumeLinkOverrides(
   latexCode: string,
   links: TailorResumeLinkRecord[],
 ) {
+  return applyTailorResumeLinkOverridesWithSummary(latexCode, links).latexCode;
+}
+
+export function applyTailorResumeLinkOverridesWithSummary(
+  latexCode: string,
+  links: TailorResumeLinkRecord[],
+): TailorResumeLinkOverrideResult {
   const linksByKey = new Map(links.map((link) => [link.key, link]));
   const labelPatterns = buildLabelPatterns(links);
 
   if (linksByKey.size === 0) {
-    return latexCode;
+    return {
+      latexCode,
+      updatedCount: 0,
+    };
   }
 
   let result = "";
   let index = 0;
+  let updatedCount = 0;
   const occurrencesByLabel = new Map<string, number>();
+  const onLinkUpdated = () => {
+    updatedCount += 1;
+  };
 
   while (index < latexCode.length) {
     const hrefIndex = latexCode.indexOf("\\href", index);
@@ -356,6 +484,7 @@ export function applyTailorResumeLinkOverrides(
         linksByKey,
         labelPatterns,
         occurrencesByLabel,
+        onLinkUpdated,
       );
       break;
     }
@@ -365,6 +494,7 @@ export function applyTailorResumeLinkOverrides(
       linksByKey,
       labelPatterns,
       occurrencesByLabel,
+      onLinkUpdated,
     );
 
     let cursor = hrefIndex + "\\href".length;
@@ -393,19 +523,67 @@ export function applyTailorResumeLinkOverrides(
     );
     const linkKey = occurrence?.key ?? null;
     const link = linkKey ? linksByKey.get(linkKey) : null;
+    const originalHref = latexCode.slice(hrefIndex, textGroup.nextIndex);
 
     if (link?.disabled || link?.url === null) {
       result += stripLinkStyling(textGroup.value);
     } else if (link?.url) {
-      result += `\\href{${link.url}}{${textGroup.value}}`;
+      const nextHref = `\\href{${link.url}}{${textGroup.value}}`;
+
+      if (nextHref !== originalHref) {
+        updatedCount += 1;
+      }
+
+      result += nextHref;
     } else {
-      result += latexCode.slice(hrefIndex, textGroup.nextIndex);
+      result += originalHref;
     }
 
     index = textGroup.nextIndex;
   }
 
-  return result;
+  return {
+    latexCode: result,
+    updatedCount,
+  };
+}
+
+export function selectTailorResumeSourceLinkOverrides(
+  input: {
+    currentLinks: TailorResumeLinkRecord[];
+    lockedLinks: TailorResumeLockedLinkRecord[];
+  },
+) {
+  return mergeTailorResumeLinksWithLockedLinks(
+    input.currentLinks.filter((link) => link.disabled),
+    input.lockedLinks,
+    {
+      includeLockedOnly: true,
+    },
+  ).filter((link) => link.disabled || link.locked === true);
+}
+
+export function applyTailorResumeSourceLinkOverrides(
+  latexCode: string,
+  input: {
+    currentLinks: TailorResumeLinkRecord[];
+    lockedLinks: TailorResumeLockedLinkRecord[];
+  },
+) {
+  return applyTailorResumeSourceLinkOverridesWithSummary(latexCode, input).latexCode;
+}
+
+export function applyTailorResumeSourceLinkOverridesWithSummary(
+  latexCode: string,
+  input: {
+    currentLinks: TailorResumeLinkRecord[];
+    lockedLinks: TailorResumeLockedLinkRecord[];
+  },
+) {
+  return applyTailorResumeLinkOverridesWithSummary(
+    latexCode,
+    selectTailorResumeSourceLinkOverrides(input),
+  );
 }
 
 export function stripDisabledTailorResumeLinks(

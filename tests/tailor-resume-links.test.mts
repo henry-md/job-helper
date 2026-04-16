@@ -4,13 +4,18 @@ import test from "node:test";
 import { tailorResumeLatexExample } from "../lib/tailor-resume-latex-example.ts";
 import { compileTailorResumeLatex } from "../lib/tailor-resume-latex.ts";
 import {
+  applyTailorResumeSourceLinkOverrides,
+  applyTailorResumeSourceLinkOverridesWithSummary,
   applyTailorResumeLinkOverrides,
+  applyTailorResumeLinkOverridesWithSummary,
+  extractTailorResumeTrackedLinks,
   stripDisabledTailorResumeLinks,
 } from "../lib/tailor-resume-link-overrides.ts";
 import {
   buildTailorResumeLinkRecords,
   normalizeTailorResumeLinkUrl,
 } from "../lib/tailor-resume-links.ts";
+import { mergeTailorResumeLinksWithLockedLinks } from "../lib/tailor-resume-locked-links.ts";
 import {
   extractResumeLatexLinks,
   validateTailorResumeLatexDocument,
@@ -231,6 +236,7 @@ test("buildTailorResumeLinkRecords preserves saved destinations and infers obvio
   });
 
   assert.equal(records[0]?.disabled, false);
+  assert.equal(records[0]?.locked ?? false, false);
   assert.equal(records[0]?.url, "https://linkedin.com/in/henry-deutsch");
   assert.equal(records[1]?.url, "https://github.com/henry-md");
   assert.equal(records[2]?.url, "mailto:henrymdeutsch@gmail.com");
@@ -258,6 +264,7 @@ test("buildTailorResumeLinkRecords preserves explicitly deleted links and carrie
   });
 
   assert.equal(records[0]?.disabled, true);
+  assert.equal(records[0]?.locked ?? false, false);
   assert.equal(records[0]?.url, null);
 });
 
@@ -277,9 +284,11 @@ test("buildTailorResumeLinkRecords assigns stable suffixes to duplicate labels",
 
   assert.equal(records[0]?.key, "portfolio");
   assert.equal(records[0]?.disabled, false);
+  assert.equal(records[0]?.locked ?? false, false);
   assert.equal(records[0]?.url, "https://henry-deutsch.com/");
   assert.equal(records[1]?.key, "portfolio-2");
   assert.equal(records[1]?.disabled, false);
+  assert.equal(records[1]?.locked ?? false, false);
   assert.equal(records[1]?.url, null);
 });
 
@@ -290,6 +299,7 @@ test("buildTailorResumeLinkRecords can drop stale links while preserving saved v
         disabled: false,
         key: "linkedin",
         label: "LinkedIn",
+        locked: true,
         updatedAt: "2026-04-15T12:00:00.000Z",
         url: "https://linkedin.com/in/henry-deutsch",
       },
@@ -345,6 +355,7 @@ test("buildTailorResumeLinkRecords can prefer explicit LaTeX href destinations f
         disabled: false,
         key: "linkedin",
         label: "LinkedIn",
+        locked: true,
         updatedAt: "2026-04-15T12:00:00.000Z",
         url: "https://linkedin.com/in/henry-deutsch",
       },
@@ -352,6 +363,7 @@ test("buildTailorResumeLinkRecords can prefer explicit LaTeX href destinations f
         disabled: true,
         key: "portfolio",
         label: "Portfolio",
+        locked: false,
         updatedAt: "2026-04-15T12:00:00.000Z",
         url: null,
       },
@@ -389,6 +401,119 @@ test("buildTailorResumeLinkRecords can prefer explicit LaTeX href destinations f
         key: "portfolio",
         label: "Portfolio",
         url: "https://henry-deutsch.com/",
+      },
+    ],
+  );
+});
+
+test("tracked source latex extraction preserves locked plain-text labels but drops unlocked ones", () => {
+  const existingLinks = [
+    {
+      disabled: false,
+      key: "linkedin",
+      label: "LinkedIn",
+      locked: true,
+      updatedAt: "2026-04-15T12:00:00.000Z",
+      url: "https://linkedin.com/in/henry-deutsch",
+    },
+    {
+      disabled: false,
+      key: "portfolio",
+      label: "Portfolio",
+      locked: false,
+      updatedAt: "2026-04-15T12:00:00.000Z",
+      url: "https://henry-deutsch.com",
+    },
+  ];
+  const extractedLinks = extractTailorResumeTrackedLinks(
+    String.raw`\documentclass{article}
+\begin{document}
+LinkedIn
+Portfolio
+\end{document}`,
+    existingLinks.filter((link) => link.disabled || link.locked),
+  );
+  const records = buildTailorResumeLinkRecords({
+    existingLinks,
+    extractedLinks,
+    preferExtractedUrls: true,
+    preserveUnusedExisting: false,
+  });
+
+  assert.deepEqual(extractedLinks, [
+    {
+      label: "LinkedIn",
+      url: null,
+    },
+  ]);
+  assert.deepEqual(
+    records.map((record) => ({
+      disabled: record.disabled,
+      key: record.key,
+      label: record.label,
+      url: record.url,
+    })),
+    [
+      {
+        disabled: false,
+        key: "linkedin",
+        label: "LinkedIn",
+        url: "https://linkedin.com/in/henry-deutsch",
+      },
+    ],
+  );
+});
+
+test("mergeTailorResumeLinksWithLockedLinks defaults to the persisted locked value on key conflicts", () => {
+  const mergedLinks = mergeTailorResumeLinksWithLockedLinks(
+    [
+      {
+        disabled: false,
+        key: "linkedin",
+        label: "LinkedIn",
+        updatedAt: "2026-04-15T12:00:00.000Z",
+        url: "https://linkedin.com/in/edited-in-latex",
+      },
+      {
+        disabled: false,
+        key: "portfolio",
+        label: "Portfolio",
+        updatedAt: "2026-04-15T12:00:00.000Z",
+        url: "https://henry-deutsch.com",
+      },
+    ],
+    [
+      {
+        key: "linkedin",
+        label: "LinkedIn",
+        updatedAt: "2026-04-15T13:00:00.000Z",
+        url: "https://linkedin.com/in/locked-profile",
+      },
+    ],
+  );
+
+  assert.deepEqual(
+    mergedLinks.map((link) => ({
+      disabled: link.disabled,
+      key: link.key,
+      label: link.label,
+      locked: link.locked ?? false,
+      url: link.url,
+    })),
+    [
+      {
+        disabled: false,
+        key: "linkedin",
+        label: "LinkedIn",
+        locked: true,
+        url: "https://linkedin.com/in/locked-profile",
+      },
+      {
+        disabled: false,
+        key: "portfolio",
+        label: "Portfolio",
+        locked: false,
+        url: "https://henry-deutsch.com",
       },
     ],
   );
@@ -486,6 +611,38 @@ test("applyTailorResumeLinkOverrides updates href destinations without changing 
   );
 });
 
+test("applyTailorResumeLinkOverridesWithSummary counts only actual saved-link rewrites", () => {
+  const overrideResult = applyTailorResumeLinkOverridesWithSummary(
+    String.raw`\documentclass{article}
+\begin{document}
+\href{https://old.example/profile}{\tightul{LinkedIn}}
+\href{https://github.com/henry-md}{\tightul{GitHub}}
+\end{document}`,
+    [
+      {
+        disabled: false,
+        key: "linkedin",
+        label: "LinkedIn",
+        updatedAt: "2026-04-15T12:00:00.000Z",
+        url: "https://linkedin.com/in/henry-deutsch",
+      },
+      {
+        disabled: false,
+        key: "github",
+        label: "GitHub",
+        updatedAt: "2026-04-15T12:00:00.000Z",
+        url: "https://github.com/henry-md",
+      },
+    ],
+  );
+
+  assert.equal(overrideResult.updatedCount, 1);
+  assert.match(
+    overrideResult.latexCode,
+    /\\href\{https:\/\/linkedin\.com\/in\/henry-deutsch\}\{\\tightul\{LinkedIn\}\}/,
+  );
+});
+
 test("applyTailorResumeLinkOverrides wraps plain text labels with deterministic link styling", () => {
   const latexCode = String.raw`\documentclass{article}
 \begin{document}
@@ -505,6 +662,124 @@ test("applyTailorResumeLinkOverrides wraps plain text labels with deterministic 
   assert.match(
     overriddenLatexCode,
     /\\textbf\{\\href\{https:\/\/henry-deutsch\.com\}\{\\tightul\{Portfolio\}\}\}/,
+  );
+});
+
+test("applyTailorResumeSourceLinkOverrides injects only locked links and strips deleted ones", () => {
+  const latexCode = String.raw`\documentclass{article}
+\begin{document}
+LinkedIn
+Portfolio
+\href{https://github.com/old-profile}{\tightul{GitHub}}
+\end{document}`;
+
+  const overriddenLatexCode = applyTailorResumeSourceLinkOverrides(latexCode, {
+    currentLinks: [
+      {
+        disabled: false,
+        key: "portfolio",
+        label: "Portfolio",
+        updatedAt: "2026-04-15T12:00:00.000Z",
+        url: "https://henry-deutsch.com",
+      },
+      {
+        disabled: true,
+        key: "github",
+        label: "GitHub",
+        updatedAt: "2026-04-15T12:00:00.000Z",
+        url: null,
+      },
+    ],
+    lockedLinks: [
+      {
+        key: "linkedin",
+        label: "LinkedIn",
+        updatedAt: "2026-04-15T12:00:00.000Z",
+        url: "https://linkedin.com/in/henry-deutsch",
+      },
+    ],
+  });
+
+  assert.match(
+    overriddenLatexCode,
+    /\\href\{https:\/\/linkedin\.com\/in\/henry-deutsch\}\{\\tightul\{LinkedIn\}\}/,
+  );
+  assert.match(overriddenLatexCode, /\nPortfolio\n/);
+  assert.doesNotMatch(
+    overriddenLatexCode,
+    /\\href\{https:\/\/henry-deutsch\.com\}\{\\tightul\{Portfolio\}\}/,
+  );
+  assert.doesNotMatch(
+    overriddenLatexCode,
+    /\\href\{https:\/\/github\.com\/old-profile\}/,
+  );
+  assert.match(overriddenLatexCode, /\nGitHub\n/);
+});
+
+test("applyTailorResumeSourceLinkOverrides rewrites a locked href inside a styled block", () => {
+  const latexCode = String.raw`\documentclass{article}
+\begin{document}
+{\BodyFont\href{https://github.com/scisegrver/BOOMmmm}{\tightul{\textbf{N-Body Orbit Simulations}}}~|~Research at Johns Hopkins\par}
+\end{document}`;
+
+  const overriddenLatexCode = applyTailorResumeSourceLinkOverrides(latexCode, {
+    currentLinks: [],
+    lockedLinks: [
+      {
+        key: "n-body-orbit-simulations",
+        label: "N-Body Orbit Simulations",
+        updatedAt: "2026-04-15T12:00:00.000Z",
+        url: "https://github.com/scisegrver/BOOM",
+      },
+    ],
+  });
+
+  assert.match(
+    overriddenLatexCode,
+    /\\href\{https:\/\/github\.com\/scisegrver\/BOOM\}\{\\tightul\{\\textbf\{N-Body Orbit Simulations\}\}\}/,
+  );
+  assert.doesNotMatch(
+    overriddenLatexCode,
+    /\\href\{https:\/\/github\.com\/scisegrver\/BOOMmmm\}/,
+  );
+});
+
+test("applyTailorResumeSourceLinkOverridesWithSummary counts locked-link injections", () => {
+  const overrideResult = applyTailorResumeSourceLinkOverridesWithSummary(
+    String.raw`\documentclass{article}
+\begin{document}
+LinkedIn
+Portfolio
+\end{document}`,
+    {
+      currentLinks: [
+        {
+          disabled: false,
+          key: "portfolio",
+          label: "Portfolio",
+          updatedAt: "2026-04-15T12:00:00.000Z",
+          url: "https://henry-deutsch.com",
+        },
+      ],
+      lockedLinks: [
+        {
+          key: "linkedin",
+          label: "LinkedIn",
+          updatedAt: "2026-04-15T12:00:00.000Z",
+          url: "https://linkedin.com/in/henry-deutsch",
+        },
+      ],
+    },
+  );
+
+  assert.equal(overrideResult.updatedCount, 1);
+  assert.match(
+    overrideResult.latexCode,
+    /\\href\{https:\/\/linkedin\.com\/in\/henry-deutsch\}\{\\tightul\{LinkedIn\}\}/,
+  );
+  assert.doesNotMatch(
+    overrideResult.latexCode,
+    /\\href\{https:\/\/henry-deutsch\.com\}\{\\tightul\{Portfolio\}\}/,
   );
 });
 

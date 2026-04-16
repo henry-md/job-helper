@@ -9,7 +9,7 @@ import {
   toReferrerOption,
 } from "@/lib/job-application-records";
 import { getPrismaClient } from "@/lib/prisma";
-import { readTailorResumeProfile } from "@/lib/tailor-resume-storage";
+import { readTailorResumeProfileState } from "@/lib/tailor-resume-profile-state";
 import type { CompanyOption, ReferrerOption } from "@/lib/job-application-types";
 import {
   emptyTailorResumeProfile,
@@ -93,7 +93,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   })();
   const tailorResumeProfile = await (async () => {
     try {
-      return await readTailorResumeProfile(session.user.id);
+      const state = await readTailorResumeProfileState(session.user.id);
+      return state.profile;
     } catch {
       return emptyTailorResumeProfile() satisfies TailorResumeProfile;
     }

@@ -4,7 +4,8 @@ import {
   emptyTailorResumeProfile,
   parseTailorResumeProfile,
   type TailorResumeProfile,
-} from "@/lib/tailor-resume-types";
+} from "./tailor-resume-types.ts";
+import { stripTailorResumeProfileLinkLocks } from "./tailor-resume-locked-links.ts";
 
 function getTailorResumePrivateDir(userId: string) {
   return path.join(process.cwd(), ".job-helper-data", "tailor-resumes", userId);
@@ -48,11 +49,12 @@ export async function writeTailorResumeProfile(
   profile: TailorResumeProfile,
 ) {
   const privateDir = getTailorResumePrivateDir(userId);
+  const sanitizedProfile = stripTailorResumeProfileLinkLocks(profile);
 
   await mkdir(privateDir, { recursive: true });
   await writeFile(
     getTailorResumeProfilePath(userId),
-    `${JSON.stringify(profile, null, 2)}\n`,
+    `${JSON.stringify(sanitizedProfile, null, 2)}\n`,
     "utf8",
   );
 }
