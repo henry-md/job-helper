@@ -144,25 +144,31 @@ test("runResumeLatexToolLoop retries with the exact compile error", async () => 
   assert.equal(requests.length, 2);
   assert.equal(requests[1]?.previousResponseId, "resp_1");
 
-  const retryInput = requests[1]?.input;
-  assert.ok(Array.isArray(retryInput));
-  assert.equal(retryInput[0]?.type, "function_call_output");
-  assert.equal(retryInput[0]?.call_id, "call_1");
-
-  const retryPayload = JSON.parse(String(retryInput[0]?.output)) as {
+  const retryPayload = requests[1]?.input as {
     attempt: number;
     error: string;
     failedLinks: unknown[];
+    previousLatexCode: string | null;
+    previousModelOutput: string | null;
+    previousResumeLinks: Array<{ label: string; url: string | null }>;
     linkSummary: unknown;
-    ok: boolean;
     remainingAttempts: number;
+    retryType: string;
   };
 
+  assert.equal(retryPayload.retryType, "validation_failure");
   assert.equal(retryPayload.attempt, 1);
   assert.equal(retryPayload.error, compileError);
   assert.deepEqual(retryPayload.failedLinks, []);
+  assert.equal(retryPayload.previousLatexCode, "\\documentclass{article}\nBAD");
+  assert.equal(retryPayload.previousModelOutput, null);
+  assert.deepEqual(retryPayload.previousResumeLinks, [
+    {
+      label: "Portfolio",
+      url: "https://example.com/bad-link",
+    },
+  ]);
   assert.equal(retryPayload.linkSummary, null);
-  assert.equal(retryPayload.ok, false);
   assert.equal(retryPayload.remainingAttempts, 2);
 });
 
@@ -372,6 +378,14 @@ test("runResumeLatexToolLoop returns the last draft plus the final error after t
   assert.equal(requests.length, 3);
   assert.equal(requests[1]?.previousResponseId, "resp_1");
   assert.equal(requests[2]?.previousResponseId, "resp_2");
+  assert.equal(
+    (requests[1]?.input as { previousLatexCode: string | null }).previousLatexCode,
+    "draft-one",
+  );
+  assert.equal(
+    (requests[2]?.input as { previousLatexCode: string | null }).previousLatexCode,
+    "draft-two",
+  );
   assert.match(
     result.validationError ?? "",
     /Unable to produce a compilable LaTeX resume after 3 attempts\./,
@@ -514,20 +528,19 @@ test("runResumeLatexToolLoop retries when link validation fails", async () => {
   );
   assert.deepEqual(result.previewPdf, Buffer.from("pdf"));
 
-  const retryInput = requests[1]?.input;
-  assert.ok(Array.isArray(retryInput));
-  assert.equal(retryInput[0]?.type, "function_call_output");
-  assert.equal(retryInput[0]?.call_id, "call_1");
-
-  const retryPayload = JSON.parse(String(retryInput[0]?.output)) as {
+  const retryPayload = requests[1]?.input as {
     attempt: number;
     error: string;
     failedLinks: Array<{ displayText: string | null; reason: string | null; url: string }>;
+    previousLatexCode: string | null;
+    previousModelOutput: string | null;
+    previousResumeLinks: Array<{ label: string; url: string | null }>;
     linkSummary: { failedCount: number; passedCount: number; totalCount: number };
-    ok: boolean;
     remainingAttempts: number;
+    retryType: string;
   };
 
+  assert.equal(retryPayload.retryType, "validation_failure");
   assert.equal(retryPayload.attempt, 1);
   assert.equal(retryPayload.error, linkFailure);
   assert.deepEqual(retryPayload.failedLinks, [
@@ -538,6 +551,12 @@ test("runResumeLatexToolLoop retries when link validation fails", async () => {
       url: "https://github.com/not-henry",
     },
   ]);
+  assert.equal(
+    retryPayload.previousLatexCode,
+    "\\href{https://github.com/not-henry}{\\tightul{github.com/henry-md}}",
+  );
+  assert.equal(retryPayload.previousModelOutput, null);
+  assert.deepEqual(retryPayload.previousResumeLinks, []);
   assert.deepEqual(
     retryPayload.linkSummary,
     buildLinkSummary({
@@ -546,6 +565,5 @@ test("runResumeLatexToolLoop retries when link validation fails", async () => {
       totalCount: 1,
     }),
   );
-  assert.equal(retryPayload.ok, false);
   assert.equal(retryPayload.remainingAttempts, 2);
 });

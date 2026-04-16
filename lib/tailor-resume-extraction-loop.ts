@@ -65,26 +65,27 @@ export type ResumeLatexLoopResponse = {
   output_text?: string;
 };
 
-type ResumeLatexRetryMessage = {
-  role: "user";
-  content: Array<{
-    type: "input_text";
-    text: string;
+export type ResumeLatexRetryContext = {
+  attempt: number;
+  error: string;
+  failedLinks: Array<{
+    displayText: string | null;
+    reason: string | null;
+    url: string;
   }>;
+  linkSummary: TailorResumeLinkValidationSummary | null;
+  previousLatexCode: string | null;
+  previousModelOutput: string | null;
+  previousResumeLinks: ExtractedTailorResumeLink[];
+  remainingAttempts: number;
+  retryType: "response_error" | "validation_failure";
 };
 
-type ResumeLatexFunctionCallOutput = {
-  type: "function_call_output";
-  call_id: string;
-  output: string;
-};
-
-export type ResumeLatexLoopInput =
-  | ResumeLatexRetryMessage[]
-  | ResumeLatexFunctionCallOutput[];
+export type ResumeLatexLoopInput = ResumeLatexRetryContext;
 
 export type RunResumeLatexToolLoopArgs = {
   createResponse: (input: {
+    attempt: number;
     previousResponseId?: string;
     input?: ResumeLatexLoopInput;
   }) => Promise<ResumeLatexLoopResponse>;
@@ -190,47 +191,47 @@ function readExtractedLatexDocument(value: unknown) {
   };
 }
 
-function buildRetryMessage(error: string): ResumeLatexRetryMessage[] {
-  return [
-    {
-      role: "user",
-      content: [
-        {
-          type: "input_text",
-          text:
-            `The previous response did not call ${resumeLatexValidationToolName} correctly.\n\n` +
-            `Exact issue:\n${error}\n\n` +
-            `Return to the resume, produce the full corrected LaTeX document, and call ${resumeLatexValidationToolName} with the entire document in latexCode plus a complete links array.`,
-        },
-      ],
-    },
-  ];
+function buildResponseFailureRetryContext(input: {
+  attempt: number;
+  error: string;
+  maxAttempts: number;
+  previousLatexCode?: string | null;
+  previousModelOutput?: string | null;
+  previousResumeLinks?: ExtractedTailorResumeLink[];
+}): ResumeLatexRetryContext {
+  return {
+    attempt: input.attempt,
+    error: input.error,
+    failedLinks: [],
+    linkSummary: null,
+    previousLatexCode: input.previousLatexCode ?? null,
+    previousModelOutput: input.previousModelOutput?.trim() || null,
+    previousResumeLinks: input.previousResumeLinks ?? [],
+    remainingAttempts: input.maxAttempts - input.attempt,
+    retryType: "response_error",
+  };
 }
 
-function buildValidationFailureOutput(input: {
+function buildValidationFailureRetryContext(input: {
   attempt: number;
-  callId: string;
   validation: Extract<TailorResumeLatexDocumentValidationResult, { ok: false }>;
+  previousLatexCode: string;
+  previousResumeLinks: ExtractedTailorResumeLink[];
   maxAttempts: number;
-}): ResumeLatexFunctionCallOutput[] {
+}): ResumeLatexRetryContext {
   const failedLinks = readFailedLinks(input.validation.links);
 
-  return [
-    {
-      type: "function_call_output",
-      call_id: input.callId,
-      output: JSON.stringify({
-        attempt: input.attempt,
-        error: input.validation.error,
-        failedLinks,
-        instruction:
-          "Revise the full LaTeX document, preserve the visible resume content, and call validate_resume_latex again with the complete corrected latexCode and links array. If a link fails validation or you are not confident in its destination, keep the visible text, remove hyperlink-specific styling, and return that label in links with url set to null instead of guessing a new destination.",
-        linkSummary: input.validation.linkSummary,
-        ok: input.validation.ok,
-        remainingAttempts: input.maxAttempts - input.attempt,
-      }),
-    },
-  ];
+  return {
+    attempt: input.attempt,
+    error: input.validation.error,
+    failedLinks,
+    linkSummary: input.validation.linkSummary,
+    previousLatexCode: input.previousLatexCode,
+    previousModelOutput: null,
+    previousResumeLinks: input.previousResumeLinks,
+    remainingAttempts: input.maxAttempts - input.attempt,
+    retryType: "validation_failure",
+  };
 }
 
 function buildRetryExhaustedError(lastError: string | null, maxAttempts: number) {
@@ -299,6 +300,7 @@ export async function runResumeLatexToolLoop(
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const response = await args.createResponse({
+      attempt,
       input: nextInput,
       previousResponseId,
     });
@@ -340,7 +342,13 @@ export async function runResumeLatexToolLoop(
               break;
             }
 
-            nextInput = buildRetryMessage(lastError);
+            nextInput = buildValidationFailureRetryContext({
+              attempt,
+              maxAttempts,
+              previousLatexCode: fallbackDocument.latexCode,
+              previousResumeLinks: fallbackDocument.links,
+              validation,
+            });
             continue;
           }
 
@@ -385,7 +393,12 @@ export async function runResumeLatexToolLoop(
         break;
       }
 
-      nextInput = buildRetryMessage(lastError);
+      nextInput = buildResponseFailureRetryContext({
+        attempt,
+        error: lastError,
+        maxAttempts,
+        previousModelOutput: outputText || null,
+      });
       continue;
     }
 
@@ -412,10 +425,11 @@ export async function runResumeLatexToolLoop(
           break;
         }
 
-        nextInput = buildValidationFailureOutput({
+        nextInput = buildValidationFailureRetryContext({
           attempt,
-          callId: toolCall.call_id,
           maxAttempts,
+          previousLatexCode: extractedDocument.latexCode,
+          previousResumeLinks: extractedDocument.links,
           validation,
         });
         continue;
@@ -458,7 +472,12 @@ export async function runResumeLatexToolLoop(
         break;
       }
 
-      nextInput = buildRetryMessage(lastError);
+      nextInput = buildResponseFailureRetryContext({
+        attempt,
+        error: lastError,
+        maxAttempts,
+        previousModelOutput: toolCall.arguments,
+      });
     }
   }
 
