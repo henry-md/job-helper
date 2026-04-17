@@ -6,7 +6,9 @@
       "Bash(git restore:*)",
       "Bash(git add:*)",
       "Bash(git apply:*)",
-      "Bash(git commit -m ':*)"
+      "Bash(git commit -m ':*)",
+      "Bash(railway status *)",
+      "Bash(railway logs *)"
     ]
   }
 }
