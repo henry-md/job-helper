@@ -221,7 +221,9 @@ export default function DashboardWorkspace({
       </header>
 
       <TailoredResumeReviewModal
+        key={reviewingTailoredResume?.id ?? "closed"}
         onClose={() => setReviewingTailoredResumeId(null)}
+        onTailoredResumesChange={setTailoredResumes}
         record={reviewingTailoredResume}
       />
 

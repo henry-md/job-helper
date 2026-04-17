@@ -80,6 +80,7 @@ Relevant code paths:
 - Embedded PDF link recovery: `lib/tailor-resume-pdf-links.ts`
 - Prompt reference example/template: `lib/tailor-resume-latex-example.ts`
 - LaTeX compile helper: `lib/tailor-resume-latex.ts`
+- Review highlight implementation notes: `agent-docs/architecture/tailor-resume-preview-highlighting.md`
 - Saved profile + preview persistence: `lib/tailor-resume-storage.ts`
 - API orchestration: `app/api/tailor-resume/route.ts`
 - Preview route: `app/api/tailor-resume/preview/route.ts`

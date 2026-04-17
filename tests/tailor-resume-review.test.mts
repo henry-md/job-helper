@@ -30,8 +30,11 @@ test("buildTailoredResumeBlockEdits snapshots before and after LaTeX by segment"
   assert.equal(edits.length, 1);
   assert.equal(edits[0]?.segmentId, targetSegment.id);
   assert.equal(edits[0]?.command, "resumeitem");
+  assert.equal(edits[0]?.editId, `${targetSegment.id}:model`);
   assert.equal(edits[0]?.beforeLatexCode.includes("\\resumeitem"), true);
   assert.equal(edits[0]?.afterLatexCode, "\\resumeitem{Tailored bullet one}");
+  assert.equal(edits[0]?.source, "model");
+  assert.equal(edits[0]?.state, "applied");
 });
 
 test("normalizeTailoredResumeEditReason trims reasons to at most two sentences", () => {
@@ -62,5 +65,33 @@ test("buildTailoredResumeDiffRows pairs nearby removals and additions as modifie
     { text: "\\resumeitem{", type: "context" },
     { text: "Tailored", type: "added" },
     { text: " bullet}", type: "context" },
+  ]);
+});
+
+test("buildTailoredResumeDiffRows coalesces long modified ranges into one inline highlight span", () => {
+  const rows = buildTailoredResumeDiffRows(
+    String.raw`\resumeitem{Created full-stack dashboard for project management with \textbf{React (Next.js) and JavaScript}, with user authentication}`,
+    String.raw`\resumeitem{Used \textbf{AWS Amplify} to set up \textbf{CI/CD} pipelines to support contributor onboarding, reducing design-to-dev handoff time by an avg. of \textasciitilde30\% across 8 teams}`,
+  );
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.type, "modified");
+  assert.deepEqual(rows[0]?.originalSegments, [
+    { text: "\\resumeitem{", type: "context" },
+    {
+      text:
+        "Created full-stack dashboard for project management with \\textbf{React (Next.js) and JavaScript}, with user authentication",
+      type: "removed",
+    },
+    { text: "}", type: "context" },
+  ]);
+  assert.deepEqual(rows[0]?.modifiedSegments, [
+    { text: "\\resumeitem{", type: "context" },
+    {
+      text:
+        "Used \\textbf{AWS Amplify} to set up \\textbf{CI/CD} pipelines to support contributor onboarding, reducing design-to-dev handoff time by an avg. of \\textasciitilde30\\% across 8 teams",
+      type: "added",
+    },
+    { text: "}", type: "context" },
   ]);
 });

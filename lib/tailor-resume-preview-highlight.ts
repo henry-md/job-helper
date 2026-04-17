@@ -1,43 +1,76 @@
+import {
+  buildTailoredResumeCombinedActiveEdits,
+  resolveTailoredResumeSourceAnnotatedLatex,
+} from "./tailor-resume-edit-history.ts";
+import type { TailoredResumeBlockEditRecord } from "./tailor-resume-types.ts";
+import { buildTailoredResumeDiffRows } from "./tailor-resume-review.ts";
 import { stripTailorResumeSegmentIds } from "./tailor-resume-segmentation.ts";
 
 const reviewHighlightPreambleMarker = "% JOBHELPER_REVIEW_HIGHLIGHT_MACROS";
-const missingSegmentErrorMessage =
-  "Unable to locate the selected tailored resume segment.";
 const annotatedSegmentPattern =
   /^[ \t]*% JOBHELPER_SEGMENT_ID:\s*([^\n]+)\s*(?:\n|$)/gm;
 
 const reviewHighlightPreamble = String.raw`
 % JOBHELPER_REVIEW_HIGHLIGHT_MACROS
-\definecolor{JobHelperHighlight}{RGB}{255,243,128}
-\newcommand{\jhl}[1]{{\setlength{\fboxsep}{0pt}\colorbox{JobHelperHighlight}{#1}}}
-\newcommand{\jhlt}[1]{{\setlength{\fboxsep}{0pt}\colorbox{JobHelperHighlight}{\parbox{\linewidth}{#1}}}}
-\newcommand{\jobhelperHighlightedResumeSection}[1]{%
-  \vspace{5pt}
-  {\SectionFont\jhl{\textbf{#1}}}\par
-  \vspace{1.2pt}
-  \hrule height 0.5pt
-  \vspace{3.8pt}
-}
-\newcommand{\jobhelperHighlightedEntryheading}[3]{%
-  \noindent
-  \begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
-    {\BodyFont\jhl{\textbf{#1}~|~\textit{#2}}} &
-    {\BodyFont\jhl{#3}}
-  \end{tabular*}\par
-}
-\newcommand{\jobhelperHighlightedProjectheading}[2]{%
-  \noindent
-  \begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
-    {\BodyFont\jhl{#1}} &
-    {\BodyFont\jhl{#2}}
-  \end{tabular*}\par
-}
-\newcommand{\jobhelperHighlightedDescline}[1]{{\BodyFont\jhlt{#1}\par}}
-\newcommand{\jobhelperHighlightedResumeitem}[1]{\item \jhlt{#1}}
-\newcommand{\jobhelperHighlightedLabelline}[2]{%
-  {\BodyFont\noindent\jhlt{\makebox[74pt][l]{\textbf{#1}}#2}\par}
-}
+\definecolor{JobHelperAddedHighlight}{RGB}{180,240,200}
+\definecolor{JobHelperModifiedHighlight}{RGB}{255,225,128}
+\newcommand{\jhladd}{\bgroup\markoverwith{\textcolor{JobHelperAddedHighlight}{\rule[-0.52ex]{2pt}{2.3ex}}}\ULon}
+\newcommand{\jhlmod}{\bgroup\markoverwith{\textcolor{JobHelperModifiedHighlight}{\rule[-0.52ex]{2pt}{2.3ex}}}\ULon}
+\newcommand{\jhladdbridge}{\smash{\llap{\textcolor{JobHelperAddedHighlight}{\rule[-0.52ex]{0.24em}{2.3ex}}}}}
+\newcommand{\jhlmodbridge}{\smash{\llap{\textcolor{JobHelperModifiedHighlight}{\rule[-0.52ex]{0.24em}{2.3ex}}}}}
 `;
+
+const escapedInlinePunctuationPattern = /^\\[%&#_${}]$/;
+const inlineHighlightCommandTokens = new Set([
+  "\\textasciicircum",
+  "\\textasciitilde",
+  "\\textbackslash",
+  "\\textbar",
+]);
+type PersistedAnnotatedBlock = {
+  contentEnd: number;
+  contentStart: number;
+  id: string;
+  latexCode: string;
+};
+
+function tokenizeHighlightableLatex(text: string) {
+  return text.match(/\\[A-Za-z@]+|\\.|[{}]|%[^\n]*|\s+|[^\\{}%\s]+/g) ?? [];
+}
+
+function isInlineHighlightCommandToken(token: string) {
+  return (
+    escapedInlinePunctuationPattern.test(token) ||
+    inlineHighlightCommandTokens.has(token)
+  );
+}
+
+function isStructuralHighlightToken(token: string) {
+  return (
+    token === "{" ||
+    token === "}" ||
+    token.startsWith("%") ||
+    (token.startsWith("\\") && !isInlineHighlightCommandToken(token))
+  );
+}
+
+function canWrapWholeHighlightRange(text: string) {
+  if (!text || text.includes("\n")) {
+    return false;
+  }
+
+  return tokenizeHighlightableLatex(text).every((token) => {
+    if (!token || token.startsWith("%")) {
+      return false;
+    }
+
+    if (token.startsWith("\\")) {
+      return isInlineHighlightCommandToken(token);
+    }
+
+    return true;
+  });
+}
 
 function injectReviewHighlightPreamble(latexCode: string) {
   if (latexCode.includes(reviewHighlightPreambleMarker)) {
@@ -55,17 +88,6 @@ function injectReviewHighlightPreamble(latexCode: string) {
     reviewHighlightPreamble +
     "\n" +
     latexCode.slice(documentStartIndex)
-  );
-}
-
-function replaceLeadingCommand(
-  latexCode: string,
-  originalCommand: string,
-  replacementCommand: string,
-) {
-  return latexCode.replace(
-    new RegExp(`^(\\s*)\\\\${originalCommand}(?=\\s*[\\[{])`),
-    (_match, indentation: string) => `${indentation}\\${replacementCommand}`,
   );
 }
 
@@ -93,138 +115,194 @@ function readPersistedAnnotatedBlocks(annotatedLatexCode: string) {
     });
   }
 
-  return matches.map((match, index) => {
+  return matches.map((match, index): PersistedAnnotatedBlock => {
     const nextMatch = matches[index + 1];
     const contentEnd = nextMatch?.markerStart ?? annotatedLatexCode.length;
-    const latexCode = annotatedLatexCode
-      .slice(match.markerEnd, contentEnd)
-      .replace(/\n+$/, "");
 
     return {
       contentEnd,
       contentStart: match.markerEnd,
       id: match.id,
-      latexCode,
+      latexCode: annotatedLatexCode
+        .slice(match.markerEnd, contentEnd)
+        .replace(/\n+$/, ""),
     };
   });
 }
 
-function detectTailoredResumeBlockCommand(latexCode: string, segmentId: string) {
-  if (segmentId.includes(".block-")) {
-    return "block";
+function highlightInlineLatexText(text: string, macroName: "jhladd" | "jhlmod") {
+  const leadingWhitespace = text.match(/^\s+/)?.[0] ?? "";
+  const trailingWhitespace = text.match(/\s+$/)?.[0] ?? "";
+  const coreText = text.slice(
+    leadingWhitespace.length,
+    text.length - trailingWhitespace.length,
+  );
+
+  if (coreText && canWrapWholeHighlightRange(coreText)) {
+    return `${leadingWhitespace}\\${macroName}{${coreText}}${trailingWhitespace}`;
   }
 
-  const trimmedLatexCode = latexCode.trimStart();
+  const tokens = tokenizeHighlightableLatex(coreText);
+  const output: string[] = [];
+  let buffer = "";
+  let lastEmittedWasHighlight = false;
+  let needsBridgeBeforeNextHighlight = false;
+  const bridgeMacroName = macroName === "jhladd" ? "jhladdbridge" : "jhlmodbridge";
 
-  if (trimmedLatexCode.startsWith("\\resumeSection")) {
-    return "resumeSection";
+  function flushBuffer() {
+    if (!buffer) {
+      return;
+    }
+
+    if (needsBridgeBeforeNextHighlight) {
+      output.push(`\\${bridgeMacroName}`);
+      needsBridgeBeforeNextHighlight = false;
+    }
+
+    output.push(`\\${macroName}{${buffer}}`);
+    lastEmittedWasHighlight = true;
+    buffer = "";
   }
 
-  if (trimmedLatexCode.startsWith("\\entryheading")) {
-    return "entryheading";
+  for (const token of tokens) {
+    if (!token) {
+      continue;
+    }
+
+    if (isStructuralHighlightToken(token)) {
+      flushBuffer();
+      if (lastEmittedWasHighlight) {
+        needsBridgeBeforeNextHighlight = true;
+      }
+      output.push(token);
+      lastEmittedWasHighlight = false;
+      continue;
+    }
+
+    buffer += token;
   }
 
-  if (trimmedLatexCode.startsWith("\\projectheading")) {
-    return "projectheading";
-  }
+  flushBuffer();
 
-  if (trimmedLatexCode.startsWith("\\descline")) {
-    return "descline";
-  }
-
-  if (trimmedLatexCode.startsWith("\\resumeitem")) {
-    return "resumeitem";
-  }
-
-  if (trimmedLatexCode.startsWith("\\labelline")) {
-    return "labelline";
-  }
-
-  return null;
+  return leadingWhitespace + output.join("") + trailingWhitespace;
 }
 
-function highlightTailoredResumeBlock(input: {
-  command: string | null;
-  latexCode: string;
+function applyDiffHighlights(input: {
+  after: string;
+  before: string;
 }) {
-  switch (input.command) {
-    case "resumeSection":
-      return replaceLeadingCommand(
-        input.latexCode,
-        "resumeSection",
-        "jobhelperHighlightedResumeSection",
-      );
-    case "entryheading":
-      return replaceLeadingCommand(
-        input.latexCode,
-        "entryheading",
-        "jobhelperHighlightedEntryheading",
-      );
-    case "projectheading":
-      return replaceLeadingCommand(
-        input.latexCode,
-        "projectheading",
-        "jobhelperHighlightedProjectheading",
-      );
-    case "descline":
-      return replaceLeadingCommand(
-        input.latexCode,
-        "descline",
-        "jobhelperHighlightedDescline",
-      );
-    case "resumeitem":
-      return replaceLeadingCommand(
-        input.latexCode,
-        "resumeitem",
-        "jobhelperHighlightedResumeitem",
-      );
-    case "labelline":
-      return replaceLeadingCommand(
-        input.latexCode,
-        "labelline",
-        "jobhelperHighlightedLabelline",
-      );
-    default:
-      return `\\jhlt{${input.latexCode}}`;
-  }
-}
+  const diffRows = buildTailoredResumeDiffRows(input.before, input.after);
+  const outputLines: string[] = [];
 
-export function isMissingTailoredResumeReviewSegmentError(error: unknown) {
-  return error instanceof Error && error.message === missingSegmentErrorMessage;
+  for (const row of diffRows) {
+    if (row.modifiedText === null) {
+      continue;
+    }
+
+    if (row.type === "context") {
+      outputLines.push(row.modifiedText);
+      continue;
+    }
+
+    if (row.type === "added") {
+      outputLines.push(highlightInlineLatexText(row.modifiedText, "jhladd"));
+      continue;
+    }
+
+    const segments = row.modifiedSegments;
+
+    if (segments && segments.some((segment) => segment.type === "added")) {
+      const firstAddedIndex = segments.findIndex(
+        (segment) => segment.type === "added",
+      );
+      let lastAddedIndex = -1;
+
+      for (let index = segments.length - 1; index >= 0; index -= 1) {
+        if (segments[index]?.type === "added") {
+          lastAddedIndex = index;
+          break;
+        }
+      }
+
+      if (firstAddedIndex === -1 || lastAddedIndex === -1) {
+        outputLines.push(row.modifiedText);
+        continue;
+      }
+
+      const leadingContext = segments
+        .slice(0, firstAddedIndex)
+        .map((segment) => segment.text)
+        .join("");
+      const highlightedRange = segments
+        .slice(firstAddedIndex, lastAddedIndex + 1)
+        .map((segment) => segment.text)
+        .join("");
+      const trailingContext = segments
+        .slice(lastAddedIndex + 1)
+        .map((segment) => segment.text)
+        .join("");
+
+      outputLines.push(
+        leadingContext +
+          highlightInlineLatexText(highlightedRange, "jhlmod") +
+          trailingContext,
+      );
+      continue;
+    }
+
+    outputLines.push(row.modifiedText);
+  }
+
+  return outputLines.join("\n");
 }
 
 export function buildTailoredResumeReviewHighlightedLatex(input: {
   annotatedLatexCode: string;
-  segmentId: string;
+  edits: TailoredResumeBlockEditRecord[];
+  sourceAnnotatedLatexCode?: string | null;
 }) {
-  const annotatedLatexCode = input.annotatedLatexCode
+  const combinedEdits = buildTailoredResumeCombinedActiveEdits({
+    annotatedLatexCode: input.annotatedLatexCode,
+    edits: input.edits,
+    sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode ?? null,
+  });
+  const normalizedAnnotatedLatex = resolveTailoredResumeSourceAnnotatedLatex({
+    annotatedLatexCode: input.annotatedLatexCode,
+    edits: input.edits,
+    sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode ?? null,
+  })
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n");
-  const blocks = readPersistedAnnotatedBlocks(annotatedLatexCode);
-  const targetBlock = blocks.find((block) => block.id === input.segmentId);
+  const blocks = readPersistedAnnotatedBlocks(normalizedAnnotatedLatex);
+  const editsBySegmentId = new Map(combinedEdits.map((edit) => [edit.segmentId, edit]));
+  let result = "";
+  let cursor = 0;
 
-  if (!targetBlock) {
-    throw new Error(missingSegmentErrorMessage);
+  for (const block of blocks) {
+    result += normalizedAnnotatedLatex.slice(cursor, block.contentStart);
+
+    const edit = editsBySegmentId.get(block.id);
+
+    if (edit) {
+      const originalChunk = normalizedAnnotatedLatex.slice(
+        block.contentStart,
+        block.contentEnd,
+      );
+      const trailingWhitespace = originalChunk.slice(block.latexCode.length);
+
+      result +=
+        applyDiffHighlights({
+          after: edit.afterLatexCode,
+          before: edit.beforeLatexCode,
+        }) + trailingWhitespace;
+    } else {
+      result += normalizedAnnotatedLatex.slice(block.contentStart, block.contentEnd);
+    }
+
+    cursor = block.contentEnd;
   }
 
-  const originalBlockChunk = annotatedLatexCode.slice(
-    targetBlock.contentStart,
-    targetBlock.contentEnd,
-  );
-  const trailingWhitespace = originalBlockChunk.slice(targetBlock.latexCode.length);
-  const highlightedAnnotatedLatex =
-    annotatedLatexCode.slice(0, targetBlock.contentStart) +
-    highlightTailoredResumeBlock({
-      command: detectTailoredResumeBlockCommand(
-        targetBlock.latexCode,
-        targetBlock.id,
-      ),
-      latexCode: targetBlock.latexCode,
-    }) +
-    trailingWhitespace +
-    annotatedLatexCode.slice(targetBlock.contentEnd);
+  result += normalizedAnnotatedLatex.slice(cursor);
 
-  return injectReviewHighlightPreamble(
-    stripTailorResumeSegmentIds(highlightedAnnotatedLatex),
-  );
+  return injectReviewHighlightPreamble(stripTailorResumeSegmentIds(result));
 }

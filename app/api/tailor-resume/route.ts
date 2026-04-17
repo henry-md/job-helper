@@ -36,6 +36,11 @@ import {
   stripTailorResumeSegmentIds,
 } from "@/lib/tailor-resume-segmentation";
 import {
+  buildTailoredResumeResolvedSegmentMap,
+  rebuildTailoredResumeAnnotatedLatex,
+  resolveTailoredResumeSourceAnnotatedLatex,
+} from "@/lib/tailor-resume-edit-history";
+import {
   deleteTailoredResumePdf,
   deleteTailorResumePreviewPdf,
   writeTailoredResumePdf,
@@ -51,6 +56,7 @@ import {
   emptyTailorResumeLatexState,
   emptyTailorResumeWorkspaceState,
   type TailorResumeLockedLinkRecord,
+  type TailoredResumeBlockEditRecord,
   type TailorResumeProfile,
   type TailorResumeSavedLinkUpdate,
 } from "@/lib/tailor-resume-types";
@@ -355,6 +361,61 @@ async function compileLatexDraft(
           error instanceof Error
             ? error.message
             : "Unable to compile the LaTeX preview.",
+        ),
+        pdfUpdatedAt: previousPdfUpdatedAt,
+        status: "failed" as const,
+        updatedAt,
+      },
+    };
+  }
+}
+
+async function compileTailoredResumeDraft(
+  userId: string,
+  tailoredResumeId: string,
+  input: {
+    compileCode?: string;
+    sourceCode: string;
+  },
+  previousPdfUpdatedAt: string | null,
+) {
+  const updatedAt = new Date().toISOString();
+  const normalizedSource = normalizeAnnotatedLatexState(input.sourceCode, updatedAt);
+  const normalizedCompile = normalizeAnnotatedLatexState(
+    input.compileCode ?? input.sourceCode,
+    updatedAt,
+  );
+
+  try {
+    const previewPdf = await compileTailorResumeLatex(normalizedCompile.latexCode);
+
+    await writeTailoredResumePdf(userId, tailoredResumeId, previewPdf);
+
+    return {
+      annotatedLatex: normalizedSource.annotatedLatex,
+      compiledLatexCode: normalizedCompile.latexCode,
+      latex: {
+        code: normalizedSource.latexCode,
+        error: null,
+        pdfUpdatedAt: updatedAt,
+        status: "ready" as const,
+        updatedAt,
+      },
+    };
+  } catch (error) {
+    if (!previousPdfUpdatedAt) {
+      await deleteTailoredResumePdf(userId, tailoredResumeId);
+    }
+
+    return {
+      annotatedLatex: normalizedSource.annotatedLatex,
+      compiledLatexCode: normalizedCompile.latexCode,
+      latex: {
+        code: normalizedSource.latexCode,
+        error: extractTailorResumeActualLatexError(
+          error instanceof Error
+            ? error.message
+            : "Unable to compile the tailored resume preview.",
         ),
         pdfUpdatedAt: previousPdfUpdatedAt,
         status: "failed" as const,
@@ -737,6 +798,9 @@ export async function PATCH(request: Request) {
           latexCode: tailoringResult.latexCode,
           pdfUpdatedAt: tailoringResult.previewPdf ? tailoredResumeUpdatedAt : null,
           positionTitle: tailoringResult.positionTitle,
+          sourceAnnotatedLatexCode: normalizeTailorResumeLatex(
+            processedBaseAnnotatedLatex.latexCode,
+          ).annotatedLatex,
           status: tailoringResult.previewPdf ? "ready" : "failed",
           updatedAt: tailoredResumeUpdatedAt,
         },
@@ -764,6 +828,243 @@ export async function PATCH(request: Request) {
         ...tailoringResult.savedLinkUpdates,
       ],
       tailoredResumeError: tailoringResult.validationError,
+    });
+  }
+
+  if ("action" in body && body.action === "setTailoredResumeEditState") {
+    const tailoredResumeId =
+      "tailoredResumeId" in body && typeof body.tailoredResumeId === "string"
+        ? body.tailoredResumeId.trim()
+        : "";
+    const editId =
+      "editId" in body && typeof body.editId === "string"
+        ? body.editId.trim()
+        : "";
+    const nextEditState: TailoredResumeBlockEditRecord["state"] | null =
+      "state" in body && body.state === "rejected"
+        ? "rejected"
+        : "state" in body && body.state === "applied"
+          ? "applied"
+          : null;
+
+    if (!tailoredResumeId || !editId || !nextEditState) {
+      return NextResponse.json(
+        { error: "Provide a tailored resume, edit, and next state." },
+        { status: 400 },
+      );
+    }
+
+    const tailoredResumeIndex = rawProfile.tailoredResumes.findIndex(
+      (record) => record.id === tailoredResumeId,
+    );
+
+    if (tailoredResumeIndex === -1) {
+      return NextResponse.json(
+        { error: "The tailored resume could not be found." },
+        { status: 404 },
+      );
+    }
+
+    const tailoredResume = rawProfile.tailoredResumes[tailoredResumeIndex];
+    let didUpdateEdit = false;
+    const nextEdits: TailoredResumeBlockEditRecord[] = tailoredResume.edits.map((edit) => {
+      if (edit.editId !== editId) {
+        return edit;
+      }
+
+      didUpdateEdit = true;
+      return {
+        ...edit,
+        state: nextEditState,
+      };
+    });
+
+    if (!didUpdateEdit) {
+      return NextResponse.json(
+        { error: "The tailored resume edit could not be found." },
+        { status: 404 },
+      );
+    }
+
+    const sourceAnnotatedLatexCode = resolveTailoredResumeSourceAnnotatedLatex({
+      annotatedLatexCode: tailoredResume.annotatedLatexCode,
+      edits: tailoredResume.edits,
+      sourceAnnotatedLatexCode: tailoredResume.sourceAnnotatedLatexCode,
+    });
+    const rebuiltAnnotatedLatexCode = rebuildTailoredResumeAnnotatedLatex({
+      annotatedLatexCode: tailoredResume.annotatedLatexCode,
+      edits: nextEdits,
+      sourceAnnotatedLatexCode,
+    });
+    const compiledTailoredResume = await compileTailoredResumeDraft(
+      session.user.id,
+      tailoredResumeId,
+      {
+        sourceCode: rebuiltAnnotatedLatexCode,
+      },
+      tailoredResume.pdfUpdatedAt,
+    );
+    const nextUpdatedAt = compiledTailoredResume.latex.updatedAt;
+    const nextRawProfile: TailorResumeProfile = {
+      ...rawProfile,
+      tailoredResumes: rawProfile.tailoredResumes.map((record, index) =>
+        index === tailoredResumeIndex
+          ? {
+              ...record,
+              annotatedLatexCode: compiledTailoredResume.annotatedLatex.code,
+              edits: nextEdits,
+              error: compiledTailoredResume.latex.error,
+              latexCode: compiledTailoredResume.latex.code,
+              pdfUpdatedAt: compiledTailoredResume.latex.pdfUpdatedAt,
+              sourceAnnotatedLatexCode,
+              status: compiledTailoredResume.latex.status,
+              updatedAt: nextUpdatedAt,
+            }
+          : record,
+      ),
+    };
+
+    await writeTailorResumeProfile(session.user.id, nextRawProfile);
+
+    return NextResponse.json({
+      profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
+        includeLockedOnly: true,
+      }),
+      tailoredResumeEditId: editId,
+      tailoredResumeId,
+    });
+  }
+
+  if ("action" in body && body.action === "saveTailoredResumeUserEdit") {
+    const tailoredResumeId =
+      "tailoredResumeId" in body && typeof body.tailoredResumeId === "string"
+        ? body.tailoredResumeId.trim()
+        : "";
+    const segmentId =
+      "segmentId" in body && typeof body.segmentId === "string"
+        ? body.segmentId.trim()
+        : "";
+    const latexCode =
+      "latexCode" in body && typeof body.latexCode === "string"
+        ? body.latexCode
+        : null;
+
+    if (!tailoredResumeId || !segmentId || latexCode === null) {
+      return NextResponse.json(
+        { error: "Provide a tailored resume, segment, and LaTeX block." },
+        { status: 400 },
+      );
+    }
+
+    if (latexCode.length > maxLatexCodeLength) {
+      return NextResponse.json(
+        { error: "Keep the LaTeX under 300,000 characters." },
+        { status: 413 },
+      );
+    }
+
+    const tailoredResumeIndex = rawProfile.tailoredResumes.findIndex(
+      (record) => record.id === tailoredResumeId,
+    );
+
+    if (tailoredResumeIndex === -1) {
+      return NextResponse.json(
+        { error: "The tailored resume could not be found." },
+        { status: 404 },
+      );
+    }
+
+    const tailoredResume = rawProfile.tailoredResumes[tailoredResumeIndex];
+    const sourceAnnotatedLatexCode = resolveTailoredResumeSourceAnnotatedLatex({
+      annotatedLatexCode: tailoredResume.annotatedLatexCode,
+      edits: tailoredResume.edits,
+      sourceAnnotatedLatexCode: tailoredResume.sourceAnnotatedLatexCode,
+    });
+    const resolvedSegments = buildTailoredResumeResolvedSegmentMap({
+      annotatedLatexCode: tailoredResume.annotatedLatexCode,
+      edits: tailoredResume.edits,
+      sourceAnnotatedLatexCode,
+    });
+    const resolvedSegment = resolvedSegments.get(segmentId);
+
+    if (!resolvedSegment) {
+      return NextResponse.json(
+        { error: "The selected LaTeX block could not be found." },
+        { status: 404 },
+      );
+    }
+
+    const normalizedReplacementLatexCode = stripTailorResumeSegmentIds(
+      normalizeTailorResumeLatex(latexCode).annotatedLatex,
+    ).replace(/\n+$/, "");
+
+    if (normalizedReplacementLatexCode.trim()) {
+      const replacementSegmentCount =
+        normalizeTailorResumeLatex(normalizedReplacementLatexCode).segmentCount;
+
+      if (replacementSegmentCount > 1) {
+        return NextResponse.json(
+          { error: "Save exactly one logical LaTeX block at a time." },
+          { status: 400 },
+        );
+      }
+    }
+
+    const nextEditId = randomUUID();
+    const nextEdits: TailoredResumeBlockEditRecord[] = [
+      ...tailoredResume.edits,
+      {
+        afterLatexCode: normalizedReplacementLatexCode,
+        beforeLatexCode: resolvedSegment.latexCode,
+        command: resolvedSegment.command,
+        editId: nextEditId,
+        reason: "User edited",
+        segmentId,
+        source: "user" as const,
+        state: "applied" as const,
+      },
+    ];
+    const rebuiltAnnotatedLatexCode = rebuildTailoredResumeAnnotatedLatex({
+      annotatedLatexCode: tailoredResume.annotatedLatexCode,
+      edits: nextEdits,
+      sourceAnnotatedLatexCode,
+    });
+    const compiledTailoredResume = await compileTailoredResumeDraft(
+      session.user.id,
+      tailoredResumeId,
+      {
+        sourceCode: rebuiltAnnotatedLatexCode,
+      },
+      tailoredResume.pdfUpdatedAt,
+    );
+    const nextUpdatedAt = compiledTailoredResume.latex.updatedAt;
+    const nextRawProfile: TailorResumeProfile = {
+      ...rawProfile,
+      tailoredResumes: rawProfile.tailoredResumes.map((record, index) =>
+        index === tailoredResumeIndex
+          ? {
+              ...record,
+              annotatedLatexCode: compiledTailoredResume.annotatedLatex.code,
+              edits: nextEdits,
+              error: compiledTailoredResume.latex.error,
+              latexCode: compiledTailoredResume.latex.code,
+              pdfUpdatedAt: compiledTailoredResume.latex.pdfUpdatedAt,
+              sourceAnnotatedLatexCode,
+              status: compiledTailoredResume.latex.status,
+              updatedAt: nextUpdatedAt,
+            }
+          : record,
+      ),
+    };
+
+    await writeTailorResumeProfile(session.user.id, nextRawProfile);
+
+    return NextResponse.json({
+      profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
+        includeLockedOnly: true,
+      }),
+      tailoredResumeEditId: nextEditId,
+      tailoredResumeId,
     });
   }
 

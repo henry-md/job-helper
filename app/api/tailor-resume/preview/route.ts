@@ -2,10 +2,7 @@ import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/auth";
 import { compileTailorResumeLatex } from "@/lib/tailor-resume-latex";
-import {
-  buildTailoredResumeReviewHighlightedLatex,
-  isMissingTailoredResumeReviewSegmentError,
-} from "@/lib/tailor-resume-preview-highlight";
+import { buildTailoredResumeReviewHighlightedLatex } from "@/lib/tailor-resume-preview-highlight";
 import {
   readTailorResumeProfile,
   readTailoredResumePdf,
@@ -25,10 +22,10 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const tailoredResumeId = searchParams.get("tailoredResumeId");
-    const highlightSegmentId = searchParams.get("highlightSegmentId");
+    const withHighlights = searchParams.get("highlights") === "true";
     let previewPdf: Buffer;
 
-    if (tailoredResumeId && highlightSegmentId) {
+    if (tailoredResumeId && withHighlights) {
       const profile = await readTailorResumeProfile(session.user.id);
       const tailoredResume = profile.tailoredResumes.find(
         (record) => record.id === tailoredResumeId,
@@ -44,17 +41,11 @@ export async function GET(request: Request) {
       try {
         const highlightedLatex = buildTailoredResumeReviewHighlightedLatex({
           annotatedLatexCode: tailoredResume.annotatedLatexCode,
-          segmentId: highlightSegmentId,
+          edits: tailoredResume.edits,
+          sourceAnnotatedLatexCode: tailoredResume.sourceAnnotatedLatexCode,
         });
         previewPdf = await compileTailorResumeLatex(highlightedLatex);
-      } catch (error) {
-        if (isMissingTailoredResumeReviewSegmentError(error)) {
-          return NextResponse.json(
-            { error: "The selected review segment could not be found." },
-            { status: 404 },
-          );
-        }
-
+      } catch {
         previewPdf = await readTailoredResumePdf(session.user.id, tailoredResumeId);
       }
     } else {

@@ -137,8 +137,12 @@ test("parseTailorResumeProfile keeps tailored resume metadata and workspace stat
     profile.tailoredResumes[0]?.edits[0]?.reason,
     'Highlights CI/CD work. Matches "CI/CD" in the job description.',
   );
+  assert.equal(profile.tailoredResumes[0]?.edits[0]?.editId, "experience.entry-1.bullet-1:1");
+  assert.equal(profile.tailoredResumes[0]?.edits[0]?.source, "model");
+  assert.equal(profile.tailoredResumes[0]?.edits[0]?.state, "applied");
   assert.equal(profile.tailoredResumes[0]?.positionTitle, "Research Engineer");
   assert.equal(profile.tailoredResumes[0]?.jobIdentifier, "Applied research");
+  assert.equal(profile.tailoredResumes[0]?.sourceAnnotatedLatexCode, null);
 });
 
 test("parseTailorResumeProfile backfills tailored resume metadata from displayName", () => {

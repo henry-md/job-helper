@@ -67,6 +67,79 @@ function pushTailoredResumeDiffSegment(
   segments.push({ ...nextSegment });
 }
 
+function coalesceTailoredResumeDiffHighlightRange(
+  segments: TailoredResumeDiffSegment[],
+) {
+  const firstChangedIndex = segments.findIndex(
+    (segment) => segment.type !== "context",
+  );
+
+  if (firstChangedIndex === -1) {
+    return segments;
+  }
+
+  let lastChangedIndex = firstChangedIndex;
+
+  for (let index = segments.length - 1; index >= firstChangedIndex; index -= 1) {
+    if (segments[index]?.type !== "context") {
+      lastChangedIndex = index;
+      break;
+    }
+  }
+
+  const highlightType = segments[firstChangedIndex]?.type;
+
+  if (!highlightType || highlightType === "context") {
+    return segments;
+  }
+
+  const highlightText = segments
+    .slice(firstChangedIndex, lastChangedIndex + 1)
+    .map((segment) => segment.text)
+    .join("");
+  const leadingWhitespace = highlightText.match(/^\s+/)?.[0] ?? "";
+  const trailingWhitespace = highlightText.match(/\s+$/)?.[0] ?? "";
+  const trimmedHighlightText = highlightText.slice(
+    leadingWhitespace.length,
+    highlightText.length - trailingWhitespace.length,
+  );
+
+  if (!trimmedHighlightText) {
+    return segments;
+  }
+
+  const coalescedSegments: TailoredResumeDiffSegment[] = [];
+
+  for (const segment of segments.slice(0, firstChangedIndex)) {
+    pushTailoredResumeDiffSegment(coalescedSegments, segment);
+  }
+
+  if (leadingWhitespace) {
+    pushTailoredResumeDiffSegment(coalescedSegments, {
+      text: leadingWhitespace,
+      type: "context",
+    });
+  }
+
+  pushTailoredResumeDiffSegment(coalescedSegments, {
+    text: trimmedHighlightText,
+    type: highlightType,
+  });
+
+  if (trailingWhitespace) {
+    pushTailoredResumeDiffSegment(coalescedSegments, {
+      text: trailingWhitespace,
+      type: "context",
+    });
+  }
+
+  for (const segment of segments.slice(lastChangedIndex + 1)) {
+    pushTailoredResumeDiffSegment(coalescedSegments, segment);
+  }
+
+  return coalescedSegments;
+}
+
 function buildInlineTailoredResumeDiffSegments(
   originalText: string,
   modifiedText: string,
@@ -112,8 +185,8 @@ function buildInlineTailoredResumeDiffSegments(
   }
 
   return {
-    modifiedSegments,
-    originalSegments,
+    modifiedSegments: coalesceTailoredResumeDiffHighlightRange(modifiedSegments),
+    originalSegments: coalesceTailoredResumeDiffHighlightRange(originalSegments),
   };
 }
 
@@ -269,7 +342,10 @@ export function buildTailoredResumeBlockEdits(input: {
         afterLatexCode: stripTailorResumeSegmentIds(change.latexCode).replace(/\n+$/, ""),
         beforeLatexCode: block.latexCode,
         command: block.command,
+        editId: `${block.id}:model`,
         reason: normalizeTailoredResumeEditReason(change.reason),
+        source: "model",
+        state: "applied",
         segmentId: block.id,
       },
     ];

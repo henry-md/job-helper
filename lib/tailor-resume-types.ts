@@ -71,7 +71,10 @@ export type TailoredResumeBlockEditRecord = {
   afterLatexCode: string;
   beforeLatexCode: string;
   command: string | null;
+  editId: string;
   reason: string;
+  source: "model" | "user";
+  state: "applied" | "rejected";
   segmentId: string;
 };
 
@@ -88,6 +91,7 @@ export type TailoredResumeRecord = {
   latexCode: string;
   pdfUpdatedAt: string | null;
   positionTitle: string;
+  sourceAnnotatedLatexCode: string | null;
   status: TailorResumeLatexStatus;
   updatedAt: string;
 };
@@ -324,16 +328,22 @@ function parseTailorResumeWorkspaceState(value: unknown): TailorResumeWorkspaceS
 
 function parseTailoredResumeBlockEditRecord(
   value: unknown,
+  index: number,
 ): TailoredResumeBlockEditRecord | null {
   if (!isRecord(value)) {
     return null;
   }
 
+  const editId = readNullableString(value.editId);
   const segmentId = readNullableString(value.segmentId);
   const beforeLatexCode = readNullableString(value.beforeLatexCode);
   const afterLatexCode = readNullableString(value.afterLatexCode);
   const reason = readNullableString(value.reason);
   const command = readNullableString(value.command);
+  const rawSource = value.source;
+  const source = rawSource === "user" ? "user" : "model";
+  const rawState = value.state;
+  const state = rawState === "rejected" ? "rejected" : "applied";
 
   if (
     !segmentId ||
@@ -348,7 +358,10 @@ function parseTailoredResumeBlockEditRecord(
     afterLatexCode,
     beforeLatexCode,
     command,
+    editId: editId ?? `${segmentId}:${index + 1}`,
     reason,
+    source,
+    state,
     segmentId,
   };
 }
@@ -358,8 +371,8 @@ function parseTailoredResumeBlockEditRecords(value: unknown) {
     return [] as TailoredResumeBlockEditRecord[];
   }
 
-  return value.flatMap((entry) => {
-    const parsedEdit = parseTailoredResumeBlockEditRecord(entry);
+  return value.flatMap((entry, index) => {
+    const parsedEdit = parseTailoredResumeBlockEditRecord(entry, index);
     return parsedEdit ? [parsedEdit] : [];
   });
 }
@@ -378,6 +391,7 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
   const updatedAt = readNullableString(value.updatedAt);
   const pdfUpdatedAt = readNullableString(value.pdfUpdatedAt);
   const error = readNullableString(value.error);
+  const sourceAnnotatedLatexCode = readNullableString(value.sourceAnnotatedLatexCode);
   const companyName =
     readNullableString(value.companyName) ??
     rawDisplayName?.split(" - ")[0]?.trim() ??
@@ -427,6 +441,7 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
     latexCode,
     pdfUpdatedAt,
     positionTitle,
+    sourceAnnotatedLatexCode,
     status,
     updatedAt,
   };
