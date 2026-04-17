@@ -63,7 +63,12 @@ export async function GET(request: Request) {
         : await readTailorResumePreviewPdf(session.user.id);
     }
 
-    return new NextResponse(previewPdf, {
+    const previewBytes = Uint8Array.from(previewPdf);
+    const previewBody = new Blob([previewBytes], {
+      type: "application/pdf",
+    });
+
+    return new NextResponse(previewBody, {
       headers: {
         "Cache-Control": "no-store",
         "Content-Type": "application/pdf",

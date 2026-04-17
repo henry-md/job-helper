@@ -332,14 +332,14 @@ export function buildTailoredResumeDiffRows(
               row.originalText,
               row.modifiedText,
             )
-          : {};
+          : null;
 
       rows.push({
         modifiedLineNumber: row.modifiedText !== null ? modifiedLineNumber : null,
-        modifiedSegments: inlineSegments.modifiedSegments,
+        modifiedSegments: inlineSegments?.modifiedSegments,
         modifiedText: row.modifiedText,
         originalLineNumber: row.originalText !== null ? originalLineNumber : null,
-        originalSegments: inlineSegments.originalSegments,
+        originalSegments: inlineSegments?.originalSegments,
         originalText: row.originalText,
         type: row.type,
       });
