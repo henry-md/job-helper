@@ -30,5 +30,5 @@ Run `npm run build`, then load `/Users/Henry/Developer/job-helper/extension/dist
 
 - `src/App.tsx`: popup UI rendered with React.
 - `src/content.ts`: content script that scrapes structured page evidence and renders the in-page command banner.
-- `src/background.ts`: MV3 service worker entry that handles `Cmd+Shift+S` / `Ctrl+Shift+S`, captures the visible tab, and posts to `/api/job-applications/ingest`.
+- `src/background.ts`: MV3 service worker entry that handles `Cmd+Shift+S` / `Ctrl+Shift+S`, formats the scraped page context into a job description, and calls `PATCH /api/tailor-resume` with `action: "tailor"`.
 - `manifest.config.ts`: typed Chrome extension manifest source used by CRXJS/Vite.

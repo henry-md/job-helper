@@ -1,11 +1,20 @@
 import {
   CAPTURE_COMMAND_NAME,
-  DEFAULT_INGEST_ENDPOINT,
-  LAST_INGESTION_STORAGE_KEY,
-  type IngestionRecord,
+  DEFAULT_TAILOR_RESUME_ENDPOINT,
+  LAST_TAILORING_STORAGE_KEY,
   type JobPageContext,
+  type TailorResumeRunRecord,
 } from "./job-helper";
+
 type OverlayTone = "error" | "info" | "success";
+
+type TailorResumeSummary = {
+  companyName: string | null;
+  id: string | null;
+  positionTitle: string | null;
+  status: string | null;
+};
+
 let isCaptureInFlight = false;
 
 function injectOverlayIntoPage(text: string, tone: OverlayTone) {
@@ -61,6 +70,182 @@ function injectOverlayIntoPage(text: string, tone: OverlayTone) {
   overlay.dataset.jobHelperTimeoutId = String(timeoutId);
 }
 
+function cleanText(value: string | null | undefined) {
+  return (value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function uniqueStrings(values: string[], limit: number) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const normalizedValue = cleanText(value);
+
+    if (!normalizedValue) {
+      continue;
+    }
+
+    const dedupeKey = normalizedValue.toLowerCase();
+
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    result.push(normalizedValue);
+
+    if (result.length >= limit) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+function buildSummaryLine(label: string, values: string[], limit = 6) {
+  const normalizedValues = uniqueStrings(values, limit);
+
+  if (normalizedValues.length === 0) {
+    return null;
+  }
+
+  return `${label}: ${normalizedValues.join(", ")}`;
+}
+
+function formatStructuredPosting(
+  posting: JobPageContext["jsonLdJobPostings"][number],
+  index: number,
+) {
+  const lines = [
+    posting.title ? `Title: ${posting.title}` : null,
+    posting.hiringOrganization
+      ? `Company: ${posting.hiringOrganization}`
+      : null,
+    buildSummaryLine("Employment type", posting.employmentType),
+    buildSummaryLine("Locations", posting.locations),
+    buildSummaryLine("Compensation", posting.baseSalary),
+    posting.datePosted ? `Date posted: ${posting.datePosted}` : null,
+    posting.validThrough ? `Valid through: ${posting.validThrough}` : null,
+    posting.identifier ? `Identifier: ${posting.identifier}` : null,
+    posting.directApply === true
+      ? "Direct apply: yes"
+      : posting.directApply === false
+        ? "Direct apply: no"
+        : null,
+    posting.description ? `Description:\n${posting.description}` : null,
+  ].filter((line): line is string => Boolean(line));
+
+  if (lines.length === 0) {
+    return null;
+  }
+
+  return [`Structured job posting ${index + 1}:`, ...lines].join("\n");
+}
+
+function buildJobDescriptionFromPageContext(pageContext: JobPageContext) {
+  const sections: string[] = [];
+  const summaryLines = [
+    pageContext.url ? `URL: ${pageContext.url}` : null,
+    pageContext.canonicalUrl &&
+    pageContext.canonicalUrl !== pageContext.url
+      ? `Canonical URL: ${pageContext.canonicalUrl}`
+      : null,
+    pageContext.title ? `Page title: ${pageContext.title}` : null,
+    pageContext.siteName ? `Site name: ${pageContext.siteName}` : null,
+    pageContext.description
+      ? `Meta description: ${pageContext.description}`
+      : null,
+    buildSummaryLine("Role title hints", pageContext.titleCandidates),
+    buildSummaryLine("Company hints", pageContext.companyCandidates),
+    buildSummaryLine("Location hints", pageContext.locationCandidates),
+    buildSummaryLine(
+      "Employment type hints",
+      pageContext.employmentTypeCandidates,
+    ),
+    buildSummaryLine("Salary hints", pageContext.salaryMentions),
+    buildSummaryLine("Visible headings", pageContext.headings, 12),
+  ].filter((line): line is string => Boolean(line));
+
+  if (summaryLines.length > 0) {
+    sections.push(["Job page summary:", ...summaryLines].join("\n"));
+  }
+
+  if (pageContext.selectionText) {
+    sections.push(`Selected text from the page:\n${pageContext.selectionText}`);
+  }
+
+  const structuredPostings = pageContext.jsonLdJobPostings
+    .map(formatStructuredPosting)
+    .filter((section): section is string => Boolean(section));
+
+  if (structuredPostings.length > 0) {
+    sections.push(structuredPostings.join("\n\n"));
+  }
+
+  const topTextBlocks = uniqueStrings(pageContext.topTextBlocks, 5);
+
+  if (topTextBlocks.length > 0) {
+    sections.push(
+      [
+        "Main page text:",
+        ...topTextBlocks.map(
+          (block, index) => `Section ${index + 1}:\n${block}`,
+        ),
+      ].join("\n\n"),
+    );
+  }
+
+  if (pageContext.rawText) {
+    sections.push(`Full flattened page text:\n${pageContext.rawText}`);
+  }
+
+  return sections.join("\n\n").trim();
+}
+
+function readLatestTailoredResume(payload: Record<string, unknown>) {
+  const profile =
+    typeof payload.profile === "object" && payload.profile !== null
+      ? (payload.profile as { tailoredResumes?: unknown })
+      : null;
+  const tailoredResumes = Array.isArray(profile?.tailoredResumes)
+    ? profile.tailoredResumes
+    : [];
+  const latestTailoredResume = tailoredResumes[0];
+
+  if (
+    typeof latestTailoredResume !== "object" ||
+    latestTailoredResume === null
+  ) {
+    return null;
+  }
+
+  const summary = latestTailoredResume as Record<string, unknown>;
+
+  return {
+    companyName:
+      typeof summary.companyName === "string" ? summary.companyName : null,
+    id: typeof summary.id === "string" ? summary.id : null,
+    positionTitle:
+      typeof summary.positionTitle === "string" ? summary.positionTitle : null,
+    status: typeof summary.status === "string" ? summary.status : null,
+  } satisfies TailorResumeSummary;
+}
+
+function buildSuccessMessage(record: TailorResumeRunRecord) {
+  const positionTitle = record.positionTitle?.trim();
+  const companyName = record.companyName?.trim();
+  const jobLabel =
+    positionTitle && companyName
+      ? `${positionTitle} at ${companyName}`
+      : positionTitle || companyName || "this role";
+
+  if (record.tailoredResumeError) {
+    return `Saved a tailored draft for ${jobLabel}, but it needs review`;
+  }
+
+  return `Tailored resume for ${jobLabel}`;
+}
+
 async function getActiveTab() {
   const [tab] = await chrome.tabs.query({
     active: true,
@@ -72,27 +257,6 @@ async function getActiveTab() {
   }
 
   return tab;
-}
-
-async function captureVisibleTabDataUrl(windowId?: number) {
-  try {
-    if (typeof windowId === "number") {
-      return await chrome.tabs.captureVisibleTab(windowId, {
-        format: "png",
-      });
-    }
-
-    return await chrome.tabs.captureVisibleTab({
-      format: "png",
-    });
-  } catch {
-    return null;
-  }
-}
-
-async function dataUrlToBlob(dataUrl: string) {
-  const response = await fetch(dataUrl);
-  return response.blob();
 }
 
 async function showOverlay(tabId: number, text: string, tone: OverlayTone) {
@@ -133,24 +297,13 @@ async function collectPageContext(tabId: number) {
   }
 }
 
-async function persistResult(record: IngestionRecord) {
+async function persistResult(record: TailorResumeRunRecord) {
   await chrome.storage.local.set({
-    [LAST_INGESTION_STORAGE_KEY]: record,
+    [LAST_TAILORING_STORAGE_KEY]: record,
   });
 }
 
-function buildSuccessMessage(record: IngestionRecord) {
-  const jobTitle = record.extraction?.jobTitle?.trim();
-  const companyName = record.extraction?.companyName?.trim();
-
-  if (jobTitle && companyName) {
-    return `Saved ${jobTitle} at ${companyName}`;
-  }
-
-  return "Saved job evidence to Job Helper";
-}
-
-async function ingestActiveTab() {
+async function tailorResumeForActiveTab() {
   const activeTab = await getActiveTab();
   const tabId = activeTab.id;
 
@@ -158,31 +311,32 @@ async function ingestActiveTab() {
     throw new Error("The active tab does not expose an id.");
   }
 
-  const screenshotDataUrl = await captureVisibleTabDataUrl(activeTab.windowId);
-  await showOverlay(tabId, "Job Helper read Cmd+Shift+S", "info");
+  await showOverlay(tabId, "Job Helper is reading this job post", "info");
 
   const pageContext = await collectPageContext(tabId);
 
-  if (!pageContext && !screenshotDataUrl) {
-    throw new Error("Could not read the page or capture a screenshot.");
+  if (!pageContext) {
+    throw new Error("Could not read the current page.");
   }
 
-  const formData = new FormData();
-  formData.append("source", "chrome_extension");
+  const jobDescription = buildJobDescriptionFromPageContext(pageContext);
 
-  if (pageContext) {
-    formData.append("pageContext", JSON.stringify(pageContext));
+  if (!jobDescription) {
+    throw new Error("Could not find job description text on this page.");
   }
 
-  if (screenshotDataUrl) {
-    const screenshotBlob = await dataUrlToBlob(screenshotDataUrl);
-    formData.append("jobScreenshots", screenshotBlob, "browser-capture.png");
-  }
+  await showOverlay(tabId, "Tailoring your resume for this job...", "info");
 
-  const response = await fetch(DEFAULT_INGEST_ENDPOINT, {
-    method: "POST",
-    body: formData,
+  const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
+    method: "PATCH",
+    body: JSON.stringify({
+      action: "tailor",
+      jobDescription,
+    }),
     credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
   });
   const payload = (await response.json()) as Record<string, unknown>;
 
@@ -190,55 +344,43 @@ async function ingestActiveTab() {
     throw new Error(
       typeof payload.error === "string"
         ? payload.error
-        : "The ingestion endpoint returned an error.",
+        : "The Tailor Resume endpoint returned an error.",
     );
   }
 
-  const extraction =
-    typeof payload.extraction === "object" && payload.extraction !== null
-      ? (payload.extraction as Record<string, unknown>)
+  if (typeof payload.profile !== "object" || payload.profile === null) {
+    throw new Error("Tailor Resume did not return a saved result.");
+  }
+
+  const latestTailoredResume = readLatestTailoredResume(payload);
+  const tailoredResumeError =
+    typeof payload.tailoredResumeError === "string"
+      ? payload.tailoredResumeError
       : null;
-  const evidence =
-    typeof payload.evidence === "object" && payload.evidence !== null
-      ? (payload.evidence as {
-          hasPageContext: boolean;
-          screenshotCount: number;
-          source: string;
-        })
-      : null;
-  const application =
-    typeof payload.application === "object" && payload.application !== null
-      ? (payload.application as { id?: string })
-      : null;
-  const record: IngestionRecord = {
-    applicationId: application?.id ?? null,
+  const record: TailorResumeRunRecord = {
     capturedAt: new Date().toISOString(),
-    endpoint: DEFAULT_INGEST_ENDPOINT,
-    evidence,
-    extraction: extraction
-      ? {
-          companyName:
-            typeof extraction.companyName === "string" ? extraction.companyName : null,
-          employmentType:
-            typeof extraction.employmentType === "string"
-              ? extraction.employmentType
-              : null,
-          jobTitle: typeof extraction.jobTitle === "string" ? extraction.jobTitle : null,
-          jobUrl: typeof extraction.jobUrl === "string" ? extraction.jobUrl : null,
-          location: typeof extraction.location === "string" ? extraction.location : null,
-          salaryRange:
-            typeof extraction.salaryRange === "string" ? extraction.salaryRange : null,
-          status: typeof extraction.status === "string" ? extraction.status : null,
-        }
-      : null,
-    message: "Saved job evidence to Job Helper.",
-    status: "success",
+    companyName: latestTailoredResume?.companyName ?? null,
+    endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
+    message: "",
+    pageTitle: pageContext.title || null,
+    pageUrl: pageContext.url || null,
+    positionTitle: latestTailoredResume?.positionTitle ?? null,
+    status:
+      latestTailoredResume?.status === "ready" && !tailoredResumeError
+        ? "success"
+        : "error",
+    tailoredResumeError,
+    tailoredResumeId: latestTailoredResume?.id ?? null,
   };
 
   record.message = buildSuccessMessage(record);
 
   await persistResult(record);
-  await showOverlay(tabId, record.message, "success");
+  await showOverlay(
+    tabId,
+    record.message,
+    record.status === "success" ? "success" : "error",
+  );
 }
 
 async function runCaptureFlow() {
@@ -249,19 +391,22 @@ async function runCaptureFlow() {
   isCaptureInFlight = true;
 
   try {
-    await ingestActiveTab();
+    await tailorResumeForActiveTab();
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Failed to ingest the active page.";
+      error instanceof Error ? error.message : "Failed to tailor the resume.";
 
-    const record: IngestionRecord = {
-      applicationId: null,
+    const record: TailorResumeRunRecord = {
       capturedAt: new Date().toISOString(),
-      endpoint: DEFAULT_INGEST_ENDPOINT,
-      evidence: null,
-      extraction: null,
+      companyName: null,
+      endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
       message,
+      pageTitle: null,
+      pageUrl: null,
+      positionTitle: null,
       status: "error",
+      tailoredResumeError: null,
+      tailoredResumeId: null,
     };
 
     await persistResult(record);

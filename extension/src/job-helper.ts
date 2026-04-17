@@ -1,8 +1,8 @@
 export const CAPTURE_COMMAND_NAME = "capture_job_page";
 export const DEFAULT_APP_BASE_URL = "http://localhost:3000";
-export const DEFAULT_INGEST_ENDPOINT =
-  `${DEFAULT_APP_BASE_URL}/api/job-applications/ingest`;
-export const LAST_INGESTION_STORAGE_KEY = "jobHelperLastIngestion";
+export const DEFAULT_TAILOR_RESUME_ENDPOINT =
+  `${DEFAULT_APP_BASE_URL}/api/tailor-resume`;
+export const LAST_TAILORING_STORAGE_KEY = "jobHelperLastTailoringRun";
 
 export type JobPostingStructuredHint = {
   baseSalary: string[];
@@ -35,24 +35,15 @@ export type JobPageContext = {
   url: string;
 };
 
-export type IngestionRecord = {
-  applicationId: string | null;
+export type TailorResumeRunRecord = {
   capturedAt: string;
   endpoint: string;
-  evidence: {
-    hasPageContext: boolean;
-    screenshotCount: number;
-    source: string;
-  } | null;
-  extraction: {
-    companyName: string | null;
-    employmentType: string | null;
-    jobTitle: string | null;
-    jobUrl: string | null;
-    location: string | null;
-    salaryRange: string | null;
-    status: string | null;
-  } | null;
+  companyName: string | null;
   message: string;
+  pageTitle: string | null;
+  pageUrl: string | null;
+  positionTitle: string | null;
   status: "error" | "success";
+  tailoredResumeError: string | null;
+  tailoredResumeId: string | null;
 };

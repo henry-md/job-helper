@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import "./App.css";
 import {
   CAPTURE_COMMAND_NAME,
-  LAST_INGESTION_STORAGE_KEY,
-  type IngestionRecord,
+  LAST_TAILORING_STORAGE_KEY,
   type JobPageContext,
+  type TailorResumeRunRecord,
 } from "./job-helper";
 
 type PopupState =
@@ -52,7 +52,8 @@ function App() {
     status: "idle",
     snapshot: null,
   });
-  const [lastIngestion, setLastIngestion] = useState<IngestionRecord | null>(null);
+  const [lastTailoringRun, setLastTailoringRun] =
+    useState<TailorResumeRunRecord | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -76,12 +77,12 @@ function App() {
 
   useEffect(() => {
     void chrome.storage.local
-      .get(LAST_INGESTION_STORAGE_KEY)
+      .get(LAST_TAILORING_STORAGE_KEY)
       .then((result) => {
-        const storedValue = result[LAST_INGESTION_STORAGE_KEY];
+        const storedValue = result[LAST_TAILORING_STORAGE_KEY];
 
         if (storedValue) {
-          setLastIngestion(storedValue as IngestionRecord);
+          setLastTailoringRun(storedValue as TailorResumeRunRecord);
         }
       });
 
@@ -89,12 +90,13 @@ function App() {
       changes: Record<string, chrome.storage.StorageChange>,
       areaName: string,
     ) {
-      if (areaName !== "local" || !changes[LAST_INGESTION_STORAGE_KEY]) {
+      if (areaName !== "local" || !changes[LAST_TAILORING_STORAGE_KEY]) {
         return;
       }
 
-      setLastIngestion(
-        (changes[LAST_INGESTION_STORAGE_KEY].newValue as IngestionRecord | null) ?? null,
+      setLastTailoringRun(
+        (changes[LAST_TAILORING_STORAGE_KEY].newValue as TailorResumeRunRecord | null) ??
+          null,
       );
     }
 
@@ -109,10 +111,10 @@ function App() {
     <main className="popup-shell">
       <section className="panel">
         <p className="eyebrow">Job Helper Extension</p>
-        <h1>Chrome capture starter</h1>
+        <h1>Tailor from the page</h1>
         <p className="lede">
-          Press <code>Cmd+Shift+S</code> on macOS to capture the current page, scrape
-          structured browser evidence, and send it to Job Helper.
+          Press <code>Cmd+Shift+S</code> on macOS to scrape the current job post and
+          run Tailor Resume with that page content.
         </p>
 
         <div className="status-row">
@@ -126,32 +128,42 @@ function App() {
         </div>
 
         <section className="snapshot-card">
-          <h2>Last ingestion</h2>
-          {lastIngestion ? (
+          <h2>Last tailoring run</h2>
+          {lastTailoringRun ? (
             <dl className="snapshot-grid">
               <div>
                 <dt>Status</dt>
-                <dd>{lastIngestion.message}</dd>
+                <dd>{lastTailoringRun.message}</dd>
               </div>
               <div>
-                <dt>Captured at</dt>
-                <dd>{new Date(lastIngestion.capturedAt).toLocaleString()}</dd>
+                <dt>Ran at</dt>
+                <dd>{new Date(lastTailoringRun.capturedAt).toLocaleString()}</dd>
               </div>
               <div>
-                <dt>Extracted title</dt>
-                <dd>{lastIngestion.extraction?.jobTitle || "No title extracted."}</dd>
+                <dt>Role</dt>
+                <dd>{lastTailoringRun.positionTitle || "No role was returned."}</dd>
               </div>
               <div>
-                <dt>Extracted company</dt>
-                <dd>
-                  {lastIngestion.extraction?.companyName || "No company extracted."}
+                <dt>Company</dt>
+                <dd>{lastTailoringRun.companyName || "No company was returned."}</dd>
+              </div>
+              <div>
+                <dt>Tailor Resume</dt>
+                <dd className="wrap-anywhere">
+                  {lastTailoringRun.endpoint}
+                </dd>
+              </div>
+              <div>
+                <dt>Page</dt>
+                <dd className="wrap-anywhere">
+                  {lastTailoringRun.pageUrl || "No page URL was captured."}
                 </dd>
               </div>
             </dl>
           ) : (
             <p className="placeholder">
               Run the <code>{CAPTURE_COMMAND_NAME}</code> shortcut once to store the
-              latest ingestion result here.
+              latest tailoring result here.
             </p>
           )}
         </section>

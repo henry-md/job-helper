@@ -352,7 +352,7 @@ window.addEventListener(
     }
 
     lastShortcutAt = now;
-    showOverlay("Job Helper read Cmd+Shift+S", "info");
+    showOverlay("Job Helper is reading this job post", "info");
     void chrome.runtime.sendMessage({
       type: "JOB_HELPER_TRIGGER_CAPTURE",
     });
@@ -372,7 +372,8 @@ chrome.runtime.onMessage.addListener((
 
   if (typedMessage?.type === "JOB_HELPER_SHOW_OVERLAY") {
     showOverlay(
-      cleanText(typedMessage.payload?.text, 240) || "Job Helper received the command",
+      cleanText(typedMessage.payload?.text, 240) ||
+        "Job Helper is working on this page",
       typedMessage.payload?.tone ?? "info",
     );
     sendResponse({ ok: true });
