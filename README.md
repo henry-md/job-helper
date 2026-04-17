@@ -162,5 +162,6 @@ end)
 - Uploading a screenshot on `/dashboard` stores the image under `public/uploads/job-screenshots/`, sends it to the OpenAI Responses API with a strict JSON schema, and creates `Company`, `JobApplicationScreenshot`, and `JobApplication` records.
 - The Tailor Resume tab stores the uploaded resume under `public/uploads/resumes/<userId>/`, saves a private per-user profile under `.job-helper-data/tailor-resumes/<userId>/profile.json`, extracts LaTeX directly with the OpenAI Responses API, and keeps that LaTeX as the editable source of truth alongside a compiled PDF preview.
 - The Hammerspoon hotkey posts directly to `/api/job-applications/ingest`, so it needs `JOB_HELPER_INGEST_SECRET` in `.env` and the matching secret plus Google account email in `~/.hammerspoon/init.lua`.
-- The shared ingestion endpoint accepts screenshots, structured page context, raw page text, or any combination. Hammerspoon currently sends screenshots; the Chrome extension sends both a screenshot and structured browser evidence.
+- The shared ingestion endpoint accepts screenshots, structured page context, raw page text, or any combination. Hammerspoon currently sends screenshots.
+- The Chrome extension hotkey now scrapes structured browser evidence from the active job page and sends it to `PATCH /api/tailor-resume` with `action: "tailor"` so Tailor Resume runs directly from the page content.
 - The default extraction model is `gpt-5-mini`; override it with `OPENAI_JOB_EXTRACTION_MODEL`.

@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "WebSearch"
+      "WebSearch",
+      "Bash(sips -g pixelWidth -g pixelHeight /Users/Henry/Developer/job-helper/extension/public/jimmy.png)",
+      "Bash(git restore:*)",
+      "Bash(git add:*)",
+      "Bash(git apply:*)",
+      "Bash(git commit -m ':*)"
     ]
   }
 }
