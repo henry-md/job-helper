@@ -20,6 +20,21 @@ model User {
   sessions                Session[]
   screenshots             JobApplicationScreenshot[]
   tailorResumeLockedLinks TailorResumeLockedLink[]
+  latexBuildFailures      LatexBuildFailure[]
+}
+
+model LatexBuildFailure {
+  id        String   @id @default(cuid())
+  userId    String
+  source    String
+  latexCode String
+  error     String
+  attempt   Int      @default(1)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
 }
 
 model TailorResumeLockedLink {
