@@ -22,8 +22,8 @@ test("applyTailorResumeBlockChanges replaces a segment and re-normalizes ids", (
     annotatedLatexCode: normalized.annotatedLatex,
     changes: [
       {
-        latexCode:
-          "\\resumeitem{Tailored bullet one}\n\\resumeitem{Tailored bullet two}",
+        latexCode: "\\resumeitem{Tailored bullet one}",
+        reason: 'Highlights CI/CD work. Matches "CI/CD" in the job description.',
         segmentId: targetSegment.id,
       },
     ],
@@ -34,7 +34,7 @@ test("applyTailorResumeBlockChanges replaces a segment and re-normalizes ids", (
   const strippedLatex = stripTailorResumeSegmentIds(updated.annotatedLatex);
 
   assert.equal(strippedLatex.includes("Tailored bullet one"), true);
-  assert.equal(strippedLatex.includes("Tailored bullet two"), true);
+  assert.equal(strippedLatex.includes("Tailored bullet two"), false);
 });
 
 test("applyTailorResumeBlockChanges rejects duplicate segment edits", () => {
@@ -52,10 +52,12 @@ test("applyTailorResumeBlockChanges rejects duplicate segment edits", () => {
         changes: [
           {
             latexCode: "\\resumeitem{One}",
+            reason: 'Highlights one requirement. Matches "Requirement one".',
             segmentId: targetSegment.id,
           },
           {
             latexCode: "\\resumeitem{Two}",
+            reason: 'Highlights another requirement. Matches "Requirement two".',
             segmentId: targetSegment.id,
           },
         ],
@@ -74,10 +76,36 @@ test("applyTailorResumeBlockChanges rejects unknown segment ids", () => {
         changes: [
           {
             latexCode: "\\resumeitem{Tailored bullet}",
+            reason: 'Highlights the quoted requirement. Matches "required experience".',
             segmentId: "missing.segment-id",
           },
         ],
       }),
     /unknown segment/,
+  );
+});
+
+test("applyTailorResumeBlockChanges rejects replacements that span multiple logical blocks", () => {
+  const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
+  const targetSegment = normalized.segments.find((segment) =>
+    segment.id.includes(".bullet-1"),
+  );
+
+  assert.ok(targetSegment);
+
+  assert.throws(
+    () =>
+      applyTailorResumeBlockChanges({
+        annotatedLatexCode: normalized.annotatedLatex,
+        changes: [
+          {
+            latexCode:
+              "\\resumeitem{Tailored bullet one}\n\\resumeitem{Tailored bullet two}",
+            reason: 'Combines neighboring bullets. Matches "two separate accomplishments".',
+            segmentId: targetSegment.id,
+          },
+        ],
+      }),
+    /multiple logical blocks/,
   );
 });

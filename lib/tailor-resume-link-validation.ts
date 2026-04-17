@@ -566,24 +566,6 @@ export async function validateTailorResumeLink(
   };
 }
 
-function buildLinkFailureMessage(links: TailorResumeLinkValidationEntry[]) {
-  const failedLinks = links.filter((link) => link.outcome === "failed");
-  const failedLinkLines = failedLinks
-    .slice(0, 3)
-    .map((link) => `- ${link.url}: ${link.reason ?? "Link validation failed."}`);
-  const remainingFailureCount = failedLinks.length - failedLinkLines.length;
-  const remainingFailuresLine =
-    remainingFailureCount > 0
-      ? `- ${remainingFailureCount} more link${remainingFailureCount === 1 ? "" : "s"} failed validation.`
-      : null;
-
-  return [
-    `Validated ${links.length} extracted link${links.length === 1 ? "" : "s"}, and ${failedLinks.length} failed.`,
-    ...failedLinkLines,
-    ...(remainingFailuresLine ? [remainingFailuresLine] : []),
-    "Keep the visible text, but remove \\href and link-only styling such as \\tightul when a destination fails validation instead of guessing a replacement.",
-  ].join("\n");
-}
 
 export function extractResumeLatexLinks(
   latexCode: string,
@@ -669,16 +651,6 @@ export async function validateTailorResumeLatexDocument(
   try {
     const previewPdf = await compileLatex(latexCode);
     const linkValidation = await validateResumeLatexLinks(latexCode, fetchImpl);
-
-    if (linkValidation.linkSummary.failedCount > 0) {
-      return {
-        error: buildLinkFailureMessage(linkValidation.links),
-        linkSummary: linkValidation.linkSummary,
-        links: linkValidation.links,
-        ok: false,
-        previewPdf: null,
-      };
-    }
 
     return {
       error: null,

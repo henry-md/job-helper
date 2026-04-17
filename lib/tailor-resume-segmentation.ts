@@ -8,6 +8,12 @@ type ParsedCommand = {
   start: number;
 };
 
+type ParsedBraceBlock = {
+  content: string;
+  end: number;
+  start: number;
+};
+
 type SegmentState = {
   bulletOrdinal: number;
   currentEntryOrdinal: number;
@@ -30,6 +36,15 @@ export type NormalizeTailorResumeLatexResult = {
   annotatedLatex: string;
   segmentCount: number;
   segments: TailorResumeSegment[];
+};
+
+export type TailorResumeAnnotatedBlock = {
+  command: string | null;
+  contentEnd: number;
+  contentStart: number;
+  id: string;
+  latexCode: string;
+  markerStart: number;
 };
 
 export function buildUniqueTailorResumeSegmentId(
@@ -113,6 +128,20 @@ function readBalancedGroup(value: string, start: number, openChar: "{" | "[") {
   return null;
 }
 
+function readTopLevelBraceBlockAt(value: string, start: number): ParsedBraceBlock | null {
+  const group = readBalancedGroup(value, start, "{");
+
+  if (!group) {
+    return null;
+  }
+
+  return {
+    content: group.content,
+    end: group.end,
+    start,
+  };
+}
+
 function readCommandAt(value: string, start: number): ParsedCommand | null {
   if (value[start] !== "\\") {
     return null;
@@ -135,8 +164,17 @@ function readCommandAt(value: string, start: number): ParsedCommand | null {
   let cursor = nameEnd;
 
   while (true) {
+    const whitespaceStart = cursor;
     cursor = skipWhitespace(value, cursor);
+    const skippedWhitespace = value.slice(whitespaceStart, cursor);
     const currentChar = value[cursor];
+
+    if (
+      (args.length > 0 || optionalArgs.length > 0) &&
+      /\n\s*\n/.test(skippedWhitespace)
+    ) {
+      break;
+    }
 
     if (currentChar === "[") {
       const group = readBalancedGroup(value, cursor, "[");
@@ -212,6 +250,57 @@ function nextFallbackSegmentId(
   return `${state.currentSectionSlug}.${fallbackSlug}-${ordinal}`;
 }
 
+function extractBraceBlockSlug(blockContent: string) {
+  const firstTextbfIndex = blockContent.indexOf("\\textbf");
+
+  if (firstTextbfIndex !== -1) {
+    const parsedCommand = readCommandAt(blockContent, firstTextbfIndex);
+    const textbfLabel = parsedCommand?.args[0]?.trim();
+
+    if (textbfLabel) {
+      return slugifySegmentPart(textbfLabel);
+    }
+  }
+
+  const firstCommandIndex = blockContent.indexOf("\\");
+
+  if (firstCommandIndex !== -1) {
+    const parsedCommand = readCommandAt(blockContent, firstCommandIndex);
+
+    if (parsedCommand) {
+      const commandLabel =
+        parsedCommand.args[0]?.trim() ??
+        parsedCommand.optionalArgs[0]?.trim() ??
+        parsedCommand.command;
+
+      if (commandLabel) {
+        return slugifySegmentPart(commandLabel);
+      }
+    }
+  }
+
+  const plainText = blockContent
+    .replace(/\\[a-zA-Z]+/g, " ")
+    .replace(/[{}%]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (plainText) {
+    return slugifySegmentPart(plainText.slice(0, 60));
+  }
+
+  return "block";
+}
+
+function nextBraceBlockSegmentId(state: SegmentState, blockContent: string) {
+  const blockSlug = extractBraceBlockSlug(blockContent);
+  const blockKey = `${state.currentSectionSlug}:block:${blockSlug}`;
+  const ordinal = (state.fallbackOrdinalsBySlug.get(blockKey) ?? 0) + 1;
+  state.fallbackOrdinalsBySlug.set(blockKey, ordinal);
+
+  return `${state.currentSectionSlug}.block-${blockSlug}-${ordinal}`;
+}
+
 function nextSegmentId(
   command: string,
   state: SegmentState,
@@ -278,6 +367,88 @@ export function stripTailorResumeSegmentIds(latexCode: string) {
   return stripAnnotatedLine(latexCode);
 }
 
+type ParsedSegmentCandidate =
+  | {
+      kind: "block";
+      lineIndentation: string;
+      lineStart: number;
+      parsedBlock: ParsedBraceBlock;
+    }
+  | {
+      kind: "command";
+      lineIndentation: string;
+      lineStart: number;
+      parsedCommand: ParsedCommand;
+    };
+
+function findNextSegmentCandidate(
+  value: string,
+  fromIndex: number,
+): ParsedSegmentCandidate | null {
+  const nextLineStart = fromIndex <= 0
+    ? 0
+    : (() => {
+        const lastNewlineBeforeIndex = value.lastIndexOf("\n", fromIndex - 1);
+        const candidateLineStart = lastNewlineBeforeIndex + 1;
+
+        if (candidateLineStart >= fromIndex) {
+          return candidateLineStart;
+        }
+
+        const nextNewline = value.indexOf("\n", fromIndex);
+        return nextNewline === -1 ? value.length : nextNewline + 1;
+      })();
+
+  let lineStart = nextLineStart;
+
+  while (lineStart < value.length) {
+    let cursor = lineStart;
+
+    while (cursor < value.length && /[ \t]/.test(value[cursor] ?? "")) {
+      cursor += 1;
+    }
+
+    const firstChar = value[cursor];
+    const lineIndentation = value.slice(lineStart, cursor);
+
+    if (firstChar === "\\") {
+      const parsedCommand = readCommandAt(value, cursor);
+
+      if (parsedCommand) {
+        return {
+          kind: "command",
+          lineIndentation,
+          lineStart,
+          parsedCommand,
+        };
+      }
+    }
+
+    if (firstChar === "{") {
+      const parsedBlock = readTopLevelBraceBlockAt(value, cursor);
+
+      if (parsedBlock) {
+        return {
+          kind: "block",
+          lineIndentation,
+          lineStart,
+          parsedBlock,
+        };
+      }
+    }
+
+    const nextNewline = value.indexOf("\n", lineStart);
+
+    if (nextNewline === -1) {
+      break;
+    }
+
+    lineStart = nextNewline + 1;
+  }
+
+  return null;
+}
+
 export function normalizeTailorResumeLatex(latexCode: string): NormalizeTailorResumeLatexResult {
   const cleanLatex = stripTailorResumeSegmentIds(latexCode);
   const state = createInitialSegmentState();
@@ -285,54 +456,46 @@ export function normalizeTailorResumeLatex(latexCode: string): NormalizeTailorRe
   const segments: TailorResumeSegment[] = [];
   const chunks: string[] = [];
   let cursor = 0;
-  let searchIndex = 0;
+  let candidate = findNextSegmentCandidate(cleanLatex, 0);
 
-  while (searchIndex < cleanLatex.length) {
-    const slashIndex = cleanLatex.indexOf("\\", searchIndex);
-
-    if (slashIndex === -1) {
-      break;
-    }
-
-    const lineStart = cleanLatex.lastIndexOf("\n", slashIndex - 1) + 1;
-    const leadingText = cleanLatex.slice(lineStart, slashIndex);
-
-    if (!/^[ \t]*$/.test(leadingText)) {
-      searchIndex = slashIndex + 1;
-      continue;
-    }
-
-    const parsedCommand = readCommandAt(cleanLatex, slashIndex);
-
-    if (!parsedCommand) {
-      searchIndex = slashIndex + 1;
-      continue;
-    }
-
+  while (candidate) {
+    const parsedStart =
+      candidate.kind === "command"
+        ? candidate.parsedCommand.start
+        : candidate.parsedBlock.start;
+    const parsedEnd =
+      candidate.kind === "command"
+        ? candidate.parsedCommand.end
+        : candidate.parsedBlock.end;
     const segmentId = buildUniqueTailorResumeSegmentId(
-      nextSegmentId(
-        parsedCommand.command,
-        state,
-        parsedCommand.args,
-        parsedCommand.optionalArgs,
-      ),
+      candidate.kind === "command"
+        ? nextSegmentId(
+            candidate.parsedCommand.command,
+            state,
+            candidate.parsedCommand.args,
+            candidate.parsedCommand.optionalArgs,
+          )
+        : nextBraceBlockSegmentId(state, candidate.parsedBlock.content),
       seenSegmentIds,
     );
-    const lineIndentation =
-      /^[ \t]*$/.test(leadingText) ? leadingText : "";
 
-    chunks.push(cleanLatex.slice(cursor, lineIndentation ? lineStart : parsedCommand.start));
-    chunks.push(`${lineIndentation}${segmentMarkerPrefix}${segmentId}\n`);
-    if (lineIndentation) {
-      chunks.push(leadingText);
+    chunks.push(
+      cleanLatex.slice(
+        cursor,
+        candidate.lineIndentation ? candidate.lineStart : parsedStart,
+      ),
+    );
+    chunks.push(`${candidate.lineIndentation}${segmentMarkerPrefix}${segmentId}\n`);
+    if (candidate.lineIndentation) {
+      chunks.push(candidate.lineIndentation);
     }
-    chunks.push(cleanLatex.slice(parsedCommand.start, parsedCommand.end));
+    chunks.push(cleanLatex.slice(parsedStart, parsedEnd));
     segments.push({
-      command: parsedCommand.command,
+      command: candidate.kind === "command" ? candidate.parsedCommand.command : "block",
       id: segmentId,
     });
-    cursor = parsedCommand.end;
-    searchIndex = parsedCommand.end;
+    cursor = parsedEnd;
+    candidate = findNextSegmentCandidate(cleanLatex, parsedEnd);
   }
 
   chunks.push(cleanLatex.slice(cursor));
@@ -342,6 +505,53 @@ export function normalizeTailorResumeLatex(latexCode: string): NormalizeTailorRe
     segmentCount: segments.length,
     segments,
   };
+}
+
+export function readAnnotatedTailorResumeBlocks(annotatedLatexCode: string) {
+  const normalized = normalizeTailorResumeLatex(annotatedLatexCode);
+  const commandsById = new Map(
+    normalized.segments.map((segment) => [segment.id, segment.command]),
+  );
+  const matches: Array<{
+    id: string;
+    markerEnd: number;
+    markerStart: number;
+  }> = [];
+
+  for (const match of normalized.annotatedLatex.matchAll(
+    /^[ \t]*% JOBHELPER_SEGMENT_ID:\s*([^\n]+)\s*(?:\n|$)/gm,
+  )) {
+    const markerStart = match.index ?? 0;
+    const markerText = match[0] ?? "";
+    const rawId = match[1] ?? "";
+    const id = rawId.trim();
+
+    if (!id || !markerText) {
+      continue;
+    }
+
+    matches.push({
+      id,
+      markerEnd: markerStart + markerText.length,
+      markerStart,
+    });
+  }
+
+  return matches.map((match, index): TailorResumeAnnotatedBlock => {
+    const nextMatch = matches[index + 1];
+    const contentEnd = nextMatch?.markerStart ?? normalized.annotatedLatex.length;
+
+    return {
+      command: commandsById.get(match.id) ?? null,
+      contentEnd,
+      contentStart: match.markerEnd,
+      id: match.id,
+      latexCode: normalized.annotatedLatex
+        .slice(match.markerEnd, contentEnd)
+        .replace(/\n+$/, ""),
+      markerStart: match.markerStart,
+    };
+  });
 }
 
 export function hasValidTailorResumeSegmentIds(latexCode: string) {

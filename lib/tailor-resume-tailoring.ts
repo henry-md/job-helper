@@ -2,17 +2,19 @@ import OpenAI from "openai";
 import { applyTailorResumeLinkOverridesWithSummary } from "./tailor-resume-link-overrides.ts";
 import { validateTailorResumeLatexDocument } from "./tailor-resume-link-validation.ts";
 import { getRetryAttemptsToGenerateLatexEdits } from "./tailor-resume-retry-config.ts";
+import { buildTailoredResumeBlockEdits } from "./tailor-resume-review.ts";
 import {
   normalizeTailorResumeLatex,
+  readAnnotatedTailorResumeBlocks,
   stripTailorResumeSegmentIds,
 } from "./tailor-resume-segmentation.ts";
 import type {
   TailorResumeLinkRecord,
+  TailoredResumeBlockEditRecord,
   TailorResumeSavedLinkUpdate,
 } from "./tailor-resume-types.ts";
 
 const TEST_OPENAI_RESPONSE_MODEL = "test-openai-response";
-const segmentMarkerPattern = /^[ \t]*% JOBHELPER_SEGMENT_ID:\s*([^\n]+)\s*(?:\n|$)/gm;
 const tailorResumeBlockChangesSchema = {
   type: "object",
   additionalProperties: false,
@@ -24,9 +26,10 @@ const tailorResumeBlockChangesSchema = {
         additionalProperties: false,
         properties: {
           latexCode: { type: "string" },
+          reason: { type: "string" },
           segmentId: { type: "string" },
         },
-        required: ["segmentId", "latexCode"],
+        required: ["segmentId", "latexCode", "reason"],
       },
     },
     companyName: { type: "string" },
@@ -45,6 +48,7 @@ const tailorResumeBlockChangesSchema = {
 
 type TailoredResumeBlockChange = {
   latexCode: string;
+  reason: string;
   segmentId: string;
 };
 
@@ -69,17 +73,12 @@ type TailoredResumeResponse = {
   output_text?: string;
 };
 
-type AnnotatedTailorResumeBlock = {
-  contentEnd: number;
-  id: string;
-  markerStart: number;
-};
-
 export type GenerateTailoredResumeResult = {
   annotatedLatexCode: string;
   attempts: number;
   companyName: string;
   displayName: string;
+  edits: TailoredResumeBlockEditRecord[];
   jobIdentifier: string;
   latexCode: string;
   model: string;
@@ -187,13 +186,22 @@ function parseTailoredResumeResponse(
       "latexCode" in entry && typeof entry.latexCode === "string"
         ? entry.latexCode
         : "";
+    const reason =
+      "reason" in entry && typeof entry.reason === "string"
+        ? entry.reason
+        : "";
 
     if (!segmentId) {
       throw new Error("The model returned a block change without a segmentId.");
     }
 
+    if (!readTrimmedString(reason)) {
+      throw new Error("The model returned a block change without a reason.");
+    }
+
     return {
       latexCode,
+      reason,
       segmentId,
     };
   });
@@ -219,60 +227,40 @@ function buildTailoringInstructions(input: { feedback?: string }) {
     "How block replacements work:\n" +
     "1. Each change targets one existing segmentId from the provided annotated LaTeX.\n" +
     "2. Replacing a segment swaps the entire block that starts at that segment comment and ends right before the next segment comment.\n" +
-    "3. Your replacement latexCode can contain multiple logical LaTeX blocks when you need to expand or reorder content.\n" +
+    "3. Your replacement latexCode must contain exactly one logical LaTeX block: the replacement for that targeted segment only.\n" +
     "4. Use an empty string for latexCode only when removing that block entirely is clearly helpful.\n" +
     "5. Never invent, rename, or return % JOBHELPER_SEGMENT_ID comments. The server re-adds them deterministically after applying your edits.\n" +
-    "6. Never reference the same segmentId more than once.\n\n" +
+    "6. Never reference the same segmentId more than once.\n" +
+    "7. Every change must include a concise reason string that explains why the edit improves fit for this specific job description.\n\n" +
     "Metadata rules:\n" +
     "1. companyName should be the employer if identifiable.\n" +
     "2. positionTitle should be the role title if identifiable.\n" +
     "3. jobIdentifier should be the best short disambiguator for this job: prefer the team name, otherwise location, otherwise a brief identifying phrase.\n" +
     "4. displayName should be the user-facing saved name, preferably \"Company - Role\".\n\n" +
+    "Reason rules:\n" +
+    "1. Keep every reason to 1-2 short sentences maximum.\n" +
+    "2. Sentence 1 should briefly summarize the high-level change you made.\n" +
+    "3. Sentence 2 should explain why that change matters for this role, preferably by quoting a short exact phrase from the job description in quotation marks.\n" +
+    "4. If the pasted job description makes the section clear, explicitly say whether that quote came from a required/basic qualification, a preferred/good-to-have qualification, responsibilities, or another labeled section.\n" +
+    "5. Do not guess section labels. If the pasted text does not clearly identify the section, just give the quote without inventing where it came from.\n" +
+    "6. When the job description explicitly emphasizes something, quote those exact words instead of vaguely saying it was emphasized or mentioned in the description.\n" +
+    "7. If no short exact quote fits naturally, use the closest brief phrase from the job description, but still avoid generic wording like \"matches the job description\" with no supporting detail.\n" +
+    "8. Prefer concise fragments or incomplete sentences over polished prose.\n" +
+    "9. NEVER under any circumstances write 3 sentences for a single block edit.\n" +
+    "10. Good examples: \"Surfaces GitHub OSS work earlier. Required qualifications mention \\\"GitHub-hosted open-source projects\\\".\" and \"Moves Python frameworks higher. Preferred qualifications emphasize \\\"relevant frameworks\\\" and \\\"Python\\\".\"\n" +
+    "11. Bad examples: \"Highlights relevant experience because the description emphasizes it.\" and \"Matches the required section\" with no quote.\n" +
+    "12. Focus on the job-description signal you matched, not on generic writing advice.\n\n" +
+    "Job description source quality:\n" +
+    "The job description below may be scraped from a job board page and can include navigation chrome, sidebar links, footer text, and listings for other roles. " +
+    "Identify and focus only on the single target job posting. Ignore unrelated job listings, site navigation, and boilerplate page text.\n\n" +
     "Guardrails:\n" +
     "1. Preserve factual accuracy. Never invent achievements, employers, dates, titles, technologies, metrics, degrees, or certifications.\n" +
     "2. Prefer the smallest set of content edits that materially improve fit.\n" +
-    "3. It is heavily discouraged to change styling, page layout, margins, font sizing, spacing systems, or macro structure unless the user explicitly asked for layout changes or the document cannot work without that fix.\n" +
-    "4. Keep the final document pdflatex-compatible after your replacements are applied.\n"
+    "3. If three chunks need edits, return three separate changes. Never bundle sibling chunks into one latexCode replacement.\n" +
+    "4. It is heavily discouraged to change styling, page layout, margins, font sizing, spacing systems, or macro structure unless the user explicitly asked for layout changes or the document cannot work without that fix.\n" +
+    "5. Keep the final document pdflatex-compatible after your replacements are applied.\n" +
+    "6. Special character escaping: in plain text content, the characters }, {, #, %, &, $, _, ^, ~, and \\ are special in LaTeX and must be escaped (e.g., \\}, \\{, \\#, \\%, \\&, \\$, \\_, \\^{}, \\~{}, \\textbackslash{}). A bare } or { in text content is the most common cause of 'Extra }' or 'Missing $' compile errors. Only leave these characters unescaped inside LaTeX command arguments where they serve a structural role (e.g., \\textbf{...}, \\href{...}{...}).\n"
   );
-}
-
-function readAnnotatedTailorResumeBlocks(annotatedLatexCode: string) {
-  const blocks: AnnotatedTailorResumeBlock[] = [];
-  const matches: Array<{
-    id: string;
-    markerEnd: number;
-    markerStart: number;
-  }> = [];
-
-  for (const match of annotatedLatexCode.matchAll(new RegExp(segmentMarkerPattern))) {
-    const markerStart = match.index ?? 0;
-    const markerText = match[0] ?? "";
-    const rawId = match[1] ?? "";
-    const id = rawId.trim();
-
-    if (!id || !markerText) {
-      continue;
-    }
-
-    matches.push({
-      id,
-      markerEnd: markerStart + markerText.length,
-      markerStart,
-    });
-  }
-
-  for (let index = 0; index < matches.length; index += 1) {
-    const currentMatch = matches[index];
-    const nextMatch = matches[index + 1];
-
-    blocks.push({
-      contentEnd: nextMatch?.markerStart ?? annotatedLatexCode.length,
-      id: currentMatch.id,
-      markerStart: currentMatch.markerStart,
-    });
-  }
-
-  return blocks;
 }
 
 export function applyTailorResumeBlockChanges(input: {
@@ -321,6 +309,15 @@ export function applyTailorResumeBlockChanges(input: {
     const replacementLatex = stripTailorResumeSegmentIds(change.latexCode);
 
     if (replacementLatex.trim()) {
+      const replacementSegmentCount =
+        normalizeTailorResumeLatex(replacementLatex).segmentCount;
+
+      if (replacementSegmentCount > 1) {
+        throw new Error(
+          `Replacement for segment ${change.segmentId} spans multiple logical blocks.`,
+        );
+      }
+
       chunks.push(replacementLatex);
 
       if (!replacementLatex.endsWith("\n") && block.contentEnd < normalizedInput.annotatedLatex.length) {
@@ -383,6 +380,7 @@ export async function generateTailoredResume(input: {
   annotatedLatexCode: string;
   jobDescription: string;
   linkOverrides?: TailorResumeLinkRecord[];
+  onBuildFailure?: (latexCode: string, error: string, attempt: number) => Promise<void>;
 }): Promise<GenerateTailoredResumeResult> {
   const model = process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
   const maxTailoredResumeAttempts = getRetryAttemptsToGenerateLatexEdits();
@@ -404,6 +402,7 @@ export async function generateTailoredResume(input: {
       attempts: 1,
       companyName: fallbackMetadata.companyName,
       displayName: fallbackMetadata.displayName,
+      edits: [],
       jobIdentifier: fallbackMetadata.jobIdentifier,
       latexCode: stripTailorResumeSegmentIds(
         finalizedTestCandidate.normalizedLatex.annotatedLatex,
@@ -422,6 +421,7 @@ export async function generateTailoredResume(input: {
   let lastError: string | null = null;
   let lastMetadata = fallbackMetadata;
   let lastAnnotatedLatex = normalizedInput.annotatedLatex;
+  let lastEdits: TailoredResumeBlockEditRecord[] = [];
   let lastSavedLinkUpdateCount = 0;
   let lastSavedLinkUpdates: TailorResumeSavedLinkUpdate[] = [];
   let lastModel = model;
@@ -471,6 +471,10 @@ export async function generateTailoredResume(input: {
     }
 
     lastMetadata = normalizeTailoredResumeMetadata(candidate);
+    const candidateEdits = buildTailoredResumeBlockEdits({
+      annotatedLatexCode: normalizedInput.annotatedLatex,
+      changes: candidate.changes,
+    });
 
     let appliedCandidate;
 
@@ -498,6 +502,7 @@ export async function generateTailoredResume(input: {
     );
 
     lastAnnotatedLatex = normalizedCandidate.normalizedLatex.annotatedLatex;
+    lastEdits = candidateEdits;
     lastSavedLinkUpdateCount = normalizedCandidate.updatedCount;
     lastSavedLinkUpdates = normalizedCandidate.updatedLinks;
 
@@ -507,6 +512,7 @@ export async function generateTailoredResume(input: {
         attempts: attempt,
         companyName: lastMetadata.companyName,
         displayName: lastMetadata.displayName,
+        edits: candidateEdits,
         jobIdentifier: lastMetadata.jobIdentifier,
         latexCode: stripTailorResumeSegmentIds(
           normalizedCandidate.normalizedLatex.annotatedLatex,
@@ -521,6 +527,13 @@ export async function generateTailoredResume(input: {
     }
 
     lastError = validation.error;
+
+    await input.onBuildFailure?.(
+      stripTailorResumeSegmentIds(normalizedCandidate.normalizedLatex.annotatedLatex),
+      validation.error,
+      attempt,
+    );
+
     feedback =
       `Applying your previous block changes produced a compile failure.\n\n` +
       `Compiler error:\n${validation.error}\n\n` +
@@ -532,6 +545,7 @@ export async function generateTailoredResume(input: {
     attempts: maxTailoredResumeAttempts,
     companyName: lastMetadata.companyName,
     displayName: lastMetadata.displayName,
+    edits: lastEdits,
     jobIdentifier: lastMetadata.jobIdentifier,
     latexCode: stripTailorResumeSegmentIds(lastAnnotatedLatex),
     model: lastModel,

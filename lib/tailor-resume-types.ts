@@ -67,11 +67,20 @@ export type TailorResumeWorkspaceState = {
   updatedAt: string | null;
 };
 
+export type TailoredResumeBlockEditRecord = {
+  afterLatexCode: string;
+  beforeLatexCode: string;
+  command: string | null;
+  reason: string;
+  segmentId: string;
+};
+
 export type TailoredResumeRecord = {
   annotatedLatexCode: string;
   companyName: string;
   createdAt: string;
   displayName: string;
+  edits: TailoredResumeBlockEditRecord[];
   error: string | null;
   id: string;
   jobDescription: string;
@@ -313,6 +322,48 @@ function parseTailorResumeWorkspaceState(value: unknown): TailorResumeWorkspaceS
   };
 }
 
+function parseTailoredResumeBlockEditRecord(
+  value: unknown,
+): TailoredResumeBlockEditRecord | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const segmentId = readNullableString(value.segmentId);
+  const beforeLatexCode = readNullableString(value.beforeLatexCode);
+  const afterLatexCode = readNullableString(value.afterLatexCode);
+  const reason = readNullableString(value.reason);
+  const command = readNullableString(value.command);
+
+  if (
+    !segmentId ||
+    beforeLatexCode === null ||
+    afterLatexCode === null ||
+    !reason
+  ) {
+    return null;
+  }
+
+  return {
+    afterLatexCode,
+    beforeLatexCode,
+    command,
+    reason,
+    segmentId,
+  };
+}
+
+function parseTailoredResumeBlockEditRecords(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailoredResumeBlockEditRecord[];
+  }
+
+  return value.flatMap((entry) => {
+    const parsedEdit = parseTailoredResumeBlockEditRecord(entry);
+    return parsedEdit ? [parsedEdit] : [];
+  });
+}
+
 function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null {
   if (!isRecord(value)) {
     return null;
@@ -368,6 +419,7 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
     companyName,
     createdAt,
     displayName,
+    edits: parseTailoredResumeBlockEditRecords(value.edits),
     error,
     id,
     jobDescription,

@@ -12,6 +12,7 @@ import {
   applyTailorResumeSourceLinkOverridesWithSummary,
   extractTailorResumeTrackedLinks,
 } from "@/lib/tailor-resume-link-overrides";
+import { extractTailorResumeActualLatexError } from "@/lib/tailor-resume-error-format";
 import {
   mergeTailorResumeLinksWithLockedLinks,
   mergeTailorResumeProfileWithLockedLinks,
@@ -43,6 +44,7 @@ import {
 } from "@/lib/tailor-resume-storage";
 import { readTailorResumeProfileState } from "@/lib/tailor-resume-profile-state";
 import { generateTailoredResume } from "@/lib/tailor-resume-tailoring";
+import { logLatexBuildFailure } from "@/lib/tailor-resume-log-latex-failure";
 import {
   emptyTailorResumeAnnotatedLatexState,
   emptyTailorResumeExtractionState,
@@ -297,9 +299,10 @@ async function persistExtractedLatexResult(
     annotatedLatex: normalized.annotatedLatex,
     latex: {
       code: normalized.latexCode,
-      error:
+      error: extractTailorResumeActualLatexError(
         extraction.validationError ??
-        "Unable to compile the generated LaTeX preview.",
+          "Unable to compile the generated LaTeX preview.",
+      ),
       pdfUpdatedAt: null,
       status: "failed" as const,
       updatedAt,
@@ -348,10 +351,11 @@ async function compileLatexDraft(
       compiledLatexCode: normalizedCompile.latexCode,
       latex: {
         code: normalizedSource.latexCode,
-        error:
+        error: extractTailorResumeActualLatexError(
           error instanceof Error
             ? error.message
             : "Unable to compile the LaTeX preview.",
+        ),
         pdfUpdatedAt: previousPdfUpdatedAt,
         status: "failed" as const,
         updatedAt,
@@ -403,6 +407,8 @@ async function runResumeExtraction(
         input.lockedLinks,
       ),
       onAttemptEvent: options.onAttemptEvent,
+      onBuildFailure: (latexCode, error, attempt) =>
+        logLatexBuildFailure({ userId, source: "extraction", latexCode, error, attempt }),
       preserveUnusedKnownLinks: options.preserveUnusedKnownLinks,
     });
     const persistedLatex = await persistExtractedLatexResult(userId, extraction);
@@ -697,6 +703,8 @@ export async function PATCH(request: Request) {
       annotatedLatexCode: processedBaseAnnotatedLatex.latexCode,
       jobDescription,
       linkOverrides: buildKnownTailorResumeLinks(rawProfile.links, lockedLinks),
+      onBuildFailure: (latexCode, error, attempt) =>
+        logLatexBuildFailure({ userId: session.user.id, source: "tailoring", latexCode, error, attempt }),
     });
     const tailoredResumeId = randomUUID();
     const tailoredResumeUpdatedAt = new Date().toISOString();
@@ -721,6 +729,7 @@ export async function PATCH(request: Request) {
           companyName: tailoringResult.companyName,
           createdAt: tailoredResumeUpdatedAt,
           displayName: tailoringResult.displayName,
+          edits: tailoringResult.edits,
           error: tailoringResult.validationError,
           id: tailoredResumeId,
           jobDescription,

@@ -21,6 +21,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import { formatTailorResumeLatexError } from "@/lib/tailor-resume-error-format";
 import { normalizeTailorResumeLinkUrl } from "@/lib/tailor-resume-links";
 import type {
   SavedResumeRecord,
@@ -133,6 +134,15 @@ function buildPreviewPdfUrl(updatedAt: string | null) {
   return updatedAt
     ? `/api/tailor-resume/preview?updatedAt=${encodeURIComponent(updatedAt)}`
     : null;
+}
+
+function buildInlineLatexError(error: string) {
+  const formattedError = formatTailorResumeLatexError(error, {
+    maxChars: 220,
+    singleLine: true,
+  });
+
+  return formattedError.displayMessage || "Unable to compile the LaTeX preview.";
 }
 
 function resolveSavedLatexCode(profile: TailorResumeProfile) {
@@ -291,10 +301,16 @@ function showExtractionAttemptToasts(
 
 function showExtractionAttemptToast(attempt: TailorResumeExtractionAttempt) {
   if (attempt.outcome === "failed") {
+    const failedLinkCount = attempt.linkSummary?.failedCount ?? 0;
+    const errorSuffix = failedLinkCount > 0
+      ? ` ${failedLinkCount} link${failedLinkCount === 1 ? "" : "s"} failed validation.`
+      : attempt.error
+        ? ` ${attempt.error}`
+        : "";
     toast.error(
       attempt.willRetry
-        ? `LaTeX generation attempt ${attempt.attempt} failed, so we retried it automatically.${attempt.error ? ` ${attempt.error}` : ""}`
-        : `LaTeX generation attempt ${attempt.attempt} failed and no retries remain.${attempt.error ? ` ${attempt.error}` : ""}`,
+        ? `LaTeX generation attempt ${attempt.attempt} failed, so we retried it automatically.${errorSuffix}`
+        : `LaTeX generation attempt ${attempt.attempt} failed and no retries remain.${errorSuffix}`,
       {
         id: `tailor-resume-extraction-attempt-${attempt.attempt}-failed`,
       },
@@ -312,7 +328,7 @@ function showLinkValidationSummaryToast(
   links: TailorResumeLinkValidationEntry[] | null | undefined,
   delayMs = 0,
 ) {
-  if (!linkSummary || linkSummary.totalCount === 0) {
+  if (!linkSummary || linkSummary.failedCount === 0) {
     return;
   }
 
@@ -346,69 +362,34 @@ function showLinkValidationSummaryToast(
 
       return accumulator;
     }, []);
-    const passedLinks = groupedLinks.filter((link) => link.outcome === "passed");
-    const notPassedLinks = groupedLinks.filter((link) => link.outcome !== "passed");
+    const failedLinks = groupedLinks.filter((link) => link.outcome === "failed");
+    const unverifiedLinks = groupedLinks.filter((link) => link.outcome === "unverified");
+    const notPassedLinks = [...failedLinks, ...unverifiedLinks];
     const unverifiedFragment =
       linkSummary.unverifiedCount > 0
-        ? `, ${linkSummary.unverifiedCount} couldn't be verified`
+        ? `, ${linkSummary.unverifiedCount} unverified`
         : "";
     const message =
-      `Validated ${linkSummary.totalCount} extracted ` +
-      `link${linkSummary.totalCount === 1 ? "" : "s"}: ` +
-      `${linkSummary.passedCount} passed, ${linkSummary.failedCount} failed${unverifiedFragment}.`;
+      `${linkSummary.failedCount} link${linkSummary.failedCount === 1 ? "" : "s"} failed validation${unverifiedFragment}.`;
     const description = (
-      <div className="space-y-3 text-left">
-        <div className="space-y-1">
-          <div className="text-xs font-medium text-zinc-100">Passed</div>
-          {passedLinks.length > 0 ? (
-            <ul className="space-y-1 text-xs text-zinc-300">
-              {passedLinks.map((link) => (
-                <li
-                  key={`${link.outcome}:${link.url}:${link.reason ?? ""}`}
-                  className="break-all"
-                >
-                  {link.url}
-                  {link.count > 1 ? ` (${link.count}x)` : ""}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="text-xs text-zinc-400">none</div>
-          )}
-        </div>
-        <div className="space-y-1">
-          <div className="text-xs font-medium text-zinc-100">Didn&apos;t pass</div>
-          {notPassedLinks.length > 0 ? (
-            <ul className="space-y-1 text-xs text-zinc-300">
-              {notPassedLinks.map((link) => (
-                <li
-                  key={`${link.outcome}:${link.url}:${link.reason ?? ""}`}
-                  className="break-all"
-                >
-                  {link.url}
-                  {link.count > 1 ? ` (${link.count}x)` : ""}
-                  {link.outcome === "failed" ? " (failed)" : " (unverified)"}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="text-xs text-zinc-400">none</div>
-          )}
-        </div>
-      </div>
+      <ul className="space-y-1 text-left text-xs text-zinc-300">
+        {notPassedLinks.map((link) => (
+          <li
+            key={`${link.outcome}:${link.url}:${link.reason ?? ""}`}
+            className="break-all"
+          >
+            {link.url}
+            {link.count > 1 ? ` (${link.count}x)` : ""}
+            {link.reason ? `: ${link.reason}` : ""}
+            {link.outcome === "unverified" ? " (unverified)" : ""}
+          </li>
+        ))}
+      </ul>
     );
 
-    if (linkSummary.failedCount > 0) {
-      toast.error(message, {
-        description,
-        duration: failedLinkToastDurationMs,
-        id: linkValidationToastId,
-      });
-      return;
-    }
-
-    toast.success(message, {
+    toast.error(message, {
       description,
+      duration: failedLinkToastDurationMs,
       id: linkValidationToastId,
     });
   }, delayMs);
@@ -569,9 +550,15 @@ export default function TailorResumeWorkspace({
       ? profile.annotatedLatex.code
       : draftLatexCode;
   const previewPdfUrl = buildPreviewPdfUrl(profile.latex.pdfUpdatedAt);
-  const previewErrorMessage =
+  const previewError =
     profile.latex.status === "failed"
-      ? profile.latex.error ?? "Unable to compile the LaTeX preview."
+      ? formatTailorResumeLatexError(
+          profile.latex.error ?? "Unable to compile the LaTeX preview.",
+          {
+            maxChars: 900,
+            maxLines: 10,
+          },
+        )
       : null;
   const showEditorLoadingOverlay = isUploadingResume;
   const showPreviewLoadingOverlay =
@@ -1015,8 +1002,9 @@ export default function TailorResumeWorkspace({
       );
 
       if (payload.extractionError) {
+        const inlineError = buildInlineLatexError(payload.extractionError);
         toast.error(
-          `Saved the resume, but LaTeX generation needs review: ${payload.extractionError}`,
+          `Saved the resume, but LaTeX generation needs review: ${inlineError}`,
           {
             id: resumeUploadToastId,
           },
@@ -1167,8 +1155,9 @@ export default function TailorResumeWorkspace({
       );
 
       if (payload.extractionError) {
+        const inlineError = buildInlineLatexError(payload.extractionError);
         toast.error(
-          `Saved the link changes, but LaTeX generation still needs review: ${payload.extractionError}`,
+          `Saved the link changes, but LaTeX generation still needs review: ${inlineError}`,
           {
             id: resumeLinkSaveToastId,
           },
@@ -1538,13 +1527,18 @@ export default function TailorResumeWorkspace({
         ) : null}
 
         <div className="relative z-10 flex min-h-[500px] flex-1 overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate">
-          {previewErrorMessage ? (
-            <div className="h-full w-full overflow-auto rounded-[1.25rem] bg-rose-950/70 p-5 text-sm leading-6 text-rose-100">
+          {previewError ? (
+            <div className="h-full w-full overflow-auto rounded-[1.25rem] border border-rose-300/12 bg-[linear-gradient(180deg,rgba(251,113,133,0.16),rgba(159,18,57,0.2))] p-5 text-sm leading-6 text-rose-50/92 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
               <p className="font-medium text-rose-50">
                 The current LaTeX draft did not render cleanly.
               </p>
-              <pre className="mt-3 whitespace-pre-wrap font-mono text-xs leading-6 text-rose-100/90">
-                {previewErrorMessage}
+              {previewError.wasTruncated ? (
+                <p className="mt-2 text-xs leading-5 text-rose-100/70">
+                  Showing an abbreviated version of the latest LaTeX error.
+                </p>
+              ) : null}
+              <pre className="mt-3 whitespace-pre-wrap font-mono text-xs leading-6 text-rose-50/78">
+                {previewError.displayMessage}
               </pre>
             </div>
           ) : previewPdfUrl ? (
