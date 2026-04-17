@@ -51,6 +51,7 @@ type ExtractResumeLatexDocumentDependencies = {
   onAttemptEvent?: (
     attemptEvent: RunResumeLatexToolLoopResult["attemptEvents"][number],
   ) => void | Promise<void>;
+  onBuildFailure?: (latexCode: string, error: string, attempt: number) => Promise<void>;
   preserveUnusedKnownLinks?: boolean;
   validateLatexDocument?: (
     latexCode: string,
@@ -300,6 +301,7 @@ export async function extractResumeLatexDocument(
       fallbackModel: model,
       maxAttempts: retryAttempts,
       onAttemptEvent: dependencies.onAttemptEvent,
+      onBuildFailure: dependencies.onBuildFailure,
       validateLatex: validateLatexWithOverrides,
     });
 

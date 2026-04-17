@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import ApplicationStatsWorkspace from "@/components/application-stats-workspace";
 import JobApplicationIntake from "@/components/job-application-intake";
 import SignOutButton from "@/components/sign-out-button";
 import StatusToast from "@/components/status-toast";
+import TailoredResumeReviewModal from "@/components/tailored-resume-review-modal";
 import TailorResumeWorkspace from "@/components/tailor-resume-workspace";
 import { formatCompactDate, shouldIncludeShortYear } from "@/lib/date-format";
 import type {
@@ -155,13 +155,13 @@ export default function DashboardWorkspace({
   userImage: string | null | undefined;
   userName: string | null | undefined;
 }) {
-  const [activeTab, setActiveTab] = useState<"history" | "new" | "tailor">("new");
-  const [historyApplicationId, setHistoryApplicationId] = useState<string | null>(
-    null,
-  );
+  const [activeTab, setActiveTab] = useState<"new" | "tailor">("new");
+  const [reviewingTailoredResumeId, setReviewingTailoredResumeId] = useState<string | null>(null);
   const [tailoredResumes, setTailoredResumes] = useState<TailoredResumeRecord[]>(
     () => tailorResumeProfile.tailoredResumes,
   );
+  const reviewingTailoredResume =
+    tailoredResumes.find((tr) => tr.id === reviewingTailoredResumeId) ?? null;
   const displayName = userName?.trim()?.split(" ")[0] || userName || "there";
   const profileImageSrc = getValidProfileImageSrc(userImage);
   const includeYearInDates = shouldIncludeShortYear(
@@ -215,27 +215,17 @@ export default function DashboardWorkspace({
             >
               Tailor Resume
             </button>
-            <button
-              className={`rounded-full px-3 py-2 text-xs uppercase tracking-[0.18em] transition ${
-                activeTab === "history"
-                  ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
-                  : "text-zinc-400 hover:text-zinc-200"
-              }`}
-              onClick={() => setActiveTab("history")}
-              type="button"
-            >
-              History
-            </button>
           </nav>
           <SignOutButton />
         </div>
       </header>
 
-      <div
-        className={`min-h-0 flex-1 ${
-          activeTab === "new" ? "overflow-hidden" : "overflow-y-auto"
-        }`}
-      >
+      <TailoredResumeReviewModal
+        onClose={() => setReviewingTailoredResumeId(null)}
+        record={reviewingTailoredResume}
+      />
+
+      <div className="min-h-0 flex-1 overflow-hidden">
         {activeTab === "new" ? (
           <section className="grid h-full min-h-0 gap-[clamp(0.75rem,1.2vh,1rem)] xl:grid-cols-[1.45fr_0.55fr]">
             <section className="glass-panel soft-ring flex min-h-0 flex-col rounded-[1.5rem] p-4 sm:p-5">
@@ -267,14 +257,9 @@ export default function DashboardWorkspace({
                 ) : (
                   <div className="grid gap-2">
                     {applications.slice(0, 4).map((application) => (
-                      <button
+                      <div
                         key={application.id}
-                        className="rounded-[1rem] border border-white/8 bg-black/20 px-3 py-2.5 text-left transition hover:border-emerald-400/25 hover:bg-emerald-400/6 focus-visible:border-emerald-300/45 focus-visible:outline-none"
-                        onClick={() => {
-                          setHistoryApplicationId(application.id);
-                          setActiveTab("history");
-                        }}
-                        type="button"
+                        className="rounded-[1rem] border border-white/8 bg-black/20 px-3 py-2.5"
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
@@ -285,9 +270,64 @@ export default function DashboardWorkspace({
                               {application.companyName}
                             </p>
                           </div>
-                          <span className="text-xs text-zinc-500">
+                          <span className="shrink-0 text-xs text-zinc-500">
                             {formatCompactDate(
                               application.appliedAt,
+                              includeYearInDates,
+                            )}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </aside>
+          </section>
+        ) : (
+          <section className="grid h-full min-h-0 gap-[clamp(0.75rem,1.2vh,1rem)] xl:grid-cols-[1fr_0.4fr]">
+            <div className="app-scrollbar min-h-0 overflow-y-auto">
+              <TailorResumeWorkspace
+                debugUiEnabled={tailorResumeDebugUiEnabled}
+                openAIReady={tailorResumeOpenAIReady}
+                initialProfile={tailorResumeProfile}
+                onTailoredResumesChange={setTailoredResumes}
+              />
+            </div>
+
+            <aside className="grid min-h-0 content-start gap-[clamp(0.75rem,1.2vh,1rem)] self-start">
+              <section className="glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+                    Recent tailored resumes
+                  </p>
+                  <span className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
+                    {tailoredResumes.length} resumes
+                  </span>
+                </div>
+                {tailoredResumes.length === 0 ? (
+                  <p className="text-sm text-zinc-400">No tailored resumes yet.</p>
+                ) : (
+                  <div className="grid gap-2">
+                    {tailoredResumes.slice(0, 4).map((tailoredResume) => (
+                      <button
+                        key={tailoredResume.id}
+                        className="rounded-[1rem] border border-white/8 bg-black/20 px-3 py-2.5 text-left transition hover:border-emerald-400/25 hover:bg-emerald-400/6 focus-visible:border-emerald-300/45 focus-visible:outline-none"
+                        onClick={() => setReviewingTailoredResumeId(tailoredResume.id)}
+                        type="button"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-zinc-100">
+                              {tailoredResume.displayName}
+                            </p>
+                            <p className="truncate text-sm text-zinc-400">
+                              {tailoredResume.companyName}
+                            </p>
+                          </div>
+                          <span className="shrink-0 text-xs text-zinc-500">
+                            {formatCompactDate(
+                              tailoredResume.updatedAt,
                               includeYearInDates,
                             )}
                           </span>
@@ -299,21 +339,6 @@ export default function DashboardWorkspace({
               </section>
             </aside>
           </section>
-        ) : activeTab === "tailor" ? (
-          <TailorResumeWorkspace
-            debugUiEnabled={tailorResumeDebugUiEnabled}
-            openAIReady={tailorResumeOpenAIReady}
-            initialProfile={tailorResumeProfile}
-            onTailoredResumesChange={setTailoredResumes}
-          />
-        ) : (
-          <ApplicationStatsWorkspace
-            companyOptions={companyOptions}
-            applications={applications}
-            initialExpandedId={historyApplicationId}
-            referrerOptions={referrerOptions}
-            tailoredResumes={tailoredResumes}
-          />
         )}
       </div>
     </div>

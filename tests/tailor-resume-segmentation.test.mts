@@ -5,6 +5,7 @@ import {
   buildUniqueTailorResumeSegmentId,
   hasValidTailorResumeSegmentIds,
   normalizeTailorResumeLatex,
+  readAnnotatedTailorResumeBlocks,
   stripTailorResumeSegmentIds,
 } from "../lib/tailor-resume-segmentation.ts";
 
@@ -43,6 +44,23 @@ test("normalizeTailorResumeLatex is stable across re-normalization", () => {
 
   assert.equal(secondPass.annotatedLatex, firstPass.annotatedLatex);
   assert.equal(secondPass.segmentCount, firstPass.segmentCount);
+});
+
+test("normalizeTailorResumeLatex splits top-level body blocks inside technical skills", () => {
+  const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
+  const technicalSkillBlocks = readAnnotatedTailorResumeBlocks(
+    normalized.annotatedLatex,
+  ).filter((block) => block.id.startsWith("technical-skills."));
+
+  assert.equal(technicalSkillBlocks[0]?.id, "technical-skills.section-1");
+  assert.equal(
+    technicalSkillBlocks[technicalSkillBlocks.length - 1]?.id,
+    "technical-skills.end-document-1",
+  );
+  assert.equal(
+    technicalSkillBlocks.filter((block) => block.command === "block").length,
+    3,
+  );
 });
 
 test("buildUniqueTailorResumeSegmentId appends numeric suffixes on conflict", () => {

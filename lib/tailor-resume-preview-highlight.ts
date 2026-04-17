@@ -8,37 +8,34 @@ const annotatedSegmentPattern =
 
 const reviewHighlightPreamble = String.raw`
 % JOBHELPER_REVIEW_HIGHLIGHT_MACROS
-\definecolor{JobHelperReviewAccent}{RGB}{196,118,24}
-\newcommand{\jobhelperReviewMark}{%
-  \llap{\hspace*{-0.2in}\textcolor{JobHelperReviewAccent}{\rule{0.11in}{0.82em}}\hspace{0.08in}}%
-}
+\definecolor{JobHelperHighlight}{RGB}{255,243,128}
+\newcommand{\jhl}[1]{{\setlength{\fboxsep}{0pt}\colorbox{JobHelperHighlight}{#1}}}
+\newcommand{\jhlt}[1]{{\setlength{\fboxsep}{0pt}\colorbox{JobHelperHighlight}{\parbox{\linewidth}{#1}}}}
 \newcommand{\jobhelperHighlightedResumeSection}[1]{%
   \vspace{5pt}
-  {\SectionFont\jobhelperReviewMark\textcolor{JobHelperReviewAccent}{\textbf{#1}}}\par
+  {\SectionFont\jhl{\textbf{#1}}}\par
   \vspace{1.2pt}
-  {\color{JobHelperReviewAccent}\hrule height 0.7pt}
+  \hrule height 0.5pt
   \vspace{3.8pt}
 }
 \newcommand{\jobhelperHighlightedEntryheading}[3]{%
   \noindent
-  \jobhelperReviewMark
   \begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
-    {\BodyFont\textcolor{JobHelperReviewAccent}{\textbf{#1}~|~\textit{#2}}} &
-    {\BodyFont\textcolor{JobHelperReviewAccent}{#3}}
+    {\BodyFont\jhl{\textbf{#1}~|~\textit{#2}}} &
+    {\BodyFont\jhl{#3}}
   \end{tabular*}\par
 }
 \newcommand{\jobhelperHighlightedProjectheading}[2]{%
   \noindent
-  \jobhelperReviewMark
   \begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
-    {\BodyFont\textcolor{JobHelperReviewAccent}{#1}} &
-    {\BodyFont\textcolor{JobHelperReviewAccent}{#2}}
+    {\BodyFont\jhl{#1}} &
+    {\BodyFont\jhl{#2}}
   \end{tabular*}\par
 }
-\newcommand{\jobhelperHighlightedDescline}[1]{{\BodyFont\jobhelperReviewMark\textcolor{JobHelperReviewAccent}{#1}\par}}
-\newcommand{\jobhelperHighlightedResumeitem}[1]{\item {\jobhelperReviewMark\textcolor{JobHelperReviewAccent}{#1}}}
+\newcommand{\jobhelperHighlightedDescline}[1]{{\BodyFont\jhlt{#1}\par}}
+\newcommand{\jobhelperHighlightedResumeitem}[1]{\item \jhlt{#1}}
 \newcommand{\jobhelperHighlightedLabelline}[2]{%
-  {\BodyFont\noindent\jobhelperReviewMark\makebox[74pt][l]{\textcolor{JobHelperReviewAccent}{\textbf{#1}}}\textcolor{JobHelperReviewAccent}{#2}\par}
+  {\BodyFont\noindent\jhlt{\makebox[74pt][l]{\textbf{#1}}#2}\par}
 }
 `;
 
@@ -188,10 +185,7 @@ function highlightTailoredResumeBlock(input: {
         "jobhelperHighlightedLabelline",
       );
     default:
-      return `{
-\\jobhelperReviewMark\\color{JobHelperReviewAccent}
-${input.latexCode}
-}`;
+      return `\\jhlt{${input.latexCode}}`;
   }
 }
 

@@ -106,12 +106,10 @@ export default function TailoredResumeReviewModal({
   const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(
     () => record?.edits[0]?.segmentId ?? null,
   );
-  const [isPdfHighlightEnabled, setIsPdfHighlightEnabled] = useState(true);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
 
   useEffect(() => {
     setSelectedSegmentId(record?.edits[0]?.segmentId ?? null);
-    setIsPdfHighlightEnabled(true);
   }, [record]);
 
   useEffect(() => {
@@ -151,8 +149,7 @@ export default function TailoredResumeReviewModal({
   );
   const previewUrl = record
     ? buildTailoredResumePreviewPdfUrl(record, {
-        highlightSegmentId:
-          isPdfHighlightEnabled && selectedEdit ? selectedEdit.segmentId : null,
+        highlightSegmentId: selectedEdit ? selectedEdit.segmentId : null,
       })
     : null;
 
@@ -380,27 +377,11 @@ export default function TailoredResumeReviewModal({
                         Tailored PDF
                       </p>
                       <p className="mt-2 text-sm leading-6 text-zinc-400">
-                        {selectedEdit && isPdfHighlightEnabled
+                        {selectedEdit
                           ? "Showing a temporary review render with the selected change highlighted."
                           : "Use the rendered PDF to sanity-check spacing, line breaks, and overall presentation after each content edit."}
                       </p>
                     </div>
-
-                    {selectedEdit ? (
-                      <button
-                        className={`rounded-full border px-3 py-2 text-[11px] uppercase tracking-[0.18em] transition ${
-                          isPdfHighlightEnabled
-                            ? "border-amber-300/35 bg-amber-400/10 text-amber-100 hover:border-amber-200/45 hover:bg-amber-400/14"
-                            : "border-white/10 bg-white/5 text-zinc-300 hover:border-white/20 hover:bg-white/10"
-                        }`}
-                        onClick={() =>
-                          setIsPdfHighlightEnabled((currentValue) => !currentValue)
-                        }
-                        type="button"
-                      >
-                        {isPdfHighlightEnabled ? "Highlight on" : "Highlight off"}
-                      </button>
-                    ) : null}
                   </div>
                 </div>
 
@@ -415,9 +396,7 @@ export default function TailoredResumeReviewModal({
                     {isPreviewLoading ? (
                       <div className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-[1px]">
                         <div className="rounded-full border border-white/12 bg-zinc-950/88 px-4 py-2 text-xs uppercase tracking-[0.18em] text-zinc-200">
-                          {selectedEdit && isPdfHighlightEnabled
-                            ? "Rendering highlighted preview..."
-                            : "Loading PDF..."}
+                          {selectedEdit ? "Rendering highlighted preview..." : "Loading PDF..."}
                         </div>
                       </div>
                     ) : null}

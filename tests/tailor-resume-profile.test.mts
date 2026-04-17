@@ -104,6 +104,15 @@ test("parseTailorResumeProfile keeps tailored resume metadata and workspace stat
         companyName: "OpenAI",
         createdAt: "2026-04-15T12:00:00.000Z",
         displayName: "OpenAI - Research Engineer",
+        edits: [
+          {
+            afterLatexCode: "\\resumeitem{Tailored bullet}",
+            beforeLatexCode: "\\resumeitem{Original bullet}",
+            command: "resumeitem",
+            reason: 'Highlights CI/CD work. Matches "CI/CD" in the job description.',
+            segmentId: "experience.entry-1.bullet-1",
+          },
+        ],
         error: null,
         id: "tailored-1",
         jobDescription: "Job description text",
@@ -123,6 +132,11 @@ test("parseTailorResumeProfile keeps tailored resume metadata and workspace stat
 
   assert.equal(profile.workspace.isBaseResumeStepComplete, true);
   assert.equal(profile.tailoredResumes[0]?.companyName, "OpenAI");
+  assert.equal(profile.tailoredResumes[0]?.edits.length, 1);
+  assert.equal(
+    profile.tailoredResumes[0]?.edits[0]?.reason,
+    'Highlights CI/CD work. Matches "CI/CD" in the job description.',
+  );
   assert.equal(profile.tailoredResumes[0]?.positionTitle, "Research Engineer");
   assert.equal(profile.tailoredResumes[0]?.jobIdentifier, "Applied research");
 });
@@ -147,6 +161,7 @@ test("parseTailorResumeProfile backfills tailored resume metadata from displayNa
   });
 
   assert.equal(profile.tailoredResumes[0]?.companyName, "Anthropic");
+  assert.deepEqual(profile.tailoredResumes[0]?.edits, []);
   assert.equal(profile.tailoredResumes[0]?.positionTitle, "Product Engineer");
   assert.equal(profile.tailoredResumes[0]?.jobIdentifier, "General");
 });

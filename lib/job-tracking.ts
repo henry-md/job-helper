@@ -2,6 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileBufferToDataUrl } from "@/lib/file-data-url";
 
 const supportedMimeTypes = new Set([
   "image/png",
@@ -161,6 +162,4 @@ export async function deletePersistedUserResume(storagePath: string) {
   }
 }
 
-export function fileBufferToDataUrl(buffer: Buffer, mimeType: string) {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
-}
+export { fileBufferToDataUrl };

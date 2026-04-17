@@ -94,6 +94,7 @@ export type RunResumeLatexToolLoopArgs = {
   onAttemptEvent?: (
     attemptEvent: RunResumeLatexToolLoopResult["attemptEvents"][number],
   ) => void | Promise<void>;
+  onBuildFailure?: (latexCode: string, error: string, attempt: number) => Promise<void>;
   validateLatex: (
     latexCode: string,
   ) => Promise<TailorResumeLatexDocumentValidationResult>;
@@ -330,6 +331,8 @@ export async function runResumeLatexToolLoop(
           if (!validation.ok) {
             lastError = validation.error;
 
+            await args.onBuildFailure?.(fallbackDocument.latexCode, validation.error, attempt);
+
             await recordAttemptEvent({
               attempt,
               error: lastError,
@@ -412,6 +415,8 @@ export async function runResumeLatexToolLoop(
 
       if (!validation.ok) {
         lastError = validation.error;
+
+        await args.onBuildFailure?.(extractedDocument.latexCode, validation.error, attempt);
 
         await recordAttemptEvent({
           attempt,
