@@ -12,6 +12,7 @@ Implementation:
 - The helper injects review-only LaTeX macros ahead of `\begin{document}`. These macros use `ulem`/`\markoverwith ... \ULon` instead of `\colorbox`, because `\colorbox` creates a rigid rectangle that does not wrap across lines cleanly.
 - Each changed block is rebuilt from `beforeLatexCode` vs `afterLatexCode` with `buildTailoredResumeDiffRows(...)`.
 - Added-only rows become green highlights; modified rows become amber highlights over just the added/replacement text.
+- The in-app interactive renderer is separate from the highlighted PDF. It draws browser overlays on top of the clean compiled PDF, keeps all currently active segment diffs visible at once, and treats clicking an edit card as a temporary focus event that scrolls to the block and pulses the overlay without changing the steady highlight set.
 
 Multi-line highlight rule:
 
@@ -20,7 +21,7 @@ Multi-line highlight rule:
 - The tokenizer treats escaped punctuation such as `\%` plus inline punctuation commands like `\textasciitilde` as part of the same highlightable text run.
 - Inline formatting boundaries such as `\textbf{...}` do not stay inside one outer `\jhlmod{...}` span. Instead, the helper highlights from inside the formatting command and keeps the surrounding plain text in adjacent highlight runs.
 - Interior spaces and separators remain inside the neighboring split runs, so `\jhlmod{Used }\textbf{\jhlmod{AWS Amplify}}\jhlmod{ to set up }` still reads as one continuous highlighted band instead of separate word boxes.
-- The helper also inserts a tiny zero-width bridge overlay before each resumed split run, which patches the visible hairline gap that `ulem` can leave between adjacent highlight runs at formatting boundaries.
+- Each emitted highlight run also gets a tiny zero-width leading bleed overlay so browser PDF viewers do not leave a visible hairline seam when the next split run resumes after a formatting boundary.
 - Structural commands such as `\resumeitem`, `\begin`, `\end`, comments, and line-breaking commands still force the helper to fall back to a safer split form.
 
 Guardrails:
