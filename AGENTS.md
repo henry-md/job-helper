@@ -9,19 +9,11 @@ See canonical documentation:
   Explains how the codebase is structured and how major systems interact. Use this to understand where new code should live and how components connect. Example files: architecture/overview.md, architecture/database.md, architecture/api.md, architecture/auth.md.
 
 - agent-docs/coding-conventions.md  
-  Contains required coding rules and constraints (e.g., database migrations, dependency rules, file patterns). Always follow these when writing or modifying code, and especially when using terminal commands (like db migrations) or at a cross-roads in approaches. Example topics: database-migrations.md, dendency-rules.md, file-structure.md.
+  Contains required coding rules and constraints (e.g., database migrations, dependency rules, file patterns). Always follow these when writing or modifying code, and especially when using terminal commands (like db migrations) or at a cross-roads in approaches. Example topics: database-migrations.md, dependency-rules.md, filstructure.md.
 
 - agent-docs/bug-fixes/  
   Short records of important bugs that occurred that might break again easily if we don't document it. Example files: bug-fixes/oauth-loop.md, bug-fixes/race-condition-cache.md. Documenting what the bug was and what approach was taken to solving it. This is equally for the developer's reference as your own.
 
-- agent-docs/skills/  
-  Reusable skill documents that direct you to perform specific tasks in a consistent way. The user may invoke a skill by typing a forward slash followed by the skill name in kebab case, like /write-release-notes or /refactor-auth-flow. The user may also create a skill, or ask you to create a skill, so that task can be done repeatedly later. When a relevant skill exists, follow it. Each `agent-docs/skills/[skill].md` file should be concise and should briefly explain what the skill is, what it does, and any key constraints or steps. The filename should be the skill name in kebab-case so it matches the slash command.
-
 When modifying code, follow the rules defined in these documents. The /agent-docs folder is for you to keep yourself updated as you work on the project on past context. Be concise so that you can continue to maintain it for a while and not have the files blow up in size.
 
-Agent entry points:
-- If the user invokes a skill with /<command-name> in kebab case, treat that as a request to execute the corresponding document in agent-docs/skills/.
-- Skills are task-specific instructions that direct you to do a particular job in a repeatable way.
-- The user may create a skill directly, or ask you to create a skill for future repeated use.
-- When creating a new skill, store it in agent-docs/skills/ with a kebab-case filename that matches the slash command when appropriate.
-- Each skill file should be concise and should briefly outline what the skill is, what it should do, and any important constraints or steps to follow.
+
