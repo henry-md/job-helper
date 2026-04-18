@@ -1,5 +1,6 @@
 "use client";
 
+import { Check, Download, Pencil, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -99,6 +100,17 @@ function resolveAcceptedBlockChoice(input: {
   return null;
 }
 
+function buildTailoredResumeDownloadFilename(displayName: string) {
+  const normalizedBaseName = displayName
+    .trim()
+    .replace(/[\\/:*?"<>|]/g, "-")
+    .replace(/\s+/g, " ")
+    .replace(/-+/g, "-")
+    .replace(/[ .-]+$/g, "");
+
+  return `${normalizedBaseName || "tailored-resume"}.pdf`;
+}
+
 function DiffCell({
   lineNumber,
   segments,
@@ -161,6 +173,7 @@ type TailoredResumeMutationResponse = {
 
 const defaultReviewDetailsPaneSize = 58;
 const defaultReviewPreviewPaneSize = 42;
+const maxTailoredResumeDisplayNameLength = 200;
 const selectedReviewSurfaceClassName =
   "border-emerald-300/38 bg-[linear-gradient(180deg,rgba(52,211,153,0.06),rgba(16,185,129,0.02))] shadow-[0_0_0_1px_rgba(16,185,129,0.12),inset_0_1px_0_rgba(167,243,208,0.05)]";
 
@@ -184,10 +197,16 @@ export default function TailoredResumeReviewModal({
     hasOverflow: false,
   }));
   const [isEditingLatexSegment, setIsEditingLatexSegment] = useState(false);
+  const [isRenamingDisplayName, setIsRenamingDisplayName] = useState(false);
   const [isThesisOpen, setIsThesisOpen] = useState(false);
   const [interactivePreviewFocusRequest, setInteractivePreviewFocusRequest] =
     useState(0);
+  const [draftDisplayName, setDraftDisplayName] = useState(
+    () => record?.displayName ?? "",
+  );
   const [draftEditedLatexCode, setDraftEditedLatexCode] = useState("");
+  const [isDownloadingPreviewPdf, setIsDownloadingPreviewPdf] = useState(false);
+  const [isSavingDisplayName, setIsSavingDisplayName] = useState(false);
   const [suppressedAcceptedBlockChoiceEditId, setSuppressedAcceptedBlockChoiceEditId] =
     useState<string | null>(null);
   const [isSavingTailoredResumeEdit, setIsSavingTailoredResumeEdit] = useState(false);
@@ -199,6 +218,7 @@ export default function TailoredResumeReviewModal({
   );
   const editRailRef = useRef<HTMLDivElement | null>(null);
   const editButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const displayNameInputRef = useRef<HTMLInputElement | null>(null);
   const editedLatexTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const lastPreviewRecoveryRecordIdRef = useRef<string | null>(null);
   const thesisPopoverRef = useRef<HTMLDivElement | null>(null);
@@ -255,6 +275,12 @@ export default function TailoredResumeReviewModal({
           return;
         }
 
+        if (isRenamingDisplayName) {
+          setDraftDisplayName(record.displayName);
+          setIsRenamingDisplayName(false);
+          return;
+        }
+
         onClose();
         return;
       }
@@ -305,7 +331,7 @@ export default function TailoredResumeReviewModal({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isThesisOpen, onClose, record, resolvedSelectedEditId]);
+  }, [isRenamingDisplayName, isThesisOpen, onClose, record, resolvedSelectedEditId]);
 
   useEffect(() => {
     if (!record) {
@@ -464,8 +490,31 @@ export default function TailoredResumeReviewModal({
   }, [isEditingLatexSegment, isWideLayout, selectedEdit?.editId]);
 
   useEffect(() => {
+    setDraftDisplayName(record?.displayName ?? "");
+    setIsRenamingDisplayName(false);
     setIsThesisOpen(false);
-  }, [record?.id]);
+  }, [record?.displayName, record?.id]);
+
+  useEffect(() => {
+    if (!isRenamingDisplayName) {
+      return;
+    }
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      const input = displayNameInputRef.current;
+
+      if (!input) {
+        return;
+      }
+
+      input.focus();
+      input.select();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+    };
+  }, [isRenamingDisplayName]);
 
   useEffect(() => {
     setInteractivePreviewFocusRequest(0);
@@ -640,6 +689,115 @@ export default function TailoredResumeReviewModal({
       );
     } finally {
       setIsSavingTailoredResumeEdit(false);
+    }
+  }
+
+  function startRenamingDisplayName() {
+    if (!record || isSavingDisplayName) {
+      return;
+    }
+
+    setDraftDisplayName(record.displayName);
+    setIsRenamingDisplayName(true);
+  }
+
+  function cancelRenamingDisplayName() {
+    setDraftDisplayName(record?.displayName ?? "");
+    setIsRenamingDisplayName(false);
+  }
+
+  async function saveRenamedDisplayName() {
+    if (!record) {
+      return;
+    }
+
+    const nextDisplayName = draftDisplayName.trim();
+
+    if (!nextDisplayName) {
+      toast.error("Add a name for the tailored resume.");
+      return;
+    }
+
+    if (nextDisplayName.length > maxTailoredResumeDisplayNameLength) {
+      toast.error("Keep the tailored resume name under 200 characters.");
+      return;
+    }
+
+    if (nextDisplayName === record.displayName) {
+      setIsRenamingDisplayName(false);
+      return;
+    }
+
+    setIsSavingDisplayName(true);
+
+    try {
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({
+          action: "renameTailoredResume",
+          displayName: nextDisplayName,
+          tailoredResumeId: record.id,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
+      const payload = (await response.json()) as TailoredResumeMutationResponse;
+
+      if (!response.ok || !payload.profile) {
+        throw new Error(payload.error ?? "Unable to rename the tailored resume.");
+      }
+
+      onTailoredResumesChange(payload.profile.tailoredResumes);
+      setDraftDisplayName(nextDisplayName);
+      setIsRenamingDisplayName(false);
+      toast.success("Updated the tailored resume name.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Unable to rename the tailored resume.",
+      );
+    } finally {
+      setIsSavingDisplayName(false);
+    }
+  }
+
+  async function downloadPreviewPdf() {
+    if (!plainPdfUrl || !record || isDownloadingPreviewPdf) {
+      return;
+    }
+
+    setIsDownloadingPreviewPdf(true);
+
+    try {
+      const response = await fetch(plainPdfUrl, {
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error("Unable to download the tailored resume PDF.");
+      }
+
+      const pdfBlob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(pdfBlob);
+      const downloadLink = document.createElement("a");
+
+      downloadLink.href = downloadUrl;
+      downloadLink.download = buildTailoredResumeDownloadFilename(record.displayName);
+      downloadLink.style.display = "none";
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      downloadLink.remove();
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Unable to download the tailored resume PDF.",
+      );
+    } finally {
+      setIsDownloadingPreviewPdf(false);
     }
   }
 
@@ -1114,39 +1272,87 @@ export default function TailoredResumeReviewModal({
               <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
                 Tailored preview
               </p>
-              <p
-                className="mt-1 truncate text-sm font-medium text-zinc-100"
-                title={record.displayName}
-              >
-                {record.displayName}
-              </p>
+              {isRenamingDisplayName ? (
+                <form
+                  className="mt-1 flex min-w-0 items-center gap-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void saveRenamedDisplayName();
+                  }}
+                >
+                  <input
+                    className="min-w-0 flex-1 rounded-full border border-white/12 bg-white/[0.04] px-3 py-1.5 text-sm font-medium text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-300/35 focus:ring-2 focus:ring-emerald-300/20"
+                    maxLength={maxTailoredResumeDisplayNameLength}
+                    onChange={(event) => setDraftDisplayName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        cancelRenamingDisplayName();
+                      }
+                    }}
+                    placeholder="Tailored resume name"
+                    ref={displayNameInputRef}
+                    spellCheck={false}
+                    value={draftDisplayName}
+                  />
+                  <button
+                    aria-label="Save tailored resume name"
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-emerald-300/24 bg-emerald-400/10 text-emerald-100 transition hover:border-emerald-200/40 hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={isSavingDisplayName}
+                    title="Save name"
+                    type="submit"
+                  >
+                    <Check aria-hidden="true" className="h-4 w-4" />
+                  </button>
+                  <button
+                    aria-label="Cancel renaming tailored resume"
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={isSavingDisplayName}
+                    onClick={cancelRenamingDisplayName}
+                    title="Cancel"
+                    type="button"
+                  >
+                    <X aria-hidden="true" className="h-4 w-4" />
+                  </button>
+                </form>
+              ) : (
+                <div className="mt-1 min-w-0">
+                  <p
+                    className="truncate text-sm font-medium text-zinc-100"
+                    title={record.displayName}
+                  >
+                    {record.displayName}
+                  </p>
+                </div>
+              )}
             </div>
-            <div className="flex flex-wrap items-center gap-2 justify-self-start sm:justify-self-end">
-              {selectedEdit ? (
+            <div className="flex flex-wrap items-center gap-2 justify-self-start self-center sm:justify-self-end">
+              {!isRenamingDisplayName ? (
                 <button
-                  className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[9px] uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:text-zinc-500"
-                  disabled={!selectedSegmentSnapshot || isSavingTailoredResumeEdit}
-                  onClick={startEditingSelectedBlock}
-                  title={
-                    selectedSegmentSnapshot
-                      ? `Edit the selected ${formatTailoredResumeEditLabel(selectedEdit)} block.`
-                      : "This block is not available for editing."
-                  }
+                  aria-label={`Rename ${record.displayName}`}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:border-white/20 hover:bg-white/10 hover:text-zinc-100 disabled:cursor-not-allowed disabled:text-zinc-500"
+                  disabled={isSavingDisplayName}
+                  onClick={startRenamingDisplayName}
+                  title="Rename tailored resume"
                   type="button"
                 >
-                  {isEditingLatexSegment ? "Editing" : "Edit"}
+                  <Pencil aria-hidden="true" className="h-4 w-4" />
                 </button>
               ) : null}
               {plainPdfUrl ? (
-                <a
-                  className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[9px] uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
-                  href={plainPdfUrl}
-                  rel="noreferrer"
-                  target="_blank"
-                  title="Open the PDF in a new tab."
+                <button
+                  aria-label="Download tailored resume PDF"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:text-zinc-500"
+                  disabled={isDownloadingPreviewPdf}
+                  onClick={() => void downloadPreviewPdf()}
+                  title="Download the tailored resume PDF."
+                  type="button"
                 >
-                  Open PDF
-                </a>
+                  <Download
+                    aria-hidden="true"
+                    className={`h-4 w-4 ${isDownloadingPreviewPdf ? "animate-pulse" : ""}`}
+                  />
+                </button>
               ) : null}
             </div>
           </div>

@@ -75,6 +75,7 @@ import {
 
 const maxJobDescriptionLength = 200_000;
 const maxLatexCodeLength = 300_000;
+const maxTailoredResumeDisplayNameLength = 200;
 
 function normalizeAnnotatedLatexState(latexCode: string, updatedAt: string) {
   const normalizedLatex = normalizeTailorResumeLatex(latexCode);
@@ -971,6 +972,69 @@ export async function PATCH(request: Request) {
     };
 
     await writeTailorResumeProfile(session.user.id, nextRawProfile);
+
+    return NextResponse.json({
+      profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
+        includeLockedOnly: true,
+      }),
+      tailoredResumeId,
+    });
+  }
+
+  if ("action" in body && body.action === "renameTailoredResume") {
+    const tailoredResumeId =
+      "tailoredResumeId" in body && typeof body.tailoredResumeId === "string"
+        ? body.tailoredResumeId.trim()
+        : "";
+    const nextDisplayName =
+      "displayName" in body && typeof body.displayName === "string"
+        ? body.displayName.trim()
+        : "";
+
+    if (!tailoredResumeId || !nextDisplayName) {
+      return NextResponse.json(
+        { error: "Provide the tailored resume and its next name." },
+        { status: 400 },
+      );
+    }
+
+    if (nextDisplayName.length > maxTailoredResumeDisplayNameLength) {
+      return NextResponse.json(
+        { error: "Keep the tailored resume name under 200 characters." },
+        { status: 413 },
+      );
+    }
+
+    const tailoredResumeIndex = rawProfile.tailoredResumes.findIndex(
+      (record) => record.id === tailoredResumeId,
+    );
+
+    if (tailoredResumeIndex === -1) {
+      return NextResponse.json(
+        { error: "The tailored resume could not be found." },
+        { status: 404 },
+      );
+    }
+
+    const currentTailoredResume = rawProfile.tailoredResumes[tailoredResumeIndex];
+    const nextRawProfile: TailorResumeProfile =
+      currentTailoredResume.displayName === nextDisplayName
+        ? rawProfile
+        : {
+            ...rawProfile,
+            tailoredResumes: rawProfile.tailoredResumes.map((record, index) =>
+              index === tailoredResumeIndex
+                ? {
+                    ...record,
+                    displayName: nextDisplayName,
+                  }
+                : record,
+            ),
+          };
+
+    if (nextRawProfile !== rawProfile) {
+      await writeTailorResumeProfile(session.user.id, nextRawProfile);
+    }
 
     return NextResponse.json({
       profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
