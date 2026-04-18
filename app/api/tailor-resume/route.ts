@@ -767,6 +767,30 @@ export async function PATCH(request: Request) {
       onBuildFailure: (latexCode, error, attempt) =>
         logLatexBuildFailure({ userId: session.user.id, source: "tailoring", latexCode, error, attempt }),
     });
+
+    if (tailoringResult.outcome === "generation_failure") {
+      if (rawProfile.jobDescription !== jobDescription) {
+        await writeTailorResumeProfile(session.user.id, {
+          ...rawProfile,
+          jobDescription,
+        });
+      }
+
+      const attemptLabel =
+        tailoringResult.attempts === 1 ? "attempt" : "attempts";
+      const failureMessage = tailoringResult.validationError?.trim()
+        ? `Unable to generate a valid tailored resume after ${tailoringResult.attempts} ${attemptLabel}: ${tailoringResult.validationError}`
+        : `Unable to generate a valid tailored resume after ${tailoringResult.attempts} ${attemptLabel}.`;
+
+      return NextResponse.json(
+        {
+          error: failureMessage,
+          tailoredResumeDurationMs: tailoringResult.generationDurationMs,
+        },
+        { status: 422 },
+      );
+    }
+
     const tailoredResumeId = randomUUID();
     const tailoredResumeUpdatedAt = new Date().toISOString();
 
@@ -802,6 +826,7 @@ export async function PATCH(request: Request) {
             processedBaseAnnotatedLatex.latexCode,
           ).annotatedLatex,
           status: tailoringResult.previewPdf ? "ready" : "failed",
+          thesis: tailoringResult.thesis,
           updatedAt: tailoredResumeUpdatedAt,
         },
         ...rawProfile.tailoredResumes,
@@ -827,6 +852,8 @@ export async function PATCH(request: Request) {
         ...processedBaseAnnotatedLatex.updatedLinks,
         ...tailoringResult.savedLinkUpdates,
       ],
+      tailoredResumeId,
+      tailoredResumeDurationMs: tailoringResult.generationDurationMs,
       tailoredResumeError: tailoringResult.validationError,
     });
   }

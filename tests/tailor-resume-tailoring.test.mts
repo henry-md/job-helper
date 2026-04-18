@@ -3,6 +3,8 @@ import test from "node:test";
 import { tailorResumeLatexExample } from "../lib/tailor-resume-latex-example.ts";
 import {
   applyTailorResumeBlockChanges,
+  classifyTailoredResumeGenerationOutcome,
+  parseTailoredResumeResponse,
 } from "../lib/tailor-resume-tailoring.ts";
 import {
   hasValidTailorResumeSegmentIds,
@@ -107,5 +109,105 @@ test("applyTailorResumeBlockChanges rejects replacements that span multiple logi
         ],
       }),
     /multiple logical blocks/,
+  );
+});
+
+test("applyTailorResumeBlockChanges repairs a lone bare dollar sign in model output", () => {
+  const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
+  const targetSegment = normalized.segments.find((segment) =>
+    segment.id.includes(".bullet-1"),
+  );
+
+  assert.ok(targetSegment);
+
+  const updated = applyTailorResumeBlockChanges({
+    annotatedLatexCode: normalized.annotatedLatex,
+    changes: [
+      {
+        latexCode: String.raw`\resumeitem{Saved \textbf{$50K+/mo} in spend}`,
+        reason: 'Highlights scale. Matches "$50K+/mo" in the original resume.',
+        segmentId: targetSegment.id,
+      },
+    ],
+  });
+
+  const strippedLatex = stripTailorResumeSegmentIds(updated.annotatedLatex);
+
+  assert.equal(strippedLatex.includes(String.raw`\textbf{\$50K+/mo}`), true);
+});
+
+test("classifyTailoredResumeGenerationOutcome returns generation_failure when no candidate was applied", () => {
+  assert.equal(
+    classifyTailoredResumeGenerationOutcome({
+      hasAppliedCandidate: false,
+      hasPreviewPdf: false,
+    }),
+    "generation_failure",
+  );
+});
+
+test("classifyTailoredResumeGenerationOutcome returns reviewable_failure when a candidate exists without a preview", () => {
+  assert.equal(
+    classifyTailoredResumeGenerationOutcome({
+      hasAppliedCandidate: true,
+      hasPreviewPdf: false,
+    }),
+    "reviewable_failure",
+  );
+});
+
+test("classifyTailoredResumeGenerationOutcome returns success when a preview is available", () => {
+  assert.equal(
+    classifyTailoredResumeGenerationOutcome({
+      hasAppliedCandidate: false,
+      hasPreviewPdf: true,
+    }),
+    "success",
+  );
+});
+
+test("parseTailoredResumeResponse keeps the structured thesis payload", () => {
+  const parsed = parseTailoredResumeResponse({
+    changes: [
+      {
+        latexCode: "\\resumeitem{Tailored bullet one}",
+        reason: 'Highlights CI/CD work. Required qualifications mention "CI/CD".',
+        segmentId: "experience.entry-1.bullet-1",
+      },
+    ],
+    companyName: "OpenAI",
+    displayName: "OpenAI - Research Engineer",
+    jobIdentifier: "Applied research",
+    positionTitle: "Research Engineer",
+    thesis: {
+      jobDescriptionFocus:
+        "Over-indexes on research infrastructure and rigorous CI/CD expectations beyond generic software engineering signals.",
+      resumeChanges:
+        "Raises the most relevant platform-delivery work and makes the research-systems context more explicit across the edited bullets.",
+    },
+  });
+
+  assert.equal(parsed.companyName, "OpenAI");
+  assert.equal(
+    parsed.thesis.jobDescriptionFocus,
+    "Over-indexes on research infrastructure and rigorous CI/CD expectations beyond generic software engineering signals.",
+  );
+  assert.equal(
+    parsed.thesis.resumeChanges,
+    "Raises the most relevant platform-delivery work and makes the research-systems context more explicit across the edited bullets.",
+  );
+});
+
+test("parseTailoredResumeResponse rejects a missing thesis payload", () => {
+  assert.throws(
+    () =>
+      parseTailoredResumeResponse({
+        changes: [],
+        companyName: "OpenAI",
+        displayName: "OpenAI - Research Engineer",
+        jobIdentifier: "Applied research",
+        positionTitle: "Research Engineer",
+      }),
+    /thesis/i,
   );
 });

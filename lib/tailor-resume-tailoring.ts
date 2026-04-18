@@ -11,6 +11,7 @@ import {
 import type {
   TailorResumeLinkRecord,
   TailoredResumeBlockEditRecord,
+  TailoredResumeThesis,
   TailorResumeSavedLinkUpdate,
 } from "./tailor-resume-types.ts";
 
@@ -19,6 +20,15 @@ const tailorResumeBlockChangesSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
+    thesis: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        jobDescriptionFocus: { type: "string" },
+        resumeChanges: { type: "string" },
+      },
+      required: ["jobDescriptionFocus", "resumeChanges"],
+    },
     changes: {
       type: "array",
       items: {
@@ -38,6 +48,7 @@ const tailorResumeBlockChangesSchema = {
     positionTitle: { type: "string" },
   },
   required: [
+    "thesis",
     "changes",
     "companyName",
     "displayName",
@@ -58,6 +69,7 @@ type TailoredResumeStructuredResponse = {
   displayName: string;
   jobIdentifier: string;
   positionTitle: string;
+  thesis: TailoredResumeThesis;
 };
 
 type TailoredResumeResponse = {
@@ -79,15 +91,36 @@ export type GenerateTailoredResumeResult = {
   companyName: string;
   displayName: string;
   edits: TailoredResumeBlockEditRecord[];
+  generationDurationMs: number;
   jobIdentifier: string;
   latexCode: string;
   model: string;
+  outcome: TailoredResumeGenerationOutcome;
   positionTitle: string;
   previewPdf: Buffer | null;
   savedLinkUpdateCount: number;
   savedLinkUpdates: TailorResumeSavedLinkUpdate[];
+  thesis: TailoredResumeThesis | null;
   validationError: string | null;
 };
+
+export type TailoredResumeGenerationOutcome =
+  | "generation_failure"
+  | "reviewable_failure"
+  | "success";
+
+export function classifyTailoredResumeGenerationOutcome(input: {
+  hasAppliedCandidate: boolean;
+  hasPreviewPdf: boolean;
+}): TailoredResumeGenerationOutcome {
+  if (input.hasPreviewPdf) {
+    return "success";
+  }
+
+  return input.hasAppliedCandidate
+    ? "reviewable_failure"
+    : "generation_failure";
+}
 
 function getOpenAIClient() {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -162,7 +195,35 @@ function normalizeTailoredResumeMetadata(
   };
 }
 
-function parseTailoredResumeResponse(
+function parseTailoredResumeThesis(value: unknown): TailoredResumeThesis {
+  if (!value || typeof value !== "object") {
+    throw new Error("The model did not return a valid thesis object.");
+  }
+
+  const jobDescriptionFocus =
+    "jobDescriptionFocus" in value
+      ? readTrimmedString(value.jobDescriptionFocus)
+      : "";
+  const resumeChanges =
+    "resumeChanges" in value ? readTrimmedString(value.resumeChanges) : "";
+
+  if (!jobDescriptionFocus) {
+    throw new Error(
+      "The model returned a thesis without jobDescriptionFocus.",
+    );
+  }
+
+  if (!resumeChanges) {
+    throw new Error("The model returned a thesis without resumeChanges.");
+  }
+
+  return {
+    jobDescriptionFocus,
+    resumeChanges,
+  };
+}
+
+export function parseTailoredResumeResponse(
   value: unknown,
 ): TailoredResumeStructuredResponse {
   if (!value || typeof value !== "object") {
@@ -211,6 +272,7 @@ function parseTailoredResumeResponse(
     ...normalizeTailoredResumeMetadata(
       value as Partial<TailoredResumeStructuredResponse>,
     ),
+    thesis: parseTailoredResumeThesis("thesis" in value ? value.thesis : null),
   };
 }
 
@@ -223,7 +285,16 @@ function buildTailoringInstructions(input: { feedback?: string }) {
     `${feedbackBlock}` +
     "Tailor the provided resume LaTeX for the provided job description. " +
     "The resume includes immutable server-owned comments in the form % JOBHELPER_SEGMENT_ID: ... directly above each logical LaTeX block.\n\n" +
-    "You must return a strict JSON object describing only the block replacements to make.\n\n" +
+    "You must return a strict JSON object containing thesis, metadata, and only the block replacements to make.\n\n" +
+    "Segment conventions:\n" +
+    "1. Treat every % JOBHELPER_SEGMENT_ID: ... comment as a hard boundary for exactly one editable block.\n" +
+    "2. segmentId chooses which single block to replace. latexCode must contain only the replacement for that one block.\n" +
+    "3. Never include content from the previous or next segment inside the same latexCode string.\n" +
+    "4. If the desired rewrite would cross into another segment marker, split it into multiple change objects, one per segmentId.\n" +
+    "5. Never return a whole multi-block environment, list, or section when only one block was targeted.\n" +
+    "6. In particular, do not replace one begin-resumebullets block with a full \\begin{resumebullets} ... \\resumeitem{...} ... \\resumeitem{...} ... \\end{resumebullets} payload when those later bullets belong to separate segmentIds.\n" +
+    "7. Bad example: segmentId work-experience.begin-resumebullets-1 with latexCode containing the opening \\begin{resumebullets}, the first bullet, the next bullet, and \\end{resumebullets}. That spans multiple logical blocks and will be rejected.\n" +
+    "8. Good example: if work-experience.begin-resumebullets-1 currently contains the opening \\begin{resumebullets} plus only the first bullet, return only that opening wrapper plus first bullet for that segmentId, then return a second change object for the next bullet's own segmentId.\n\n" +
     "How block replacements work:\n" +
     "1. Each change targets one existing segmentId from the provided annotated LaTeX.\n" +
     "2. Replacing a segment swaps the entire block that starts at that segment comment and ends right before the next segment comment.\n" +
@@ -237,6 +308,13 @@ function buildTailoringInstructions(input: { feedback?: string }) {
     "2. positionTitle should be the role title if identifiable.\n" +
     "3. jobIdentifier should be the best short disambiguator for this job: prefer the team name, otherwise location, otherwise a brief identifying phrase.\n" +
     "4. displayName should be the user-facing saved name, preferably \"Company - Role\".\n\n" +
+    "Thesis rules:\n" +
+    "1. Return thesis.jobDescriptionFocus and thesis.resumeChanges.\n" +
+    "2. thesis.jobDescriptionFocus should explain what this job description emphasized beyond common denominator requirements like having a bachelor's degree, being a software engineer, or other baseline expectations. Strip out the generic signals and name the specific areas where this posting clearly over-indexes.\n" +
+    "3. thesis.jobDescriptionFocus should focus on 2-4 high-signal themes and can quote short exact phrases from the job description when helpful.\n" +
+    "4. thesis.resumeChanges should summarize the broad ways the resume should be or was changed to match those themes, such as which experience was elevated, compressed, reframed, or made more explicit.\n" +
+    "5. thesis.resumeChanges should stay at the strategy level, not a line-by-line diff.\n" +
+    "6. Keep each thesis field concise and high signal, ideally 2-4 sentences.\n\n" +
     "Reason rules:\n" +
     "1. Keep every reason to 1-2 short sentences maximum.\n" +
     "2. Sentence 1 should briefly summarize the high-level change you made.\n" +
@@ -253,6 +331,10 @@ function buildTailoringInstructions(input: { feedback?: string }) {
     "Job description source quality:\n" +
     "The job description below may be scraped from a job board page and can include navigation chrome, sidebar links, footer text, and listings for other roles. " +
     "Identify and focus only on the single target job posting. Ignore unrelated job listings, site navigation, and boilerplate page text.\n\n" +
+    "Common pitfalls:\n" +
+    "1. The most common structural failure is crossing a % JOBHELPER_SEGMENT_ID boundary. When in doubt, split the rewrite into smaller one-segment changes.\n" +
+    "2. Keep latexCode faithful to the targeted block's existing shape. If the source block is one bullet, return one bullet. If the source block is an opening wrapper plus one bullet, return only that opening wrapper plus one bullet.\n" +
+    "3. Do not add or remove neighboring bullets, \\end{...} lines, or surrounding wrappers unless they are part of that exact targeted block.\n\n" +
     "Guardrails:\n" +
     "1. Preserve factual accuracy. Never invent achievements, employers, dates, titles, technologies, metrics, degrees, or certifications.\n" +
     "2. Prefer the smallest set of content edits that materially improve fit.\n" +
@@ -306,7 +388,9 @@ export function applyTailorResumeBlockChanges(input: {
       continue;
     }
 
-    const replacementLatex = stripTailorResumeSegmentIds(change.latexCode);
+    const replacementLatex = repairTailoredResumeModelLatexBlock(
+      stripTailorResumeSegmentIds(change.latexCode),
+    );
 
     if (replacementLatex.trim()) {
       const replacementSegmentCount =
@@ -331,6 +415,81 @@ export function applyTailorResumeBlockChanges(input: {
   chunks.push(normalizedInput.annotatedLatex.slice(cursor));
 
   return normalizeTailorResumeLatex(chunks.join(""));
+}
+
+export function repairTailoredResumeModelLatexBlock(latexCode: string) {
+  const unescapedDollarIndexes: number[] = [];
+
+  for (let index = 0; index < latexCode.length; index += 1) {
+    if (latexCode[index] !== "$") {
+      continue;
+    }
+
+    if (index > 0 && latexCode[index - 1] === "\\") {
+      continue;
+    }
+
+    unescapedDollarIndexes.push(index);
+  }
+
+  if (unescapedDollarIndexes.length !== 1) {
+    return latexCode;
+  }
+
+  const dollarIndex = unescapedDollarIndexes[0] ?? -1;
+
+  if (dollarIndex === -1) {
+    return latexCode;
+  }
+
+  return `${latexCode.slice(0, dollarIndex)}\\$${latexCode.slice(dollarIndex + 1)}`;
+}
+
+export function buildInvalidTailorResumeReplacementLogPayload(input: {
+  annotatedLatexCode: string;
+  candidate: TailoredResumeStructuredResponse;
+  error: string;
+}) {
+  const blocksById = new Map(
+    readAnnotatedTailorResumeBlocks(input.annotatedLatexCode).map((block) => [
+      block.id,
+      block,
+    ]),
+  );
+
+  const referencedBlockSections = input.candidate.changes.map((change, index) => {
+    const sourceBlock = blocksById.get(change.segmentId);
+    const sectionLines = [
+      `Change ${index + 1}`,
+      `segmentId: ${change.segmentId}`,
+      `reason: ${change.reason.trim() || "[missing reason]"}`,
+      `source command: ${sourceBlock?.command ?? "[missing]"}`,
+      "Original block:",
+      sourceBlock?.latexCode || "[segment not found in annotated source LaTeX]",
+      "Replacement block:",
+      change.latexCode || "[empty string]",
+    ];
+
+    return sectionLines.join("\n");
+  });
+
+  return [
+    "Tailor Resume invalid replacement",
+    "",
+    "Validation error:",
+    input.error,
+    "",
+    "Structured response:",
+    JSON.stringify(input.candidate, null, 2),
+    "",
+    "Referenced source blocks:",
+    referencedBlockSections.length > 0
+      ? referencedBlockSections.join("\n\n---\n\n")
+      : "[no block changes returned]",
+    "",
+    "Annotated source LaTeX:",
+    input.annotatedLatexCode,
+  ].join("\n");
 }
 
 function applySavedTailoredResumeLinks(
@@ -381,12 +540,19 @@ export async function generateTailoredResume(input: {
   jobDescription: string;
   linkOverrides?: TailorResumeLinkRecord[];
   onBuildFailure?: (latexCode: string, error: string, attempt: number) => Promise<void>;
+  onInvalidReplacement?: (
+    payload: string,
+    error: string,
+    attempt: number,
+  ) => Promise<void>;
 }): Promise<GenerateTailoredResumeResult> {
+  const startedAt = Date.now();
   const model = process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
   const maxTailoredResumeAttempts = getRetryAttemptsToGenerateLatexEdits();
   const normalizedInput = normalizeTailorResumeLatex(input.annotatedLatexCode);
   const linkOverrides = input.linkOverrides ?? [];
   const fallbackMetadata = normalizeTailoredResumeMetadata({});
+  const readGenerationDurationMs = () => Math.max(0, Date.now() - startedAt);
 
   if (isTestOpenAIResponseEnabled()) {
     const finalizedTestCandidate = applySavedTailoredResumeLinks(
@@ -403,15 +569,21 @@ export async function generateTailoredResume(input: {
       companyName: fallbackMetadata.companyName,
       displayName: fallbackMetadata.displayName,
       edits: [],
+      generationDurationMs: readGenerationDurationMs(),
       jobIdentifier: fallbackMetadata.jobIdentifier,
       latexCode: stripTailorResumeSegmentIds(
         finalizedTestCandidate.normalizedLatex.annotatedLatex,
       ),
       model: TEST_OPENAI_RESPONSE_MODEL,
+      outcome: classifyTailoredResumeGenerationOutcome({
+        hasAppliedCandidate: true,
+        hasPreviewPdf: validation.ok,
+      }),
       positionTitle: fallbackMetadata.positionTitle,
       previewPdf: validation.ok ? validation.previewPdf : null,
       savedLinkUpdateCount: finalizedTestCandidate.updatedCount,
       savedLinkUpdates: finalizedTestCandidate.updatedLinks,
+      thesis: null,
       validationError: validation.ok ? null : validation.error,
     };
   }
@@ -424,7 +596,9 @@ export async function generateTailoredResume(input: {
   let lastEdits: TailoredResumeBlockEditRecord[] = [];
   let lastSavedLinkUpdateCount = 0;
   let lastSavedLinkUpdates: TailorResumeSavedLinkUpdate[] = [];
+  let lastThesis: TailoredResumeThesis | null = null;
   let lastModel = model;
+  let hasAppliedCandidate = false;
 
   for (let attempt = 1; attempt <= maxTailoredResumeAttempts; attempt += 1) {
     const response = await client.responses.create({
@@ -452,7 +626,7 @@ export async function generateTailoredResume(input: {
     if (!outputText) {
       lastError = "The model returned an empty tailoring response.";
       feedback =
-        "The previous response was empty. Return the full structured response with metadata and block changes.";
+        "The previous response was empty. Return the full structured response with thesis, metadata, and block changes.";
       continue;
     }
 
@@ -466,11 +640,12 @@ export async function generateTailoredResume(input: {
           ? error.message
           : "The model returned an unreadable tailoring payload.";
       feedback =
-        `The previous response could not be parsed.\n\nExact issue:\n${lastError}`;
+        `The previous response could not be parsed.\n\nExact issue:\n${lastError}\n\nReturn the full structured response with thesis, metadata, and block changes.`;
       continue;
     }
 
     lastMetadata = normalizeTailoredResumeMetadata(candidate);
+    lastThesis = candidate.thesis;
     const candidateEdits = buildTailoredResumeBlockEdits({
       annotatedLatexCode: normalizedInput.annotatedLatex,
       changes: candidate.changes,
@@ -488,8 +663,17 @@ export async function generateTailoredResume(input: {
         error instanceof Error
           ? error.message
           : "Unable to apply the requested block replacements.";
+      await input.onInvalidReplacement?.(
+        buildInvalidTailorResumeReplacementLogPayload({
+          annotatedLatexCode: normalizedInput.annotatedLatex,
+          candidate,
+          error: lastError,
+        }),
+        lastError,
+        attempt,
+      );
       feedback =
-        `The previous structured response referenced invalid segment edits.\n\nExact issue:\n${lastError}\n\nReturn a corrected full response.`;
+        `The previous structured response referenced invalid segment edits.\n\nExact issue:\n${lastError}\n\nReturn a corrected full response with thesis, metadata, and block changes.`;
       continue;
     }
 
@@ -497,6 +681,7 @@ export async function generateTailoredResume(input: {
       appliedCandidate.annotatedLatex,
       linkOverrides,
     );
+    hasAppliedCandidate = true;
     const validation = await validateTailorResumeLatexDocument(
       stripTailorResumeSegmentIds(normalizedCandidate.normalizedLatex.annotatedLatex),
     );
@@ -513,15 +698,21 @@ export async function generateTailoredResume(input: {
         companyName: lastMetadata.companyName,
         displayName: lastMetadata.displayName,
         edits: candidateEdits,
+        generationDurationMs: readGenerationDurationMs(),
         jobIdentifier: lastMetadata.jobIdentifier,
         latexCode: stripTailorResumeSegmentIds(
           normalizedCandidate.normalizedLatex.annotatedLatex,
         ),
         model: lastModel,
+        outcome: classifyTailoredResumeGenerationOutcome({
+          hasAppliedCandidate: true,
+          hasPreviewPdf: true,
+        }),
         positionTitle: lastMetadata.positionTitle,
         previewPdf: validation.previewPdf,
         savedLinkUpdateCount: normalizedCandidate.updatedCount,
         savedLinkUpdates: normalizedCandidate.updatedLinks,
+        thesis: lastThesis,
         validationError: null,
       };
     }
@@ -537,7 +728,7 @@ export async function generateTailoredResume(input: {
     feedback =
       `Applying your previous block changes produced a compile failure.\n\n` +
       `Compiler error:\n${validation.error}\n\n` +
-      "Return a corrected full structured response with revised metadata and block changes.";
+      "Return a corrected full structured response with revised thesis, metadata, and block changes.";
   }
 
   return {
@@ -546,13 +737,19 @@ export async function generateTailoredResume(input: {
     companyName: lastMetadata.companyName,
     displayName: lastMetadata.displayName,
     edits: lastEdits,
+    generationDurationMs: readGenerationDurationMs(),
     jobIdentifier: lastMetadata.jobIdentifier,
     latexCode: stripTailorResumeSegmentIds(lastAnnotatedLatex),
     model: lastModel,
+    outcome: classifyTailoredResumeGenerationOutcome({
+      hasAppliedCandidate,
+      hasPreviewPdf: false,
+    }),
     positionTitle: lastMetadata.positionTitle,
     previewPdf: null,
     savedLinkUpdateCount: lastSavedLinkUpdateCount,
     savedLinkUpdates: lastSavedLinkUpdates,
+    thesis: lastThesis,
     validationError:
       lastError ??
       `Unable to produce a tailored resume after ${maxTailoredResumeAttempts} attempts.`,

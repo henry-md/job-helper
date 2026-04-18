@@ -121,6 +121,12 @@ test("parseTailorResumeProfile keeps tailored resume metadata and workspace stat
         pdfUpdatedAt: "2026-04-15T12:00:00.000Z",
         positionTitle: "Research Engineer",
         status: "ready",
+        thesis: {
+          jobDescriptionFocus:
+            'Over-indexes on applied research systems and CI/CD rigor rather than generic software engineering requirements.',
+          resumeChanges:
+            "Moves the most directly relevant research-platform and delivery bullets higher and makes the systems context more explicit.",
+        },
         updatedAt: "2026-04-15T12:00:00.000Z",
       },
     ],
@@ -143,6 +149,14 @@ test("parseTailorResumeProfile keeps tailored resume metadata and workspace stat
   assert.equal(profile.tailoredResumes[0]?.positionTitle, "Research Engineer");
   assert.equal(profile.tailoredResumes[0]?.jobIdentifier, "Applied research");
   assert.equal(profile.tailoredResumes[0]?.sourceAnnotatedLatexCode, null);
+  assert.equal(
+    profile.tailoredResumes[0]?.thesis?.jobDescriptionFocus,
+    "Over-indexes on applied research systems and CI/CD rigor rather than generic software engineering requirements.",
+  );
+  assert.equal(
+    profile.tailoredResumes[0]?.thesis?.resumeChanges,
+    "Moves the most directly relevant research-platform and delivery bullets higher and makes the systems context more explicit.",
+  );
 });
 
 test("parseTailorResumeProfile backfills tailored resume metadata from displayName", () => {
@@ -168,4 +182,5 @@ test("parseTailorResumeProfile backfills tailored resume metadata from displayNa
   assert.deepEqual(profile.tailoredResumes[0]?.edits, []);
   assert.equal(profile.tailoredResumes[0]?.positionTitle, "Product Engineer");
   assert.equal(profile.tailoredResumes[0]?.jobIdentifier, "General");
+  assert.equal(profile.tailoredResumes[0]?.thesis, null);
 });

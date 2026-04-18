@@ -78,6 +78,11 @@ export type TailoredResumeBlockEditRecord = {
   segmentId: string;
 };
 
+export type TailoredResumeThesis = {
+  jobDescriptionFocus: string;
+  resumeChanges: string;
+};
+
 export type TailoredResumeRecord = {
   annotatedLatexCode: string;
   companyName: string;
@@ -93,6 +98,7 @@ export type TailoredResumeRecord = {
   positionTitle: string;
   sourceAnnotatedLatexCode: string | null;
   status: TailorResumeLatexStatus;
+  thesis: TailoredResumeThesis | null;
   updatedAt: string;
 };
 
@@ -377,6 +383,24 @@ function parseTailoredResumeBlockEditRecords(value: unknown) {
   });
 }
 
+function parseTailoredResumeThesis(value: unknown): TailoredResumeThesis | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const jobDescriptionFocus = readNullableString(value.jobDescriptionFocus)?.trim() ?? "";
+  const resumeChanges = readNullableString(value.resumeChanges)?.trim() ?? "";
+
+  if (!jobDescriptionFocus || !resumeChanges) {
+    return null;
+  }
+
+  return {
+    jobDescriptionFocus,
+    resumeChanges,
+  };
+}
+
 function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null {
   if (!isRecord(value)) {
     return null;
@@ -392,6 +416,7 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
   const pdfUpdatedAt = readNullableString(value.pdfUpdatedAt);
   const error = readNullableString(value.error);
   const sourceAnnotatedLatexCode = readNullableString(value.sourceAnnotatedLatexCode);
+  const thesis = parseTailoredResumeThesis(value.thesis);
   const companyName =
     readNullableString(value.companyName) ??
     rawDisplayName?.split(" - ")[0]?.trim() ??
@@ -443,6 +468,7 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
     positionTitle,
     sourceAnnotatedLatexCode,
     status,
+    thesis,
     updatedAt,
   };
 }

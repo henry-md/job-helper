@@ -41,7 +41,17 @@ Tailor Resume object model:
   - `error`: last compile error when the draft does not render
   - `pdfUpdatedAt`: timestamp of the last successfully compiled preview PDF
 
-5. Preview PDF (`Buffer`)
+5. Tailored Resume Record (`TailoredResumeRecord`)
+- Files: `lib/tailor-resume-types.ts`, `app/api/tailor-resume/route.ts`
+- Each saved tailored resume keeps:
+  - the tailored LaTeX / annotated LaTeX snapshot
+  - block-level edit history for review and later user overrides
+  - a `thesis` object with:
+    - `jobDescriptionFocus`: the non-generic themes where the job description over-indexed
+    - `resumeChanges`: the broad resume strategy used to match those themes
+- The review modal surfaces this thesis from saved profile data; it is not recomputed client-side.
+
+6. Preview PDF (`Buffer`)
 - Files: `lib/tailor-resume-storage.ts`, `app/api/tailor-resume/preview/route.ts`
 - The preview PDF is compiled from a derived LaTeX string based on `latex.code`.
 - Before compile, Tailor Resume runs a separate processing pass that:
