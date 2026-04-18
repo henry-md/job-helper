@@ -40,6 +40,7 @@ import {
   rebuildTailoredResumeAnnotatedLatex,
   resolveTailoredResumeSourceAnnotatedLatex,
 } from "@/lib/tailor-resume-edit-history";
+import { repairTailoredResumeForCompile } from "@/lib/tailored-resume-repair";
 import {
   deleteTailoredResumePdf,
   deleteTailorResumePreviewPdf,
@@ -429,6 +430,58 @@ async function compileTailoredResumeDraft(
       },
     };
   }
+}
+
+async function ensureTailoredResumePreview(input: {
+  rawProfile: TailorResumeProfile;
+  tailoredResumeId: string;
+  userId: string;
+}) {
+  const tailoredResumeIndex = input.rawProfile.tailoredResumes.findIndex(
+    (record) => record.id === input.tailoredResumeId,
+  );
+
+  if (tailoredResumeIndex === -1) {
+    return null;
+  }
+
+  const tailoredResume = input.rawProfile.tailoredResumes[tailoredResumeIndex];
+  const repairedTailoredResume = repairTailoredResumeForCompile(tailoredResume).record;
+
+  if (repairedTailoredResume.pdfUpdatedAt) {
+    return input.rawProfile;
+  }
+
+  const compiledTailoredResume = await compileTailoredResumeDraft(
+    input.userId,
+    input.tailoredResumeId,
+    {
+      sourceCode: repairedTailoredResume.annotatedLatexCode,
+    },
+    repairedTailoredResume.pdfUpdatedAt,
+  );
+  const nextUpdatedAt = compiledTailoredResume.latex.updatedAt;
+
+  const nextRawProfile: TailorResumeProfile = {
+    ...input.rawProfile,
+    tailoredResumes: input.rawProfile.tailoredResumes.map((record, index) =>
+      index === tailoredResumeIndex
+        ? {
+            ...repairedTailoredResume,
+            annotatedLatexCode: compiledTailoredResume.annotatedLatex.code,
+            error: compiledTailoredResume.latex.error,
+            latexCode: compiledTailoredResume.latex.code,
+            pdfUpdatedAt: compiledTailoredResume.latex.pdfUpdatedAt,
+            status: compiledTailoredResume.latex.status,
+            updatedAt: nextUpdatedAt,
+          }
+        : record,
+    ),
+  };
+
+  await writeTailorResumeProfile(input.userId, nextRawProfile);
+
+  return nextRawProfile;
 }
 
 async function runResumeExtraction(
@@ -925,6 +978,55 @@ export async function PATCH(request: Request) {
       }),
       tailoredResumeId,
     });
+  }
+
+  if ("action" in body && body.action === "ensureTailoredResumePreview") {
+    const tailoredResumeId =
+      "tailoredResumeId" in body && typeof body.tailoredResumeId === "string"
+        ? body.tailoredResumeId.trim()
+        : "";
+
+    if (!tailoredResumeId) {
+      return NextResponse.json(
+        { error: "Provide the tailored resume you want to compile." },
+        { status: 400 },
+      );
+    }
+
+    const nextRawProfile = await ensureTailoredResumePreview({
+      rawProfile,
+      tailoredResumeId,
+      userId: session.user.id,
+    });
+
+    if (!nextRawProfile) {
+      return NextResponse.json(
+        { error: "The tailored resume could not be found." },
+        { status: 404 },
+      );
+    }
+
+    const nextTailoredResume = nextRawProfile.tailoredResumes.find(
+      (record) => record.id === tailoredResumeId,
+    );
+    const nextProfile = mergeTailorResumeProfileWithLockedLinks(
+      nextRawProfile,
+      lockedLinks,
+      {
+        includeLockedOnly: true,
+      },
+    );
+
+    return NextResponse.json(
+      {
+        error: nextTailoredResume?.error,
+        profile: nextProfile,
+        tailoredResumeId,
+      },
+      {
+        status: nextTailoredResume?.pdfUpdatedAt ? 200 : 422,
+      },
+    );
   }
 
   if ("action" in body && body.action === "setTailoredResumeEditState") {
