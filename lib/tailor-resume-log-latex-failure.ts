@@ -1,6 +1,6 @@
 import { getPrismaClient } from "@/lib/prisma";
 
-export async function logLatexBuildFailure(input: {
+export async function logTailorResumeDebugError(input: {
   userId: string;
   source: string;
   latexCode: string;
@@ -19,6 +19,16 @@ export async function logLatexBuildFailure(input: {
       },
     });
   } catch (err) {
-    console.error("Failed to log LaTeX build failure:", err);
+    console.error("Failed to log resume debug error:", err);
   }
+}
+
+export async function logLatexBuildFailure(input: {
+  userId: string;
+  source: string;
+  latexCode: string;
+  error: string;
+  attempt: number;
+}): Promise<void> {
+  await logTailorResumeDebugError(input);
 }

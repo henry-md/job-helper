@@ -49,7 +49,13 @@ import {
 } from "@/lib/tailor-resume-storage";
 import { readTailorResumeProfileState } from "@/lib/tailor-resume-profile-state";
 import { generateTailoredResume } from "@/lib/tailor-resume-tailoring";
-import { logLatexBuildFailure } from "@/lib/tailor-resume-log-latex-failure";
+import {
+  tailorResumeDebugErrorSources,
+} from "@/lib/tailor-resume-debug-errors";
+import {
+  logLatexBuildFailure,
+  logTailorResumeDebugError,
+} from "@/lib/tailor-resume-log-latex-failure";
 import {
   emptyTailorResumeAnnotatedLatexState,
   emptyTailorResumeExtractionState,
@@ -469,7 +475,13 @@ async function runResumeExtraction(
       ),
       onAttemptEvent: options.onAttemptEvent,
       onBuildFailure: (latexCode, error, attempt) =>
-        logLatexBuildFailure({ userId, source: "extraction", latexCode, error, attempt }),
+        logLatexBuildFailure({
+          userId,
+          source: tailorResumeDebugErrorSources.extractionCompileFailure,
+          latexCode,
+          error,
+          attempt,
+        }),
       preserveUnusedKnownLinks: options.preserveUnusedKnownLinks,
     });
     const persistedLatex = await persistExtractedLatexResult(userId, extraction);
@@ -765,7 +777,21 @@ export async function PATCH(request: Request) {
       jobDescription,
       linkOverrides: buildKnownTailorResumeLinks(rawProfile.links, lockedLinks),
       onBuildFailure: (latexCode, error, attempt) =>
-        logLatexBuildFailure({ userId: session.user.id, source: "tailoring", latexCode, error, attempt }),
+        logLatexBuildFailure({
+          userId: session.user.id,
+          source: tailorResumeDebugErrorSources.tailoringCompileFailure,
+          latexCode,
+          error,
+          attempt,
+        }),
+      onInvalidReplacement: (payload, error, attempt) =>
+        logTailorResumeDebugError({
+          userId: session.user.id,
+          source: tailorResumeDebugErrorSources.tailoringInvalidReplacement,
+          latexCode: payload,
+          error,
+          attempt,
+        }),
     });
 
     if (tailoringResult.outcome === "generation_failure") {
