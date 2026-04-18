@@ -67,74 +67,122 @@ function pushTailoredResumeDiffSegment(
   segments.push({ ...nextSegment });
 }
 
+function readVisibleTailoredResumeDiffContextText(value: string) {
+  return value
+    .replace(/\\[A-Za-z@]+/g, " ")
+    .replace(/\\./g, " ")
+    .replace(/[{}]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isSubstantiveTailoredResumeDiffContext(text: string) {
+  const visibleText = readVisibleTailoredResumeDiffContextText(text);
+
+  if (!visibleText) {
+    return false;
+  }
+
+  const alphanumericText = visibleText.replace(/[^A-Za-z0-9]+/g, "");
+
+  if (!alphanumericText) {
+    return false;
+  }
+
+  const visibleWords = visibleText.split(/\s+/).filter(Boolean);
+
+  return (
+    alphanumericText.length >= 10 ||
+    (visibleWords.length >= 2 && alphanumericText.length >= 6) ||
+    (visibleWords.length === 1 && alphanumericText.length >= 5)
+  );
+}
+
 function coalesceTailoredResumeDiffHighlightRange(
   segments: TailoredResumeDiffSegment[],
 ) {
-  const firstChangedIndex = segments.findIndex(
-    (segment) => segment.type !== "context",
-  );
+  const coalescedSegments: TailoredResumeDiffSegment[] = [];
+  let index = 0;
 
-  if (firstChangedIndex === -1) {
-    return segments;
-  }
+  while (index < segments.length) {
+    const segment = segments[index];
 
-  let lastChangedIndex = firstChangedIndex;
-
-  for (let index = segments.length - 1; index >= firstChangedIndex; index -= 1) {
-    if (segments[index]?.type !== "context") {
-      lastChangedIndex = index;
+    if (!segment) {
       break;
     }
-  }
 
-  const highlightType = segments[firstChangedIndex]?.type;
+    if (segment.type === "context") {
+      pushTailoredResumeDiffSegment(coalescedSegments, segment);
+      index += 1;
+      continue;
+    }
 
-  if (!highlightType || highlightType === "context") {
-    return segments;
-  }
+    const highlightType = segment.type;
+    let lastChangedIndex = index;
+    let cursor = index + 1;
 
-  const highlightText = segments
-    .slice(firstChangedIndex, lastChangedIndex + 1)
-    .map((segment) => segment.text)
-    .join("");
-  const leadingWhitespace = highlightText.match(/^\s+/)?.[0] ?? "";
-  const trailingWhitespace = highlightText.match(/\s+$/)?.[0] ?? "";
-  const trimmedHighlightText = highlightText.slice(
-    leadingWhitespace.length,
-    highlightText.length - trailingWhitespace.length,
-  );
+    while (cursor < segments.length) {
+      const bridgeStart = cursor;
 
-  if (!trimmedHighlightText) {
-    return segments;
-  }
+      while (segments[cursor]?.type === "context") {
+        cursor += 1;
+      }
 
-  const coalescedSegments: TailoredResumeDiffSegment[] = [];
+      const nextChangedSegment = segments[cursor];
 
-  for (const segment of segments.slice(0, firstChangedIndex)) {
-    pushTailoredResumeDiffSegment(coalescedSegments, segment);
-  }
+      if (!nextChangedSegment || nextChangedSegment.type !== highlightType) {
+        break;
+      }
 
-  if (leadingWhitespace) {
+      const bridgeText = segments
+        .slice(bridgeStart, cursor)
+        .map((candidate) => candidate.text)
+        .join("");
+
+      if (isSubstantiveTailoredResumeDiffContext(bridgeText)) {
+        break;
+      }
+
+      lastChangedIndex = cursor;
+      cursor += 1;
+    }
+
+    const highlightText = segments
+      .slice(index, lastChangedIndex + 1)
+      .map((candidate) => candidate.text)
+      .join("");
+    const leadingWhitespace = highlightText.match(/^\s+/)?.[0] ?? "";
+    const trailingWhitespace = highlightText.match(/\s+$/)?.[0] ?? "";
+    const trimmedHighlightText = highlightText.slice(
+      leadingWhitespace.length,
+      highlightText.length - trailingWhitespace.length,
+    );
+
+    if (!trimmedHighlightText) {
+      index = lastChangedIndex + 1;
+      continue;
+    }
+
+    if (leadingWhitespace) {
+      pushTailoredResumeDiffSegment(coalescedSegments, {
+        text: leadingWhitespace,
+        type: "context",
+      });
+    }
+
     pushTailoredResumeDiffSegment(coalescedSegments, {
-      text: leadingWhitespace,
-      type: "context",
+      text: trimmedHighlightText,
+      type: highlightType,
     });
-  }
 
-  pushTailoredResumeDiffSegment(coalescedSegments, {
-    text: trimmedHighlightText,
-    type: highlightType,
-  });
+    if (trailingWhitespace) {
+      pushTailoredResumeDiffSegment(coalescedSegments, {
+        text: trailingWhitespace,
+        type: "context",
+      });
+    }
 
-  if (trailingWhitespace) {
-    pushTailoredResumeDiffSegment(coalescedSegments, {
-      text: trailingWhitespace,
-      type: "context",
-    });
-  }
-
-  for (const segment of segments.slice(lastChangedIndex + 1)) {
-    pushTailoredResumeDiffSegment(coalescedSegments, segment);
+    index = lastChangedIndex + 1;
   }
 
   return coalescedSegments;

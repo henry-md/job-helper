@@ -95,3 +95,60 @@ test("buildTailoredResumeDiffRows coalesces long modified ranges into one inline
     { text: "}", type: "context" },
   ]);
 });
+
+test("buildTailoredResumeDiffRows preserves meaningful shared anchors inside modified spans", () => {
+  const rows = buildTailoredResumeDiffRows(
+    String.raw`\resumeitem{Led major refactor enabling \textbf{\$50K+/mo in TikTok ad spend} by incorporating TikTok support for our entire suite of software. Refactored \textbf{31K+ LOC in 365 files}, reworking \textbf{140+ tRPC endpoints \& Bayesian inference engine} for platform-agnostic objects}`,
+    String.raw`\resumeitem{Led major refactor that enabled \textbf{\$50K+/mo in TikTok ad spend} by adding TikTok support across our suite; refactored \textbf{31K+ LOC in 365 files} and reworked \textbf{140+ tRPC endpoints \& Bayesian inference engine} to create platform-agnostic objects, improving developer onboarding and automation workflows}`,
+  );
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.type, "modified");
+  assert.deepEqual(rows[0]?.originalSegments, [
+    { text: "\\resumeitem{Led major refactor ", type: "context" },
+    { text: "enabling", type: "removed" },
+    {
+      text: " \\textbf{\\$50K+/mo in TikTok ad spend} by ",
+      type: "context",
+    },
+    { text: "incorporating", type: "removed" },
+    { text: " TikTok support ", type: "context" },
+    { text: "for our entire", type: "removed" },
+    { text: " suite ", type: "context" },
+    { text: "of software. Refactored", type: "removed" },
+    { text: " \\textbf{31K+ LOC in 365 files}", type: "context" },
+    { text: ", reworking", type: "removed" },
+    {
+      text: " \\textbf{140+ tRPC endpoints \\& Bayesian inference engine} ",
+      type: "context",
+    },
+    { text: "for", type: "removed" },
+    { text: " platform-agnostic objects}", type: "context" },
+  ]);
+  assert.deepEqual(rows[0]?.modifiedSegments, [
+    { text: "\\resumeitem{Led major refactor ", type: "context" },
+    { text: "that enabled", type: "added" },
+    {
+      text: " \\textbf{\\$50K+/mo in TikTok ad spend} by ",
+      type: "context",
+    },
+    { text: "adding", type: "added" },
+    { text: " TikTok support ", type: "context" },
+    { text: "across", type: "added" },
+    { text: " our suite", type: "context" },
+    { text: "; refactored", type: "added" },
+    { text: " \\textbf{31K+ LOC in 365 files} ", type: "context" },
+    { text: "and reworked", type: "added" },
+    {
+      text: " \\textbf{140+ tRPC endpoints \\& Bayesian inference engine} ",
+      type: "context",
+    },
+    { text: "to create", type: "added" },
+    { text: " platform-agnostic objects", type: "context" },
+    {
+      text: ", improving developer onboarding and automation workflows",
+      type: "added",
+    },
+    { text: "}", type: "context" },
+  ]);
+});
