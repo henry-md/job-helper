@@ -33,6 +33,7 @@ import type {
 type TailorResumeWorkspaceProps = {
   debugUiEnabled: boolean;
   initialProfile: TailorResumeProfile;
+  onReviewTailoredResume?: (tailoredResumeId: string) => void;
   onTailoredResumesChange?: (
     tailoredResumes: TailorResumeProfile["tailoredResumes"],
   ) => void;
@@ -113,6 +114,45 @@ const resumeLinkSaveToastId = "tailor-resume-link-save";
 const resumeUploadToastId = "tailor-resume-resume-upload";
 const savedLinkUpdateToastId = "tailor-resume-saved-link-updates";
 const failedLinkToastDurationMs = 5 * 60 * 1_000;
+
+function formatElapsedDuration(durationMs: number | null | undefined) {
+  if (
+    typeof durationMs !== "number" ||
+    !Number.isFinite(durationMs) ||
+    durationMs < 0
+  ) {
+    return null;
+  }
+
+  if (durationMs < 10_000) {
+    return `${(durationMs / 1_000).toFixed(1)}s`;
+  }
+
+  const totalSeconds = Math.round(durationMs / 1_000);
+
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+function resolveElapsedDurationMs(
+  serverDurationMs: number | null | undefined,
+  startedAt: number,
+) {
+  if (
+    typeof serverDurationMs === "number" &&
+    Number.isFinite(serverDurationMs) &&
+    serverDurationMs >= 0
+  ) {
+    return serverDurationMs;
+  }
+
+  return Math.max(0, performance.now() - startedAt);
+}
 
 function validateResumeFile(file: File) {
   if (!acceptedResumeMimeTypes.has(file.type)) {
@@ -469,6 +509,7 @@ function StatusPill({ children }: { children: ReactNode }) {
 export default function TailorResumeWorkspace({
   debugUiEnabled,
   initialProfile,
+  onReviewTailoredResume,
   onTailoredResumesChange,
   openAIReady,
 }: TailorResumeWorkspaceProps) {
@@ -1341,6 +1382,7 @@ export default function TailorResumeWorkspace({
     }
 
     setIsTailoringResume(true);
+    const tailoringStartedAt = performance.now();
     toast.loading("Tailoring a job-specific LaTeX resume...", {
       id: "tailor-resume-run",
     });
@@ -1361,8 +1403,17 @@ export default function TailorResumeWorkspace({
         profile?: TailorResumeProfile;
         savedLinkUpdateCount?: number;
         savedLinkUpdates?: TailorResumeSavedLinkUpdate[];
+        tailoredResumeId?: string;
+        tailoredResumeDurationMs?: number;
         tailoredResumeError?: string | null;
       };
+      const tailoringDurationMs = resolveElapsedDurationMs(
+        payload.tailoredResumeDurationMs,
+        tailoringStartedAt,
+      );
+      const formattedTailoringDuration = formatElapsedDuration(
+        tailoringDurationMs,
+      );
 
       if (!response.ok || !payload.profile) {
         throw new Error(payload.error ?? "Unable to tailor the resume.");
@@ -1382,22 +1433,42 @@ export default function TailorResumeWorkspace({
         payload.savedLinkUpdateCount,
         payload.savedLinkUpdates,
       );
+      const nextTailoredResumeId =
+        payload.tailoredResumeId ?? payload.profile.tailoredResumes[0]?.id ?? null;
 
       if (payload.tailoredResumeError) {
         toast.error(
-          `Saved a tailored draft, but it still needs review: ${payload.tailoredResumeError}`,
+          formattedTailoringDuration
+            ? `Saved a tailored draft in ${formattedTailoringDuration}, but it still needs review: ${payload.tailoredResumeError}. Opening review.`
+            : `Saved a tailored draft, but it still needs review: ${payload.tailoredResumeError}. Opening review.`,
           {
             id: "tailor-resume-run",
           },
         );
       } else {
-        toast.success("Saved a job-specific tailored resume. Find it in History.", {
-          id: "tailor-resume-run",
-        });
+        toast.success(
+          formattedTailoringDuration
+            ? `Saved a job-specific tailored resume in ${formattedTailoringDuration}. Opening review.`
+            : "Saved a job-specific tailored resume. Opening review.",
+          {
+            id: "tailor-resume-run",
+          },
+        );
+      }
+
+      if (nextTailoredResumeId) {
+        onReviewTailoredResume?.(nextTailoredResumeId);
       }
     } catch (error) {
+      const formattedTailoringDuration = formatElapsedDuration(
+        Math.max(0, performance.now() - tailoringStartedAt),
+      );
+      const errorMessage =
+        error instanceof Error ? error.message : "Unable to tailor the resume.";
       toast.error(
-        error instanceof Error ? error.message : "Unable to tailor the resume.",
+        formattedTailoringDuration
+          ? `${errorMessage} (${formattedTailoringDuration})`
+          : errorMessage,
         {
           id: "tailor-resume-run",
         },

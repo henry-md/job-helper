@@ -1,4 +1,5 @@
 import {
+  buildTailoredResumeReviewUrl,
   CAPTURE_COMMAND_NAME,
   DEFAULT_TAILOR_RESUME_ENDPOINT,
   LAST_TAILORING_STORAGE_KEY,
@@ -240,10 +241,10 @@ function buildSuccessMessage(record: TailorResumeRunRecord) {
       : positionTitle || companyName || "this role";
 
   if (record.tailoredResumeError) {
-    return `Saved a tailored draft for ${jobLabel}, but it needs review`;
+    return `Saved a tailored draft for ${jobLabel}. Opening review`;
   }
 
-  return `Tailored resume for ${jobLabel}`;
+  return `Tailored resume for ${jobLabel}. Opening review`;
 }
 
 async function getActiveTab() {
@@ -357,6 +358,7 @@ async function tailorResumeForActiveTab() {
     typeof payload.tailoredResumeError === "string"
       ? payload.tailoredResumeError
       : null;
+  const reviewUrl = buildTailoredResumeReviewUrl(latestTailoredResume?.id ?? null);
   const record: TailorResumeRunRecord = {
     capturedAt: new Date().toISOString(),
     companyName: latestTailoredResume?.companyName ?? null,
@@ -381,6 +383,12 @@ async function tailorResumeForActiveTab() {
     record.message,
     record.status === "success" ? "success" : "error",
   );
+
+  if (latestTailoredResume?.id) {
+    await chrome.tabs.create({
+      url: reviewUrl,
+    });
+  }
 }
 
 async function runCaptureFlow() {

@@ -1,12 +1,27 @@
 "use client";
 
+import { useRouter, useSearchParams } from "next/navigation";
+import { createPortal } from "react-dom";
 import { useEffect, useState } from "react";
+import { Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import JobApplicationIntake from "@/components/job-application-intake";
 import SignOutButton from "@/components/sign-out-button";
 import StatusToast from "@/components/status-toast";
 import TailoredResumeReviewModal from "@/components/tailored-resume-review-modal";
 import TailorResumeWorkspace from "@/components/tailor-resume-workspace";
-import { formatCompactDate, shouldIncludeShortYear } from "@/lib/date-format";
+import {
+  buildDashboardHref,
+  parseDashboardRouteStateFromSearchParams,
+  type DashboardRouteState,
+  type DashboardTabId,
+} from "@/lib/dashboard-route-state";
+import {
+  formatCompactDate,
+  formatCompactDateOrSameDayTime,
+  shouldIncludeShortYear,
+} from "@/lib/date-format";
+import { formatTailoredResumeSidebarName } from "@/lib/tailored-resume-sidebar-name";
 import type {
   CompanyOption,
   JobApplicationRecord,
@@ -16,6 +31,12 @@ import type {
   TailorResumeProfile,
   TailoredResumeRecord,
 } from "@/lib/tailor-resume-types";
+
+type TailoredResumeSidebarMutationResponse = {
+  error?: string;
+  profile?: TailorResumeProfile;
+  tailoredResumeId?: string;
+};
 
 function getValidProfileImageSrc(value: string | null | undefined) {
   const normalizedValue = value?.trim();
@@ -130,6 +151,8 @@ export default function DashboardWorkspace({
   companyOptions,
   disabled,
   extractionModel,
+  initialReviewingTailoredResumeId,
+  initialTab,
   referrerOptions,
   statusMessage,
   tailorResumeDebugUiEnabled,
@@ -144,6 +167,8 @@ export default function DashboardWorkspace({
   companyOptions: CompanyOption[];
   disabled: boolean;
   extractionModel: string;
+  initialReviewingTailoredResumeId?: string | null;
+  initialTab: "new" | "tailor";
   referrerOptions: ReferrerOption[];
   statusMessage?: {
     text: string;
@@ -155,18 +180,137 @@ export default function DashboardWorkspace({
   userImage: string | null | undefined;
   userName: string | null | undefined;
 }) {
-  const [activeTab, setActiveTab] = useState<"new" | "tailor">("new");
-  const [reviewingTailoredResumeId, setReviewingTailoredResumeId] = useState<string | null>(null);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [dashboardRouteState, setDashboardRouteState] = useState<DashboardRouteState>(
+    () => ({
+      tab: initialTab,
+      tailoredResumeId: initialReviewingTailoredResumeId ?? null,
+    }),
+  );
+  const [tailoredResumePendingDeleteId, setTailoredResumePendingDeleteId] = useState<string | null>(null);
   const [tailoredResumes, setTailoredResumes] = useState<TailoredResumeRecord[]>(
     () => tailorResumeProfile.tailoredResumes,
   );
+  const [isDeletingTailoredResume, setIsDeletingTailoredResume] = useState(false);
+  const activeTab = dashboardRouteState.tab;
+  const reviewingTailoredResumeId = dashboardRouteState.tailoredResumeId;
   const reviewingTailoredResume =
     tailoredResumes.find((tr) => tr.id === reviewingTailoredResumeId) ?? null;
+  const tailoredResumePendingDelete =
+    tailoredResumes.find((tr) => tr.id === tailoredResumePendingDeleteId) ?? null;
   const displayName = userName?.trim()?.split(" ")[0] || userName || "there";
   const profileImageSrc = getValidProfileImageSrc(userImage);
-  const includeYearInDates = shouldIncludeShortYear(
+  const includeYearInApplicationDates = shouldIncludeShortYear(
     applications.map((application) => application.appliedAt),
   );
+  const includeYearInTailoredResumeDates = shouldIncludeShortYear(
+    tailoredResumes.map((tailoredResume) => tailoredResume.updatedAt),
+  );
+  const tailoredResumeCountLabel =
+    `${tailoredResumes.length} ${tailoredResumes.length === 1 ? "resume" : "resumes"}`;
+
+  useEffect(() => {
+    setDashboardRouteState(parseDashboardRouteStateFromSearchParams(searchParams));
+  }, [searchParams]);
+
+  function navigateDashboard(nextRouteState: DashboardRouteState) {
+    setDashboardRouteState(nextRouteState);
+
+    const nextHref = buildDashboardHref(nextRouteState);
+    const currentQueryString = searchParams.toString();
+    const currentHref = currentQueryString
+      ? `/dashboard?${currentQueryString}`
+      : "/dashboard";
+
+    if (nextHref !== currentHref) {
+      router.replace(nextHref, {
+        scroll: false,
+      });
+    }
+  }
+
+  function setActiveDashboardTab(nextTab: DashboardTabId) {
+    navigateDashboard({
+      tab: nextTab,
+      tailoredResumeId: null,
+    });
+  }
+
+  function openTailoredResumeReview(tailoredResumeId: string) {
+    navigateDashboard({
+      tab: "tailor",
+      tailoredResumeId,
+    });
+  }
+
+  function closeTailoredResumeReview() {
+    navigateDashboard({
+      tab: "tailor",
+      tailoredResumeId: null,
+    });
+  }
+
+  useEffect(() => {
+    if (!tailoredResumePendingDelete) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !isDeletingTailoredResume) {
+        setTailoredResumePendingDeleteId(null);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isDeletingTailoredResume, tailoredResumePendingDelete]);
+
+  async function deleteTailoredResume() {
+    if (!tailoredResumePendingDelete) {
+      return;
+    }
+
+    setIsDeletingTailoredResume(true);
+
+    try {
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({
+          action: "deleteTailoredResume",
+          tailoredResumeId: tailoredResumePendingDelete.id,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
+      const payload = (await response.json()) as TailoredResumeSidebarMutationResponse;
+
+      if (!response.ok || !payload.profile) {
+        throw new Error(payload.error ?? "Unable to delete the tailored resume.");
+      }
+
+      setTailoredResumes(payload.profile.tailoredResumes);
+      setTailoredResumePendingDeleteId(null);
+
+      if (reviewingTailoredResumeId === tailoredResumePendingDelete.id) {
+        closeTailoredResumeReview();
+      }
+
+      toast.success("Deleted the tailored resume.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Unable to delete the tailored resume.",
+      );
+    } finally {
+      setIsDeletingTailoredResume(false);
+    }
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-[clamp(0.75rem,1.2vh,1rem)]">
@@ -199,7 +343,7 @@ export default function DashboardWorkspace({
                   ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
                   : "text-zinc-400 hover:text-zinc-200"
               }`}
-              onClick={() => setActiveTab("new")}
+              onClick={() => setActiveDashboardTab("new")}
               type="button"
             >
               New application
@@ -210,7 +354,7 @@ export default function DashboardWorkspace({
                   ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
                   : "text-zinc-400 hover:text-zinc-200"
               }`}
-              onClick={() => setActiveTab("tailor")}
+              onClick={() => setActiveDashboardTab("tailor")}
               type="button"
             >
               Tailor Resume
@@ -222,10 +366,64 @@ export default function DashboardWorkspace({
 
       <TailoredResumeReviewModal
         key={reviewingTailoredResume?.id ?? "closed"}
-        onClose={() => setReviewingTailoredResumeId(null)}
+        onClose={closeTailoredResumeReview}
         onTailoredResumesChange={setTailoredResumes}
         record={reviewingTailoredResume}
       />
+      {typeof document !== "undefined" && tailoredResumePendingDelete
+        ? createPortal(
+            <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/58 p-4 backdrop-blur-sm">
+              <div
+                aria-describedby="delete-tailored-resume-description"
+                aria-labelledby="delete-tailored-resume-title"
+                aria-modal="true"
+                className="glass-panel soft-ring relative w-full max-w-md overflow-hidden rounded-[1.5rem] border border-white/10 bg-[linear-gradient(180deg,rgba(251,113,133,0.06),rgba(39,39,42,0.72)_22%,rgba(9,9,11,0.94)_100%)] text-zinc-50 shadow-[0_30px_120px_rgba(0,0,0,0.56)]"
+                role="dialog"
+              >
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-28 bg-[radial-gradient(circle_at_top,rgba(251,113,133,0.12),transparent_72%)]" />
+                <div className="relative grid gap-3 px-5 pb-5 pt-5 text-left sm:px-6 sm:pb-6 sm:pt-6">
+                  <div>
+                    <p className="text-[0.68rem] uppercase tracking-[0.24em] text-rose-100/75">
+                      Remove from history
+                    </p>
+                    <h2
+                      className="mt-3 text-[1.35rem] font-semibold tracking-tight text-zinc-50"
+                      id="delete-tailored-resume-title"
+                    >
+                      Delete tailored resume?
+                    </h2>
+                    <p
+                      className="mt-3 max-w-md text-sm leading-6 text-zinc-400"
+                      id="delete-tailored-resume-description"
+                    >
+                      This removes the saved tailored resume and its PDF preview
+                      from History. This action can&apos;t be undone.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-col-reverse gap-2 border-t border-white/10 bg-black/20 px-5 py-4 sm:flex-row sm:justify-end sm:px-6 sm:py-5">
+                  <button
+                    className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={isDeletingTailoredResume}
+                    onClick={() => setTailoredResumePendingDeleteId(null)}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="rounded-full border border-rose-300/18 bg-[linear-gradient(180deg,rgba(251,113,133,0.16),rgba(159,18,57,0.24))] px-4 py-2.5 text-sm font-medium text-rose-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition hover:bg-[linear-gradient(180deg,rgba(251,113,133,0.2),rgba(159,18,57,0.28))] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={isDeletingTailoredResume}
+                    onClick={() => void deleteTailoredResume()}
+                    type="button"
+                  >
+                    {isDeletingTailoredResume ? "Deleting..." : "Delete resume"}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
 
       <div className="min-h-0 flex-1 overflow-hidden">
         {activeTab === "new" ? (
@@ -239,7 +437,7 @@ export default function DashboardWorkspace({
               />
             </section>
 
-            <aside className="grid min-h-0 content-start gap-[clamp(0.75rem,1.2vh,1rem)] self-start">
+            <aside className="app-scrollbar min-h-0 overflow-y-auto pr-1">
               <section className="glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
@@ -275,7 +473,7 @@ export default function DashboardWorkspace({
                           <span className="shrink-0 text-xs text-zinc-500">
                             {formatCompactDate(
                               application.appliedAt,
-                              includeYearInDates,
+                              includeYearInApplicationDates,
                             )}
                           </span>
                         </div>
@@ -293,48 +491,73 @@ export default function DashboardWorkspace({
                 debugUiEnabled={tailorResumeDebugUiEnabled}
                 openAIReady={tailorResumeOpenAIReady}
                 initialProfile={tailorResumeProfile}
+                onReviewTailoredResume={openTailoredResumeReview}
                 onTailoredResumesChange={setTailoredResumes}
               />
             </div>
 
-            <aside className="grid min-h-0 content-start gap-[clamp(0.75rem,1.2vh,1rem)] self-start">
+            <aside className="app-scrollbar min-h-0 overflow-y-auto pr-1">
               <section className="glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
                     Recent tailored resumes
                   </p>
-                  <span className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
-                    {tailoredResumes.length} resumes
+                  <span
+                    className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400"
+                    title={`${tailoredResumes.length} total tailored resume${
+                      tailoredResumes.length === 1 ? "" : "s"
+                    }`}
+                  >
+                    {tailoredResumeCountLabel}
                   </span>
                 </div>
                 {tailoredResumes.length === 0 ? (
                   <p className="text-sm text-zinc-400">No tailored resumes yet.</p>
                 ) : (
                   <div className="grid gap-2">
-                    {tailoredResumes.slice(0, 4).map((tailoredResume) => (
-                      <button
+                    {tailoredResumes.map((tailoredResume) => (
+                      <div
                         key={tailoredResume.id}
-                        className="rounded-[1rem] border border-white/8 bg-black/20 px-3 py-2.5 text-left transition hover:border-emerald-400/25 hover:bg-emerald-400/6 focus-visible:border-emerald-300/45 focus-visible:outline-none"
-                        onClick={() => setReviewingTailoredResumeId(tailoredResume.id)}
-                        type="button"
+                        className="group flex items-start gap-1 rounded-[1rem] border border-white/8 bg-black/20 transition hover:border-emerald-400/25 hover:bg-emerald-400/6 focus-within:border-emerald-300/45"
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium text-zinc-100">
-                              {tailoredResume.displayName}
-                            </p>
-                            <p className="truncate text-sm text-zinc-400">
-                              {tailoredResume.companyName}
-                            </p>
+                        <button
+                          className="min-w-0 flex-1 overflow-hidden px-3 py-2.5 text-left focus-visible:outline-none"
+                          onClick={() => openTailoredResumeReview(tailoredResume.id)}
+                          type="button"
+                        >
+                          <div className="flex items-center gap-3 overflow-hidden">
+                            <div className="min-w-0 flex-1">
+                              <p
+                                className="truncate text-sm font-medium text-zinc-100"
+                                title={tailoredResume.displayName}
+                              >
+                                {formatTailoredResumeSidebarName(tailoredResume)}
+                              </p>
+                              <p className="truncate text-sm text-zinc-400">
+                                {tailoredResume.companyName}
+                              </p>
+                            </div>
+                            <span className="shrink-0 self-center text-xs text-zinc-500">
+                              {formatCompactDateOrSameDayTime(
+                                tailoredResume.updatedAt,
+                                {
+                                  includeYear: includeYearInTailoredResumeDates,
+                                },
+                              )}
+                            </span>
                           </div>
-                          <span className="shrink-0 text-xs text-zinc-500">
-                            {formatCompactDate(
-                              tailoredResume.updatedAt,
-                              includeYearInDates,
-                            )}
-                          </span>
-                        </div>
-                      </button>
+                        </button>
+                        <button
+                          aria-label={`Delete ${tailoredResume.displayName}`}
+                          className="mr-1 mt-2 shrink-0 rounded-full p-2 text-zinc-500 transition hover:bg-rose-400/10 hover:text-rose-200 focus-visible:bg-rose-400/10 focus-visible:text-rose-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:text-zinc-700"
+                          disabled={isDeletingTailoredResume}
+                          onClick={() => setTailoredResumePendingDeleteId(tailoredResume.id)}
+                          title="Delete tailored resume"
+                          type="button"
+                        >
+                          <Trash2 aria-hidden="true" className="h-4 w-4" />
+                        </button>
+                      </div>
                     ))}
                   </div>
                 )}

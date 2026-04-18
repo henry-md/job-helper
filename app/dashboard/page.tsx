@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 import DashboardWorkspace from "@/components/dashboard-workspace";
 import { authOptions } from "@/auth";
+import { parseDashboardRouteState } from "@/lib/dashboard-route-state";
 import {
   countDistinctApplicationCompanies,
   toJobApplicationRecord,
@@ -19,6 +20,8 @@ type DashboardPageProps = {
   searchParams?: Promise<{
     error?: string;
     ingested?: string;
+    tab?: string;
+    tailoredResumeId?: string;
   }>;
 };
 
@@ -117,6 +120,10 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           text: params.error,
         }
       : null;
+  const initialDashboardRouteState = parseDashboardRouteState({
+    tab: params?.tab,
+    tailoredResumeId: params?.tailoredResumeId,
+  });
 
   return (
     <main className="h-[100dvh] overflow-hidden px-[clamp(1.4rem,2.4vw,2.8rem)] py-[clamp(0.75rem,1.6vh,1.25rem)]">
@@ -134,6 +141,10 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             tailorResumeDebugUiEnabled={Boolean(process.env.DEBUG_UI)}
             tailorResumeOpenAIReady={openAIReady}
             tailorResumeProfile={tailorResumeProfile}
+            initialReviewingTailoredResumeId={
+              initialDashboardRouteState.tailoredResumeId
+            }
+            initialTab={initialDashboardRouteState.tab}
             userImage={session.user.image}
             userName={session.user.name}
           />

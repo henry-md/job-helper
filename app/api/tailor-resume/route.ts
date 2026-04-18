@@ -831,6 +831,49 @@ export async function PATCH(request: Request) {
     });
   }
 
+  if ("action" in body && body.action === "deleteTailoredResume") {
+    const tailoredResumeId =
+      "tailoredResumeId" in body && typeof body.tailoredResumeId === "string"
+        ? body.tailoredResumeId.trim()
+        : "";
+
+    if (!tailoredResumeId) {
+      return NextResponse.json(
+        { error: "Provide the tailored resume you want to delete." },
+        { status: 400 },
+      );
+    }
+
+    const tailoredResume = rawProfile.tailoredResumes.find(
+      (record) => record.id === tailoredResumeId,
+    );
+
+    if (!tailoredResume) {
+      return NextResponse.json(
+        { error: "The tailored resume could not be found." },
+        { status: 404 },
+      );
+    }
+
+    await deleteTailoredResumePdf(session.user.id, tailoredResume.id);
+
+    const nextRawProfile: TailorResumeProfile = {
+      ...rawProfile,
+      tailoredResumes: rawProfile.tailoredResumes.filter(
+        (record) => record.id !== tailoredResume.id,
+      ),
+    };
+
+    await writeTailorResumeProfile(session.user.id, nextRawProfile);
+
+    return NextResponse.json({
+      profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
+        includeLockedOnly: true,
+      }),
+      tailoredResumeId,
+    });
+  }
+
   if ("action" in body && body.action === "setTailoredResumeEditState") {
     const tailoredResumeId =
       "tailoredResumeId" in body && typeof body.tailoredResumeId === "string"
