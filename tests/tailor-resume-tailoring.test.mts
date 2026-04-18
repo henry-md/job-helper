@@ -4,7 +4,7 @@ import { tailorResumeLatexExample } from "../lib/tailor-resume-latex-example.ts"
 import {
   applyTailorResumeBlockChanges,
   classifyTailoredResumeGenerationOutcome,
-  parseTailoredResumeResponse,
+  parseTailoredResumePlanResponse,
 } from "../lib/tailor-resume-tailoring.ts";
 import {
   hasValidTailorResumeSegmentIds,
@@ -166,11 +166,11 @@ test("classifyTailoredResumeGenerationOutcome returns success when a preview is 
   );
 });
 
-test("parseTailoredResumeResponse keeps the structured thesis payload", () => {
-  const parsed = parseTailoredResumeResponse({
+test("parseTailoredResumePlanResponse keeps the structured thesis payload", () => {
+  const parsed = parseTailoredResumePlanResponse({
     changes: [
       {
-        latexCode: "\\resumeitem{Tailored bullet one}",
+        desiredPlainText: "Tailored bullet one",
         reason: 'Highlights CI/CD work. Required qualifications mention "CI/CD".',
         segmentId: "experience.entry-1.bullet-1",
       },
@@ -198,10 +198,10 @@ test("parseTailoredResumeResponse keeps the structured thesis payload", () => {
   );
 });
 
-test("parseTailoredResumeResponse rejects a missing thesis payload", () => {
+test("parseTailoredResumePlanResponse rejects a missing thesis payload", () => {
   assert.throws(
     () =>
-      parseTailoredResumeResponse({
+      parseTailoredResumePlanResponse({
         changes: [],
         companyName: "OpenAI",
         displayName: "OpenAI - Research Engineer",

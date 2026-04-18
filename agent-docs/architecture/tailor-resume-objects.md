@@ -74,6 +74,14 @@ Current flow:
 8. The dashboard shows a split pane with raw LaTeX on the left and the rendered PDF on the right.
 9. User edits first reparse the latest LaTeX into current links, then merge in stored locked links by key, then save the lock-processed LaTeX back into `latex.code` so the editor/preview both reflect the saved locked destinations.
 
+Tailoring generation:
+
+- Tailor Resume no longer asks one model call to decide the strategy and write final LaTeX at the same time.
+- The tailoring flow now runs in two stages:
+  - a planning pass that sees whole-resume plaintext plus document-ordered plaintext blocks keyed by `segmentId`
+  - an implementation pass that sees only the selected blocks and translates the approved plaintext plan back into block-local LaTeX replacements
+- Compile retries stay scoped to the implementation pass so LaTeX escaping and block-boundary fixes do not force the model to rethink the whole editing thesis on every retry.
+
 Important rule:
 
 - LaTeX is the authoritative editing surface.

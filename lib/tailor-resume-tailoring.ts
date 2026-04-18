@@ -1,6 +1,10 @@
 import OpenAI from "openai";
 import { applyTailorResumeLinkOverridesWithSummary } from "./tailor-resume-link-overrides.ts";
 import { validateTailorResumeLatexDocument } from "./tailor-resume-link-validation.ts";
+import {
+  buildTailorResumePlanningSnapshot,
+  type TailorResumePlanningBlock,
+} from "./tailor-resume-planning.ts";
 import { getRetryAttemptsToGenerateLatexEdits } from "./tailor-resume-retry-config.ts";
 import { buildTailoredResumeBlockEdits } from "./tailor-resume-review.ts";
 import {
@@ -16,7 +20,7 @@ import type {
 } from "./tailor-resume-types.ts";
 
 const TEST_OPENAI_RESPONSE_MODEL = "test-openai-response";
-const tailorResumeBlockChangesSchema = {
+const tailorResumePlanSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
@@ -35,11 +39,11 @@ const tailorResumeBlockChangesSchema = {
         type: "object",
         additionalProperties: false,
         properties: {
-          latexCode: { type: "string" },
+          desiredPlainText: { type: "string" },
           reason: { type: "string" },
           segmentId: { type: "string" },
         },
-        required: ["segmentId", "latexCode", "reason"],
+        required: ["segmentId", "desiredPlainText", "reason"],
       },
     },
     companyName: { type: "string" },
@@ -57,10 +61,50 @@ const tailorResumeBlockChangesSchema = {
   ],
 } as const;
 
+const tailorResumeImplementationSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    changes: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          latexCode: { type: "string" },
+          segmentId: { type: "string" },
+        },
+        required: ["segmentId", "latexCode"],
+      },
+    },
+  },
+  required: ["changes"],
+} as const;
+
+type TailoredResumePlanChange = {
+  desiredPlainText: string;
+  reason: string;
+  segmentId: string;
+};
+
+type TailoredResumeImplementationChange = {
+  latexCode: string;
+  segmentId: string;
+};
+
 type TailoredResumeBlockChange = {
   latexCode: string;
   reason: string;
   segmentId: string;
+};
+
+type TailoredResumePlanResponse = {
+  changes: TailoredResumePlanChange[];
+  companyName: string;
+  displayName: string;
+  jobIdentifier: string;
+  positionTitle: string;
+  thesis: TailoredResumeThesis;
 };
 
 type TailoredResumeStructuredResponse = {
@@ -70,6 +114,10 @@ type TailoredResumeStructuredResponse = {
   jobIdentifier: string;
   positionTitle: string;
   thesis: TailoredResumeThesis;
+};
+
+type TailoredResumeImplementationResponse = {
+  changes: TailoredResumeImplementationChange[];
 };
 
 type TailoredResumeResponse = {
@@ -177,9 +225,12 @@ function buildDisplayName(input: {
   return companyName || positionTitle || "Tailored Resume";
 }
 
-function normalizeTailoredResumeMetadata(
-  value: Partial<TailoredResumeStructuredResponse>,
-) {
+function normalizeTailoredResumeMetadata(value: {
+  companyName?: string;
+  displayName?: string;
+  jobIdentifier?: string;
+  positionTitle?: string;
+}) {
   const companyName = readTrimmedString(value.companyName);
   const positionTitle = readTrimmedString(value.positionTitle);
   const displayName =
@@ -223,11 +274,44 @@ function parseTailoredResumeThesis(value: unknown): TailoredResumeThesis {
   };
 }
 
-export function parseTailoredResumeResponse(
-  value: unknown,
-): TailoredResumeStructuredResponse {
+function parseTailoredResumePlanChange(value: unknown): TailoredResumePlanChange {
   if (!value || typeof value !== "object") {
-    throw new Error("The model did not return a valid tailoring payload.");
+    throw new Error("The model returned an invalid planned block change.");
+  }
+
+  const segmentId =
+    "segmentId" in value ? readTrimmedString(value.segmentId) : "";
+  const desiredPlainText =
+    "desiredPlainText" in value && typeof value.desiredPlainText === "string"
+      ? value.desiredPlainText.trim()
+      : "";
+  const reason =
+    "reason" in value && typeof value.reason === "string"
+      ? value.reason
+      : "";
+
+  if (!segmentId) {
+    throw new Error(
+      "The model returned a planned block change without a segmentId.",
+    );
+  }
+
+  if (!readTrimmedString(reason)) {
+    throw new Error("The model returned a planned block change without a reason.");
+  }
+
+  return {
+    desiredPlainText,
+    reason,
+    segmentId,
+  };
+}
+
+export function parseTailoredResumePlanResponse(
+  value: unknown,
+): TailoredResumePlanResponse {
+  if (!value || typeof value !== "object") {
+    throw new Error("The model did not return a valid tailoring plan.");
   }
 
   const rawChanges = "changes" in value ? value.changes : null;
@@ -236,73 +320,189 @@ export function parseTailoredResumeResponse(
     throw new Error("The model did not return a changes array.");
   }
 
-  const changes = rawChanges.map((entry) => {
-    if (!entry || typeof entry !== "object") {
-      throw new Error("The model returned an invalid block change.");
-    }
-
-    const segmentId =
-      "segmentId" in entry ? readTrimmedString(entry.segmentId) : "";
-    const latexCode =
-      "latexCode" in entry && typeof entry.latexCode === "string"
-        ? entry.latexCode
-        : "";
-    const reason =
-      "reason" in entry && typeof entry.reason === "string"
-        ? entry.reason
-        : "";
-
-    if (!segmentId) {
-      throw new Error("The model returned a block change without a segmentId.");
-    }
-
-    if (!readTrimmedString(reason)) {
-      throw new Error("The model returned a block change without a reason.");
-    }
-
-    return {
-      latexCode,
-      reason,
-      segmentId,
-    };
-  });
+  const changes = rawChanges.map(parseTailoredResumePlanChange);
 
   return {
     changes,
-    ...normalizeTailoredResumeMetadata(
-      value as Partial<TailoredResumeStructuredResponse>,
-    ),
+    ...normalizeTailoredResumeMetadata(value as TailoredResumePlanResponse),
     thesis: parseTailoredResumeThesis("thesis" in value ? value.thesis : null),
   };
 }
 
-function buildTailoringInstructions(input: { feedback?: string }) {
+function parseTailoredResumeImplementationChange(
+  value: unknown,
+): TailoredResumeImplementationChange {
+  if (!value || typeof value !== "object") {
+    throw new Error("The model returned an invalid LaTeX implementation change.");
+  }
+
+  const segmentId =
+    "segmentId" in value ? readTrimmedString(value.segmentId) : "";
+  const latexCode =
+    "latexCode" in value && typeof value.latexCode === "string"
+      ? value.latexCode
+      : "";
+
+  if (!segmentId) {
+    throw new Error(
+      "The model returned a LaTeX implementation change without a segmentId.",
+    );
+  }
+
+  return {
+    latexCode,
+    segmentId,
+  };
+}
+
+function parseTailoredResumeImplementationResponse(
+  value: unknown,
+): TailoredResumeImplementationResponse {
+  if (!value || typeof value !== "object") {
+    throw new Error("The model did not return a valid LaTeX implementation.");
+  }
+
+  const rawChanges = "changes" in value ? value.changes : null;
+
+  if (!Array.isArray(rawChanges)) {
+    throw new Error("The model did not return a changes array.");
+  }
+
+  return {
+    changes: rawChanges.map(parseTailoredResumeImplementationChange),
+  };
+}
+
+function validateTailoredResumePlanChanges(input: {
+  changes: TailoredResumePlanChange[];
+  planningBlocks: TailorResumePlanningBlock[];
+}) {
+  const planningBlockIds = new Set(
+    input.planningBlocks.map((block) => block.segmentId),
+  );
+  const seenSegmentIds = new Set<string>();
+
+  for (const change of input.changes) {
+    if (seenSegmentIds.has(change.segmentId)) {
+      throw new Error(
+        `The model returned duplicate planned edits for segment ${change.segmentId}.`,
+      );
+    }
+
+    if (!planningBlockIds.has(change.segmentId)) {
+      throw new Error(
+        `The model planned an edit for unknown segment ${change.segmentId}.`,
+      );
+    }
+
+    seenSegmentIds.add(change.segmentId);
+  }
+}
+
+function buildTailoredResumeBlockChanges(input: {
+  implementationChanges: TailoredResumeImplementationChange[];
+  plannedChanges: TailoredResumePlanChange[];
+}) {
+  const plannedSegmentIds = new Set(
+    input.plannedChanges.map((change) => change.segmentId),
+  );
+  const implementationById = new Map<string, TailoredResumeImplementationChange>();
+
+  for (const change of input.implementationChanges) {
+    if (!plannedSegmentIds.has(change.segmentId)) {
+      throw new Error(
+        `The model returned a LaTeX implementation for unknown segment ${change.segmentId}.`,
+      );
+    }
+
+    if (implementationById.has(change.segmentId)) {
+      throw new Error(
+        `The model returned duplicate LaTeX implementations for segment ${change.segmentId}.`,
+      );
+    }
+
+    implementationById.set(change.segmentId, change);
+  }
+
+  return input.plannedChanges.map((plannedChange) => {
+    const implementationChange = implementationById.get(plannedChange.segmentId);
+
+    if (!implementationChange) {
+      throw new Error(
+        `The model did not return a LaTeX implementation for segment ${plannedChange.segmentId}.`,
+      );
+    }
+
+    return {
+      latexCode: implementationChange.latexCode,
+      reason: plannedChange.reason,
+      segmentId: plannedChange.segmentId,
+    } satisfies TailoredResumeBlockChange;
+  });
+}
+
+function serializeTailorResumePlanningBlocks(
+  blocks: TailorResumePlanningBlock[],
+) {
+  if (blocks.length === 0) {
+    return "[no editable plaintext blocks found]";
+  }
+
+  return blocks
+    .map(
+      (block, index) =>
+        [
+          `${index + 1}. segmentId: ${block.segmentId}`,
+          `   command: ${block.command ?? "unknown"}`,
+          `   current text: ${block.plainText}`,
+        ].join("\n"),
+    )
+    .join("\n\n");
+}
+
+function serializeTailorResumeImplementationBlocks(input: {
+  planningBlocksById: Map<string, TailorResumePlanningBlock>;
+  plannedChanges: TailoredResumePlanChange[];
+}) {
+  if (input.plannedChanges.length === 0) {
+    return "[no planned changes]";
+  }
+
+  return input.plannedChanges
+    .map((change, index) => {
+      const block = input.planningBlocksById.get(change.segmentId);
+
+      return [
+        `${index + 1}. segmentId: ${change.segmentId}`,
+        `   command: ${block?.command ?? "unknown"}`,
+        `   current text: ${block?.plainText ?? "[missing block]"}`,
+        `   desired text: ${change.desiredPlainText || "[remove this block]"}`,
+        `   reason: ${change.reason.trim()}`,
+        "   original latex block:",
+        block?.latexCode ?? "[missing block]",
+      ].join("\n");
+    })
+    .join("\n\n");
+}
+
+function buildTailoringPlanInstructions(input: { feedback?: string }) {
   const feedbackBlock = input.feedback?.trim()
     ? `Previous attempt feedback:\n${input.feedback.trim()}\n\n`
     : "";
 
   return (
     `${feedbackBlock}` +
-    "Tailor the provided resume LaTeX for the provided job description. " +
-    "The resume includes immutable server-owned comments in the form % JOBHELPER_SEGMENT_ID: ... directly above each logical LaTeX block.\n\n" +
-    "You must return a strict JSON object containing thesis, metadata, and only the block replacements to make.\n\n" +
-    "Segment conventions:\n" +
-    "1. Treat every % JOBHELPER_SEGMENT_ID: ... comment as a hard boundary for exactly one editable block.\n" +
-    "2. segmentId chooses which single block to replace. latexCode must contain only the replacement for that one block.\n" +
-    "3. Never include content from the previous or next segment inside the same latexCode string.\n" +
-    "4. If the desired rewrite would cross into another segment marker, split it into multiple change objects, one per segmentId.\n" +
-    "5. Never return a whole multi-block environment, list, or section when only one block was targeted.\n" +
-    "6. In particular, do not replace one begin-resumebullets block with a full \\begin{resumebullets} ... \\resumeitem{...} ... \\resumeitem{...} ... \\end{resumebullets} payload when those later bullets belong to separate segmentIds.\n" +
-    "7. Bad example: segmentId work-experience.begin-resumebullets-1 with latexCode containing the opening \\begin{resumebullets}, the first bullet, the next bullet, and \\end{resumebullets}. That spans multiple logical blocks and will be rejected.\n" +
-    "8. Good example: if work-experience.begin-resumebullets-1 currently contains the opening \\begin{resumebullets} plus only the first bullet, return only that opening wrapper plus first bullet for that segmentId, then return a second change object for the next bullet's own segmentId.\n\n" +
-    "How block replacements work:\n" +
-    "1. Each change targets one existing segmentId from the provided annotated LaTeX.\n" +
-    "2. Replacing a segment swaps the entire block that starts at that segment comment and ends right before the next segment comment.\n" +
-    "3. Your replacement latexCode must contain exactly one logical LaTeX block: the replacement for that targeted segment only.\n" +
-    "4. Use an empty string for latexCode only when removing that block entirely is clearly helpful.\n" +
-    "5. Never invent, rename, or return % JOBHELPER_SEGMENT_ID comments. The server re-adds them deterministically after applying your edits.\n" +
+    "Plan resume edits using plaintext only. The whole resume is provided as plain text plus a document-ordered block list where each editable block already has a stable segmentId.\n\n" +
+    "You must return a strict JSON object containing thesis, metadata, and only the planned block edits to make.\n\n" +
+    "Planning rules:\n" +
+    "1. Work from the provided whole-resume plaintext and block plaintext. Do not write LaTeX.\n" +
+    "2. Each planned change must target one segmentId from the provided block list.\n" +
+    "3. desiredPlainText must be the intended final visible text for that single block only, with no LaTeX commands or segment markers.\n" +
+    "4. Keep the desired text faithful to the targeted block's scope. If a rewrite should affect multiple blocks, return multiple change objects.\n" +
+    "5. Do not reference structural blocks that were omitted from the plaintext block list.\n" +
     "6. Never reference the same segmentId more than once.\n" +
-    "7. Every change must include a concise reason string that explains why the edit improves fit for this specific job description.\n\n" +
+    "7. Every change must include a concise reason string that explains why the edit improves fit for this specific job description.\n" +
+    "8. Prefer the smallest set of content edits that materially improve fit.\n\n" +
     "Metadata rules:\n" +
     "1. companyName should be the employer if identifiable.\n" +
     "2. positionTitle should be the role title if identifiable.\n" +
@@ -317,31 +517,50 @@ function buildTailoringInstructions(input: { feedback?: string }) {
     "6. Keep each thesis field concise and high signal, ideally 2-4 sentences.\n\n" +
     "Reason rules:\n" +
     "1. Keep every reason to 1-2 short sentences maximum.\n" +
-    "2. Sentence 1 should briefly summarize the high-level change you made.\n" +
-    "3. Sentence 2 should explain why that change matters for this role, preferably by quoting a short exact phrase from the job description in quotation marks.\n" +
-    "4. If the pasted job description makes the section clear, explicitly say whether that quote came from a required/basic qualification, a preferred/good-to-have qualification, responsibilities, or another labeled section.\n" +
-    "5. Do not guess section labels. If the pasted text does not clearly identify the section, just give the quote without inventing where it came from.\n" +
-    "6. When the job description explicitly emphasizes something, quote those exact words instead of vaguely saying it was emphasized or mentioned in the description.\n" +
-    "7. If no short exact quote fits naturally, use the closest brief phrase from the job description, but still avoid generic wording like \"matches the job description\" with no supporting detail.\n" +
-    "8. Prefer concise fragments or incomplete sentences over polished prose.\n" +
-    "9. NEVER under any circumstances write 3 sentences for a single block edit.\n" +
-    "10. Good examples: \"Surfaces GitHub OSS work earlier. Required qualifications mention \\\"GitHub-hosted open-source projects\\\".\" and \"Moves Python frameworks higher. Preferred qualifications emphasize \\\"relevant frameworks\\\" and \\\"Python\\\".\"\n" +
-    "11. Bad examples: \"Highlights relevant experience because the description emphasizes it.\" and \"Matches the required section\" with no quote.\n" +
-    "12. Focus on the job-description signal you matched, not on generic writing advice.\n\n" +
+    "2. Sentence 1 should briefly summarize the high-level change you made and name the concrete thing that changed, using the employer, project, feature, accomplishment, metric, or technology anchor from that resume block when possible.\n" +
+    "3. Do not write vague sentence-1 summaries like \"Reframes the accomplishment to...\" or \"Highlights relevant experience\" with no subject. Make sentence 1 understandable on its own without opening the diff.\n" +
+    "4. Sentence 2 should explain why that change matters for this role, preferably by quoting a short exact phrase from the job description in quotation marks.\n" +
+    "5. If the pasted job description makes the section clear, explicitly say whether that quote came from a required/basic qualification, a preferred/good-to-have qualification, responsibilities, or another labeled section.\n" +
+    "6. Do not guess section labels. If the pasted text does not clearly identify the section, just give the quote without inventing where it came from.\n" +
+    "7. When the job description explicitly emphasizes something, quote those exact words instead of vaguely saying it was emphasized or mentioned in the description.\n" +
+    "8. If no short exact quote fits naturally, use the closest brief phrase from the job description, but still avoid generic wording like \"matches the job description\" with no supporting detail.\n" +
+    "9. Prefer concise fragments or incomplete sentences over polished prose.\n" +
+    "10. NEVER under any circumstances write 3 sentences for a single block edit.\n" +
+    "11. Good examples: \"Reframes NewForm TikTok refactor accomplishment around developer experience. Responsibilities mention \\\"developer experience\\\".\" and \"Surfaces GitHub OSS work earlier. Required qualifications mention \\\"GitHub-hosted open-source projects\\\".\"\n" +
+    "12. Bad examples: \"Reframes the accomplishment to highlight developer experience.\" and \"Matches the required section\" with no quote.\n" +
+    "13. Focus on the job-description signal you matched, not on generic writing advice.\n\n" +
     "Job description source quality:\n" +
     "The job description below may be scraped from a job board page and can include navigation chrome, sidebar links, footer text, and listings for other roles. " +
     "Identify and focus only on the single target job posting. Ignore unrelated job listings, site navigation, and boilerplate page text.\n\n" +
-    "Common pitfalls:\n" +
-    "1. The most common structural failure is crossing a % JOBHELPER_SEGMENT_ID boundary. When in doubt, split the rewrite into smaller one-segment changes.\n" +
-    "2. Keep latexCode faithful to the targeted block's existing shape. If the source block is one bullet, return one bullet. If the source block is an opening wrapper plus one bullet, return only that opening wrapper plus one bullet.\n" +
-    "3. Do not add or remove neighboring bullets, \\end{...} lines, or surrounding wrappers unless they are part of that exact targeted block.\n\n" +
     "Guardrails:\n" +
     "1. Preserve factual accuracy. Never invent achievements, employers, dates, titles, technologies, metrics, degrees, or certifications.\n" +
-    "2. Prefer the smallest set of content edits that materially improve fit.\n" +
-    "3. If three chunks need edits, return three separate changes. Never bundle sibling chunks into one latexCode replacement.\n" +
-    "4. It is heavily discouraged to change styling, page layout, margins, font sizing, spacing systems, or macro structure unless the user explicitly asked for layout changes or the document cannot work without that fix.\n" +
-    "5. Keep the final document pdflatex-compatible after your replacements are applied.\n" +
-    "6. Special character escaping: in plain text content, the characters }, {, #, %, &, $, _, ^, ~, and \\ are special in LaTeX and must be escaped (e.g., \\}, \\{, \\#, \\%, \\&, \\$, \\_, \\^{}, \\~{}, \\textbackslash{}). A bare } or { in text content is the most common cause of 'Extra }' or 'Missing $' compile errors. Only leave these characters unescaped inside LaTeX command arguments where they serve a structural role (e.g., \\textbf{...}, \\href{...}{...}).\n"
+    "2. It is heavily discouraged to plan styling, page layout, margins, font sizing, spacing systems, or macro-structure changes unless the job fit clearly depends on them.\n"
+  );
+}
+
+function buildTailoringImplementationInstructions(input: { feedback?: string }) {
+  const feedbackBlock = input.feedback?.trim()
+    ? `Previous implementation feedback:\n${input.feedback.trim()}\n\n`
+    : "";
+
+  return (
+    `${feedbackBlock}` +
+    "Implement the approved resume edit plan as exact LaTeX block replacements. The strategic edit choices, targeted segments, and desired visible text are already decided.\n\n" +
+    "You must return a strict JSON object containing only changes.\n\n" +
+    "Implementation rules:\n" +
+    "1. Return exactly one LaTeX replacement for every planned segmentId and no extras.\n" +
+    "2. latexCode must contain only the replacement for that one segment.\n" +
+    "3. Never include content from the previous or next segment inside the same latexCode string.\n" +
+    "4. Never invent, rename, or return % JOBHELPER_SEGMENT_ID comments. The server re-adds them deterministically after applying your edits.\n" +
+    "5. Keep the replacement faithful to the targeted block's existing shape. If the source block is one bullet, return one bullet. If the source block is an opening wrapper plus one bullet, return only that opening wrapper plus one bullet.\n" +
+    "6. Do not add or remove neighboring bullets, \\end{...} lines, or surrounding wrappers unless they are part of that exact targeted block.\n" +
+    "7. Use the planned desired text as the target visible output, but preserve the source block's macro style, argument structure, and local formatting conventions whenever possible.\n" +
+    "8. If the desired text is an empty string, use an empty latexCode only when removing that single block is clearly the right implementation.\n\n" +
+    "Common pitfalls:\n" +
+    "1. The most common structural failure is crossing a segment boundary. When in doubt, keep the replacement smaller and closer to the source block.\n" +
+    "2. If the source block is \\entryheading, \\projectheading, or \\labelline, preserve the existing command form and adapt the text inside its arguments instead of flattening it into a different shape.\n" +
+    "3. Keep the final document pdflatex-compatible after your replacements are applied.\n" +
+    "4. Special character escaping: in plain text content, the characters }, {, #, %, &, $, _, ^, ~, and \\ are special in LaTeX and must be escaped (e.g., \\}, \\{, \\#, \\%, \\&, \\$, \\_, \\^{}, \\~{}, \\textbackslash{}). A bare } or { in text content is the most common cause of 'Extra }' or 'Missing $' compile errors. Only leave these characters unescaped inside LaTeX command arguments where they serve a structural role (e.g., \\textbf{...}, \\href{...}{...}).\n"
   );
 }
 
@@ -516,9 +735,9 @@ function applySavedTailoredResumeLinks(
   };
 }
 
-function buildTailoringInput(input: {
-  annotatedLatexCode: string;
+function buildTailoringPlanInput(input: {
   jobDescription: string;
+  planningSnapshot: ReturnType<typeof buildTailorResumePlanningSnapshot>;
 }) {
   return [
     {
@@ -528,7 +747,36 @@ function buildTailoringInput(input: {
           type: "input_text" as const,
           text:
             `Job description:\n${input.jobDescription}\n\n` +
-            `Annotated base resume LaTeX:\n${input.annotatedLatexCode}`,
+            `Whole resume plain text:\n${input.planningSnapshot.resumePlainText}\n\n` +
+            "Editable resume blocks (document order):\n" +
+            serializeTailorResumePlanningBlocks(input.planningSnapshot.blocks),
+        },
+      ],
+    },
+  ];
+}
+
+function buildTailoringImplementationInput(input: {
+  jobDescription: string;
+  planningBlocksById: Map<string, TailorResumePlanningBlock>;
+  plan: TailoredResumePlanResponse;
+}) {
+  return [
+    {
+      role: "user" as const,
+      content: [
+        {
+          type: "input_text" as const,
+          text:
+            `Job description:\n${input.jobDescription}\n\n` +
+            "Accepted tailoring thesis:\n" +
+            `jobDescriptionFocus: ${input.plan.thesis.jobDescriptionFocus}\n` +
+            `resumeChanges: ${input.plan.thesis.resumeChanges}\n\n` +
+            "Planned segment edits:\n" +
+            serializeTailorResumeImplementationBlocks({
+              planningBlocksById: input.planningBlocksById,
+              plannedChanges: input.plan.changes,
+            }),
         },
       ],
     },
@@ -589,7 +837,15 @@ export async function generateTailoredResume(input: {
   }
 
   const client = getOpenAIClient();
-  let feedback = "";
+  const planningSnapshot = buildTailorResumePlanningSnapshot(
+    normalizedInput.annotatedLatex,
+  );
+  const planningBlocksById = new Map(
+    planningSnapshot.blocks.map((block) => [block.segmentId, block]),
+  );
+  const maxPlanningAttempts = Math.min(2, maxTailoredResumeAttempts);
+  let planningFeedback = "";
+  let implementationFeedback = "";
   let lastError: string | null = null;
   let lastMetadata = fallbackMetadata;
   let lastAnnotatedLatex = normalizedInput.annotatedLatex;
@@ -599,64 +855,244 @@ export async function generateTailoredResume(input: {
   let lastThesis: TailoredResumeThesis | null = null;
   let lastModel = model;
   let hasAppliedCandidate = false;
+  let completedPlanningAttempts = 0;
+  let completedImplementationAttempts = 0;
+  let plan: TailoredResumePlanResponse | null = null;
 
-  for (let attempt = 1; attempt <= maxTailoredResumeAttempts; attempt += 1) {
+  for (let attempt = 1; attempt <= maxPlanningAttempts; attempt += 1) {
     const response = await client.responses.create({
-      input: buildTailoringInput({
-        annotatedLatexCode: normalizedInput.annotatedLatex,
+      input: buildTailoringPlanInput({
         jobDescription: input.jobDescription,
+        planningSnapshot,
       }),
-      instructions: buildTailoringInstructions({ feedback }),
+      instructions: buildTailoringPlanInstructions({ feedback: planningFeedback }),
       model,
       text: {
         verbosity: "low",
         format: {
           type: "json_schema",
-          name: "tailor_resume_block_changes",
+          name: "tailor_resume_edit_plan",
           strict: true,
-          schema: tailorResumeBlockChangesSchema,
+          schema: tailorResumePlanSchema,
         },
       },
     });
 
+    completedPlanningAttempts = attempt;
     lastModel = (response as { model?: string }).model ?? model;
 
     const outputText = readOutputText(response);
 
     if (!outputText) {
-      lastError = "The model returned an empty tailoring response.";
-      feedback =
-        "The previous response was empty. Return the full structured response with thesis, metadata, and block changes.";
+      lastError = "The model returned an empty tailoring plan.";
+      planningFeedback =
+        "The previous response was empty. Return the full structured response with thesis, metadata, and plaintext block changes.";
       continue;
     }
 
-    let candidate: TailoredResumeStructuredResponse;
+    let nextPlan: TailoredResumePlanResponse;
 
     try {
-      candidate = parseTailoredResumeResponse(JSON.parse(outputText));
+      nextPlan = parseTailoredResumePlanResponse(JSON.parse(outputText));
+      validateTailoredResumePlanChanges({
+        changes: nextPlan.changes,
+        planningBlocks: planningSnapshot.blocks,
+      });
     } catch (error) {
       lastError =
         error instanceof Error
           ? error.message
-          : "The model returned an unreadable tailoring payload.";
-      feedback =
-        `The previous response could not be parsed.\n\nExact issue:\n${lastError}\n\nReturn the full structured response with thesis, metadata, and block changes.`;
+          : "The model returned an unreadable tailoring plan.";
+      planningFeedback =
+        `The previous response could not be parsed or validated.\n\nExact issue:\n${lastError}\n\nReturn the full structured response with thesis, metadata, and plaintext block changes.`;
       continue;
     }
 
-    lastMetadata = normalizeTailoredResumeMetadata(candidate);
-    lastThesis = candidate.thesis;
-    const candidateEdits = buildTailoredResumeBlockEdits({
-      annotatedLatexCode: normalizedInput.annotatedLatex,
-      changes: candidate.changes,
+    plan = nextPlan;
+    lastMetadata = normalizeTailoredResumeMetadata(nextPlan);
+    lastThesis = nextPlan.thesis;
+    break;
+  }
+
+  if (!plan) {
+    return {
+      annotatedLatexCode: lastAnnotatedLatex,
+      attempts: completedPlanningAttempts || maxPlanningAttempts,
+      companyName: lastMetadata.companyName,
+      displayName: lastMetadata.displayName,
+      edits: lastEdits,
+      generationDurationMs: readGenerationDurationMs(),
+      jobIdentifier: lastMetadata.jobIdentifier,
+      latexCode: stripTailorResumeSegmentIds(lastAnnotatedLatex),
+      model: lastModel,
+      outcome: classifyTailoredResumeGenerationOutcome({
+        hasAppliedCandidate,
+        hasPreviewPdf: false,
+      }),
+      positionTitle: lastMetadata.positionTitle,
+      previewPdf: null,
+      savedLinkUpdateCount: lastSavedLinkUpdateCount,
+      savedLinkUpdates: lastSavedLinkUpdates,
+      thesis: lastThesis,
+      validationError:
+        lastError ??
+        `Unable to produce a tailored resume plan after ${maxPlanningAttempts} attempts.`,
+    };
+  }
+
+  if (plan.changes.length === 0) {
+    const normalizedCandidate = applySavedTailoredResumeLinks(
+      normalizedInput.annotatedLatex,
+      linkOverrides,
+    );
+    const validation = await validateTailorResumeLatexDocument(
+      stripTailorResumeSegmentIds(normalizedCandidate.normalizedLatex.annotatedLatex),
+    );
+
+    hasAppliedCandidate = true;
+    lastAnnotatedLatex = normalizedCandidate.normalizedLatex.annotatedLatex;
+    lastSavedLinkUpdateCount = normalizedCandidate.updatedCount;
+    lastSavedLinkUpdates = normalizedCandidate.updatedLinks;
+
+    if (validation.ok) {
+      return {
+        annotatedLatexCode: normalizedCandidate.normalizedLatex.annotatedLatex,
+        attempts: completedPlanningAttempts || 1,
+        companyName: lastMetadata.companyName,
+        displayName: lastMetadata.displayName,
+        edits: [],
+        generationDurationMs: readGenerationDurationMs(),
+        jobIdentifier: lastMetadata.jobIdentifier,
+        latexCode: stripTailorResumeSegmentIds(
+          normalizedCandidate.normalizedLatex.annotatedLatex,
+        ),
+        model: lastModel,
+        outcome: classifyTailoredResumeGenerationOutcome({
+          hasAppliedCandidate: true,
+          hasPreviewPdf: true,
+        }),
+        positionTitle: lastMetadata.positionTitle,
+        previewPdf: validation.previewPdf,
+        savedLinkUpdateCount: normalizedCandidate.updatedCount,
+        savedLinkUpdates: normalizedCandidate.updatedLinks,
+        thesis: lastThesis,
+        validationError: null,
+      };
+    }
+
+    lastError = validation.error;
+
+    await input.onBuildFailure?.(
+      stripTailorResumeSegmentIds(normalizedCandidate.normalizedLatex.annotatedLatex),
+      validation.error,
+      completedPlanningAttempts || 1,
+    );
+
+    return {
+      annotatedLatexCode: lastAnnotatedLatex,
+      attempts: completedPlanningAttempts || 1,
+      companyName: lastMetadata.companyName,
+      displayName: lastMetadata.displayName,
+      edits: [],
+      generationDurationMs: readGenerationDurationMs(),
+      jobIdentifier: lastMetadata.jobIdentifier,
+      latexCode: stripTailorResumeSegmentIds(lastAnnotatedLatex),
+      model: lastModel,
+      outcome: classifyTailoredResumeGenerationOutcome({
+        hasAppliedCandidate: true,
+        hasPreviewPdf: false,
+      }),
+      positionTitle: lastMetadata.positionTitle,
+      previewPdf: null,
+      savedLinkUpdateCount: lastSavedLinkUpdateCount,
+      savedLinkUpdates: lastSavedLinkUpdates,
+      thesis: lastThesis,
+      validationError: lastError,
+    };
+  }
+
+  for (let attempt = 1; attempt <= maxTailoredResumeAttempts; attempt += 1) {
+    const response = await client.responses.create({
+      input: buildTailoringImplementationInput({
+        jobDescription: input.jobDescription,
+        plan,
+        planningBlocksById,
+      }),
+      instructions: buildTailoringImplementationInstructions({
+        feedback: implementationFeedback,
+      }),
+      model,
+      text: {
+        verbosity: "low",
+        format: {
+          type: "json_schema",
+          name: "tailor_resume_latex_implementation",
+          strict: true,
+          schema: tailorResumeImplementationSchema,
+        },
+      },
     });
 
+    completedImplementationAttempts = attempt;
+    lastModel = (response as { model?: string }).model ?? model;
+
+    const outputText = readOutputText(response);
+
+    if (!outputText) {
+      lastError = "The model returned an empty LaTeX implementation.";
+      implementationFeedback =
+        "The previous response was empty. Return the strict JSON object with one LaTeX replacement per planned segment.";
+      continue;
+    }
+
+    let implementation: TailoredResumeImplementationResponse;
+
+    try {
+      implementation = parseTailoredResumeImplementationResponse(
+        JSON.parse(outputText),
+      );
+    } catch (error) {
+      lastError =
+        error instanceof Error
+          ? error.message
+          : "The model returned an unreadable LaTeX implementation.";
+      implementationFeedback =
+        `The previous implementation response could not be parsed.\n\nExact issue:\n${lastError}\n\nReturn the strict JSON object with one LaTeX replacement per planned segment.`;
+      continue;
+    }
+
+    const candidateForLogging: TailoredResumeStructuredResponse = {
+      changes: implementation.changes.map((change) => ({
+        latexCode: change.latexCode,
+        reason:
+          plan.changes.find(
+            (plannedChange) => plannedChange.segmentId === change.segmentId,
+          )?.reason ?? "[missing reason]",
+        segmentId: change.segmentId,
+      })),
+      companyName: lastMetadata.companyName,
+      displayName: lastMetadata.displayName,
+      jobIdentifier: lastMetadata.jobIdentifier,
+      positionTitle: lastMetadata.positionTitle,
+      thesis: plan.thesis,
+    };
+
+    let candidateChanges: TailoredResumeBlockChange[];
+    let candidateEdits: TailoredResumeBlockEditRecord[];
     let appliedCandidate;
 
     try {
+      candidateChanges = buildTailoredResumeBlockChanges({
+        implementationChanges: implementation.changes,
+        plannedChanges: plan.changes,
+      });
+      candidateEdits = buildTailoredResumeBlockEdits({
+        annotatedLatexCode: normalizedInput.annotatedLatex,
+        changes: candidateChanges,
+      });
       appliedCandidate = applyTailorResumeBlockChanges({
         annotatedLatexCode: normalizedInput.annotatedLatex,
-        changes: candidate.changes,
+        changes: candidateChanges,
       });
     } catch (error) {
       lastError =
@@ -666,14 +1102,14 @@ export async function generateTailoredResume(input: {
       await input.onInvalidReplacement?.(
         buildInvalidTailorResumeReplacementLogPayload({
           annotatedLatexCode: normalizedInput.annotatedLatex,
-          candidate,
+          candidate: candidateForLogging,
           error: lastError,
         }),
         lastError,
         attempt,
       );
-      feedback =
-        `The previous structured response referenced invalid segment edits.\n\nExact issue:\n${lastError}\n\nReturn a corrected full response with thesis, metadata, and block changes.`;
+      implementationFeedback =
+        `The previous LaTeX implementation referenced invalid segment edits.\n\nExact issue:\n${lastError}\n\nReturn a corrected strict JSON object with one LaTeX replacement per planned segment.`;
       continue;
     }
 
@@ -725,15 +1161,17 @@ export async function generateTailoredResume(input: {
       attempt,
     );
 
-    feedback =
-      `Applying your previous block changes produced a compile failure.\n\n` +
+    implementationFeedback =
+      `Applying your previous LaTeX implementations produced a compile failure.\n\n` +
       `Compiler error:\n${validation.error}\n\n` +
-      "Return a corrected full structured response with revised thesis, metadata, and block changes.";
+      "Return corrected LaTeX replacements for the same planned segments only.";
   }
+
+  const failedAttempts = completedImplementationAttempts || maxTailoredResumeAttempts;
 
   return {
     annotatedLatexCode: lastAnnotatedLatex,
-    attempts: maxTailoredResumeAttempts,
+    attempts: failedAttempts,
     companyName: lastMetadata.companyName,
     displayName: lastMetadata.displayName,
     edits: lastEdits,
@@ -752,6 +1190,6 @@ export async function generateTailoredResume(input: {
     thesis: lastThesis,
     validationError:
       lastError ??
-      `Unable to produce a tailored resume after ${maxTailoredResumeAttempts} attempts.`,
+      `Unable to implement a tailored resume after ${failedAttempts} attempts.`,
   };
 }
