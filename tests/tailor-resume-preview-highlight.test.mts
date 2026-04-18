@@ -56,11 +56,11 @@ test("highlighted preview groups adjacent modified words into one wrapped highli
   assert.match(highlightedLatex, /JOBHELPER_REVIEW_HIGHLIGHT_MACROS/);
   assert.match(
     highlightedLatex,
-    /\\resumeitem\{\\jhlmod\{Used \}\\textbf\{\\jhlmodbridge\\jhlmod\{AWS Amplify\}\}\\jhlmodbridge\\jhlmod\{ to set up \}\\textbf\{\\jhlmodbridge\\jhlmod\{CI\/CD\}\}\\jhlmodbridge\\jhlmod\{ pipelines to support contributor onboarding, reducing design-to-dev handoff time by an avg\. of \\textasciitilde30\\% across 8 teams\}\}/,
+    /\\resumeitem\{\\jhlmod\{\\jhlmodlead\{\}Used \}\\textbf\{\\jhlmod\{\\jhlmodlead\{\}AWS Amplify\}\}\\jhlmod\{\\jhlmodlead\{\} to set up \}\\textbf\{\\jhlmod\{\\jhlmodlead\{\}CI\/CD\}\}\\jhlmod\{\\jhlmodlead\{\} pipelines to support contributor onboarding, reducing design-to-dev handoff time by an avg\. of \\textasciitilde30\\% across 8 teams\}\}/,
   );
   assert.doesNotMatch(highlightedLatex, /\\jhlmod\{pipelines\}\s+\\jhlmod\{to support contributor onboarding/);
-  assert.match(highlightedLatex, /\\textbf\{\\jhlmodbridge\\jhlmod\{CI\/CD\}\}/);
-  assert.match(highlightedLatex, /\\jhlmodbridge/);
+  assert.match(highlightedLatex, /\\textbf\{\\jhlmod\{\\jhlmodlead\{\}CI\/CD\}\}/);
+  assert.match(highlightedLatex, /\\jhlmodlead\{\}/);
 });
 
 test("highlighted preview coalesces punctuation-only joiners between modified segments", () => {
@@ -82,7 +82,7 @@ test("highlighted preview coalesces punctuation-only joiners between modified se
 
   assert.match(
     highlightedLatex,
-    /\\jhlmod\{Built APIs for internal tools, dashboards, and workflows\.\}/,
+    /\\jhlmod\{\\jhlmodlead\{\}Built APIs for internal tools, dashboards, and workflows\.\}/,
   );
 });
 
@@ -105,10 +105,10 @@ test("highlighted preview groups adjacent replacement words while preserving for
 
   assert.match(
     highlightedLatex,
-    /\\resumeitem\{\\jhlmod\{Added explicit \}\\textbf\{\\jhlmodbridge\\jhlmod\{open-source communities\}\}\\jhlmodbridge\\jhlmod\{ phrasing to show collaboration and contribution to projects\}\}/,
+    /\\resumeitem\{\\jhlmod\{\\jhlmodlead\{\}Added explicit \}\\textbf\{\\jhlmod\{\\jhlmodlead\{\}open-source communities\}\}\\jhlmod\{\\jhlmodlead\{\} phrasing to show collaboration and contribution to projects\}\}/,
   );
   assert.doesNotMatch(highlightedLatex, /\\jhlmod\{Added\}\s+\\jhlmod\{explicit\}/);
-  assert.match(highlightedLatex, /\\textbf\{\\jhlmodbridge\\jhlmod\{open-source communities\}\}/);
+  assert.match(highlightedLatex, /\\textbf\{\\jhlmod\{\\jhlmodlead\{\}open-source communities\}\}/);
 });
 
 test("highlighted preview keeps separators highlighted between adjacent formatted chunks", () => {
@@ -130,7 +130,7 @@ test("highlighted preview keeps separators highlighted between adjacent formatte
 
   assert.match(
     highlightedLatex,
-    /\\resumeitem\{\\jhlmod\{Built \}\\textbf\{\\jhlmodbridge\\jhlmod\{React\}\}\\jhlmodbridge\\jhlmod\{ \+ \}\\textbf\{\\jhlmodbridge\\jhlmod\{TypeScript\}\}\\jhlmodbridge\\jhlmod\{ dashboards\}\}/,
+    /\\resumeitem\{\\jhlmod\{\\jhlmodlead\{\}Built \}\\textbf\{\\jhlmod\{\\jhlmodlead\{\}React\}\}\\jhlmod\{\\jhlmodlead\{\} \+ \}\\textbf\{\\jhlmod\{\\jhlmodlead\{\}TypeScript\}\}\\jhlmod\{\\jhlmodlead\{\} dashboards\}\}/,
   );
   assert.doesNotMatch(highlightedLatex, /\\textbf\{\\jhlmod\{React\}\}\s+\+\s+\\textbf/);
 });
@@ -153,7 +153,7 @@ test("highlighted preview bridges punctuation between formatted chunks", () => {
 
   assert.match(
     highlightedLatex,
-    /\\resumeitem\{\\textbf\{React\}\\jhlmod\{, \}\\textbf\{\\jhlmodbridge\\jhlmod\{TypeScript\}\}\\jhlmodbridge\\jhlmod\{, and \}\\textbf\{\\jhlmodbridge\\jhlmod\{Node\.js\}\}\\jhlmodbridge\\jhlmod\{ dashboards\}\}/,
+    /\\resumeitem\{\\textbf\{React\}\\jhlmod\{\\jhlmodlead\{\}, \}\\textbf\{\\jhlmod\{\\jhlmodlead\{\}TypeScript\}\}\\jhlmod\{\\jhlmodlead\{\}, and \}\\textbf\{\\jhlmod\{\\jhlmodlead\{\}Node\.js\}\}\\jhlmod\{\\jhlmodlead\{\} dashboards\}\}/,
   );
 });
 
@@ -175,7 +175,7 @@ test("highlighted preview keeps escaped punctuation inside one highlight run", (
 
   assert.match(
     highlightedLatex,
-    /\\jhlmod\{Improved release process \(CI\/CD, avg\. \\textasciitilde30\\% faster\)\.\}/,
+    /\\jhlmod\{\\jhlmodlead\{\}Improved release process \(CI\/CD, avg\. \\textasciitilde30\\% faster\)\.\}/,
   );
   assert.doesNotMatch(
     highlightedLatex,
@@ -251,7 +251,7 @@ test("highlighted preview combines model and user edits on the same segment", ()
 
   assert.match(
     highlightedLatex,
-    /\\resumeitem\{\\jhlmod\{User-revised open-source collaboration bullet\}\}/,
+    /\\resumeitem\{\\jhlmod\{\\jhlmodlead\{\}User-revised open-source collaboration bullet\}\}/,
   );
   assert.doesNotMatch(
     highlightedLatex,

@@ -16,8 +16,8 @@ const reviewHighlightPreamble = String.raw`
 \definecolor{JobHelperModifiedHighlight}{RGB}{255,225,128}
 \newcommand{\jhladd}{\bgroup\markoverwith{\textcolor{JobHelperAddedHighlight}{\rule[-0.52ex]{2pt}{2.3ex}}}\ULon}
 \newcommand{\jhlmod}{\bgroup\markoverwith{\textcolor{JobHelperModifiedHighlight}{\rule[-0.52ex]{2pt}{2.3ex}}}\ULon}
-\newcommand{\jhladdbridge}{\smash{\llap{\textcolor{JobHelperAddedHighlight}{\rule[-0.52ex]{0.24em}{2.3ex}}}}}
-\newcommand{\jhlmodbridge}{\smash{\llap{\textcolor{JobHelperModifiedHighlight}{\rule[-0.52ex]{0.24em}{2.3ex}}}}}
+\newcommand{\jhladdlead}{\smash{\llap{\textcolor{JobHelperAddedHighlight}{\rule[-0.52ex]{0.34em}{2.3ex}}}}}
+\newcommand{\jhlmodlead}{\smash{\llap{\textcolor{JobHelperModifiedHighlight}{\rule[-0.52ex]{0.34em}{2.3ex}}}}}
 `;
 
 const escapedInlinePunctuationPattern = /^\\[%&#_${}]$/;
@@ -137,30 +137,26 @@ function highlightInlineLatexText(text: string, macroName: "jhladd" | "jhlmod") 
     leadingWhitespace.length,
     text.length - trailingWhitespace.length,
   );
+  const leadMacroName = macroName === "jhladd" ? "jhladdlead" : "jhlmodlead";
+
+  function buildHighlightedRun(value: string) {
+    return `\\${macroName}{\\${leadMacroName}{}${value}}`;
+  }
 
   if (coreText && canWrapWholeHighlightRange(coreText)) {
-    return `${leadingWhitespace}\\${macroName}{${coreText}}${trailingWhitespace}`;
+    return `${leadingWhitespace}${buildHighlightedRun(coreText)}${trailingWhitespace}`;
   }
 
   const tokens = tokenizeHighlightableLatex(coreText);
   const output: string[] = [];
   let buffer = "";
-  let lastEmittedWasHighlight = false;
-  let needsBridgeBeforeNextHighlight = false;
-  const bridgeMacroName = macroName === "jhladd" ? "jhladdbridge" : "jhlmodbridge";
 
   function flushBuffer() {
     if (!buffer) {
       return;
     }
 
-    if (needsBridgeBeforeNextHighlight) {
-      output.push(`\\${bridgeMacroName}`);
-      needsBridgeBeforeNextHighlight = false;
-    }
-
-    output.push(`\\${macroName}{${buffer}}`);
-    lastEmittedWasHighlight = true;
+    output.push(buildHighlightedRun(buffer));
     buffer = "";
   }
 
@@ -171,11 +167,7 @@ function highlightInlineLatexText(text: string, macroName: "jhladd" | "jhlmod") 
 
     if (isStructuralHighlightToken(token)) {
       flushBuffer();
-      if (lastEmittedWasHighlight) {
-        needsBridgeBeforeNextHighlight = true;
-      }
       output.push(token);
-      lastEmittedWasHighlight = false;
       continue;
     }
 
