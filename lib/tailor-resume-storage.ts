@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   emptyTailorResumeProfile,
@@ -27,6 +27,30 @@ function getTailoredResumePdfPath(userId: string, tailoredResumeId: string) {
   );
 }
 
+function buildAtomicTempPath(targetPath: string) {
+  return path.join(
+    path.dirname(targetPath),
+    `.${path.basename(targetPath)}.${process.pid}.${Date.now()}.${Math.random()
+      .toString(16)
+      .slice(2)}.tmp`,
+  );
+}
+
+async function writeFileAtomically(
+  targetPath: string,
+  content: Parameters<typeof writeFile>[1],
+  options?: Parameters<typeof writeFile>[2],
+) {
+  const tempPath = buildAtomicTempPath(targetPath);
+
+  try {
+    await writeFile(tempPath, content, options);
+    await rename(tempPath, targetPath);
+  } finally {
+    await rm(tempPath, { force: true });
+  }
+}
+
 export async function readTailorResumeProfile(userId: string) {
   try {
     const rawValue = await readFile(getTailorResumeProfilePath(userId), "utf8");
@@ -52,7 +76,7 @@ export async function writeTailorResumeProfile(
   const sanitizedProfile = stripTailorResumeProfileLinkLocks(profile);
 
   await mkdir(privateDir, { recursive: true });
-  await writeFile(
+  await writeFileAtomically(
     getTailorResumeProfilePath(userId),
     `${JSON.stringify(sanitizedProfile, null, 2)}\n`,
     "utf8",
@@ -70,7 +94,7 @@ export async function writeTailorResumePreviewPdf(
   const privateDir = getTailorResumePrivateDir(userId);
 
   await mkdir(privateDir, { recursive: true });
-  await writeFile(getTailorResumePreviewPdfPath(userId), pdfBuffer);
+  await writeFileAtomically(getTailorResumePreviewPdfPath(userId), pdfBuffer);
 }
 
 export async function deleteTailorResumePreviewPdf(userId: string) {
@@ -92,7 +116,10 @@ export async function writeTailoredResumePdf(
   const privateDir = path.dirname(getTailoredResumePdfPath(userId, tailoredResumeId));
 
   await mkdir(privateDir, { recursive: true });
-  await writeFile(getTailoredResumePdfPath(userId, tailoredResumeId), pdfBuffer);
+  await writeFileAtomically(
+    getTailoredResumePdfPath(userId, tailoredResumeId),
+    pdfBuffer,
+  );
 }
 
 export async function deleteTailoredResumePdf(

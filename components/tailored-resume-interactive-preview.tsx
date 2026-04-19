@@ -62,6 +62,13 @@ type PageHighlightSource = {
 };
 
 let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
+const interactivePreviewLoadRetryDelays = [150, 400];
+
+function waitForInteractivePreviewRetry(delayMs: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, delayMs);
+  });
+}
 
 function installPdfJsCollectionPolyfills() {
   const mapPrototype = Map.prototype as Map<unknown, unknown> & {
@@ -764,28 +771,67 @@ export default function TailoredResumeInteractivePreview({
           return;
         }
 
-        loadingTask = pdfJs.getDocument(resolvedPdfUrl);
-        const pdfDocument = (await loadingTask.promise) as PDFDocumentProxy;
-        const nextLoadedPages: LoadedPdfPage[] = [];
+        const retryDelays = [0, ...interactivePreviewLoadRetryDelays];
+        let lastError: unknown = null;
 
-        for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
-          const page = await pdfDocument.getPage(pageNumber);
-          const viewport = page.getViewport({ scale: 1 });
+        for (const [attemptIndex, retryDelay] of retryDelays.entries()) {
+          if (retryDelay > 0) {
+            await waitForInteractivePreviewRetry(retryDelay);
+          }
 
-          nextLoadedPages.push({
-            baseHeight: viewport.height,
-            baseWidth: viewport.width,
-            page,
-            pageNumber,
-          });
+          if (isCancelled) {
+            return;
+          }
+
+          try {
+            loadingTask = pdfJs.getDocument(resolvedPdfUrl);
+            const pdfDocument = (await loadingTask.promise) as PDFDocumentProxy;
+            const nextLoadedPages: LoadedPdfPage[] = [];
+
+            for (
+              let pageNumber = 1;
+              pageNumber <= pdfDocument.numPages;
+              pageNumber += 1
+            ) {
+              const page = await pdfDocument.getPage(pageNumber);
+              const viewport = page.getViewport({ scale: 1 });
+
+              nextLoadedPages.push({
+                baseHeight: viewport.height,
+                baseWidth: viewport.width,
+                page,
+                pageNumber,
+              });
+            }
+
+            if (isCancelled) {
+              return;
+            }
+
+            setLoadedPages(nextLoadedPages);
+            setDocumentState("ready");
+            return;
+          } catch (error) {
+            if (isCancelled) {
+              return;
+            }
+
+            lastError = error;
+            loadingTask = null;
+
+            if (attemptIndex < retryDelays.length - 1) {
+              console.warn(
+                "Retrying interactive preview document load after a transient failure.",
+                error,
+              );
+              continue;
+            }
+          }
         }
 
-        if (isCancelled) {
-          return;
-        }
-
-        setLoadedPages(nextLoadedPages);
-        setDocumentState("ready");
+        throw lastError instanceof Error
+          ? lastError
+          : new Error("Unable to load the interactive preview PDF.");
       } catch (error) {
         if (isCancelled) {
           return;
