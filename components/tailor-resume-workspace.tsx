@@ -1541,7 +1541,7 @@ export default function TailorResumeWorkspace({
   const editorPanelContent = (
     <section
       aria-busy={editorDisabled}
-      className="flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
+      className="flex min-w-0 flex-col rounded-[1.25rem] border border-white/8 px-3 pb-3 pt-2 sm:h-full sm:px-4 sm:pb-4 xl:min-h-[560px]"
     >
       <div className="mb-3 flex items-center justify-between gap-3">
         <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
@@ -1577,17 +1577,15 @@ export default function TailorResumeWorkspace({
         ) : null}
       </div>
 
-      <div
-        className="relative flex min-h-[640px] flex-1 overflow-hidden rounded-[1.25rem]"
-      >
+      <div className="relative flex min-h-[420px] flex-1 overflow-hidden rounded-[1.25rem] sm:min-h-[640px]">
         {showEditorLoadingOverlay ? (
           <div className="pointer-events-none absolute inset-0 rounded-[1.25rem] bg-black/20" />
         ) : null}
 
-        <div className="relative z-10 flex min-h-[640px] flex-1 flex-col overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate">
+        <div className="relative z-10 flex min-h-[420px] flex-1 flex-col overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate sm:min-h-[640px]">
           {displayedLatexCode.trim().length > 0 || resume ? (
             <textarea
-              className={`min-h-[600px] w-full flex-1 resize-none bg-transparent px-4 py-4 font-mono text-[13px] leading-6 outline-none placeholder:text-zinc-500 transition ${
+              className={`min-h-[380px] w-full flex-1 resize-none bg-transparent px-4 py-4 font-mono text-[13px] leading-6 outline-none placeholder:text-zinc-500 transition sm:min-h-[600px] ${
                 editorDisabled
                   ? "cursor-not-allowed text-zinc-500 opacity-35"
                   : "text-zinc-100"
@@ -1601,7 +1599,7 @@ export default function TailorResumeWorkspace({
           ) : (
             <div
               aria-hidden="true"
-              className="min-h-[600px] flex-1 rounded-[1.25rem]"
+              className="min-h-[380px] flex-1 rounded-[1.25rem] sm:min-h-[600px]"
             />
           )}
 
@@ -1620,7 +1618,7 @@ export default function TailorResumeWorkspace({
   const previewPanelContent = (
     <section
       aria-busy={showPreviewLoadingOverlay}
-      className="flex h-full min-w-0 flex-col rounded-[1.25rem] border border-white/8 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 xl:min-h-[560px]"
+      className="flex min-w-0 flex-col rounded-[1.25rem] border border-white/8 px-3 pb-3 pt-2 sm:h-full sm:px-4 sm:pb-4 xl:min-h-[560px]"
     >
       <div className="mb-3">
         <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
@@ -1628,14 +1626,12 @@ export default function TailorResumeWorkspace({
         </p>
       </div>
 
-      <div
-        className="relative flex min-h-[500px] flex-1 overflow-hidden rounded-[1.25rem]"
-      >
+      <div className="relative flex min-h-[320px] flex-1 overflow-hidden rounded-[1.25rem] sm:min-h-[500px]">
         {showPreviewLoadingOverlay ? (
           <div className="pointer-events-none absolute inset-0 rounded-[1.25rem] bg-black/20" />
         ) : null}
 
-        <div className="relative z-10 flex min-h-[500px] flex-1 overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate">
+        <div className="relative z-10 flex min-h-[320px] flex-1 overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate sm:min-h-[500px]">
           {previewError ? (
             <div className="h-full w-full overflow-auto rounded-[1.25rem] border border-rose-300/12 bg-[linear-gradient(180deg,rgba(251,113,133,0.16),rgba(159,18,57,0.2))] p-5 text-sm leading-6 text-rose-50/92 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
               <p className="font-medium text-rose-50">
@@ -1651,9 +1647,9 @@ export default function TailorResumeWorkspace({
               </pre>
             </div>
           ) : previewPdfUrl ? (
-            <div className="h-full min-h-[500px] w-full rounded-[1.25rem]">
+            <div className="h-full min-h-[320px] w-full rounded-[1.25rem] sm:min-h-[500px]">
               <iframe
-                className="relative z-0 h-full min-h-[500px] w-full rounded-[1.25rem] bg-white"
+                className="relative z-0 h-full min-h-[320px] w-full rounded-[1.25rem] bg-white sm:min-h-[500px]"
                 onLoad={() => setIsPreviewFrameLoading(false)}
                 src={previewPdfUrl}
                 title="Compiled resume preview"
