@@ -114,6 +114,7 @@ const resumeLinkSaveToastId = "tailor-resume-link-save";
 const resumeUploadToastId = "tailor-resume-resume-upload";
 const savedLinkUpdateToastId = "tailor-resume-saved-link-updates";
 const failedLinkToastDurationMs = 5 * 60 * 1_000;
+const typicalTailoringDurationLabel = "~1:10";
 
 function formatElapsedDuration(durationMs: number | null | undefined) {
   if (
@@ -137,6 +138,43 @@ function formatElapsedDuration(durationMs: number | null | undefined) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+function formatElapsedClock(durationMs: number) {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1_000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function TailoringProgressToast({ startedAt }: { startedAt: number }) {
+  const [elapsedMs, setElapsedMs] = useState(() =>
+    Math.max(0, performance.now() - startedAt),
+  );
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setElapsedMs(Math.max(0, performance.now() - startedAt));
+    }, 1_000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [startedAt]);
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-3">
+        <span>Tailoring a job-specific LaTeX resume...</span>
+        <span className="shrink-0 text-zinc-400">
+          {formatElapsedClock(elapsedMs)}
+        </span>
+      </div>
+      <div className="text-xs text-zinc-400">
+        usually takes {typicalTailoringDurationLabel}
+      </div>
+    </div>
+  );
 }
 
 function resolveElapsedDurationMs(
@@ -1383,7 +1421,7 @@ export default function TailorResumeWorkspace({
 
     setIsTailoringResume(true);
     const tailoringStartedAt = performance.now();
-    toast.loading("Tailoring a job-specific LaTeX resume...", {
+    toast.loading(<TailoringProgressToast startedAt={tailoringStartedAt} />, {
       id: "tailor-resume-run",
     });
 

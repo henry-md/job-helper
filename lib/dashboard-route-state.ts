@@ -18,7 +18,7 @@ export function parseDashboardRouteState(input?: {
   tab?: string | null | undefined;
   tailoredResumeId?: string | null | undefined;
 }): DashboardRouteState {
-  const tab = input?.tab === "tailor" ? "tailor" : "new";
+  const tab = input?.tab === "new" ? "new" : "tailor";
   const tailoredResumeId =
     tab === "tailor"
       ? normalizeRouteParamValue(input?.tailoredResumeId)
@@ -49,7 +49,7 @@ export function buildDashboardHref(input: {
   });
   const searchParams = new URLSearchParams();
 
-  if (routeState.tab === "tailor") {
+  if (routeState.tab === "new") {
     searchParams.set("tab", routeState.tab);
   }
 

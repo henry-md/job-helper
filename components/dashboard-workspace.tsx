@@ -339,17 +339,6 @@ export default function DashboardWorkspace({
           <nav className="flex items-center gap-2 rounded-full border border-white/10 bg-black/20 p-1">
             <button
               className={`rounded-full px-3 py-2 text-xs uppercase tracking-[0.18em] transition ${
-                activeTab === "new"
-                  ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
-                  : "text-zinc-400 hover:text-zinc-200"
-              }`}
-              onClick={() => setActiveDashboardTab("new")}
-              type="button"
-            >
-              New application
-            </button>
-            <button
-              className={`rounded-full px-3 py-2 text-xs uppercase tracking-[0.18em] transition ${
                 activeTab === "tailor"
                   ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
                   : "text-zinc-400 hover:text-zinc-200"
@@ -358,6 +347,17 @@ export default function DashboardWorkspace({
               type="button"
             >
               Tailor Resume
+            </button>
+            <button
+              className={`rounded-full px-3 py-2 text-xs uppercase tracking-[0.18em] transition ${
+                activeTab === "new"
+                  ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
+                  : "text-zinc-400 hover:text-zinc-200"
+              }`}
+              onClick={() => setActiveDashboardTab("new")}
+              type="button"
+            >
+              Applications
             </button>
           </nav>
           <SignOutButton />

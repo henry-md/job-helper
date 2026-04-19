@@ -6,9 +6,9 @@ import {
   parseDashboardRouteStateFromSearchParams,
 } from "../lib/dashboard-route-state.ts";
 
-test("dashboard route state defaults to the new-application workspace", () => {
+test("dashboard route state defaults to the tailor-resume workspace", () => {
   assert.deepEqual(parseDashboardRouteState(), {
-    tab: "new",
+    tab: "tailor",
     tailoredResumeId: null,
   });
 });
@@ -53,13 +53,13 @@ test("dashboard route state reads review state from URL search params", () => {
 });
 
 test("dashboard href builder creates stable deep links for tailor review state", () => {
-  assert.equal(buildDashboardHref({ tab: "new" }), "/dashboard");
-  assert.equal(buildDashboardHref({ tab: "tailor" }), "/dashboard?tab=tailor");
+  assert.equal(buildDashboardHref({ tab: "tailor" }), "/dashboard");
+  assert.equal(buildDashboardHref({ tab: "new" }), "/dashboard?tab=new");
   assert.equal(
     buildDashboardHref({
       tab: "tailor",
       tailoredResumeId: "tailored-789",
     }),
-    "/dashboard?tab=tailor&tailoredResumeId=tailored-789",
+    "/dashboard?tailoredResumeId=tailored-789",
   );
 });
