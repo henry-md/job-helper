@@ -55,11 +55,16 @@ Tailor Resume object model:
     - planned `segmentId` edits
     - desired plaintext rewrites per block
     - the planner thesis + metadata
+  - the saved OpenAI debug trace for developer inspection, including:
+    - the full prompt for the stage-1 plaintext planning call
+    - the full JSON output returned by the stage-1 call
+    - the full prompt for the stage-2 LaTeX implementation call
+    - the full JSON output returned by the stage-2 call
   - a `thesis` object with:
     - `jobDescriptionFocus`: the non-generic themes where the job description over-indexed
     - `resumeChanges`: the broad resume strategy used to match those themes
 - The review modal surfaces this thesis from saved profile data; it is not recomputed client-side.
-- When `DEBUG_UI` is enabled, the tailored-resume review also exposes the saved planning payload so developers can inspect the intermediate OpenAI result without rerunning tailoring.
+- When `DEBUG_UI` is enabled, the tailored-resume review exposes those four saved stage transcripts in collapsible sections so developers can inspect the exact prompts and outputs without rerunning tailoring.
 
 6. Preview PDF (`Buffer`)
 - Files: `lib/tailor-resume-storage.ts`, `app/api/tailor-resume/preview/route.ts`

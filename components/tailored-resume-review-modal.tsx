@@ -437,6 +437,41 @@ function TailoredResumeEditSummaryCard({
   );
 }
 
+function TailoredResumeDevInspectorSection({
+  content,
+  emptyState,
+  label,
+}: {
+  content: string | null;
+  emptyState: string;
+  label: string;
+}) {
+  const resolvedContent = content?.trim() ? content : null;
+
+  return (
+    <details className="group overflow-hidden rounded-[1rem] border border-white/8 bg-white/[0.03]">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 marker:hidden">
+        <span className="text-sm font-medium text-zinc-100">{label}</span>
+        <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-zinc-400 transition group-open:border-sky-300/25 group-open:bg-sky-400/10 group-open:text-sky-100">
+          Toggle
+        </span>
+      </summary>
+
+      <div className="border-t border-white/8 px-4 py-4">
+        {resolvedContent ? (
+          <pre className="app-scrollbar max-h-[min(36rem,60vh)] overflow-auto whitespace-pre-wrap break-words rounded-[0.95rem] border border-white/8 bg-zinc-950/80 px-3 py-3 font-mono text-[11px] leading-5 text-zinc-200">
+            {resolvedContent}
+          </pre>
+        ) : (
+          <div className="rounded-[0.95rem] border border-white/8 bg-black/20 px-3 py-2.5 text-sm leading-6 text-zinc-300">
+            {emptyState}
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
 export default function TailoredResumeReviewModal({
   debugUiEnabled,
   onClose,
@@ -718,11 +753,6 @@ export default function TailoredResumeReviewModal({
   // Plain PDF URL for the interactive renderer and external PDF link.
   const plainPdfUrl = record ? buildTailoredResumePreviewPdfUrl(record) : null;
   const interactivePreviewUrl = plainPdfUrl;
-  const planningResultJson = useMemo(
-    () => (record ? JSON.stringify(record.planningResult, null, 2) : ""),
-    [record],
-  );
-
   useEffect(() => {
     const mediaQuery = window.matchMedia("(min-width: 1280px)");
     const syncLayoutMode = () => {
@@ -1304,7 +1334,7 @@ export default function TailoredResumeReviewModal({
                         setIsThesisOpen(false);
                         setIsDevInspectorOpen(true);
                       }}
-                      title="Show the saved planning payload."
+                      title="Show the saved OpenAI calls."
                       type="button"
                     >
                       Dev
@@ -1804,7 +1834,7 @@ export default function TailoredResumeReviewModal({
       {debugUiEnabled && isDevInspectorOpen ? (
         <div className="fixed inset-0 z-[230] flex items-center justify-center bg-black/48 p-4 backdrop-blur-[1px] sm:p-5">
           <button
-            aria-label="Close saved planning payload"
+            aria-label="Close saved OpenAI calls"
             className="absolute inset-0"
             onClick={() => setIsDevInspectorOpen(false)}
             type="button"
@@ -1825,14 +1855,14 @@ export default function TailoredResumeReviewModal({
                   className="mt-2 text-base font-medium text-zinc-50"
                   id={devInspectorDialogId}
                 >
-                  Saved planning payload
+                  Saved OpenAI tailoring calls
                 </h2>
                 <p
                   className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300"
                   id={devInspectorDescriptionId}
                 >
-                  This is the persisted output from the plaintext planning pass
-                  before block-level LaTeX implementation.
+                  This shows the persisted stage-1 and stage-2 prompts plus the
+                  exact JSON returned for each stage.
                 </p>
               </div>
               <button
@@ -1846,125 +1876,42 @@ export default function TailoredResumeReviewModal({
               </button>
             </div>
 
-            <div className="app-scrollbar grid min-h-0 flex-1 gap-4 overflow-y-auto px-5 py-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(22rem,0.85fr)]">
-              <div className="space-y-4">
-                <section className="rounded-[1rem] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                    Saved metadata
-                  </p>
-                  <dl className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <div>
-                      <dt className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">
-                        Display name
-                      </dt>
-                      <dd className="mt-1 text-sm leading-6 text-zinc-100">
-                        {record.planningResult.displayName}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">
-                        Company
-                      </dt>
-                      <dd className="mt-1 text-sm leading-6 text-zinc-100">
-                        {record.planningResult.companyName || "Unknown"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">
-                        Role
-                      </dt>
-                      <dd className="mt-1 text-sm leading-6 text-zinc-100">
-                        {record.planningResult.positionTitle || "Unknown"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">
-                        Identifier
-                      </dt>
-                      <dd className="mt-1 text-sm leading-6 text-zinc-100">
-                        {record.planningResult.jobIdentifier}
-                      </dd>
-                    </div>
-                  </dl>
-                </section>
+            <div className="app-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+              <TailoredResumeDevInspectorSection
+                content={record.openAiDebug.planning.prompt}
+                emptyState={
+                  record.openAiDebug.planning.skippedReason ??
+                  "No saved stage-1 prompt is available for this tailored resume."
+                }
+                label="First Call Prompt"
+              />
 
-                <section className="rounded-[1rem] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                    Thesis
-                  </p>
-                  <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                    <div className="rounded-[0.95rem] border border-white/8 bg-black/20 px-3 py-2.5">
-                      <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">
-                        Job description focus
-                      </p>
-                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-100">
-                        {record.planningResult.thesis.jobDescriptionFocus}
-                      </p>
-                    </div>
-                    <div className="rounded-[0.95rem] border border-white/8 bg-black/20 px-3 py-2.5">
-                      <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">
-                        Resume changes
-                      </p>
-                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-100">
-                        {record.planningResult.thesis.resumeChanges}
-                      </p>
-                    </div>
-                  </div>
-                </section>
+              <TailoredResumeDevInspectorSection
+                content={record.openAiDebug.planning.outputJson}
+                emptyState={
+                  record.openAiDebug.planning.skippedReason ??
+                  "No saved stage-1 JSON output is available for this tailored resume."
+                }
+                label="First Call JSON Output"
+              />
 
-                <section className="rounded-[1rem] border border-white/8 bg-white/[0.03] p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                      Planned block changes
-                    </p>
-                    <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                      {record.planningResult.changes.length} saved
-                    </span>
-                  </div>
+              <TailoredResumeDevInspectorSection
+                content={record.openAiDebug.implementation.prompt}
+                emptyState={
+                  record.openAiDebug.implementation.skippedReason ??
+                  "No saved stage-2 prompt is available for this tailored resume."
+                }
+                label="Second Call Prompt"
+              />
 
-                  {record.planningResult.changes.length > 0 ? (
-                    <div className="mt-3 space-y-3">
-                      {record.planningResult.changes.map((change) => (
-                        <article
-                          className="rounded-[0.95rem] border border-white/8 bg-black/20 px-3 py-3"
-                          key={change.segmentId}
-                        >
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="rounded-full border border-sky-300/20 bg-sky-400/10 px-2 py-0.5 font-mono text-[10px] text-sky-100">
-                              {change.segmentId}
-                            </span>
-                          </div>
-                          <p className="mt-3 text-[11px] uppercase tracking-[0.16em] text-zinc-500">
-                            Reason
-                          </p>
-                          <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-zinc-100">
-                            {change.reason}
-                          </p>
-                          <p className="mt-3 text-[11px] uppercase tracking-[0.16em] text-zinc-500">
-                            Desired plain text
-                          </p>
-                          <pre className="mt-1 whitespace-pre-wrap break-words rounded-[0.85rem] border border-white/8 bg-zinc-950/70 px-3 py-2.5 font-mono text-[11px] leading-5 text-zinc-200">
-                            {change.desiredPlainText || "[remove this block]"}
-                          </pre>
-                        </article>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="mt-3 rounded-[0.95rem] border border-white/8 bg-black/20 px-3 py-2.5 text-sm leading-6 text-zinc-300">
-                      The planner chose to keep the current resume content as-is.
-                    </div>
-                  )}
-                </section>
-              </div>
-
-              <section className="min-h-0 rounded-[1rem] border border-white/8 bg-white/[0.03] p-4">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                  Raw JSON
-                </p>
-                <pre className="app-scrollbar mt-3 max-h-[min(34rem,65vh)] overflow-auto whitespace-pre-wrap break-words rounded-[0.95rem] border border-white/8 bg-zinc-950/80 px-3 py-3 font-mono text-[11px] leading-5 text-zinc-200">
-                  {planningResultJson}
-                </pre>
-              </section>
+              <TailoredResumeDevInspectorSection
+                content={record.openAiDebug.implementation.outputJson}
+                emptyState={
+                  record.openAiDebug.implementation.skippedReason ??
+                  "No saved stage-2 JSON output is available for this tailored resume."
+                }
+                label="Second Call JSON Output"
+              />
             </div>
           </div>
         </div>

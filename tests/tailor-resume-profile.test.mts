@@ -118,6 +118,20 @@ test("parseTailorResumeProfile keeps tailored resume metadata and workspace stat
         jobDescription: "Job description text",
         jobIdentifier: "Applied research",
         latexCode: "\\documentclass{article}",
+        openAiDebug: {
+          implementation: {
+            outputJson:
+              '{\n  "changes": [\n    {\n      "segmentId": "experience.entry-1.bullet-1",\n      "latexCode": "\\\\resumeitem{Tailored bullet}"\n    }\n  ]\n}',
+            prompt: "Second call prompt",
+            skippedReason: null,
+          },
+          planning: {
+            outputJson:
+              '{\n  "changes": [\n    {\n      "segmentId": "experience.entry-1.bullet-1",\n      "desiredPlainText": "Tailored bullet",\n      "reason": "Highlights CI/CD work."\n    }\n  ]\n}',
+            prompt: "First call prompt",
+            skippedReason: null,
+          },
+        },
         pdfUpdatedAt: "2026-04-15T12:00:00.000Z",
         planningResult: {
           changes: [
@@ -172,6 +186,10 @@ test("parseTailorResumeProfile keeps tailored resume metadata and workspace stat
     profile.tailoredResumes[0]?.planningResult.changes[0]?.desiredPlainText,
     "Tailored bullet",
   );
+  assert.equal(
+    profile.tailoredResumes[0]?.openAiDebug.planning.prompt,
+    "First call prompt",
+  );
   assert.equal(profile.tailoredResumes[0]?.sourceAnnotatedLatexCode, null);
   assert.equal(
     profile.tailoredResumes[0]?.thesis?.jobDescriptionFocus,
@@ -219,6 +237,20 @@ test("parseTailorResumeProfile folds legacy model and user rows into one block e
         jobDescription: "Role text",
         jobIdentifier: "Applied research",
         latexCode: "\\documentclass{article}",
+        openAiDebug: {
+          implementation: {
+            outputJson:
+              '{\n  "changes": [\n    {\n      "segmentId": "experience.entry-1.bullet-1",\n      "latexCode": "\\\\resumeitem{Model suggested bullet}"\n    }\n  ]\n}',
+            prompt: "Second call prompt",
+            skippedReason: null,
+          },
+          planning: {
+            outputJson:
+              '{\n  "changes": [\n    {\n      "segmentId": "experience.entry-1.bullet-1",\n      "desiredPlainText": "Model suggested bullet",\n      "reason": "Model edit"\n    }\n  ]\n}',
+            prompt: "First call prompt",
+            skippedReason: null,
+          },
+        },
         pdfUpdatedAt: "2026-04-15T12:00:00.000Z",
         planningResult: {
           changes: [
@@ -263,7 +295,7 @@ test("parseTailorResumeProfile folds legacy model and user rows into one block e
   );
 });
 
-test("parseTailorResumeProfile rebuilds legacy tailored resume metadata when planningResult is missing", () => {
+test("parseTailorResumeProfile drops tailored resumes without the saved openai debug trace", () => {
   const profile = parseTailorResumeProfile({
     tailoredResumes: [
       {
@@ -278,6 +310,17 @@ test("parseTailorResumeProfile rebuilds legacy tailored resume metadata when pla
         jobIdentifier: "General",
         latexCode: "\\documentclass{article}",
         pdfUpdatedAt: null,
+        planningResult: {
+          changes: [],
+          companyName: "Anthropic",
+          displayName: "Anthropic - Product Engineer",
+          jobIdentifier: "General",
+          positionTitle: "Product Engineer",
+          thesis: {
+            jobDescriptionFocus: "Legacy focus",
+            resumeChanges: "Legacy changes",
+          },
+        },
         positionTitle: "Product Engineer",
         status: "ready",
         thesis: {
@@ -289,10 +332,5 @@ test("parseTailorResumeProfile rebuilds legacy tailored resume metadata when pla
     ],
   });
 
-  assert.equal(profile.tailoredResumes.length, 1);
-  assert.equal(profile.tailoredResumes[0]?.planningResult.companyName, "Anthropic");
-  assert.equal(profile.tailoredResumes[0]?.planningResult.displayName, "Anthropic - Product Engineer");
-  assert.equal(profile.tailoredResumes[0]?.planningResult.positionTitle, "Product Engineer");
-  assert.equal(profile.tailoredResumes[0]?.planningResult.jobIdentifier, "General");
-  assert.deepEqual(profile.tailoredResumes[0]?.planningResult.changes, []);
+  assert.deepEqual(profile.tailoredResumes, []);
 });

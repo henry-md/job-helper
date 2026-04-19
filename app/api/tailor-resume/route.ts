@@ -903,6 +903,7 @@ export async function PATCH(request: Request) {
           jobDescription,
           jobIdentifier: tailoringResult.jobIdentifier,
           latexCode: tailoringResult.latexCode,
+          openAiDebug: tailoringResult.openAiDebug,
           pdfUpdatedAt: tailoringResult.previewPdf ? tailoredResumeUpdatedAt : null,
           planningResult: tailoringResult.planningResult,
           positionTitle: tailoringResult.positionTitle,

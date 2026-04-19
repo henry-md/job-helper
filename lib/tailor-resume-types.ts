@@ -98,6 +98,17 @@ export type TailoredResumePlanningResult = {
   thesis: TailoredResumeThesis;
 };
 
+export type TailoredResumeOpenAiDebugStage = {
+  outputJson: string | null;
+  prompt: string | null;
+  skippedReason: string | null;
+};
+
+export type TailoredResumeOpenAiDebugTrace = {
+  implementation: TailoredResumeOpenAiDebugStage;
+  planning: TailoredResumeOpenAiDebugStage;
+};
+
 export type TailoredResumeRecord = {
   annotatedLatexCode: string;
   companyName: string;
@@ -109,6 +120,7 @@ export type TailoredResumeRecord = {
   jobDescription: string;
   jobIdentifier: string;
   latexCode: string;
+  openAiDebug: TailoredResumeOpenAiDebugTrace;
   pdfUpdatedAt: string | null;
   planningResult: TailoredResumePlanningResult;
   positionTitle: string;
@@ -567,6 +579,62 @@ function buildLegacyTailoredResumePlanningResult(input: {
   } satisfies TailoredResumePlanningResult;
 }
 
+function parseTailoredResumeOpenAiDebugStage(
+  value: unknown,
+): TailoredResumeOpenAiDebugStage | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const prompt = value.prompt === null ? null : readNullableString(value.prompt);
+  const outputJson =
+    value.outputJson === null ? null : readNullableString(value.outputJson);
+  const skippedReason =
+    value.skippedReason === null
+      ? null
+      : readNullableString(value.skippedReason);
+
+  if (
+    (value.prompt !== null && prompt === null) ||
+    (value.outputJson !== null && outputJson === null) ||
+    (value.skippedReason !== null && skippedReason === null)
+  ) {
+    return null;
+  }
+
+  if (prompt === null && outputJson === null && !skippedReason) {
+    return null;
+  }
+
+  return {
+    outputJson,
+    prompt,
+    skippedReason,
+  };
+}
+
+function parseTailoredResumeOpenAiDebugTrace(
+  value: unknown,
+): TailoredResumeOpenAiDebugTrace | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const planning = parseTailoredResumeOpenAiDebugStage(value.planning);
+  const implementation = parseTailoredResumeOpenAiDebugStage(
+    value.implementation,
+  );
+
+  if (!planning || !implementation) {
+    return null;
+  }
+
+  return {
+    implementation,
+    planning,
+  };
+}
+
 function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null {
   if (!isRecord(value)) {
     return null;
@@ -588,6 +656,7 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
   const positionTitle =
     typeof value.positionTitle === "string" ? value.positionTitle : null;
   const jobIdentifier = readNullableString(value.jobIdentifier);
+  const openAiDebug = parseTailoredResumeOpenAiDebugTrace(value.openAiDebug);
   const planningResult =
     parseTailoredResumePlanningResult(value.planningResult) ??
     buildLegacyTailoredResumePlanningResult({
@@ -617,6 +686,7 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
     companyName === null ||
     positionTitle === null ||
     !jobIdentifier ||
+    !openAiDebug ||
     !planningResult ||
     !thesis
   ) {
@@ -634,6 +704,7 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
     jobDescription,
     jobIdentifier,
     latexCode,
+    openAiDebug,
     pdfUpdatedAt,
     planningResult,
     positionTitle,

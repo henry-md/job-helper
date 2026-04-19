@@ -15,6 +15,7 @@ import {
 import type {
   TailorResumeLinkRecord,
   TailoredResumeBlockEditRecord,
+  TailoredResumeOpenAiDebugTrace,
   TailoredResumePlanningChange,
   TailoredResumePlanningResult,
   TailoredResumeThesis,
@@ -132,6 +133,7 @@ export type GenerateTailoredResumeResult = {
   jobIdentifier: string;
   latexCode: string;
   model: string;
+  openAiDebug: TailoredResumeOpenAiDebugTrace;
   outcome: TailoredResumeGenerationOutcome;
   planningResult: TailoredResumePlanningResult;
   positionTitle: string;
@@ -775,6 +777,41 @@ function buildTailoringImplementationInput(input: {
   ];
 }
 
+function serializeTailoredResumePrompt(input: {
+  instructions: string;
+  inputMessages: Array<{
+    content?: Array<{
+      text?: string;
+      type?: string;
+    }>;
+    role?: string;
+  }>;
+}) {
+  const serializedInput = input.inputMessages
+    .map((message) => {
+      const textBlocks = (message.content ?? [])
+        .filter((contentBlock) => contentBlock.type === "input_text")
+        .map((contentBlock) => contentBlock.text?.trim() ?? "")
+        .filter(Boolean);
+
+      if (textBlocks.length === 0) {
+        return null;
+      }
+
+      return [`Role: ${message.role ?? "user"}`, ...textBlocks].join("\n\n");
+    })
+    .filter((message) => message !== null)
+    .join("\n\n---\n\n");
+
+  return [
+    "Instructions:",
+    input.instructions.trim(),
+    "",
+    "Input:",
+    serializedInput || "[no input text]",
+  ].join("\n");
+}
+
 export async function generateTailoredResume(input: {
   annotatedLatexCode: string;
   jobDescription: string;
@@ -805,6 +842,20 @@ export async function generateTailoredResume(input: {
         "No intermediate plan was produced; the base resume was compiled without planned block edits.",
     },
   };
+  const fallbackOpenAiDebug: TailoredResumeOpenAiDebugTrace = {
+    implementation: {
+      outputJson: null,
+      prompt: null,
+      skippedReason:
+        "Implementation stage did not run because TEST_OPENAI_RESPONSE bypassed live OpenAI calls.",
+    },
+    planning: {
+      outputJson: null,
+      prompt: null,
+      skippedReason:
+        "Planning stage did not run because TEST_OPENAI_RESPONSE bypassed live OpenAI calls.",
+    },
+  };
   const readGenerationDurationMs = () => Math.max(0, Date.now() - startedAt);
 
   if (isTestOpenAIResponseEnabled()) {
@@ -828,6 +879,7 @@ export async function generateTailoredResume(input: {
         finalizedTestCandidate.normalizedLatex.annotatedLatex,
       ),
       model: TEST_OPENAI_RESPONSE_MODEL,
+      openAiDebug: fallbackOpenAiDebug,
       outcome: classifyTailoredResumeGenerationOutcome({
         hasAppliedCandidate: true,
         hasPreviewPdf: validation.ok,
@@ -860,19 +912,34 @@ export async function generateTailoredResume(input: {
   let lastSavedLinkUpdates: TailorResumeSavedLinkUpdate[] = [];
   let lastThesis: TailoredResumeThesis | null = null;
   let lastPlanningResult = fallbackPlanningResult;
+  let lastOpenAiDebug = fallbackOpenAiDebug;
   let lastModel = model;
   let hasAppliedCandidate = false;
   let completedPlanningAttempts = 0;
   let completedImplementationAttempts = 0;
   let plan: TailoredResumePlanResponse | null = null;
+  let planningPrompt: string | null = null;
+  let planningOutputJson: string | null = null;
+  let implementationPrompt: string | null = null;
+  let implementationOutputJson: string | null = null;
+  let implementationSkippedReason: string | null =
+    "Implementation stage has not run yet.";
 
   for (let attempt = 1; attempt <= maxPlanningAttempts; attempt += 1) {
+    const planInput = buildTailoringPlanInput({
+      jobDescription: input.jobDescription,
+      planningSnapshot,
+    });
+    const planInstructions = buildTailoringPlanInstructions({
+      feedback: planningFeedback,
+    });
+    planningPrompt = serializeTailoredResumePrompt({
+      inputMessages: planInput,
+      instructions: planInstructions,
+    });
     const response = await client.responses.create({
-      input: buildTailoringPlanInput({
-        jobDescription: input.jobDescription,
-        planningSnapshot,
-      }),
-      instructions: buildTailoringPlanInstructions({ feedback: planningFeedback }),
+      input: planInput,
+      instructions: planInstructions,
       model,
       text: {
         verbosity: "low",
@@ -916,9 +983,22 @@ export async function generateTailoredResume(input: {
     }
 
     plan = nextPlan;
+    planningOutputJson = outputText;
     lastMetadata = normalizeTailoredResumeMetadata(nextPlan);
     lastThesis = nextPlan.thesis;
     lastPlanningResult = nextPlan;
+    lastOpenAiDebug = {
+      implementation: {
+        outputJson: implementationOutputJson,
+        prompt: implementationPrompt,
+        skippedReason: implementationSkippedReason,
+      },
+      planning: {
+        outputJson: planningOutputJson,
+        prompt: planningPrompt,
+        skippedReason: null,
+      },
+    };
     break;
   }
 
@@ -933,6 +1013,7 @@ export async function generateTailoredResume(input: {
       jobIdentifier: lastMetadata.jobIdentifier,
       latexCode: stripTailorResumeSegmentIds(lastAnnotatedLatex),
       model: lastModel,
+      openAiDebug: lastOpenAiDebug,
       outcome: classifyTailoredResumeGenerationOutcome({
         hasAppliedCandidate,
         hasPreviewPdf: false,
@@ -950,6 +1031,20 @@ export async function generateTailoredResume(input: {
   }
 
   if (plan.changes.length === 0) {
+    implementationSkippedReason =
+      "Implementation stage was skipped because the planner returned no segment changes.";
+    lastOpenAiDebug = {
+      implementation: {
+        outputJson: null,
+        prompt: null,
+        skippedReason: implementationSkippedReason,
+      },
+      planning: {
+        outputJson: planningOutputJson,
+        prompt: planningPrompt,
+        skippedReason: null,
+      },
+    };
     const normalizedCandidate = applySavedTailoredResumeLinks(
       normalizedInput.annotatedLatex,
       linkOverrides,
@@ -976,6 +1071,7 @@ export async function generateTailoredResume(input: {
           normalizedCandidate.normalizedLatex.annotatedLatex,
         ),
         model: lastModel,
+        openAiDebug: lastOpenAiDebug,
         outcome: classifyTailoredResumeGenerationOutcome({
           hasAppliedCandidate: true,
           hasPreviewPdf: true,
@@ -1008,6 +1104,7 @@ export async function generateTailoredResume(input: {
       jobIdentifier: lastMetadata.jobIdentifier,
       latexCode: stripTailorResumeSegmentIds(lastAnnotatedLatex),
       model: lastModel,
+      openAiDebug: lastOpenAiDebug,
       outcome: classifyTailoredResumeGenerationOutcome({
         hasAppliedCandidate: true,
         hasPreviewPdf: false,
@@ -1022,16 +1119,23 @@ export async function generateTailoredResume(input: {
     };
   }
 
+  implementationSkippedReason = null;
   for (let attempt = 1; attempt <= maxTailoredResumeAttempts; attempt += 1) {
+    const implementationInput = buildTailoringImplementationInput({
+      jobDescription: input.jobDescription,
+      plan,
+      planningBlocksById,
+    });
+    const implementationInstructions = buildTailoringImplementationInstructions({
+      feedback: implementationFeedback,
+    });
+    implementationPrompt = serializeTailoredResumePrompt({
+      inputMessages: implementationInput,
+      instructions: implementationInstructions,
+    });
     const response = await client.responses.create({
-      input: buildTailoringImplementationInput({
-        jobDescription: input.jobDescription,
-        plan,
-        planningBlocksById,
-      }),
-      instructions: buildTailoringImplementationInstructions({
-        feedback: implementationFeedback,
-      }),
+      input: implementationInput,
+      instructions: implementationInstructions,
       model,
       text: {
         verbosity: "low",
@@ -1072,6 +1176,19 @@ export async function generateTailoredResume(input: {
       continue;
     }
 
+    implementationOutputJson = outputText;
+    lastOpenAiDebug = {
+      implementation: {
+        outputJson: implementationOutputJson,
+        prompt: implementationPrompt,
+        skippedReason: null,
+      },
+      planning: {
+        outputJson: planningOutputJson,
+        prompt: planningPrompt,
+        skippedReason: null,
+      },
+    };
     const candidateForLogging: TailoredResumeStructuredResponse = {
       changes: implementation.changes.map((change) => ({
         latexCode: change.latexCode,
@@ -1151,6 +1268,7 @@ export async function generateTailoredResume(input: {
           normalizedCandidate.normalizedLatex.annotatedLatex,
         ),
         model: lastModel,
+        openAiDebug: lastOpenAiDebug,
         outcome: classifyTailoredResumeGenerationOutcome({
           hasAppliedCandidate: true,
           hasPreviewPdf: true,
@@ -1191,6 +1309,7 @@ export async function generateTailoredResume(input: {
     jobIdentifier: lastMetadata.jobIdentifier,
     latexCode: stripTailorResumeSegmentIds(lastAnnotatedLatex),
     model: lastModel,
+    openAiDebug: lastOpenAiDebug,
     outcome: classifyTailoredResumeGenerationOutcome({
       hasAppliedCandidate,
       hasPreviewPdf: false,
