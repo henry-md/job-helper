@@ -417,6 +417,23 @@ function summarizeHighlightRectGroup(rects: HighlightRect[]) {
   };
 }
 
+function buildInteractivePreviewFocusScrollSignature(input: {
+  focusKey: string;
+  focusRequest: number;
+  rects: HighlightRect[];
+}) {
+  return `${input.focusKey}:${input.focusRequest}:${input.rects
+    .map((rect) =>
+      [
+        rect.left.toFixed(2),
+        rect.top.toFixed(2),
+        rect.width.toFixed(2),
+        rect.height.toFixed(2),
+      ].join(","),
+    )
+    .join("|")}`;
+}
+
 function resolveInteractivePreviewCenteredScrollTop(input: {
   focusGroup: { height: number; top: number };
   pageElement: HTMLDivElement;
@@ -551,7 +568,7 @@ function InteractivePreviewPage({
   );
   const pageRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const lastScrolledFocusTokenRef = useRef<string | null>(null);
+  const lastScrolledFocusSignatureRef = useRef<string | null>(null);
 
   // Recompute overlays without repainting the underlying PDF page on every edit click.
   useEffect(() => {
@@ -696,10 +713,24 @@ function InteractivePreviewPage({
     }
 
     const focusToken = `${focusKey}:${focusRequest}`;
+    const focusScrollSignature = buildInteractivePreviewFocusScrollSignature({
+      focusKey,
+      focusRequest,
+      rects: focusHighlightRects,
+    });
 
     setGuidedFocusToken(focusToken);
 
-    if (lastScrolledFocusTokenRef.current === focusToken) {
+    const pageElement = pageRef.current;
+    const scrollContainer = scrollContainerRef.current;
+    const focusGroup = summarizeHighlightRectGroup(focusHighlightRects);
+
+    if (
+      lastScrolledFocusSignatureRef.current === focusScrollSignature ||
+      !pageElement ||
+      !scrollContainer ||
+      !focusGroup
+    ) {
       const clearFocusTimer = window.setTimeout(() => {
         setGuidedFocusToken((currentToken) =>
           currentToken === focusToken ? null : currentToken,
@@ -711,15 +742,7 @@ function InteractivePreviewPage({
       };
     }
 
-    lastScrolledFocusTokenRef.current = focusToken;
-
-    const pageElement = pageRef.current;
-    const scrollContainer = scrollContainerRef.current;
-    const focusGroup = summarizeHighlightRectGroup(focusHighlightRects);
-
-    if (!pageElement || !scrollContainer || !focusGroup) {
-      return;
-    }
+    lastScrolledFocusSignatureRef.current = focusScrollSignature;
 
     const clampedScrollTop = resolveInteractivePreviewCenteredScrollTop({
       focusGroup,
