@@ -33,7 +33,7 @@ test("buildTailoredResumeBlockEdits snapshots before and after LaTeX by segment"
   assert.equal(edits[0]?.editId, `${targetSegment.id}:model`);
   assert.equal(edits[0]?.beforeLatexCode.includes("\\resumeitem"), true);
   assert.equal(edits[0]?.afterLatexCode, "\\resumeitem{Tailored bullet one}");
-  assert.equal(edits[0]?.source, "model");
+  assert.equal(edits[0]?.customLatexCode, null);
   assert.equal(edits[0]?.state, "applied");
 });
 

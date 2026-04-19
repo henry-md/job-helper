@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildTailoredResumeReviewEdits,
   buildTailoredResumeCombinedActiveEdits,
   rebuildTailoredResumeAnnotatedLatex,
   resolveTailoredResumeSourceAnnotatedLatex,
+  updateTailoredResumeEditState,
 } from "../lib/tailor-resume-edit-history.ts";
 import { tailorResumeLatexExample } from "../lib/tailor-resume-latex-example.ts";
 import {
@@ -52,21 +54,10 @@ test("combined active edits collapse model and user history into the final diff"
           "\\resumeitem{Added explicit open-source collaboration bullet}",
         beforeLatexCode: sourceBlock.latexCode,
         command: "resumeitem",
+        customLatexCode:
+          "\\resumeitem{User-revised open-source collaboration bullet}",
         editId: `${sourceBlock.id}:model`,
         reason: "Model edit",
-        source: "model",
-        state: "applied",
-        segmentId: sourceBlock.id,
-      },
-      {
-        afterLatexCode:
-          "\\resumeitem{User-revised open-source collaboration bullet}",
-        beforeLatexCode:
-          "\\resumeitem{Added explicit open-source collaboration bullet}",
-        command: "resumeitem",
-        editId: `${sourceBlock.id}:user`,
-        reason: "User edited",
-        source: "user",
         state: "applied",
         segmentId: sourceBlock.id,
       },
@@ -80,7 +71,79 @@ test("combined active edits collapse model and user history into the final diff"
     combinedEdits[0]?.afterLatexCode,
     "\\resumeitem{User-revised open-source collaboration bullet}",
   );
-  assert.equal(combinedEdits[0]?.reason, "User edited");
+  assert.equal(combinedEdits[0]?.reason, "Model edit");
+});
+
+test("review edits keep the original model block visible when the user customizes it", () => {
+  const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
+  const sourceBlock = findBlockBySnippet(
+    normalized.annotatedLatex,
+    "Created full-stack dashboard for project management",
+  );
+  const reviewEdits = buildTailoredResumeReviewEdits({
+    edits: [
+      {
+        afterLatexCode:
+          "\\resumeitem{Added explicit open-source collaboration bullet}",
+        beforeLatexCode: sourceBlock.latexCode,
+        command: "resumeitem",
+        customLatexCode:
+          "\\resumeitem{User-revised open-source collaboration bullet}",
+        editId: `${sourceBlock.id}:model`,
+        reason: "Model edit",
+        state: "applied",
+        segmentId: sourceBlock.id,
+      },
+    ],
+  });
+
+  assert.equal(reviewEdits.length, 1);
+  assert.equal(reviewEdits[0]?.editId, `${sourceBlock.id}:model`);
+  assert.equal(
+    reviewEdits[0]?.afterLatexCode,
+    "\\resumeitem{Added explicit open-source collaboration bullet}",
+  );
+  assert.equal(
+    reviewEdits[0]?.customLatexCode,
+    "\\resumeitem{User-revised open-source collaboration bullet}",
+  );
+});
+
+test("changing the model choice clears user overrides for the same segment", () => {
+  const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
+  const sourceBlock = findBlockBySnippet(
+    normalized.annotatedLatex,
+    "Created full-stack dashboard for project management",
+  );
+  const nextEdits = updateTailoredResumeEditState({
+    editId: `${sourceBlock.id}:model`,
+    edits: [
+      {
+        afterLatexCode:
+          "\\resumeitem{Added explicit open-source collaboration bullet}",
+        beforeLatexCode: sourceBlock.latexCode,
+        command: "resumeitem",
+        customLatexCode:
+          "\\resumeitem{User-revised open-source collaboration bullet}",
+        editId: `${sourceBlock.id}:model`,
+        reason: "Model edit",
+        state: "applied",
+        segmentId: sourceBlock.id,
+      },
+    ],
+    nextState: "rejected",
+  });
+
+  assert.ok(nextEdits);
+  assert.equal(
+    nextEdits?.find((edit) => edit.editId === `${sourceBlock.id}:model`)?.state,
+    "rejected",
+  );
+  assert.equal(
+    nextEdits?.find((edit) => edit.editId === `${sourceBlock.id}:model`)
+      ?.customLatexCode,
+    null,
+  );
 });
 
 test("rebuilding tailored resume latex drops rejected edits from the effective document", () => {
@@ -98,9 +161,9 @@ test("rebuilding tailored resume latex drops rejected edits from the effective d
           "\\resumeitem{Added explicit open-source collaboration bullet}",
         beforeLatexCode: sourceBlock.latexCode,
         command: "resumeitem",
+        customLatexCode: null,
         editId: `${sourceBlock.id}:model`,
         reason: "Model edit",
-        source: "model",
         state: "rejected",
         segmentId: sourceBlock.id,
       },
@@ -137,9 +200,9 @@ test("source annotated latex falls back by reversing the earliest edit on legacy
           "\\resumeitem{Added explicit open-source collaboration bullet}",
         beforeLatexCode: sourceBlock.latexCode,
         command: "resumeitem",
+        customLatexCode: null,
         editId: `${sourceBlock.id}:model`,
         reason: "Model edit",
-        source: "model",
         state: "applied",
         segmentId: sourceBlock.id,
       },

@@ -9,10 +9,6 @@ import type { TailoredResumeRecord } from "./tailor-resume-types.ts";
 export function repairTailoredResumeForCompile(record: TailoredResumeRecord) {
   let didChange = false;
   const repairedEdits = record.edits.map((edit) => {
-    if (edit.source !== "model") {
-      return edit;
-    }
-
     const repairedAfterLatexCode = repairTailoredResumeModelLatexBlock(
       edit.afterLatexCode,
     );

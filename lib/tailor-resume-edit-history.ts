@@ -38,6 +38,53 @@ function readNormalizedAnnotatedLatex(latexCode: string) {
   return normalizeTailorResumeLatex(latexCode).annotatedLatex;
 }
 
+export function resolveTailoredResumeCurrentEditLatexCode(
+  edit: Pick<
+    TailoredResumeBlockEditRecord,
+    "afterLatexCode" | "beforeLatexCode" | "customLatexCode" | "state"
+  >,
+) {
+  if (edit.customLatexCode !== null) {
+    return edit.customLatexCode;
+  }
+
+  return edit.state === "applied" ? edit.afterLatexCode : edit.beforeLatexCode;
+}
+
+export function buildTailoredResumeReviewEdits(
+  record: Pick<TailoredResumeRecord, "edits">,
+) {
+  return record.edits;
+}
+
+export function updateTailoredResumeEditState(input: {
+  editId: string;
+  edits: TailoredResumeBlockEditRecord[];
+  nextState: TailoredResumeBlockEditRecord["state"];
+}): TailoredResumeBlockEditRecord[] | null {
+  const targetEdit = input.edits.find((edit) => edit.editId === input.editId);
+
+  if (!targetEdit) {
+    return null;
+  }
+
+  return input.edits.map<TailoredResumeBlockEditRecord>((edit) => {
+    if (edit.editId === input.editId) {
+      if (edit.state === input.nextState && edit.customLatexCode === null) {
+        return edit;
+      }
+
+      return {
+        ...edit,
+        customLatexCode: null,
+        state: input.nextState,
+      };
+    }
+
+    return edit;
+  });
+}
+
 export function resolveTailoredResumeSourceAnnotatedLatex(
   record: Pick<
     TailoredResumeRecord,
@@ -91,25 +138,17 @@ export function buildTailoredResumeCombinedActiveEdits(
 ) {
   const sourceAnnotatedLatexCode = resolveTailoredResumeSourceAnnotatedLatex(record);
   const sourceBlocks = readAnnotatedTailorResumeBlocks(sourceAnnotatedLatexCode);
-  const latestAppliedEditsBySegmentId = new Map<string, TailoredResumeBlockEditRecord>();
-
-  for (const edit of record.edits) {
-    if (edit.state !== "applied") {
-      continue;
-    }
-
-    latestAppliedEditsBySegmentId.set(edit.segmentId, edit);
-  }
+  const editsBySegmentId = new Map(record.edits.map((edit) => [edit.segmentId, edit]));
 
   return sourceBlocks.flatMap((block) => {
-    const latestAppliedEdit = latestAppliedEditsBySegmentId.get(block.id);
+    const latestAppliedEdit = editsBySegmentId.get(block.id);
 
     if (!latestAppliedEdit) {
       return [];
     }
 
     const normalizedAfterLatexCode = normalizeStoredBlockLatex(
-      latestAppliedEdit.afterLatexCode,
+      resolveTailoredResumeCurrentEditLatexCode(latestAppliedEdit),
     );
 
     if (normalizedAfterLatexCode === block.latexCode) {

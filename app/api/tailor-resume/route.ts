@@ -39,6 +39,7 @@ import {
   buildTailoredResumeResolvedSegmentMap,
   rebuildTailoredResumeAnnotatedLatex,
   resolveTailoredResumeSourceAnnotatedLatex,
+  updateTailoredResumeEditState,
 } from "@/lib/tailor-resume-edit-history";
 import { repairTailoredResumeForCompile } from "@/lib/tailored-resume-repair";
 import {
@@ -1129,20 +1130,13 @@ export async function PATCH(request: Request) {
     }
 
     const tailoredResume = rawProfile.tailoredResumes[tailoredResumeIndex];
-    let didUpdateEdit = false;
-    const nextEdits: TailoredResumeBlockEditRecord[] = tailoredResume.edits.map((edit) => {
-      if (edit.editId !== editId) {
-        return edit;
-      }
-
-      didUpdateEdit = true;
-      return {
-        ...edit,
-        state: nextEditState,
-      };
+    const nextEdits = updateTailoredResumeEditState({
+      editId,
+      edits: tailoredResume.edits,
+      nextState: nextEditState,
     });
 
-    if (!didUpdateEdit) {
+    if (!nextEdits) {
       return NextResponse.json(
         { error: "The tailored resume edit could not be found." },
         { status: 404 },
@@ -1273,20 +1267,42 @@ export async function PATCH(request: Request) {
       }
     }
 
-    const nextEditId = randomUUID();
-    const nextEdits: TailoredResumeBlockEditRecord[] = [
-      ...tailoredResume.edits,
-      {
-        afterLatexCode: normalizedReplacementLatexCode,
-        beforeLatexCode: resolvedSegment.latexCode,
+    const existingEdit = tailoredResume.edits.find((edit) => edit.segmentId === segmentId);
+
+    if (!existingEdit) {
+      return NextResponse.json(
+        { error: "The selected LaTeX block could not be found in the review timeline." },
+        { status: 404 },
+      );
+    }
+
+    const nextEdits: TailoredResumeBlockEditRecord[] = tailoredResume.edits.map((edit) => {
+      if (edit.editId !== existingEdit.editId) {
+        return edit;
+      }
+
+      if (normalizedReplacementLatexCode === edit.beforeLatexCode) {
+        return {
+          ...edit,
+          customLatexCode: null,
+          state: "rejected",
+        };
+      }
+
+      if (normalizedReplacementLatexCode === edit.afterLatexCode) {
+        return {
+          ...edit,
+          customLatexCode: null,
+          state: "applied",
+        };
+      }
+
+      return {
+        ...edit,
         command: resolvedSegment.command,
-        editId: nextEditId,
-        reason: "User edited",
-        segmentId,
-        source: "user" as const,
-        state: "applied" as const,
-      },
-    ];
+        customLatexCode: normalizedReplacementLatexCode,
+      };
+    });
     const rebuiltAnnotatedLatexCode = rebuildTailoredResumeAnnotatedLatex({
       annotatedLatexCode: tailoredResume.annotatedLatexCode,
       edits: nextEdits,
@@ -1326,7 +1342,7 @@ export async function PATCH(request: Request) {
       profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
         includeLockedOnly: true,
       }),
-      tailoredResumeEditId: nextEditId,
+      tailoredResumeEditId: existingEdit.editId,
       tailoredResumeId,
     });
   }
