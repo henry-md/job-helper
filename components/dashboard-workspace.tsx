@@ -365,6 +365,7 @@ export default function DashboardWorkspace({
       </header>
 
       <TailoredResumeReviewModal
+        debugUiEnabled={tailorResumeDebugUiEnabled}
         key={reviewingTailoredResume?.id ?? "closed"}
         onClose={closeTailoredResumeReview}
         onTailoredResumesChange={setTailoredResumes}

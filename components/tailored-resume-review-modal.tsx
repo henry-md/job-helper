@@ -2,7 +2,7 @@
 
 import { Check, Download, Pencil, X } from "lucide-react";
 import { createPortal } from "react-dom";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import TailoredResumeInteractivePreview from "@/components/tailored-resume-interactive-preview";
 import {
@@ -10,7 +10,11 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import { buildTailoredResumeResolvedSegmentMap } from "@/lib/tailor-resume-edit-history";
+import {
+  buildTailoredResumeResolvedSegmentMap,
+  buildTailoredResumeReviewEdits,
+  resolveTailoredResumeCurrentEditLatexCode,
+} from "@/lib/tailor-resume-edit-history";
 import { buildTailoredResumeInteractivePreviewQueries } from "@/lib/tailor-resume-preview-focus";
 import type {
   TailoredResumeBlockEditRecord,
@@ -20,7 +24,6 @@ import type {
 import {
   buildTailoredResumeDiffRows,
   formatTailoredResumeEditLabel,
-  summarizeTailoredResumeEdit,
   type TailoredResumeDiffSegment,
 } from "@/lib/tailor-resume-review";
 import {
@@ -63,9 +66,24 @@ function isEditableKeyboardTarget(target: EventTarget | null) {
 }
 
 type TailoredResumeAcceptedBlockChoice = "original" | "tailored";
+type TailoredResumeEditState = TailoredResumeBlockEditRecord["state"];
 
 function normalizeComparedTailoredResumeBlock(latexCode: string | null | undefined) {
   return stripTailorResumeSegmentIds(latexCode ?? "").replace(/\n+$/, "");
+}
+
+function resolveAcceptedBlockChoiceFromEditState(
+  editState: TailoredResumeEditState | null | undefined,
+) {
+  if (editState === "rejected") {
+    return "original" satisfies TailoredResumeAcceptedBlockChoice;
+  }
+
+  if (editState === "applied") {
+    return "tailored" satisfies TailoredResumeAcceptedBlockChoice;
+  }
+
+  return null;
 }
 
 function resolveAcceptedBlockChoice(input: {
@@ -77,10 +95,7 @@ function resolveAcceptedBlockChoice(input: {
   }
 
   const normalizedCurrentLatexCode = normalizeComparedTailoredResumeBlock(
-    input.currentLatexCode ??
-      (input.selectedEdit.state === "applied"
-        ? input.selectedEdit.afterLatexCode
-        : input.selectedEdit.beforeLatexCode),
+    input.currentLatexCode ?? resolveTailoredResumeCurrentEditLatexCode(input.selectedEdit),
   );
 
   if (
@@ -173,15 +188,262 @@ type TailoredResumeMutationResponse = {
 
 const defaultReviewDetailsPaneSize = 58;
 const defaultReviewPreviewPaneSize = 42;
+const editReasonClampLineCount = 4;
 const maxTailoredResumeDisplayNameLength = 200;
 const selectedReviewSurfaceClassName =
   "border-emerald-300/38 bg-[linear-gradient(180deg,rgba(52,211,153,0.06),rgba(16,185,129,0.02))] shadow-[0_0_0_1px_rgba(16,185,129,0.12),inset_0_1px_0_rgba(167,243,208,0.05)]";
+const inlineMoreButtonClassName =
+  "inline-flex translate-y-[-0.04rem] items-center rounded-[0.45rem] border border-emerald-300/35 px-1.5 py-[1px] text-[10px] font-medium leading-[1.05rem] tracking-[0.08em] lowercase text-emerald-200";
+
+function trimInlineReasonPreviewText(reason: string, maxLength: number) {
+  if (maxLength >= reason.length) {
+    return reason.trimEnd();
+  }
+
+  let preview = reason.slice(0, Math.max(0, maxLength)).trimEnd();
+
+  if (!preview) {
+    return "";
+  }
+
+  const previousWhitespaceIndex = preview.search(/\s\S*$/);
+
+  if (previousWhitespaceIndex >= Math.max(0, preview.length - 18)) {
+    preview = preview.slice(0, previousWhitespaceIndex).trimEnd();
+  }
+
+  return preview || reason.slice(0, Math.max(1, maxLength)).trimEnd();
+}
+
+function TailoredResumeEditSummaryCard({
+  displayedEditState,
+  edit,
+  index,
+  isSelected,
+  onOpenReason,
+  onSelect,
+  registerButtonRef,
+  totalEdits,
+}: {
+  displayedEditState: TailoredResumeEditState;
+  edit: TailoredResumeBlockEditRecord;
+  index: number;
+  isSelected: boolean;
+  onOpenReason: () => void;
+  onSelect: () => void;
+  registerButtonRef: (element: HTMLButtonElement | null) => void;
+  totalEdits: number;
+}) {
+  const [reasonPreview, setReasonPreview] = useState(() => ({
+    isOverflowing: false,
+    text: edit.reason,
+  }));
+  const reasonMeasureRef = useRef<HTMLParagraphElement | null>(null);
+  const reasonMeasureTextRef = useRef<HTMLSpanElement | null>(null);
+  const reasonMeasureButtonRef = useRef<HTMLSpanElement | null>(null);
+  const reasonShellRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    const measureElement = reasonMeasureRef.current;
+    const measureTextElement = reasonMeasureTextRef.current;
+    const measureButtonElement = reasonMeasureButtonRef.current;
+    const shellElement = reasonShellRef.current;
+
+    if (
+      !measureElement ||
+      !measureTextElement ||
+      !measureButtonElement ||
+      !shellElement
+    ) {
+      return;
+    }
+
+    const updateOverflowState = () => {
+      const computedStyle = window.getComputedStyle(measureElement);
+      const lineHeight = Number.parseFloat(computedStyle.lineHeight);
+      const shellHeight = shellElement.getBoundingClientRect().height;
+      const clampHeight = Number.isFinite(lineHeight)
+        ? Math.max(shellHeight, lineHeight * editReasonClampLineCount)
+        : Math.max(shellHeight, 80);
+      const setMeasuredPreview = (text: string, overflowing: boolean) => {
+        measureTextElement.textContent = overflowing ? `${text}... ` : text;
+        measureButtonElement.hidden = !overflowing;
+      };
+
+      setMeasuredPreview(edit.reason, false);
+
+      if (measureElement.getBoundingClientRect().height <= clampHeight + 1) {
+        setReasonPreview((currentPreview) =>
+          !currentPreview.isOverflowing && currentPreview.text === edit.reason
+            ? currentPreview
+            : {
+                isOverflowing: false,
+                text: edit.reason,
+              },
+        );
+        return;
+      }
+
+      let low = 0;
+      let high = edit.reason.length;
+      let bestFitText = "";
+
+      while (low <= high) {
+        const candidateLength = Math.floor((low + high) / 2);
+        const candidateText = trimInlineReasonPreviewText(edit.reason, candidateLength);
+
+        setMeasuredPreview(candidateText, true);
+
+        if (measureElement.getBoundingClientRect().height <= clampHeight + 1) {
+          bestFitText = candidateText;
+          low = candidateLength + 1;
+        } else {
+          high = candidateLength - 1;
+        }
+      }
+
+      setReasonPreview((currentPreview) =>
+        currentPreview.isOverflowing && currentPreview.text === bestFitText
+          ? currentPreview
+          : {
+              isOverflowing: true,
+              text: bestFitText,
+            },
+      );
+    };
+
+    let frame = window.requestAnimationFrame(updateOverflowState);
+    const resizeObserver = new ResizeObserver(() => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(updateOverflowState);
+    });
+    resizeObserver.observe(shellElement);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+    };
+  }, [edit.reason]);
+
+  const editReasonToneClass =
+    displayedEditState === "rejected"
+      ? "text-rose-100"
+      : isSelected
+        ? "text-zinc-50"
+        : "text-zinc-300";
+
+  return (
+    <div className="flex items-stretch">
+      <div
+        className={`relative h-full w-[min(21rem,70vw)] snap-start overflow-hidden rounded-[1rem] border transition focus-within:ring-1 focus-within:ring-inset focus-within:ring-offset-0 sm:w-[17.5rem] xl:w-[18.5rem] ${
+          isSelected
+            ? `${selectedReviewSurfaceClassName} focus-within:ring-white/15`
+            : "border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))] hover:border-white/15 hover:bg-white/5 focus-within:ring-white/20"
+        }`}
+      >
+        <button
+          aria-label={`Select ${formatTailoredResumeEditLabel(edit)}`}
+          aria-pressed={isSelected}
+          className="absolute inset-0 z-0 rounded-[inherit] focus-visible:outline-none"
+          onClick={onSelect}
+          ref={registerButtonRef}
+          type="button"
+        />
+
+        <div className="relative z-10 flex h-full min-w-0 flex-col px-3 pb-3 pt-3 pointer-events-none">
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <span
+                className={`size-2 shrink-0 rounded-full ${
+                  isSelected
+                    ? "bg-emerald-300 shadow-[0_0_0_3px_rgba(16,185,129,0.12)]"
+                    : "bg-zinc-600"
+                }`}
+              />
+              <p className="min-w-0 flex-1 truncate text-[15px] font-medium text-zinc-100">
+                {formatTailoredResumeEditLabel(edit)}
+              </p>
+              <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-zinc-500">
+                {edit.customLatexCode !== null ? "Custom" : "Model"}
+              </span>
+              {displayedEditState === "rejected" ? (
+                <span className="shrink-0 rounded-full border border-rose-300/20 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-rose-200">
+                  Rejected
+                </span>
+                ) : null}
+            </div>
+
+            <div className="relative mt-3 flex min-h-[6.25rem] flex-1" ref={reasonShellRef}>
+              <p
+                className={`whitespace-pre-wrap break-words text-[13px] leading-5 ${editReasonToneClass}`}
+                title={edit.reason}
+              >
+                {reasonPreview.isOverflowing ? (
+                  <>
+                    {reasonPreview.text}
+                    {"... "}
+                    <button
+                      aria-label="Show full edit reason"
+                      className={`${inlineMoreButtonClassName} pointer-events-auto transition hover:border-emerald-200/55 hover:text-emerald-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-300/35`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onOpenReason();
+                      }}
+                      type="button"
+                    >
+                      more
+                    </button>
+                  </>
+                ) : (
+                  reasonPreview.text
+                )}
+              </p>
+
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-0 invisible"
+              >
+                <p
+                  className={`whitespace-pre-wrap break-words text-[13px] leading-5 ${editReasonToneClass}`}
+                  ref={reasonMeasureRef}
+                >
+                  <span ref={reasonMeasureTextRef} />
+                  <span
+                    className={inlineMoreButtonClassName}
+                    hidden
+                    ref={reasonMeasureButtonRef}
+                  >
+                    more
+                  </span>
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {index < totalEdits - 1 ? (
+        <div
+          aria-hidden="true"
+          className="flex w-10 shrink-0 items-center justify-center"
+        >
+          <span className="h-px w-3 bg-gradient-to-r from-transparent via-white/15 to-white/25" />
+          <span className="mx-1 h-2 w-2 rounded-full border border-white/20 bg-zinc-700/70" />
+          <span className="h-px w-3 bg-gradient-to-r from-white/25 via-white/15 to-transparent" />
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export default function TailoredResumeReviewModal({
+  debugUiEnabled,
   onClose,
   onTailoredResumesChange,
   record,
 }: {
+  debugUiEnabled: boolean;
   onClose: () => void;
   onTailoredResumesChange: (
     tailoredResumes: TailorResumeProfile["tailoredResumes"],
@@ -189,7 +451,7 @@ export default function TailoredResumeReviewModal({
   record: TailoredResumeRecord | null;
 }) {
   const [selectedEditId, setSelectedEditId] = useState<string | null>(
-    () => record?.edits[0]?.editId ?? null,
+    () => (record ? buildTailoredResumeReviewEdits(record)[0]?.editId ?? null : null),
   );
   const [editRailScrollState, setEditRailScrollState] = useState(() => ({
     canScrollLeft: false,
@@ -199,6 +461,7 @@ export default function TailoredResumeReviewModal({
   const [isEditingLatexSegment, setIsEditingLatexSegment] = useState(false);
   const [isRenamingDisplayName, setIsRenamingDisplayName] = useState(false);
   const [isThesisOpen, setIsThesisOpen] = useState(false);
+  const [isDevInspectorOpen, setIsDevInspectorOpen] = useState(false);
   const [interactivePreviewFocusRequest, setInteractivePreviewFocusRequest] =
     useState(0);
   const [draftDisplayName, setDraftDisplayName] = useState(
@@ -207,10 +470,16 @@ export default function TailoredResumeReviewModal({
   const [draftEditedLatexCode, setDraftEditedLatexCode] = useState("");
   const [isDownloadingPreviewPdf, setIsDownloadingPreviewPdf] = useState(false);
   const [isSavingDisplayName, setIsSavingDisplayName] = useState(false);
+  const [optimisticEditStateById, setOptimisticEditStateById] = useState<
+    Partial<Record<string, TailoredResumeEditState>>
+  >({});
   const [suppressedAcceptedBlockChoiceEditId, setSuppressedAcceptedBlockChoiceEditId] =
     useState<string | null>(null);
   const [isSavingTailoredResumeEdit, setIsSavingTailoredResumeEdit] = useState(false);
   const [isRecoveringPreview, setIsRecoveringPreview] = useState(false);
+  const [expandedEditReasonEditId, setExpandedEditReasonEditId] = useState<
+    string | null
+  >(null);
   const [isWideLayout, setIsWideLayout] = useState(
     () =>
       typeof window !== "undefined" &&
@@ -219,6 +488,8 @@ export default function TailoredResumeReviewModal({
   const editRailRef = useRef<HTMLDivElement | null>(null);
   const editButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const displayNameInputRef = useRef<HTMLInputElement | null>(null);
+  const devInspectorCloseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const expandedReasonCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const editedLatexTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const lastPreviewRecoveryRecordIdRef = useRef<string | null>(null);
   const thesisPopoverRef = useRef<HTMLDivElement | null>(null);
@@ -255,13 +526,18 @@ export default function TailoredResumeReviewModal({
     scrollEditIntoView(editId, options.behavior ?? "smooth");
   }
 
+  const reviewEdits = useMemo(
+    () => (record ? buildTailoredResumeReviewEdits(record) : []),
+    [record],
+  );
   const resolvedSelectedEditId =
-    record?.edits.some((edit) => edit.editId === selectedEditId)
+    reviewEdits.some((edit) => edit.editId === selectedEditId)
       ? selectedEditId
-      : record?.edits[0]?.editId ?? null;
-  const selectedEdit = record
-    ? resolveSelectedEdit(record.edits, resolvedSelectedEditId)
-    : null;
+      : reviewEdits[0]?.editId ?? null;
+  const selectedEdit = resolveSelectedEdit(reviewEdits, resolvedSelectedEditId);
+  const selectedEditOptimisticState = selectedEdit
+    ? optimisticEditStateById[selectedEdit.editId]
+    : undefined;
 
   useEffect(() => {
     if (!record) {
@@ -270,6 +546,16 @@ export default function TailoredResumeReviewModal({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (isDevInspectorOpen) {
+          setIsDevInspectorOpen(false);
+          return;
+        }
+
+        if (expandedEditReasonEditId) {
+          setExpandedEditReasonEditId(null);
+          return;
+        }
+
         if (isThesisOpen) {
           setIsThesisOpen(false);
           return;
@@ -285,29 +571,32 @@ export default function TailoredResumeReviewModal({
         return;
       }
 
+      if (expandedEditReasonEditId || isDevInspectorOpen) {
+        return;
+      }
+
       if (
         (event.key !== "ArrowLeft" && event.key !== "ArrowRight") ||
         event.altKey ||
         event.ctrlKey ||
         event.metaKey ||
         isEditableKeyboardTarget(event.target) ||
-        !record.edits.length
+        reviewEdits.length === 0
       ) {
         return;
       }
 
-      const currentIndex = record.edits.findIndex(
+      const currentIndex = reviewEdits.findIndex(
         (edit) => edit.editId === resolvedSelectedEditId,
       );
-      const fallbackIndex =
-        event.key === "ArrowRight" ? 0 : record.edits.length - 1;
+      const fallbackIndex = event.key === "ArrowRight" ? 0 : reviewEdits.length - 1;
       const targetIndex =
         currentIndex === -1
           ? fallbackIndex
           : event.key === "ArrowRight"
-            ? Math.min(currentIndex + 1, record.edits.length - 1)
+            ? Math.min(currentIndex + 1, reviewEdits.length - 1)
             : Math.max(currentIndex - 1, 0);
-      const targetEditId = record.edits[targetIndex]?.editId;
+      const targetEditId = reviewEdits[targetIndex]?.editId;
 
       if (!targetEditId) {
         return;
@@ -331,7 +620,16 @@ export default function TailoredResumeReviewModal({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isRenamingDisplayName, isThesisOpen, onClose, record, resolvedSelectedEditId]);
+  }, [
+    expandedEditReasonEditId,
+    isDevInspectorOpen,
+    isRenamingDisplayName,
+    isThesisOpen,
+    onClose,
+    record,
+    reviewEdits,
+    resolvedSelectedEditId,
+  ]);
 
   useEffect(() => {
     if (!record) {
@@ -369,11 +667,7 @@ export default function TailoredResumeReviewModal({
   const currentSelectedLatexCode = useMemo(
     () =>
       selectedSegmentSnapshot?.latexCode ??
-      (selectedEdit
-        ? selectedEdit.state === "applied"
-          ? selectedEdit.afterLatexCode
-          : selectedEdit.beforeLatexCode
-        : null),
+      (selectedEdit ? resolveTailoredResumeCurrentEditLatexCode(selectedEdit) : null),
     [selectedEdit, selectedSegmentSnapshot],
   );
   const interactivePreviewQueries = useMemo(
@@ -398,29 +692,36 @@ export default function TailoredResumeReviewModal({
     [interactivePreviewQueries, selectedEdit],
   );
   const acceptedBlockChoice = useMemo(
-    () =>
-      selectedEdit &&
-      suppressedAcceptedBlockChoiceEditId !== selectedEdit.editId
+    () => {
+      const optimisticAcceptedBlockChoice =
+        resolveAcceptedBlockChoiceFromEditState(selectedEditOptimisticState);
+
+      if (optimisticAcceptedBlockChoice) {
+        return optimisticAcceptedBlockChoice;
+      }
+
+      return selectedEdit &&
+        suppressedAcceptedBlockChoiceEditId !== selectedEdit.editId
         ? resolveAcceptedBlockChoice({
             currentLatexCode: currentSelectedLatexCode,
             selectedEdit,
           })
-        : null,
+        : null;
+    },
     [
       currentSelectedLatexCode,
       selectedEdit,
+      selectedEditOptimisticState,
       suppressedAcceptedBlockChoiceEditId,
     ],
   );
-  const selectedEditReasonToneClass =
-    acceptedBlockChoice === "original"
-      ? "border border-rose-300/20 bg-rose-400/8 text-rose-100"
-      : acceptedBlockChoice === "tailored"
-        ? "border border-emerald-400/20 bg-emerald-400/8 text-emerald-50"
-        : "border border-white/10 bg-white/[0.03] text-zinc-100";
   // Plain PDF URL for the interactive renderer and external PDF link.
   const plainPdfUrl = record ? buildTailoredResumePreviewPdfUrl(record) : null;
   const interactivePreviewUrl = plainPdfUrl;
+  const planningResultJson = useMemo(
+    () => (record ? JSON.stringify(record.planningResult, null, 2) : ""),
+    [record],
+  );
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(min-width: 1280px)");
@@ -437,7 +738,7 @@ export default function TailoredResumeReviewModal({
   }, []);
 
   useEffect(() => {
-    if (!record?.edits.length) {
+    if (reviewEdits.length === 0) {
       setSelectedEditId(null);
       setSuppressedAcceptedBlockChoiceEditId(null);
       setIsEditingLatexSegment(false);
@@ -445,14 +746,45 @@ export default function TailoredResumeReviewModal({
       return;
     }
 
-    if (!record.edits.some((edit) => edit.editId === selectedEditId)) {
+    if (!reviewEdits.some((edit) => edit.editId === selectedEditId)) {
       if (suppressedAcceptedBlockChoiceEditId === selectedEditId) {
         return;
       }
 
-      setSelectedEditId(record.edits[0]?.editId ?? null);
+      setSelectedEditId(reviewEdits[0]?.editId ?? null);
     }
-  }, [record, selectedEditId, suppressedAcceptedBlockChoiceEditId]);
+  }, [reviewEdits, selectedEditId, suppressedAcceptedBlockChoiceEditId]);
+
+  useEffect(() => {
+    if (!record) {
+      setOptimisticEditStateById({});
+      return;
+    }
+
+    setOptimisticEditStateById((currentState) => {
+      const entries = Object.entries(currentState);
+
+      if (entries.length === 0) {
+        return currentState;
+      }
+
+      let didChange = false;
+      const nextState: Partial<Record<string, TailoredResumeEditState>> = {};
+
+      for (const [editId, optimisticState] of entries) {
+        const matchingEdit = record.edits.find((edit) => edit.editId === editId);
+
+        if (matchingEdit && matchingEdit.state !== optimisticState) {
+          nextState[editId] = optimisticState;
+          continue;
+        }
+
+        didChange = true;
+      }
+
+      return didChange ? nextState : currentState;
+    });
+  }, [record]);
 
   useEffect(() => {
     if (!isEditingLatexSegment) {
@@ -518,10 +850,37 @@ export default function TailoredResumeReviewModal({
 
   useEffect(() => {
     setInteractivePreviewFocusRequest(0);
+    setOptimisticEditStateById({});
+    setExpandedEditReasonEditId(null);
     setSuppressedAcceptedBlockChoiceEditId(null);
     lastPreviewRecoveryRecordIdRef.current = null;
     setIsRecoveringPreview(false);
   }, [record?.id]);
+
+  useEffect(() => {
+    if (
+      !expandedEditReasonEditId ||
+      reviewEdits.some((edit) => edit.editId === expandedEditReasonEditId)
+    ) {
+      return;
+    }
+
+    setExpandedEditReasonEditId(null);
+  }, [expandedEditReasonEditId, reviewEdits]);
+
+  useEffect(() => {
+    if (!expandedEditReasonEditId) {
+      return;
+    }
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      expandedReasonCloseButtonRef.current?.focus();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+    };
+  }, [expandedEditReasonEditId]);
 
   useEffect(() => {
     if (!record || record.pdfUpdatedAt) {
@@ -608,18 +967,41 @@ export default function TailoredResumeReviewModal({
     };
   }, [isThesisOpen]);
 
+  useEffect(() => {
+    if (!isDevInspectorOpen) {
+      return;
+    }
+
+    devInspectorCloseButtonRef.current?.focus();
+  }, [isDevInspectorOpen]);
+
+  useEffect(() => {
+    setIsDevInspectorOpen(false);
+  }, [record?.id]);
+
   async function updateSelectedEditState(nextState: "applied" | "rejected") {
     if (!record || !selectedEdit) {
       return;
     }
 
+    const targetEditId = selectedEdit.editId;
+    setOptimisticEditStateById((currentState) => {
+      if (currentState[targetEditId] === nextState) {
+        return currentState;
+      }
+
+      return {
+        ...currentState,
+        [targetEditId]: nextState,
+      };
+    });
     setIsSavingTailoredResumeEdit(true);
 
     try {
       const response = await fetch("/api/tailor-resume", {
         body: JSON.stringify({
           action: "setTailoredResumeEditState",
-          editId: selectedEdit.editId,
+          editId: targetEditId,
           state: nextState,
           tailoredResumeId: record.id,
         }),
@@ -638,6 +1020,17 @@ export default function TailoredResumeReviewModal({
       setSuppressedAcceptedBlockChoiceEditId(null);
       setInteractivePreviewFocusRequest((currentRequest) => currentRequest + 1);
     } catch (error) {
+      setOptimisticEditStateById((currentState) => {
+        if (!(targetEditId in currentState)) {
+          return currentState;
+        }
+
+        const nextOptimisticState = {
+          ...currentState,
+        };
+        delete nextOptimisticState[targetEditId];
+        return nextOptimisticState;
+      });
       toast.error(
         error instanceof Error
           ? error.message
@@ -676,9 +1069,8 @@ export default function TailoredResumeReviewModal({
 
       onTailoredResumesChange(payload.profile.tailoredResumes);
       setIsEditingLatexSegment(false);
-      const nextSelectedEditId = payload.tailoredResumeEditId ?? selectedEdit.editId;
-      setSelectedEditId(nextSelectedEditId);
-      setSuppressedAcceptedBlockChoiceEditId(nextSelectedEditId);
+      setSelectedEditId(selectedEdit.editId);
+      setSuppressedAcceptedBlockChoiceEditId(null);
       setInteractivePreviewFocusRequest((currentRequest) => currentRequest + 1);
       toast.success("Saved your block edit.");
     } catch (error) {
@@ -822,7 +1214,7 @@ export default function TailoredResumeReviewModal({
 
     const nextState = choice === "tailored" ? "applied" : "rejected";
 
-    if (selectedEdit.state === nextState) {
+    if (acceptedBlockChoice === choice) {
       setSuppressedAcceptedBlockChoiceEditId(null);
       return;
     }
@@ -868,11 +1260,21 @@ export default function TailoredResumeReviewModal({
   }
 
   const thesisPopoverId = `tailored-resume-thesis-${record.id}`;
+  const devInspectorDialogId = `tailored-resume-dev-inspector-${record.id}`;
+  const devInspectorDescriptionId = `${devInspectorDialogId}-description`;
+  const expandedEditReason =
+    reviewEdits.find((edit) => edit.editId === expandedEditReasonEditId) ?? null;
+  const expandedEditReasonDialogId = expandedEditReason
+    ? `tailored-resume-edit-reason-${record.id}-${expandedEditReason.editId}`
+    : null;
+  const expandedEditReasonDescriptionId = expandedEditReason
+    ? `${expandedEditReasonDialogId}-description`
+    : null;
 
   const reviewDetailsPane = (
     <section className="flex h-full min-h-0 flex-col gap-px bg-white/8">
       <div className="shrink-0 bg-zinc-950/96 px-4 py-3 sm:px-5">
-        {record.edits.length === 0 ? (
+        {reviewEdits.length === 0 ? (
           <div className="rounded-[1.25rem] border border-white/8 bg-black/20 px-4 py-5 text-sm leading-6 text-zinc-400">
             No block-level edit snapshots were saved for this tailored
             resume. The PDF is still available on the right.
@@ -888,75 +1290,95 @@ export default function TailoredResumeReviewModal({
                   Changed edits
                 </p>
 
-                <div className="relative shrink-0" ref={thesisPopoverRef}>
-                  <button
-                    aria-controls={thesisPopoverId}
-                    aria-expanded={isThesisOpen}
-                    className={`rounded-full border px-2.5 py-1 text-[9px] uppercase tracking-[0.18em] transition ${
-                      isThesisOpen
-                        ? "border-emerald-300/30 bg-emerald-400/12 text-emerald-100"
-                        : "border-white/10 bg-white/5 text-zinc-300 hover:border-white/20 hover:bg-white/10"
-                    }`}
-                    onClick={() => setIsThesisOpen((open) => !open)}
-                    title="Show the tailoring thesis."
-                    type="button"
-                  >
-                    Thesis
-                  </button>
-
-                  {isThesisOpen ? (
-                    <div
-                      className="app-scrollbar absolute right-0 top-full z-30 mt-2 w-[min(32rem,calc(100vw-4.5rem))] max-h-[min(34rem,70vh)] overflow-y-auto overscroll-contain rounded-[1rem] border border-white/12 bg-zinc-950/98 p-3 shadow-[0_26px_70px_rgba(0,0,0,0.48)]"
-                      id={thesisPopoverId}
+                <div className="flex items-center gap-2">
+                  {debugUiEnabled ? (
+                    <button
+                      aria-controls={devInspectorDialogId}
+                      aria-expanded={isDevInspectorOpen}
+                      className={`rounded-full border px-2.5 py-1 text-[9px] uppercase tracking-[0.18em] transition ${
+                        isDevInspectorOpen
+                          ? "border-sky-300/35 bg-sky-400/12 text-sky-100"
+                          : "border-white/10 bg-white/5 text-zinc-300 hover:border-white/20 hover:bg-white/10"
+                      }`}
+                      onClick={() => {
+                        setIsThesisOpen(false);
+                        setIsDevInspectorOpen(true);
+                      }}
+                      title="Show the saved planning payload."
+                      type="button"
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                            Tailoring thesis
-                          </p>
-                          <p className="mt-1 text-sm leading-6 text-zinc-300">
-                            What the model focused on in the job description
-                            and the broad resume strategy it used.
-                          </p>
-                        </div>
-                        <button
-                          className="shrink-0 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[9px] uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
-                          onClick={() => setIsThesisOpen(false)}
-                          type="button"
-                        >
-                          Close
-                        </button>
-                      </div>
-
-                      {record.thesis ? (
-                        <div className="mt-3 space-y-3">
-                          <section className="rounded-[0.95rem] border border-white/8 bg-white/[0.03] px-3 py-2.5">
-                            <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                              Job-specific emphasis
-                            </p>
-                            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-100">
-                              {record.thesis.jobDescriptionFocus}
-                            </p>
-                          </section>
-
-                          <section className="rounded-[0.95rem] border border-white/8 bg-white/[0.03] px-3 py-2.5">
-                            <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                              Resume adaptation
-                            </p>
-                            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-100">
-                              {record.thesis.resumeChanges}
-                            </p>
-                          </section>
-                        </div>
-                      ) : (
-                        <div className="mt-3 rounded-[0.95rem] border border-white/8 bg-white/[0.03] px-3 py-2.5 text-sm leading-6 text-zinc-300">
-                          This tailored resume was saved before thesis
-                          summaries were added, so no thesis is available for
-                          it.
-                        </div>
-                      )}
-                    </div>
+                      Dev
+                    </button>
                   ) : null}
+
+                  <div className="relative shrink-0" ref={thesisPopoverRef}>
+                    <button
+                      aria-controls={thesisPopoverId}
+                      aria-expanded={isThesisOpen}
+                      className={`rounded-full border px-2.5 py-1 text-[9px] uppercase tracking-[0.18em] transition ${
+                        isThesisOpen
+                          ? "border-emerald-300/30 bg-emerald-400/12 text-emerald-100"
+                          : "border-white/10 bg-white/5 text-zinc-300 hover:border-white/20 hover:bg-white/10"
+                      }`}
+                      onClick={() => setIsThesisOpen((open) => !open)}
+                      title="Show the tailoring thesis."
+                      type="button"
+                    >
+                      Thesis
+                    </button>
+
+                    {isThesisOpen ? (
+                      <div
+                        className="app-scrollbar absolute right-0 top-full z-30 mt-2 w-[min(32rem,calc(100vw-4.5rem))] max-h-[min(34rem,70vh)] overflow-y-auto overscroll-contain rounded-[1rem] border border-white/12 bg-zinc-950/98 p-3 shadow-[0_26px_70px_rgba(0,0,0,0.48)]"
+                        id={thesisPopoverId}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                              Tailoring thesis
+                            </p>
+                            <p className="mt-1 text-sm leading-6 text-zinc-300">
+                              What the model focused on in the job description
+                              and the broad resume strategy it used.
+                            </p>
+                          </div>
+                          <button
+                            className="shrink-0 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[9px] uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                            onClick={() => setIsThesisOpen(false)}
+                            type="button"
+                          >
+                            Close
+                          </button>
+                        </div>
+
+                        {record.thesis ? (
+                          <div className="mt-3 space-y-3">
+                            <section className="rounded-[0.95rem] border border-white/8 bg-white/[0.03] px-3 py-2.5">
+                              <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                                Job-specific emphasis
+                              </p>
+                              <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-100">
+                                {record.thesis.jobDescriptionFocus}
+                              </p>
+                            </section>
+
+                            <section className="rounded-[0.95rem] border border-white/8 bg-white/[0.03] px-3 py-2.5">
+                              <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                                Resume adaptation
+                              </p>
+                              <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-100">
+                                {record.thesis.resumeChanges}
+                              </p>
+                            </section>
+                          </div>
+                        ) : (
+                          <div className="mt-3 rounded-[0.95rem] border border-white/8 bg-white/[0.03] px-3 py-2.5 text-sm leading-6 text-zinc-300">
+                            This tailored resume does not have a saved thesis.
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               </div>
 
@@ -979,123 +1401,46 @@ export default function TailoredResumeReviewModal({
                   tabIndex={-1}
                 >
                   <div className="flex min-w-max items-stretch px-2">
-                    {record.edits.map((edit, index) => {
+                    {reviewEdits.map((edit, index) => {
+                      const displayedEditState =
+                        optimisticEditStateById[edit.editId] ?? edit.state;
                       const isSelected = selectedEdit?.editId === edit.editId;
 
                       return (
-                        <div className="flex items-stretch" key={edit.editId}>
-                          <button
-                            aria-pressed={isSelected}
-                            className={`w-[min(21rem,70vw)] snap-start rounded-[1rem] border px-3 py-3 text-left transition focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-offset-0 sm:w-[17.5rem] xl:w-[18.5rem] ${
-                              isSelected
-                                ? `${selectedReviewSurfaceClassName} focus-visible:ring-white/15`
-                                : "border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))] hover:border-white/15 hover:bg-white/5 focus-visible:ring-white/20"
-                            }`}
-                            onClick={() => {
-                              setSuppressedAcceptedBlockChoiceEditId(null);
-                              selectEdit(edit.editId, {
-                                behavior: "smooth",
-                              });
-                            }}
-                            ref={(element) => {
-                              if (element) {
-                                editButtonRefs.current.set(edit.editId, element);
-                                return;
-                              }
+                        <TailoredResumeEditSummaryCard
+                          displayedEditState={displayedEditState}
+                          edit={edit}
+                          index={index}
+                          isSelected={isSelected}
+                          key={edit.editId}
+                          onOpenReason={() => {
+                            setSuppressedAcceptedBlockChoiceEditId(null);
+                            selectEdit(edit.editId, {
+                              behavior: "smooth",
+                            });
+                            setExpandedEditReasonEditId(edit.editId);
+                          }}
+                          onSelect={() => {
+                            setSuppressedAcceptedBlockChoiceEditId(null);
+                            selectEdit(edit.editId, {
+                              behavior: "smooth",
+                            });
+                          }}
+                          registerButtonRef={(element) => {
+                            if (element) {
+                              editButtonRefs.current.set(edit.editId, element);
+                              return;
+                            }
 
-                              editButtonRefs.current.delete(edit.editId);
-                            }}
-                            type="button"
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="flex min-w-0 items-center gap-2">
-                                  <span
-                                    className={`size-2 shrink-0 rounded-full ${
-                                      isSelected
-                                        ? "bg-emerald-300 shadow-[0_0_0_3px_rgba(16,185,129,0.12)]"
-                                        : "bg-zinc-600"
-                                    }`}
-                                  />
-                                  <p className="min-w-0 flex-1 truncate text-[15px] font-medium text-zinc-100">
-                                    {formatTailoredResumeEditLabel(edit)}
-                                  </p>
-                                  <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-zinc-500">
-                                    {edit.source === "user" ? "User" : "Model"}
-                                  </span>
-                                  {edit.state === "rejected" ? (
-                                    <span className="shrink-0 rounded-full border border-rose-300/20 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-rose-200">
-                                      Rejected
-                                    </span>
-                                  ) : null}
-                                </div>
-                                <p className="mt-2 line-clamp-2 text-[11px] leading-[1.2rem] text-zinc-400">
-                                  {summarizeTailoredResumeEdit(
-                                    edit.afterLatexCode || edit.beforeLatexCode,
-                                    "Block removed.",
-                                  )}
-                                </p>
-                              </div>
-                              <span
-                                className={`rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] ${
-                                  isSelected
-                                    ? "border-emerald-300/18 text-emerald-200"
-                                    : "border-white/10 text-zinc-500"
-                                }`}
-                              >
-                                {index + 1}
-                              </span>
-                            </div>
-                          </button>
-
-                          {index < record.edits.length - 1 ? (
-                            <div
-                              aria-hidden="true"
-                              className="flex w-10 shrink-0 items-center justify-center"
-                            >
-                              <span className="h-px w-3 bg-gradient-to-r from-transparent via-white/15 to-white/25" />
-                              <span className="mx-1 h-2 w-2 rounded-full border border-white/20 bg-zinc-700/70" />
-                              <span className="h-px w-3 bg-gradient-to-r from-white/25 via-white/15 to-transparent" />
-                            </div>
-                          ) : null}
-                        </div>
+                            editButtonRefs.current.delete(edit.editId);
+                          }}
+                          totalEdits={reviewEdits.length}
+                        />
                       );
                     })}
                   </div>
                 </div>
               </div>
-            </div>
-
-            <div className="rounded-[1.15rem] border border-white/8 bg-black/20 px-3.5 py-3">
-              {selectedEdit ? (
-                <>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <p
-                        className="text-[11px] uppercase tracking-[0.2em] text-zinc-500"
-                        title={formatTailoredResumeEditLabel(selectedEdit)}
-                      >
-                        Why it changed
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {acceptedBlockChoice === "original" ? (
-                        <span className="rounded-full border border-rose-300/20 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-rose-200">
-                          Rejected
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <p className={`mt-2 rounded-[0.95rem] px-3 py-2.5 text-[14px] leading-6 ${selectedEditReasonToneClass}`}>
-                    {selectedEdit.reason}
-                  </p>
-                </>
-              ) : (
-                <div className="text-sm leading-6 text-zinc-400">
-                  Select an edit to review the reasoning and diff.
-                </div>
-              )}
             </div>
           </div>
         )}
@@ -1386,6 +1731,9 @@ export default function TailoredResumeReviewModal({
           <TailoredResumeInteractivePreview
             displayName={record.displayName}
             focusKey={selectedEdit?.editId ?? null}
+            focusMatchKey={
+              selectedEdit ? `segment:${selectedEdit.segmentId}` : null
+            }
             focusQuery={interactiveFocusQuery}
             focusRequest={interactivePreviewFocusRequest}
             highlightQueries={interactivePreviewQueries?.highlightQueries ?? []}
@@ -1401,56 +1749,291 @@ export default function TailoredResumeReviewModal({
   );
 
   return createPortal(
-    <div className="fixed inset-0 z-[210] flex overflow-hidden bg-black/88 px-4 py-5 backdrop-blur-sm sm:px-6">
-      <button
-        aria-label="Close tailored resume review"
-        className="absolute right-4 top-4 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-black/45 text-zinc-100 transition hover:border-white/30 hover:bg-black/65 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 sm:right-5 sm:top-5"
-        onClick={onClose}
-        title="Close"
-        type="button"
-      >
-        <svg
-          aria-hidden="true"
-          className="h-4 w-4"
-          fill="none"
-          viewBox="0 0 14 14"
+    <>
+      <div className="fixed inset-0 z-[210] flex overflow-hidden bg-black/88 px-4 py-5 backdrop-blur-sm sm:px-6">
+        <button
+          aria-label="Close tailored resume review"
+          className="absolute right-4 top-4 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-black/45 text-zinc-100 transition hover:border-white/30 hover:bg-black/65 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 sm:right-5 sm:top-5"
+          onClick={onClose}
+          title="Close"
+          type="button"
         >
-          <path
-            d="M3.5 3.5 10.5 10.5M10.5 3.5 3.5 10.5"
-            stroke="currentColor"
-            strokeLinecap="round"
-            strokeWidth="1.5"
-          />
-        </svg>
-      </button>
-
-      <div className="mx-auto flex h-full min-h-0 w-full max-w-[1600px] items-center justify-center">
-        <section className="glass-panel soft-ring flex h-full max-h-full min-h-0 w-full flex-col overflow-hidden rounded-[1.6rem] border border-white/10 bg-zinc-950/96 shadow-[0_30px_120px_rgba(0,0,0,0.58)] ring-1 ring-white/10 backdrop-blur-xl">
-          <ResizablePanelGroup
-            className="min-h-0 flex-1 bg-zinc-950/96"
-            orientation={isWideLayout ? "horizontal" : "vertical"}
+          <svg
+            aria-hidden="true"
+            className="h-4 w-4"
+            fill="none"
+            viewBox="0 0 14 14"
           >
-            <ResizablePanel
-              className="min-h-0 min-w-0 overflow-hidden"
-              defaultSize={defaultReviewDetailsPaneSize}
-              minSize={isWideLayout ? 40 : 55}
-            >
-              {reviewDetailsPane}
-            </ResizablePanel>
+            <path
+              d="M3.5 3.5 10.5 10.5M10.5 3.5 3.5 10.5"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeWidth="1.5"
+            />
+          </svg>
+        </button>
 
-            <ResizableHandle className="group relative bg-transparent after:hidden before:absolute before:bg-white/8 before:content-[''] before:transition-colors focus-visible:ring-0 hover:before:bg-white/15 aria-[orientation=vertical]:w-4 aria-[orientation=vertical]:before:inset-y-0 aria-[orientation=vertical]:before:left-1/2 aria-[orientation=vertical]:before:w-px aria-[orientation=vertical]:before:-translate-x-1/2 aria-[orientation=horizontal]:h-4 aria-[orientation=horizontal]:before:inset-x-0 aria-[orientation=horizontal]:before:top-1/2 aria-[orientation=horizontal]:before:h-px aria-[orientation=horizontal]:before:-translate-y-1/2" />
-
-            <ResizablePanel
-              className="min-h-0 min-w-0 overflow-hidden"
-              defaultSize={defaultReviewPreviewPaneSize}
-              minSize={isWideLayout ? 28 : 22}
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1600px] items-center justify-center">
+          <section className="glass-panel soft-ring flex h-full max-h-full min-h-0 w-full flex-col overflow-hidden rounded-[1.6rem] border border-white/10 bg-zinc-950/96 shadow-[0_30px_120px_rgba(0,0,0,0.58)] ring-1 ring-white/10 backdrop-blur-xl">
+            <ResizablePanelGroup
+              className="min-h-0 flex-1 bg-zinc-950/96"
+              orientation={isWideLayout ? "horizontal" : "vertical"}
             >
-              {pdfPreviewPane}
-            </ResizablePanel>
-          </ResizablePanelGroup>
-        </section>
+              <ResizablePanel
+                className="min-h-0 min-w-0 overflow-hidden"
+                defaultSize={defaultReviewDetailsPaneSize}
+                minSize={isWideLayout ? 40 : 55}
+              >
+                {reviewDetailsPane}
+              </ResizablePanel>
+
+              <ResizableHandle className="group relative bg-transparent after:hidden before:absolute before:bg-white/8 before:content-[''] before:transition-colors focus-visible:ring-0 hover:before:bg-white/15 aria-[orientation=vertical]:w-4 aria-[orientation=vertical]:before:inset-y-0 aria-[orientation=vertical]:before:left-1/2 aria-[orientation=vertical]:before:w-px aria-[orientation=vertical]:before:-translate-x-1/2 aria-[orientation=horizontal]:h-4 aria-[orientation=horizontal]:before:inset-x-0 aria-[orientation=horizontal]:before:top-1/2 aria-[orientation=horizontal]:before:h-px aria-[orientation=horizontal]:before:-translate-y-1/2" />
+
+              <ResizablePanel
+                className="min-h-0 min-w-0 overflow-hidden"
+                defaultSize={defaultReviewPreviewPaneSize}
+                minSize={isWideLayout ? 28 : 22}
+              >
+                {pdfPreviewPane}
+              </ResizablePanel>
+            </ResizablePanelGroup>
+          </section>
+        </div>
       </div>
-    </div>,
+
+      {debugUiEnabled && isDevInspectorOpen ? (
+        <div className="fixed inset-0 z-[230] flex items-center justify-center bg-black/48 p-4 backdrop-blur-[1px] sm:p-5">
+          <button
+            aria-label="Close saved planning payload"
+            className="absolute inset-0"
+            onClick={() => setIsDevInspectorOpen(false)}
+            type="button"
+          />
+          <div
+            aria-describedby={devInspectorDescriptionId}
+            aria-labelledby={devInspectorDialogId}
+            aria-modal="true"
+            className="relative z-10 flex max-h-[min(46rem,88vh)] w-full max-w-5xl flex-col overflow-hidden rounded-[1.5rem] border border-white/10 bg-zinc-950/97 shadow-[0_30px_120px_rgba(0,0,0,0.52)] ring-1 ring-white/10"
+            role="dialog"
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+              <div className="min-w-0">
+                <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                  Dev inspector
+                </p>
+                <h2
+                  className="mt-2 text-base font-medium text-zinc-50"
+                  id={devInspectorDialogId}
+                >
+                  Saved planning payload
+                </h2>
+                <p
+                  className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300"
+                  id={devInspectorDescriptionId}
+                >
+                  This is the persisted output from the plaintext planning pass
+                  before block-level LaTeX implementation.
+                </p>
+              </div>
+              <button
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                onClick={() => setIsDevInspectorOpen(false)}
+                ref={devInspectorCloseButtonRef}
+                type="button"
+              >
+                <X aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+                <span>Close</span>
+              </button>
+            </div>
+
+            <div className="app-scrollbar grid min-h-0 flex-1 gap-4 overflow-y-auto px-5 py-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(22rem,0.85fr)]">
+              <div className="space-y-4">
+                <section className="rounded-[1rem] border border-white/8 bg-white/[0.03] p-4">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                    Saved metadata
+                  </p>
+                  <dl className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <dt className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">
+                        Display name
+                      </dt>
+                      <dd className="mt-1 text-sm leading-6 text-zinc-100">
+                        {record.planningResult.displayName}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">
+                        Company
+                      </dt>
+                      <dd className="mt-1 text-sm leading-6 text-zinc-100">
+                        {record.planningResult.companyName || "Unknown"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">
+                        Role
+                      </dt>
+                      <dd className="mt-1 text-sm leading-6 text-zinc-100">
+                        {record.planningResult.positionTitle || "Unknown"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">
+                        Identifier
+                      </dt>
+                      <dd className="mt-1 text-sm leading-6 text-zinc-100">
+                        {record.planningResult.jobIdentifier}
+                      </dd>
+                    </div>
+                  </dl>
+                </section>
+
+                <section className="rounded-[1rem] border border-white/8 bg-white/[0.03] p-4">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                    Thesis
+                  </p>
+                  <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                    <div className="rounded-[0.95rem] border border-white/8 bg-black/20 px-3 py-2.5">
+                      <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">
+                        Job description focus
+                      </p>
+                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-100">
+                        {record.planningResult.thesis.jobDescriptionFocus}
+                      </p>
+                    </div>
+                    <div className="rounded-[0.95rem] border border-white/8 bg-black/20 px-3 py-2.5">
+                      <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">
+                        Resume changes
+                      </p>
+                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-100">
+                        {record.planningResult.thesis.resumeChanges}
+                      </p>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-[1rem] border border-white/8 bg-white/[0.03] p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                      Planned block changes
+                    </p>
+                    <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                      {record.planningResult.changes.length} saved
+                    </span>
+                  </div>
+
+                  {record.planningResult.changes.length > 0 ? (
+                    <div className="mt-3 space-y-3">
+                      {record.planningResult.changes.map((change) => (
+                        <article
+                          className="rounded-[0.95rem] border border-white/8 bg-black/20 px-3 py-3"
+                          key={change.segmentId}
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-full border border-sky-300/20 bg-sky-400/10 px-2 py-0.5 font-mono text-[10px] text-sky-100">
+                              {change.segmentId}
+                            </span>
+                          </div>
+                          <p className="mt-3 text-[11px] uppercase tracking-[0.16em] text-zinc-500">
+                            Reason
+                          </p>
+                          <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-zinc-100">
+                            {change.reason}
+                          </p>
+                          <p className="mt-3 text-[11px] uppercase tracking-[0.16em] text-zinc-500">
+                            Desired plain text
+                          </p>
+                          <pre className="mt-1 whitespace-pre-wrap break-words rounded-[0.85rem] border border-white/8 bg-zinc-950/70 px-3 py-2.5 font-mono text-[11px] leading-5 text-zinc-200">
+                            {change.desiredPlainText || "[remove this block]"}
+                          </pre>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded-[0.95rem] border border-white/8 bg-black/20 px-3 py-2.5 text-sm leading-6 text-zinc-300">
+                      The planner chose to keep the current resume content as-is.
+                    </div>
+                  )}
+                </section>
+              </div>
+
+              <section className="min-h-0 rounded-[1rem] border border-white/8 bg-white/[0.03] p-4">
+                <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                  Raw JSON
+                </p>
+                <pre className="app-scrollbar mt-3 max-h-[min(34rem,65vh)] overflow-auto whitespace-pre-wrap break-words rounded-[0.95rem] border border-white/8 bg-zinc-950/80 px-3 py-3 font-mono text-[11px] leading-5 text-zinc-200">
+                  {planningResultJson}
+                </pre>
+              </section>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {expandedEditReason ? (
+        <div className="fixed inset-0 z-[230] flex items-center justify-center bg-black/38 p-4 backdrop-blur-[1px] sm:p-5">
+          <button
+            aria-label="Close full edit reason"
+            className="absolute inset-0"
+            onClick={() => setExpandedEditReasonEditId(null)}
+            type="button"
+          />
+          <div
+            aria-describedby={expandedEditReasonDescriptionId ?? undefined}
+            aria-labelledby={expandedEditReasonDialogId ?? undefined}
+            aria-modal="true"
+            className="relative z-10 flex max-h-[min(42rem,85vh)] w-full max-w-2xl flex-col overflow-hidden rounded-[1.5rem] border border-white/10 bg-zinc-950/97 shadow-[0_30px_120px_rgba(0,0,0,0.52)] ring-1 ring-white/10"
+            role="dialog"
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+              <div className="min-w-0">
+                <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                  Full edit reason
+                </p>
+                <h2
+                  className="mt-2 text-base font-medium text-zinc-50"
+                  id={expandedEditReasonDialogId ?? undefined}
+                >
+                  {formatTailoredResumeEditLabel(expandedEditReason)}
+                </h2>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-white/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-zinc-400">
+                    {expandedEditReason.customLatexCode !== null ? "Custom" : "Model"}
+                  </span>
+                  {expandedEditReason.state === "rejected" ? (
+                    <span className="rounded-full border border-rose-300/20 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-rose-200">
+                      Rejected
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <button
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                onClick={() => setExpandedEditReasonEditId(null)}
+                ref={expandedReasonCloseButtonRef}
+                type="button"
+              >
+                <X aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+                <span>Close</span>
+              </button>
+            </div>
+
+            <div className="app-scrollbar overflow-y-auto px-5 py-4">
+              <p
+                className={`whitespace-pre-wrap text-sm leading-7 ${
+                  expandedEditReason.state === "rejected"
+                    ? "text-rose-100"
+                    : "text-zinc-100"
+                }`}
+                id={expandedEditReasonDescriptionId ?? undefined}
+              >
+                {expandedEditReason.reason}
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>,
     document.body,
   );
 }
