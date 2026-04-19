@@ -164,10 +164,9 @@ function readCommandAt(value: string, start: number): ParsedCommand | null {
   let cursor = nameEnd;
 
   while (true) {
-    const whitespaceStart = cursor;
-    cursor = skipWhitespace(value, cursor);
-    const skippedWhitespace = value.slice(whitespaceStart, cursor);
-    const currentChar = value[cursor];
+    const nextTokenStart = skipWhitespace(value, cursor);
+    const skippedWhitespace = value.slice(cursor, nextTokenStart);
+    const currentChar = value[nextTokenStart];
 
     if (
       (args.length > 0 || optionalArgs.length > 0) &&
@@ -177,7 +176,7 @@ function readCommandAt(value: string, start: number): ParsedCommand | null {
     }
 
     if (currentChar === "[") {
-      const group = readBalancedGroup(value, cursor, "[");
+      const group = readBalancedGroup(value, nextTokenStart, "[");
 
       if (!group) {
         return null;
@@ -192,7 +191,7 @@ function readCommandAt(value: string, start: number): ParsedCommand | null {
       break;
     }
 
-    const group = readBalancedGroup(value, cursor, "{");
+    const group = readBalancedGroup(value, nextTokenStart, "{");
 
     if (!group) {
       return null;

@@ -56,10 +56,16 @@ test("highlighted preview groups adjacent modified words into one wrapped highli
   assert.match(highlightedLatex, /JOBHELPER_REVIEW_HIGHLIGHT_MACROS/);
   assert.match(
     highlightedLatex,
-    /\\resumeitem\{\\jhlmod\{\\jhlmodlead\{\}Used \}\\textbf\{\\jhlmod\{\\jhlmodlead\{\}AWS Amplify\}\}\\jhlmod\{\\jhlmodlead\{\} to set up \}\\textbf\{\\jhlmod\{\\jhlmodlead\{\}CI\/CD\}\}\\jhlmod\{\\jhlmodlead\{\} pipelines to support contributor onboarding, reducing design-to-dev handoff time by an avg\. of \\textasciitilde30\\% across 8 teams\}\}/,
+    /\\resumeitem\{Used \\textbf\{AWS Amplify\} to set up \\textbf\{CI\/CD\} pipelines \\jhlmod\{\\jhlmodlead\{\}to support contributor onboarding\}, reducing design-to-dev handoff time by an avg\. of \\textasciitilde30\\% across 8 teams\}/,
   );
-  assert.doesNotMatch(highlightedLatex, /\\jhlmod\{pipelines\}\s+\\jhlmod\{to support contributor onboarding/);
-  assert.match(highlightedLatex, /\\textbf\{\\jhlmod\{\\jhlmodlead\{\}CI\/CD\}\}/);
+  assert.doesNotMatch(
+    highlightedLatex,
+    /\\jhlmod\{to support\}\s+\\jhlmod\{contributor onboarding\}/,
+  );
+  assert.match(
+    highlightedLatex,
+    /\\textbf\{CI\/CD\} pipelines \\jhlmod\{\\jhlmodlead\{\}to support contributor onboarding\}/,
+  );
   assert.match(highlightedLatex, /\\jhlmodlead\{\}/);
 });
 
@@ -82,7 +88,11 @@ test("highlighted preview coalesces punctuation-only joiners between modified se
 
   assert.match(
     highlightedLatex,
-    /\\jhlmod\{\\jhlmodlead\{\}Built APIs for internal tools, dashboards, and workflows\.\}/,
+    /\\resumeitem\{\\jhlmod\{\\jhlmodlead\{\}Built APIs for internal tools, dashboards, and workflows\}\.\}/,
+  );
+  assert.doesNotMatch(
+    highlightedLatex,
+    /\\jhlmod\{Built APIs for internal tools,\}\s+\\jhlmod\{dashboards, and workflows\}/,
   );
 });
 

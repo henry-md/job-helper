@@ -63,6 +63,31 @@ test("normalizeTailorResumeLatex splits top-level body blocks inside technical s
   );
 });
 
+test("normalizeTailorResumeLatex keeps adjacent resumeitem commands in separate blocks", () => {
+  const latex = String.raw`
+\resumeSection{WORK EXPERIENCE}
+\entryheading{Example Co}{Engineer}{2024}
+\begin{resumebullets}
+  \resumeitem{First bullet}
+  \resumeitem{Second bullet}
+\end{resumebullets}
+`;
+  const normalized = normalizeTailorResumeLatex(latex);
+  const bulletBlocks = readAnnotatedTailorResumeBlocks(
+    normalized.annotatedLatex,
+  ).filter((block) => block.command === "resumeitem");
+
+  assert.deepEqual(
+    bulletBlocks.map((block) => block.id),
+    [
+      "work-experience.entry-1.bullet-1",
+      "work-experience.entry-1.bullet-2",
+    ],
+  );
+  assert.equal(bulletBlocks[0]?.latexCode.trim(), "\\resumeitem{First bullet}");
+  assert.equal(bulletBlocks[1]?.latexCode.trim(), "\\resumeitem{Second bullet}");
+});
+
 test("buildUniqueTailorResumeSegmentId appends numeric suffixes on conflict", () => {
   const seenSegmentIds = new Set<string>();
 
