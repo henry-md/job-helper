@@ -55,7 +55,33 @@ test("buildTailoredResumePreviewFocusQuery targets the changed span inside the c
           "Used AWS Amplify to set up CI/CD pipelines to support contributor onboarding, reducing design-to-dev handoff time by an avg. of ~30% across 8 teams",
         ).length,
         start: 0,
+        tone: "changed",
       },
+    ],
+    mode: "changed",
+  });
+});
+
+test("buildTailoredResumePreviewFocusQuery preserves shared anchors as neutral context", () => {
+  const focusQuery = buildTailoredResumePreviewFocusQuery({
+    beforeLatexCode:
+      String.raw`\resumeitem{Led major refactor enabling \textbf{\$50K+/mo in TikTok ad spend} by incorporating TikTok support for our entire suite of software. Refactored \textbf{31K+ LOC in 365 files}, reworking \textbf{140+ tRPC endpoints \& Bayesian inference engine} for platform-agnostic objects}`,
+    currentLatexCode:
+      String.raw`\resumeitem{Led major refactor that enabled \textbf{\$50K+/mo in TikTok ad spend} by adding TikTok support across our suite; refactored \textbf{31K+ LOC in 365 files} and reworked \textbf{140+ tRPC endpoints \& Bayesian inference engine} to create platform-agnostic objects, improving developer onboarding and automation workflows}`,
+    state: "applied",
+  });
+
+  assert.deepEqual(focusQuery, {
+    anchorText:
+      "Led major refactor that enabled $50K+/mo in TikTok ad spend by adding TikTok support across our suite; refactored 31K+ LOC in 365 files and reworked 140+ tRPC endpoints & Bayesian inference engine to create platform-agnostic objects, improving developer onboarding and automation workflows",
+    highlightRanges: [
+      { end: 31, start: 18, tone: "changed" },
+      { end: 69, start: 62, tone: "changed" },
+      { end: 91, start: 84, tone: "changed" },
+      { end: 113, start: 101, tone: "changed" },
+      { end: 148, start: 135, tone: "changed" },
+      { end: 206, start: 196, tone: "changed" },
+      { end: 289, start: 232, tone: "changed" },
     ],
     mode: "changed",
   });
@@ -98,7 +124,7 @@ test("resolveTailoredResumePreviewFocusRanges tolerates missing layout spaces in
 
   assert.deepEqual(
     resolvedRanges.map((range) => pageText.slice(range.start, range.end)),
-    ["Python, JavaScript, TypeScript"],
+    ["Python", "TypeScript"],
   );
 });
 
@@ -145,19 +171,9 @@ test("buildTailoredResumeInteractivePreviewQueries keeps one steady highlight pe
         afterLatexCode: afterModelLatexCode,
         beforeLatexCode,
         command: "resumeitem",
+        customLatexCode: afterUserLatexCode,
         editId: `${segmentId}:model`,
         reason: "Model edit.",
-        source: "model",
-        state: "applied",
-        segmentId,
-      },
-      {
-        afterLatexCode: afterUserLatexCode,
-        beforeLatexCode: afterModelLatexCode,
-        command: "resumeitem",
-        editId: `${segmentId}:user`,
-        reason: "User edit.",
-        source: "user",
         state: "applied",
         segmentId,
       },
@@ -175,10 +191,6 @@ test("buildTailoredResumeInteractivePreviewQueries keeps one steady highlight pe
   assert.deepEqual(previewQueries.highlightQueries[0]?.query, expectedCombinedQuery);
   assert.deepEqual(
     previewQueries.focusQueryByEditId.get(`${segmentId}:model`),
-    expectedCombinedQuery,
-  );
-  assert.deepEqual(
-    previewQueries.focusQueryByEditId.get(`${segmentId}:user`),
     expectedCombinedQuery,
   );
 });
@@ -200,9 +212,9 @@ test("buildTailoredResumeInteractivePreviewQueries falls back to block focus for
           String.raw`\descline{Developed AI-powered orbit analysis system with revised wording}`,
         beforeLatexCode,
         command: "descline",
+        customLatexCode: null,
         editId,
         reason: "Rejected edit.",
-        source: "model",
         state: "rejected",
         segmentId,
       },

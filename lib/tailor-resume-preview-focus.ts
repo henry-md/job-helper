@@ -1,14 +1,18 @@
-import { diffArrays } from "diff";
 import {
   buildTailoredResumeCombinedActiveEdits,
   buildTailoredResumeResolvedSegmentMap,
+  resolveTailoredResumeCurrentEditLatexCode,
 } from "./tailor-resume-edit-history.ts";
+import { buildTailoredResumeDiffRows } from "./tailor-resume-review.ts";
 import type { TailoredResumeRecord } from "./tailor-resume-types.ts";
 import { stripTailorResumeSegmentIds } from "./tailor-resume-segmentation.ts";
+
+export type TailoredResumePreviewHighlightTone = "added" | "changed";
 
 export type TailoredResumePreviewHighlightRange = {
   end: number;
   start: number;
+  tone: TailoredResumePreviewHighlightTone;
 };
 
 export type TailoredResumePreviewFocusQuery = {
@@ -138,6 +142,14 @@ function readCommandAt(value: string, start: number, end = value.length): Parsed
 
     args.push(group.content);
     cursor = group.end;
+  }
+
+  if (value[cursor] === "=") {
+    cursor += 1;
+
+    while (cursor < end && !/\s/.test(value[cursor] ?? "")) {
+      cursor += 1;
+    }
   }
 
   return {
@@ -329,10 +341,6 @@ function renderLatexFragmentToPlainText(value: string) {
   return output;
 }
 
-function tokenizeTailoredResumePreviewText(value: string) {
-  return value.match(/[A-Za-z0-9]+(?:[\/+.:-][A-Za-z0-9]+)*|\s+|./g) ?? [];
-}
-
 function normalizePreviewWhitespace(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -346,7 +354,7 @@ function buildCompactPreviewTextIndex(value: string): CompactPreviewTextIndex {
   for (let index = 0; index < value.length; index += 1) {
     const currentCharacter = value[index] ?? "";
 
-    if (!/\s/.test(currentCharacter)) {
+    if (!/\s/.test(currentCharacter) && currentCharacter !== "•") {
       compactTextParts.push(currentCharacter);
       compactPositions.push(index);
       compactLength += 1;
@@ -362,57 +370,108 @@ function buildCompactPreviewTextIndex(value: string): CompactPreviewTextIndex {
   };
 }
 
-function buildRawHighlightRange(beforeText: string, currentText: string) {
-  const diffParts = diffArrays(
-    tokenizeTailoredResumePreviewText(beforeText),
-    tokenizeTailoredResumePreviewText(currentText),
-  );
-  const addedRanges: TailoredResumePreviewHighlightRange[] = [];
-  let currentCursor = 0;
+function buildPreviewLineStartOffsets(value: string) {
+  const normalizedValue = value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = normalizedValue ? normalizedValue.split("\n") : [""];
+  const lineStartOffsets: number[] = [];
+  let offset = 0;
 
-  for (const part of diffParts) {
-    const partText = part.value.join("");
+  for (const line of lines) {
+    lineStartOffsets.push(offset);
+    offset += line.length + 1;
+  }
 
-    if (!partText) {
+  return lineStartOffsets;
+}
+
+function trimPreviewHighlightRange(input: {
+  start: number;
+  text: string;
+  tone: TailoredResumePreviewHighlightTone;
+}) {
+  const leadingWhitespace = input.text.match(/^\s+/)?.[0].length ?? 0;
+  const trailingWhitespace = input.text.match(/\s+$/)?.[0].length ?? 0;
+  const trimmedStart = input.start + leadingWhitespace;
+  const trimmedEnd = input.start + input.text.length - trailingWhitespace;
+
+  if (trimmedEnd <= trimmedStart) {
+    return null;
+  }
+
+  return {
+    end: trimmedEnd,
+    start: trimmedStart,
+    tone: input.tone,
+  } satisfies TailoredResumePreviewHighlightRange;
+}
+
+function buildRawHighlightRanges(beforeText: string, currentText: string) {
+  const diffRows = buildTailoredResumeDiffRows(beforeText, currentText);
+  const lineStartOffsets = buildPreviewLineStartOffsets(currentText);
+  const highlightRanges: TailoredResumePreviewHighlightRange[] = [];
+
+  for (const row of diffRows) {
+    if (row.modifiedText === null || row.modifiedLineNumber === null) {
       continue;
     }
 
-    if (part.added) {
-      addedRanges.push({
-        end: currentCursor + partText.length,
-        start: currentCursor,
+    const rowStartOffset = lineStartOffsets[row.modifiedLineNumber - 1] ?? 0;
+
+    if (row.type === "context") {
+      continue;
+    }
+
+    if (row.type === "added") {
+      const trimmedRange = trimPreviewHighlightRange({
+        start: rowStartOffset,
+        text: row.modifiedText,
+        tone: "added",
       });
-      currentCursor += partText.length;
+
+      if (trimmedRange) {
+        highlightRanges.push(trimmedRange);
+      }
+
       continue;
     }
 
-    if (part.removed) {
+    if (!row.modifiedSegments || row.modifiedSegments.length === 0) {
+      const trimmedRange = trimPreviewHighlightRange({
+        start: rowStartOffset,
+        text: row.modifiedText,
+        tone: "changed",
+      });
+
+      if (trimmedRange) {
+        highlightRanges.push(trimmedRange);
+      }
+
       continue;
     }
 
-    currentCursor += partText.length;
+    let segmentCursor = rowStartOffset;
+
+    for (const segment of row.modifiedSegments) {
+      const segmentStart = segmentCursor;
+      segmentCursor += segment.text.length;
+
+      if (segment.type !== "added") {
+        continue;
+      }
+
+      const trimmedRange = trimPreviewHighlightRange({
+        start: segmentStart,
+        text: segment.text,
+        tone: "changed",
+      });
+
+      if (trimmedRange) {
+        highlightRanges.push(trimmedRange);
+      }
+    }
   }
 
-  if (addedRanges.length === 0) {
-    return null;
-  }
-
-  let start = addedRanges[0]?.start ?? 0;
-  let end = addedRanges.at(-1)?.end ?? start;
-
-  while (start < end && /\s/.test(currentText[start] ?? "")) {
-    start += 1;
-  }
-
-  while (end > start && /\s/.test(currentText[end - 1] ?? "")) {
-    end -= 1;
-  }
-
-  if (start >= end) {
-    return null;
-  }
-
-  return { end, start };
+  return highlightRanges;
 }
 
 export function normalizeTailoredResumePreviewMatchText(value: string) {
@@ -438,12 +497,18 @@ export function resolveTailoredResumePreviewFocusRanges(input: {
   const highlightRanges =
     input.query.highlightRanges.length > 0
       ? input.query.highlightRanges
-      : [{ end: normalizedAnchorText.length, start: 0 }];
+      : ([
+          {
+            end: normalizedAnchorText.length,
+            start: 0,
+            tone: "changed",
+          } satisfies TailoredResumePreviewHighlightRange,
+        ] as TailoredResumePreviewHighlightRange[]);
   const clampRange = (range: TailoredResumePreviewHighlightRange) => {
     const start = Math.max(0, Math.min(range.start, normalizedAnchorText.length));
     const end = Math.max(start, Math.min(range.end, normalizedAnchorText.length));
 
-    return end > start ? { end, start } : null;
+    return end > start ? { end, start, tone: range.tone } : null;
   };
   const anchorStart = input.pageText.indexOf(normalizedAnchorText);
 
@@ -459,6 +524,7 @@ export function resolveTailoredResumePreviewFocusRanges(input: {
         {
           end: anchorStart + clampedRange.end,
           start: anchorStart + clampedRange.start,
+          tone: clampedRange.tone,
         },
       ] satisfies TailoredResumePreviewHighlightRange[];
     });
@@ -509,6 +575,7 @@ export function resolveTailoredResumePreviewFocusRanges(input: {
       {
         end: endPosition + 1,
         start: startPosition,
+        tone: clampedRange.tone,
       },
     ] satisfies TailoredResumePreviewHighlightRange[];
   });
@@ -544,9 +611,9 @@ export function buildTailoredResumePreviewFocusQuery(input: {
   }
 
   const beforePlainText = renderTailoredResumeLatexToPlainText(input.beforeLatexCode);
-  const rawHighlightRange = buildRawHighlightRange(beforePlainText, currentPlainText);
+  const rawHighlightRanges = buildRawHighlightRanges(beforePlainText, currentPlainText);
 
-  if (!rawHighlightRange) {
+  if (rawHighlightRanges.length === 0) {
     return {
       anchorText: currentPlainText,
       highlightRanges: [],
@@ -554,20 +621,31 @@ export function buildTailoredResumePreviewFocusQuery(input: {
     } satisfies TailoredResumePreviewFocusQuery;
   }
 
-  const normalizedStart = normalizeTailoredResumePreviewMatchText(
-    currentPlainText.slice(0, rawHighlightRange.start),
-  ).length;
-  const normalizedEnd = normalizeTailoredResumePreviewMatchText(
-    currentPlainText.slice(0, rawHighlightRange.end),
-  ).length;
+  const highlightRanges = rawHighlightRanges.flatMap((range) => {
+    const normalizedStart = normalizeTailoredResumePreviewMatchText(
+      currentPlainText.slice(0, range.start),
+    ).length;
+    const normalizedEnd = normalizeTailoredResumePreviewMatchText(
+      currentPlainText.slice(0, range.end),
+    ).length;
+
+    if (normalizedEnd <= normalizedStart) {
+      return [];
+    }
+
+    return [
+      {
+        end: normalizedEnd,
+        start: normalizedStart,
+        tone: range.tone,
+      } satisfies TailoredResumePreviewHighlightRange,
+    ];
+  });
 
   return {
     anchorText: currentPlainText,
-    highlightRanges:
-      normalizedEnd > normalizedStart
-        ? [{ end: normalizedEnd, start: normalizedStart }]
-        : [],
-    mode: normalizedEnd > normalizedStart ? "changed" : "focus",
+    highlightRanges,
+    mode: highlightRanges.length > 0 ? "changed" : "focus",
   } satisfies TailoredResumePreviewFocusQuery;
 }
 
@@ -614,7 +692,7 @@ export function buildTailoredResumeInteractivePreviewQueries(
           beforeLatexCode: edit.beforeLatexCode,
           currentLatexCode:
             resolvedSegmentMap.get(edit.segmentId)?.latexCode ??
-            (edit.state === "applied" ? edit.afterLatexCode : edit.beforeLatexCode),
+            resolveTailoredResumeCurrentEditLatexCode(edit),
           state: edit.state,
         });
 

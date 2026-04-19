@@ -12,6 +12,7 @@ import type {
 import type {
   TailoredResumeInteractivePreviewQuery,
   TailoredResumePreviewFocusQuery,
+  TailoredResumePreviewHighlightTone,
 } from "@/lib/tailor-resume-preview-focus";
 import { resolveTailoredResumePreviewFocusRanges } from "@/lib/tailor-resume-preview-focus";
 
@@ -21,6 +22,7 @@ type PdfPageViewport = ReturnType<PDFPageProxy["getViewport"]>;
 type TailoredResumeInteractivePreviewProps = {
   displayName: string;
   focusKey: string | null;
+  focusMatchKey: string | null;
   focusQuery: TailoredResumePreviewFocusQuery | null;
   focusRequest: number;
   highlightQueries: TailoredResumeInteractivePreviewQuery[];
@@ -53,7 +55,7 @@ type LoadedPdfPage = {
 
 type PageHighlightMatch = {
   key: string;
-  mode: TailoredResumePreviewFocusQuery["mode"];
+  tone: TailoredResumePreviewHighlightTone;
   rects: HighlightRect[];
 };
 
@@ -63,6 +65,7 @@ type PageHighlightSource = {
 
 let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
 const interactivePreviewLoadRetryDelays = [150, 400];
+const interactivePreviewGuidedFocusDurationMs = 320;
 
 function waitForInteractivePreviewRetry(delayMs: number) {
   return new Promise<void>((resolve) => {
@@ -400,6 +403,48 @@ function buildHighlightRectsForNormalizedSlice(input: {
   return mergeHighlightRects(rects);
 }
 
+function summarizeHighlightRectGroup(rects: HighlightRect[]) {
+  if (rects.length === 0) {
+    return null;
+  }
+
+  const top = Math.min(...rects.map((rect) => rect.top));
+  const bottom = Math.max(...rects.map((rect) => rect.top + rect.height));
+
+  return {
+    height: bottom - top,
+    top,
+  };
+}
+
+function resolveInteractivePreviewCenteredScrollTop(input: {
+  focusGroup: { height: number; top: number };
+  pageElement: HTMLDivElement;
+  scrollContainer: HTMLDivElement;
+}) {
+  const maxScrollTop = Math.max(
+    0,
+    input.scrollContainer.scrollHeight - input.scrollContainer.clientHeight,
+  );
+
+  if (maxScrollTop === 0) {
+    return 0;
+  }
+
+  const pageRect = input.pageElement.getBoundingClientRect();
+  const scrollContainerRect = input.scrollContainer.getBoundingClientRect();
+  const pageTopWithinScrollContent =
+    pageRect.top - scrollContainerRect.top + input.scrollContainer.scrollTop;
+  const focusCenterWithinScrollContent =
+    pageTopWithinScrollContent +
+    input.focusGroup.top +
+    input.focusGroup.height / 2;
+  const idealScrollTop =
+    focusCenterWithinScrollContent - input.scrollContainer.clientHeight / 2;
+
+  return Math.max(0, Math.min(idealScrollTop, maxScrollTop));
+}
+
 function buildFocusRects(input: {
   focusQuery: TailoredResumePreviewFocusQuery | null;
   pageMatchIndex: PageMatchIndex;
@@ -429,48 +474,74 @@ function buildPageHighlightMatches(input: {
   queries: TailoredResumeInteractivePreviewQuery[];
 }) {
   return input.queries.flatMap((entry) => {
-    const rects = buildFocusRects({
-      focusQuery: entry.query,
-      pageMatchIndex: input.pageMatchIndex,
+    const resolvedRanges = resolveTailoredResumePreviewFocusRanges({
+      pageText: input.pageMatchIndex.normalizedText,
+      query: entry.query,
     });
 
-    if (rects.length === 0) {
-      return [];
-    }
+    return resolvedRanges.flatMap((range, index) => {
+      const rects = buildHighlightRectsForNormalizedSlice({
+        end: range.end,
+        pageMatchIndex: input.pageMatchIndex,
+        start: range.start,
+      });
 
-    return [
-      {
-        key: entry.key,
-        mode: entry.query.mode,
-        rects,
-      } satisfies PageHighlightMatch,
-    ];
+      if (!rects) {
+        return [];
+      }
+
+      return [
+        {
+          key: `${entry.key}:${index}`,
+          rects,
+          tone: range.tone,
+        } satisfies PageHighlightMatch,
+      ];
+    });
   });
+}
+
+function buildFocusRectsFromPageHighlightMatches(input: {
+  focusMatchKey: string | null;
+  pageHighlightMatches: PageHighlightMatch[];
+}) {
+  if (!input.focusMatchKey) {
+    return [];
+  }
+
+  return input.pageHighlightMatches.flatMap((match) =>
+    match.key.startsWith(`${input.focusMatchKey}:`) ? match.rects : [],
+  );
 }
 
 function InteractivePreviewPage({
   focusActive,
   focusKey,
+  focusMatchKey,
   focusQuery,
   focusRequest,
   highlightQueries,
   onRenderFailure,
   page,
   scale,
+  scrollContainerRef,
 }: {
   focusActive: boolean;
   focusKey: string | null;
+  focusMatchKey: string | null;
   focusQuery: TailoredResumePreviewFocusQuery | null;
   focusRequest: number;
   highlightQueries: TailoredResumeInteractivePreviewQuery[];
   onRenderFailure?: () => void;
   page: LoadedPdfPage;
   scale: number;
+  scrollContainerRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const [focusHighlightRects, setFocusHighlightRects] = useState<HighlightRect[]>([]);
   const [pageHighlightMatches, setPageHighlightMatches] = useState<PageHighlightMatch[]>(
     [],
   );
+  const [guidedFocusToken, setGuidedFocusToken] = useState<string | null>(null);
   const [highlightSource, setHighlightSource] = useState<PageHighlightSource | null>(
     null,
   );
@@ -589,17 +660,24 @@ function InteractivePreviewPage({
     }
 
     try {
-      setPageHighlightMatches(
-        buildPageHighlightMatches({
-          pageMatchIndex: highlightSource.pageMatchIndex,
-          queries: highlightQueries,
-        }),
-      );
+      const nextPageHighlightMatches = buildPageHighlightMatches({
+        pageMatchIndex: highlightSource.pageMatchIndex,
+        queries: highlightQueries,
+      });
+      const nextFocusHighlightRects =
+        buildFocusRectsFromPageHighlightMatches({
+          focusMatchKey,
+          pageHighlightMatches: nextPageHighlightMatches,
+        });
+
+      setPageHighlightMatches(nextPageHighlightMatches);
       setFocusHighlightRects(
-        buildFocusRects({
-          focusQuery,
-          pageMatchIndex: highlightSource.pageMatchIndex,
-        }),
+        nextFocusHighlightRects.length > 0
+          ? nextFocusHighlightRects
+          : buildFocusRects({
+              focusQuery,
+              pageMatchIndex: highlightSource.pageMatchIndex,
+            }),
       );
     } catch (highlightError) {
       console.warn(
@@ -609,37 +687,61 @@ function InteractivePreviewPage({
       setFocusHighlightRects([]);
       setPageHighlightMatches([]);
     }
-  }, [focusQuery, highlightQueries, highlightSource]);
+  }, [focusMatchKey, focusQuery, highlightQueries, highlightSource]);
 
   useEffect(() => {
     if (!focusActive || !focusKey || focusHighlightRects.length === 0) {
+      setGuidedFocusToken(null);
       return;
     }
 
     const focusToken = `${focusKey}:${focusRequest}`;
 
+    setGuidedFocusToken(focusToken);
+
     if (lastScrolledFocusTokenRef.current === focusToken) {
-      return;
+      const clearFocusTimer = window.setTimeout(() => {
+        setGuidedFocusToken((currentToken) =>
+          currentToken === focusToken ? null : currentToken,
+        );
+      }, interactivePreviewGuidedFocusDurationMs);
+
+      return () => {
+        window.clearTimeout(clearFocusTimer);
+      };
     }
 
     lastScrolledFocusTokenRef.current = focusToken;
 
     const pageElement = pageRef.current;
+    const scrollContainer = scrollContainerRef.current;
+    const focusGroup = summarizeHighlightRectGroup(focusHighlightRects);
 
-    if (!pageElement) {
+    if (!pageElement || !scrollContainer || !focusGroup) {
       return;
     }
 
-    const focusElement = pageElement.querySelector<HTMLElement>(
-      "[data-tailor-resume-active-highlight='true']",
-    );
-
-    focusElement?.scrollIntoView({
-      behavior: "smooth",
-      block: "center",
-      inline: "nearest",
+    const clampedScrollTop = resolveInteractivePreviewCenteredScrollTop({
+      focusGroup,
+      pageElement,
+      scrollContainer,
     });
-  }, [focusActive, focusHighlightRects, focusKey, focusRequest]);
+
+    scrollContainer.scrollTo({
+      behavior: "smooth",
+      top: clampedScrollTop,
+    });
+
+    const clearFocusTimer = window.setTimeout(() => {
+      setGuidedFocusToken((currentToken) =>
+        currentToken === focusToken ? null : currentToken,
+      );
+    }, interactivePreviewGuidedFocusDurationMs);
+
+    return () => {
+      window.clearTimeout(clearFocusTimer);
+    };
+  }, [focusActive, focusHighlightRects, focusKey, focusRequest, scrollContainerRef]);
 
   const pageHeight = page.baseHeight * scale;
   const pageWidth = page.baseWidth * scale;
@@ -661,9 +763,9 @@ function InteractivePreviewPage({
             match.rects.map((rect, index) => (
               <div
                 className={`resume-interactive-highlight ${
-                  match.mode === "changed"
+                  match.tone === "changed"
                     ? "resume-interactive-highlight--changed"
-                    : "resume-interactive-highlight--focus"
+                    : "resume-interactive-highlight--added"
                 }`}
                 key={`steady-${match.key}-${page.pageNumber}-${index}`}
                 style={{
@@ -677,7 +779,9 @@ function InteractivePreviewPage({
           )}
         </div>
       ) : null}
-      {focusActive && focusHighlightRects.length > 0 ? (
+      {focusActive &&
+      focusHighlightRects.length > 0 &&
+      guidedFocusToken === `${focusKey}:${focusRequest}` ? (
         <div className="pointer-events-none absolute inset-0">
           {focusHighlightRects.map((rect, index) => (
             <div
@@ -721,6 +825,7 @@ export default function TailoredResumeInteractivePreview({
   displayName,
   focusRequest,
   focusKey,
+  focusMatchKey,
   focusQuery,
   highlightQueries,
   onRenderFailure,
@@ -897,6 +1002,7 @@ export default function TailoredResumeInteractivePreview({
                 <InteractivePreviewPage
                   focusActive={Boolean(focusKey)}
                   focusKey={focusKey}
+                  focusMatchKey={focusMatchKey}
                   focusQuery={focusQuery}
                   focusRequest={focusRequest}
                   highlightQueries={highlightQueries}
@@ -904,6 +1010,7 @@ export default function TailoredResumeInteractivePreview({
                   onRenderFailure={onRenderFailure}
                   page={page}
                   scale={pageScale}
+                  scrollContainerRef={containerRef}
                 />
               ))
             : null}

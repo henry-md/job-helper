@@ -27,9 +27,9 @@ function buildSingleEdit(
       afterLatexCode,
       beforeLatexCode,
       command: "resumeitem",
+      customLatexCode: null,
       editId: `${segmentId}:model`,
       reason: 'Highlights "open-source communities".',
-      source: "model",
       state: "applied",
       segmentId,
     },
@@ -227,21 +227,10 @@ test("highlighted preview combines model and user edits on the same segment", ()
         beforeLatexCode:
           "\\resumeitem{Created full-stack dashboard for project management with \\textbf{React (Next.js) and JavaScript}, with user authentication}",
         command: "resumeitem",
+        customLatexCode:
+          "\\resumeitem{User-revised open-source collaboration bullet}",
         editId: `${segmentId}:model`,
         reason: "Model edit.",
-        source: "model",
-        state: "applied",
-        segmentId,
-      },
-      {
-        afterLatexCode:
-          "\\resumeitem{User-revised open-source collaboration bullet}",
-        beforeLatexCode:
-          "\\resumeitem{Added explicit open-source collaboration bullet}",
-        command: "resumeitem",
-        editId: `${segmentId}:user`,
-        reason: "User edited",
-        source: "user",
         state: "applied",
         segmentId,
       },
