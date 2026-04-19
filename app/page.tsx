@@ -1,5 +1,6 @@
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
+import PublicLandingShowcase from "@/components/public-landing-showcase";
 import SignInButton from "@/components/sign-in-button";
 import StatusToast from "@/components/status-toast";
 import { authOptions } from "@/auth";
@@ -32,130 +33,55 @@ export default async function Home({ searchParams }: HomePageProps) {
   }
 
   return (
-    <main className="min-h-[100dvh] overflow-x-hidden px-5 py-6 text-zinc-100 sm:px-8 sm:py-8">
+    <main className="relative h-[100vh] overflow-hidden px-3 py-3 text-zinc-100 sm:px-4 sm:py-4">
       <StatusToast message={authErrorMessage} tone="error" />
 
-      <div className="mx-auto flex h-full w-full max-w-6xl items-center justify-center">
-        <section className="glass-panel soft-ring grid w-full max-w-5xl gap-8 overflow-visible rounded-[2rem] p-6 sm:p-8 lg:grid-cols-[1.05fr_0.95fr] lg:gap-8 lg:p-10">
-          <div className="flex min-h-0 flex-col justify-between gap-6 lg:gap-8">
-            <div className="space-y-6">
-              <div className="flex items-center justify-between gap-4">
-                <p className="text-[0.72rem] uppercase tracking-[0.32em] text-zinc-500">
-                  Job Helper
-                </p>
-                <span className="rounded-full border border-white/10 px-3 py-1 text-[0.68rem] uppercase tracking-[0.24em] text-zinc-400">
-                  Google sign-in
-                </span>
-              </div>
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute left-[-10rem] top-[-8rem] h-72 w-72 rounded-full bg-emerald-300/10 blur-3xl [animation:public-drift_14s_ease-in-out_infinite]" />
+        <div className="absolute right-[-8rem] top-16 h-80 w-80 rounded-full bg-cyan-300/10 blur-3xl [animation:public-drift_18s_ease-in-out_infinite_reverse]" />
+        <div className="absolute bottom-[-10rem] left-1/3 h-72 w-72 rounded-full bg-white/6 blur-3xl [animation:public-pulse_9s_ease-in-out_infinite]" />
+      </div>
 
-              <div className="space-y-4">
-                <h1 className="max-w-3xl text-[clamp(2.6rem,6vw,5.35rem)] leading-[0.9] font-semibold tracking-tight text-zinc-50">
-                  Keep your job search organized from the first screenshot.
-                </h1>
-                <p className="max-w-2xl text-[clamp(1rem,1.8vw,1.125rem)] leading-relaxed text-zinc-300">
-                  Sign in, drop in an application screenshot, confirm the details,
-                  and save it to your dashboard.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid gap-3 text-sm text-zinc-300 sm:grid-cols-3">
-              <div className="rounded-[1.25rem] border border-white/8 bg-white/[0.04] px-4 py-4">
-                Upload screenshots
-              </div>
-              <div className="rounded-[1.25rem] border border-white/8 bg-white/[0.04] px-4 py-4">
-                Review extracted fields
-              </div>
-              <div className="rounded-[1.25rem] border border-white/8 bg-white/[0.04] px-4 py-4">
-                Track applications
-              </div>
-            </div>
+      <section className="glass-panel soft-ring relative mx-auto grid h-full max-w-6xl grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden rounded-[2rem] p-4 sm:p-5 lg:grid-cols-[minmax(0,0.72fr)_minmax(0,1fr)] lg:grid-rows-1 lg:gap-5">
+        <div className="relative z-10 flex min-h-0 flex-col justify-center gap-4 lg:px-2">
+          <div className="space-y-3">
+            <p className="hidden text-[0.72rem] uppercase tracking-[0.34em] text-zinc-500 sm:block">
+              No copy-paste required
+            </p>
+            <h1 className="max-w-md text-[clamp(2.2rem,10vw,3.45rem)] leading-[0.92] font-semibold tracking-tight text-zinc-50 sm:hidden">
+              Save the role.
+              <br />
+              Track the search.
+            </h1>
+            <h1 className="hidden max-w-xl text-[clamp(2.6rem,8vw,5.2rem)] leading-[0.9] font-semibold tracking-tight text-zinc-50 sm:block">
+              Save the role.
+              <br />
+              Track the search.
+            </h1>
+            <p className="max-w-md text-[0.98rem] leading-relaxed text-zinc-300 sm:hidden">
+              Job Helper turns job post screenshots into clean drafts. Job
+              Tracker keeps every company, stage, and next step in one place.
+            </p>
+            <p className="hidden max-w-xl text-[clamp(0.96rem,1.45vw,1.08rem)] leading-relaxed text-zinc-300 sm:block">
+              Job Helper turns job post screenshots into clean drafts. Job
+              Tracker keeps every company, stage, and follow-up in one clean
+              workspace.
+            </p>
           </div>
 
-          <aside className="relative z-20 flex min-h-0 flex-col justify-between gap-6 pt-4 sm:pt-6 lg:pt-10">
-            <div className="rounded-[1.75rem] border border-white/10 bg-black/20 p-5 sm:p-6">
-              <p className="text-sm font-medium text-zinc-100">
-                Continue with Google to open your dashboard.
-              </p>
-              <p className="mt-2 text-sm leading-relaxed text-zinc-400">
-                Your applications, companies, and screenshots stay tied to your account.
-              </p>
+          <div className="max-w-md space-y-3">
+            <SignInButton />
+            <p className="hidden text-sm leading-relaxed text-zinc-500 sm:block">
+              Sign in with Google to open your saved dashboard, screenshots, and
+              tracked applications.
+            </p>
+          </div>
+        </div>
 
-              <div className="mt-6 sm:max-w-sm">
-                <SignInButton />
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div className="max-w-md space-y-2">
-                <p className="text-[0.7rem] uppercase tracking-[0.28em] text-emerald-300/75">
-                  Live dashboard preview
-                </p>
-                <p className="text-sm leading-relaxed text-zinc-400">
-                  The intake form stays front and center, so a fresh screenshot can turn
-                  into a saved application without digging through tabs.
-                </p>
-              </div>
-
-              <div className="relative z-30 rounded-[1.9rem] border border-white/10 bg-[#09090b] p-3 shadow-[0_28px_90px_rgba(0,0,0,0.45)]">
-                <div className="overflow-hidden rounded-[1.45rem] border border-white/10 bg-[radial-gradient(circle_at_top,rgba(52,211,153,0.16),transparent_40%),linear-gradient(180deg,#16161a_0%,#09090b_100%)]">
-                  <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-                    <div>
-                      <p className="text-[0.68rem] uppercase tracking-[0.28em] text-zinc-500">
-                        Dashboard
-                      </p>
-                      <p className="mt-1 text-lg font-semibold text-zinc-50">New application</p>
-                    </div>
-                    <div className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-[0.68rem] uppercase tracking-[0.22em] text-emerald-200">
-                      Extracted
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 p-4">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      {[
-                        ["Job title", "Software Engineer"],
-                        ["Company", "Microsoft"],
-                        ["Applied", "03/14/2026"],
-                        ["Location", "Hybrid"],
-                      ].map(([label, value]) => (
-                        <div
-                          key={label}
-                          className="rounded-[1.1rem] border border-white/8 bg-white/[0.03] p-3"
-                        >
-                          <p className="text-[0.68rem] uppercase tracking-[0.2em] text-zinc-500">
-                            {label}
-                          </p>
-                          <p className="mt-2 text-sm text-zinc-100">{value}</p>
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="rounded-[1.1rem] border border-white/8 bg-white/[0.03] p-3">
-                      <p className="text-[0.68rem] uppercase tracking-[0.2em] text-zinc-500">
-                        Job URL
-                      </p>
-                      <p className="mt-2 truncate text-sm text-zinc-300">
-                        apply.careers.microsoft.com/careers/job/software-engineer
-                      </p>
-                    </div>
-
-                    <div className="rounded-[1.2rem] border border-emerald-400/25 bg-emerald-400/[0.08] p-4">
-                      <p className="text-[0.68rem] uppercase tracking-[0.22em] text-emerald-200/80">
-                        Description
-                      </p>
-                      <p className="mt-3 text-sm leading-relaxed text-zinc-200">
-                        Cloud and AI platform role supporting large-scale services, with
-                        extracted details ready to review before saving.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </aside>
-        </section>
-      </div>
+        <aside className="relative z-10 min-h-0 min-w-0">
+          <PublicLandingShowcase />
+        </aside>
+      </section>
     </main>
   );
 }

@@ -15,7 +15,7 @@ const serif = Cormorant_Garamond({
 });
 
 export const metadata: Metadata = {
-  title: "Job Helper",
+  title: "J*b 🥀",
   description: "Google-authenticated workspace for a premium job search flow.",
 };
 

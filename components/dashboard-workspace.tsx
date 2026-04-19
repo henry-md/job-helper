@@ -313,13 +313,13 @@ export default function DashboardWorkspace({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-[clamp(0.75rem,1.2vh,1rem)]">
+    <div className="flex min-h-full flex-col gap-[clamp(0.75rem,1.2vh,1rem)] sm:h-full sm:min-h-0">
       <StatusToast
         message={statusMessage?.text}
         tone={statusMessage?.tone}
       />
 
-      <header className="glass-panel soft-ring flex min-h-[88px] flex-wrap items-center justify-between gap-4 rounded-[1.5rem] px-5 py-4">
+      <header className="glass-panel soft-ring flex flex-col gap-4 rounded-[1.5rem] px-4 py-4 sm:min-h-[88px] sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <div className="flex min-w-0 items-center gap-3">
           <ProfileAvatar
             imageSrc={profileImageSrc}
@@ -335,10 +335,10 @@ export default function DashboardWorkspace({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <nav className="flex items-center gap-2 rounded-full border border-white/10 bg-black/20 p-1">
+        <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-2">
+          <nav className="grid w-full grid-cols-2 items-center gap-2 rounded-[1.4rem] border border-white/10 bg-black/20 p-1 sm:flex sm:w-auto sm:rounded-full">
             <button
-              className={`rounded-full px-3 py-2 text-xs uppercase tracking-[0.18em] transition ${
+              className={`w-full min-w-0 whitespace-nowrap rounded-full px-2.5 py-2 text-center text-[0.7rem] uppercase leading-none tracking-[0.14em] transition sm:w-auto sm:px-3 sm:text-xs sm:tracking-[0.16em] ${
                 activeTab === "tailor"
                   ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
                   : "text-zinc-400 hover:text-zinc-200"
@@ -349,7 +349,7 @@ export default function DashboardWorkspace({
               Tailor Resume
             </button>
             <button
-              className={`rounded-full px-3 py-2 text-xs uppercase tracking-[0.18em] transition ${
+              className={`w-full min-w-0 whitespace-nowrap rounded-full px-2.5 py-2 text-center text-[0.7rem] uppercase leading-none tracking-[0.14em] transition sm:w-auto sm:px-3 sm:text-xs sm:tracking-[0.16em] ${
                 activeTab === "new"
                   ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
                   : "text-zinc-400 hover:text-zinc-200"
@@ -360,7 +360,7 @@ export default function DashboardWorkspace({
               Applications
             </button>
           </nav>
-          <SignOutButton />
+          <SignOutButton className="w-full sm:w-auto" />
         </div>
       </header>
 
@@ -426,9 +426,9 @@ export default function DashboardWorkspace({
           )
         : null}
 
-      <div className="min-h-0 flex-1 overflow-hidden">
+      <div className="flex-1 overflow-visible sm:min-h-0 sm:overflow-hidden">
         {activeTab === "new" ? (
-          <section className="grid h-full min-h-0 gap-[clamp(0.75rem,1.2vh,1rem)] xl:grid-cols-[1.45fr_0.55fr]">
+          <section className="grid content-start gap-[clamp(0.75rem,1.2vh,1rem)] sm:h-full sm:min-h-0 xl:grid-cols-[1.45fr_0.55fr]">
             <section className="glass-panel soft-ring flex min-h-0 flex-col rounded-[1.5rem] p-4 sm:p-5">
               <JobApplicationIntake
                 companyOptions={companyOptions}
@@ -438,7 +438,7 @@ export default function DashboardWorkspace({
               />
             </section>
 
-            <aside className="app-scrollbar min-h-0 overflow-y-auto pr-1">
+            <aside className="overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto sm:pr-1">
               <section className="glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
@@ -486,8 +486,8 @@ export default function DashboardWorkspace({
             </aside>
           </section>
         ) : (
-          <section className="grid h-full min-h-0 gap-[clamp(0.75rem,1.2vh,1rem)] xl:grid-cols-[1fr_0.4fr]">
-            <div className="app-scrollbar min-h-0 overflow-y-auto">
+          <section className="grid content-start gap-[clamp(0.75rem,1.2vh,1rem)] sm:h-full sm:min-h-0 xl:grid-cols-[1fr_0.4fr]">
+            <div className="overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto">
               <TailorResumeWorkspace
                 debugUiEnabled={tailorResumeDebugUiEnabled}
                 openAIReady={tailorResumeOpenAIReady}
@@ -497,7 +497,7 @@ export default function DashboardWorkspace({
               />
             </div>
 
-            <aside className="app-scrollbar min-h-0 overflow-y-auto pr-1">
+            <aside className="overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto sm:pr-1">
               <section className="glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
