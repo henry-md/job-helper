@@ -45,11 +45,21 @@ Tailor Resume object model:
 - Files: `lib/tailor-resume-types.ts`, `app/api/tailor-resume/route.ts`
 - Each saved tailored resume keeps:
   - the tailored LaTeX / annotated LaTeX snapshot
-  - block-level edit history for review and later user overrides
+  - one block-level edit record per changed `segmentId`
+  - each block edit record stores three distinct LaTeX states:
+    - `beforeLatexCode`: the original source-resume block
+    - `afterLatexCode`: the OpenAI-tailored suggestion for that same block
+    - `customLatexCode`: an optional user-authored override for the same block
+  - the review timeline should stay keyed to the model edit record, not create separate timeline rows for custom user overrides
+  - the saved plaintext planning payload from the first tailoring pass, including:
+    - planned `segmentId` edits
+    - desired plaintext rewrites per block
+    - the planner thesis + metadata
   - a `thesis` object with:
     - `jobDescriptionFocus`: the non-generic themes where the job description over-indexed
     - `resumeChanges`: the broad resume strategy used to match those themes
 - The review modal surfaces this thesis from saved profile data; it is not recomputed client-side.
+- When `DEBUG_UI` is enabled, the tailored-resume review also exposes the saved planning payload so developers can inspect the intermediate OpenAI result without rerunning tailoring.
 
 6. Preview PDF (`Buffer`)
 - Files: `lib/tailor-resume-storage.ts`, `app/api/tailor-resume/preview/route.ts`

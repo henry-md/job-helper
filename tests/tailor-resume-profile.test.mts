@@ -119,6 +119,26 @@ test("parseTailorResumeProfile keeps tailored resume metadata and workspace stat
         jobIdentifier: "Applied research",
         latexCode: "\\documentclass{article}",
         pdfUpdatedAt: "2026-04-15T12:00:00.000Z",
+        planningResult: {
+          changes: [
+            {
+              desiredPlainText: "Tailored bullet",
+              reason:
+                'Highlights CI/CD work. Matches "CI/CD" in the job description.',
+              segmentId: "experience.entry-1.bullet-1",
+            },
+          ],
+          companyName: "OpenAI",
+          displayName: "OpenAI - Research Engineer",
+          jobIdentifier: "Applied research",
+          positionTitle: "Research Engineer",
+          thesis: {
+            jobDescriptionFocus:
+              "Over-indexes on applied research systems and CI/CD rigor rather than generic software engineering requirements.",
+            resumeChanges:
+              "Moves the most directly relevant research-platform and delivery bullets higher and makes the systems context more explicit.",
+          },
+        },
         positionTitle: "Research Engineer",
         status: "ready",
         thesis: {
@@ -144,10 +164,14 @@ test("parseTailorResumeProfile keeps tailored resume metadata and workspace stat
     'Highlights CI/CD work. Matches "CI/CD" in the job description.',
   );
   assert.equal(profile.tailoredResumes[0]?.edits[0]?.editId, "experience.entry-1.bullet-1:1");
-  assert.equal(profile.tailoredResumes[0]?.edits[0]?.source, "model");
+  assert.equal(profile.tailoredResumes[0]?.edits[0]?.customLatexCode, null);
   assert.equal(profile.tailoredResumes[0]?.edits[0]?.state, "applied");
   assert.equal(profile.tailoredResumes[0]?.positionTitle, "Research Engineer");
   assert.equal(profile.tailoredResumes[0]?.jobIdentifier, "Applied research");
+  assert.equal(
+    profile.tailoredResumes[0]?.planningResult.changes[0]?.desiredPlainText,
+    "Tailored bullet",
+  );
   assert.equal(profile.tailoredResumes[0]?.sourceAnnotatedLatexCode, null);
   assert.equal(
     profile.tailoredResumes[0]?.thesis?.jobDescriptionFocus,
@@ -159,28 +183,116 @@ test("parseTailorResumeProfile keeps tailored resume metadata and workspace stat
   );
 });
 
-test("parseTailorResumeProfile backfills tailored resume metadata from displayName", () => {
+test("parseTailorResumeProfile folds legacy model and user rows into one block edit", () => {
   const profile = parseTailorResumeProfile({
     tailoredResumes: [
       {
         annotatedLatexCode:
-          "% JOBHELPER_SEGMENT_ID: document.documentclass-article-1\n\\documentclass{article}",
+          "% JOBHELPER_SEGMENT_ID: experience.entry-1.bullet-1\n\\resumeitem{User custom bullet}",
+        companyName: "OpenAI",
         createdAt: "2026-04-15T12:00:00.000Z",
-        displayName: "Anthropic - Product Engineer",
+        displayName: "OpenAI - Research Engineer",
+        edits: [
+          {
+            afterLatexCode: "\\resumeitem{Model suggested bullet}",
+            beforeLatexCode: "\\resumeitem{Original bullet}",
+            command: "resumeitem",
+            editId: "experience.entry-1.bullet-1:model",
+            reason: "Model edit",
+            source: "model",
+            state: "applied",
+            segmentId: "experience.entry-1.bullet-1",
+          },
+          {
+            afterLatexCode: "\\resumeitem{User custom bullet}",
+            beforeLatexCode: "\\resumeitem{Model suggested bullet}",
+            command: "resumeitem",
+            editId: "experience.entry-1.bullet-1:user",
+            reason: "User edit",
+            source: "user",
+            state: "applied",
+            segmentId: "experience.entry-1.bullet-1",
+          },
+        ],
         error: null,
-        id: "tailored-legacy",
-        jobDescription: "Legacy job description",
+        id: "tailored-legacy-merged",
+        jobDescription: "Role text",
+        jobIdentifier: "Applied research",
         latexCode: "\\documentclass{article}",
-        pdfUpdatedAt: null,
+        pdfUpdatedAt: "2026-04-15T12:00:00.000Z",
+        planningResult: {
+          changes: [
+            {
+              desiredPlainText: "Model suggested bullet",
+              reason: "Model edit",
+              segmentId: "experience.entry-1.bullet-1",
+            },
+          ],
+          companyName: "OpenAI",
+          displayName: "OpenAI - Research Engineer",
+          jobIdentifier: "Applied research",
+          positionTitle: "Research Engineer",
+          thesis: {
+            jobDescriptionFocus: "Legacy focus",
+            resumeChanges: "Legacy changes",
+          },
+        },
+        positionTitle: "Research Engineer",
         status: "ready",
+        thesis: {
+          jobDescriptionFocus: "Legacy focus",
+          resumeChanges: "Legacy changes",
+        },
         updatedAt: "2026-04-15T12:00:00.000Z",
       },
     ],
   });
 
-  assert.equal(profile.tailoredResumes[0]?.companyName, "Anthropic");
-  assert.deepEqual(profile.tailoredResumes[0]?.edits, []);
-  assert.equal(profile.tailoredResumes[0]?.positionTitle, "Product Engineer");
-  assert.equal(profile.tailoredResumes[0]?.jobIdentifier, "General");
-  assert.equal(profile.tailoredResumes[0]?.thesis, null);
+  assert.equal(profile.tailoredResumes[0]?.edits.length, 1);
+  assert.equal(
+    profile.tailoredResumes[0]?.edits[0]?.beforeLatexCode,
+    "\\resumeitem{Original bullet}",
+  );
+  assert.equal(
+    profile.tailoredResumes[0]?.edits[0]?.afterLatexCode,
+    "\\resumeitem{Model suggested bullet}",
+  );
+  assert.equal(
+    profile.tailoredResumes[0]?.edits[0]?.customLatexCode,
+    "\\resumeitem{User custom bullet}",
+  );
+});
+
+test("parseTailorResumeProfile rebuilds legacy tailored resume metadata when planningResult is missing", () => {
+  const profile = parseTailorResumeProfile({
+    tailoredResumes: [
+      {
+        annotatedLatexCode:
+          "% JOBHELPER_SEGMENT_ID: document.documentclass-article-1\n\\documentclass{article}",
+        companyName: "Anthropic",
+        createdAt: "2026-04-15T12:00:00.000Z",
+        displayName: "Anthropic - Product Engineer",
+        error: null,
+        id: "tailored-legacy",
+        jobDescription: "Legacy job description",
+        jobIdentifier: "General",
+        latexCode: "\\documentclass{article}",
+        pdfUpdatedAt: null,
+        positionTitle: "Product Engineer",
+        status: "ready",
+        thesis: {
+          jobDescriptionFocus: "Legacy focus",
+          resumeChanges: "Legacy changes",
+        },
+        updatedAt: "2026-04-15T12:00:00.000Z",
+      },
+    ],
+  });
+
+  assert.equal(profile.tailoredResumes.length, 1);
+  assert.equal(profile.tailoredResumes[0]?.planningResult.companyName, "Anthropic");
+  assert.equal(profile.tailoredResumes[0]?.planningResult.displayName, "Anthropic - Product Engineer");
+  assert.equal(profile.tailoredResumes[0]?.planningResult.positionTitle, "Product Engineer");
+  assert.equal(profile.tailoredResumes[0]?.planningResult.jobIdentifier, "General");
+  assert.deepEqual(profile.tailoredResumes[0]?.planningResult.changes, []);
 });

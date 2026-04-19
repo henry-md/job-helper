@@ -71,9 +71,9 @@ export type TailoredResumeBlockEditRecord = {
   afterLatexCode: string;
   beforeLatexCode: string;
   command: string | null;
+  customLatexCode: string | null;
   editId: string;
   reason: string;
-  source: "model" | "user";
   state: "applied" | "rejected";
   segmentId: string;
 };
@@ -81,6 +81,21 @@ export type TailoredResumeBlockEditRecord = {
 export type TailoredResumeThesis = {
   jobDescriptionFocus: string;
   resumeChanges: string;
+};
+
+export type TailoredResumePlanningChange = {
+  desiredPlainText: string;
+  reason: string;
+  segmentId: string;
+};
+
+export type TailoredResumePlanningResult = {
+  changes: TailoredResumePlanningChange[];
+  companyName: string;
+  displayName: string;
+  jobIdentifier: string;
+  positionTitle: string;
+  thesis: TailoredResumeThesis;
 };
 
 export type TailoredResumeRecord = {
@@ -95,6 +110,7 @@ export type TailoredResumeRecord = {
   jobIdentifier: string;
   latexCode: string;
   pdfUpdatedAt: string | null;
+  planningResult: TailoredResumePlanningResult;
   positionTitle: string;
   sourceAnnotatedLatexCode: string | null;
   status: TailorResumeLatexStatus;
@@ -307,20 +323,6 @@ function parseTailorResumeAnnotatedLatexState(
   };
 }
 
-function buildTailoredResumeDisplayName(input: {
-  companyName: string;
-  positionTitle: string;
-}) {
-  const companyName = input.companyName.trim();
-  const positionTitle = input.positionTitle.trim();
-
-  if (companyName && positionTitle) {
-    return `${companyName} - ${positionTitle}`;
-  }
-
-  return companyName || positionTitle || "Tailored Resume";
-}
-
 function parseTailorResumeWorkspaceState(value: unknown): TailorResumeWorkspaceState {
   if (!isRecord(value)) {
     return emptyTailorResumeWorkspaceState();
@@ -332,10 +334,14 @@ function parseTailorResumeWorkspaceState(value: unknown): TailorResumeWorkspaceS
   };
 }
 
+type ParsedTailoredResumeBlockEditRecord = TailoredResumeBlockEditRecord & {
+  source: "model" | "user";
+};
+
 function parseTailoredResumeBlockEditRecord(
   value: unknown,
   index: number,
-): TailoredResumeBlockEditRecord | null {
+): ParsedTailoredResumeBlockEditRecord | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -344,6 +350,8 @@ function parseTailoredResumeBlockEditRecord(
   const segmentId = readNullableString(value.segmentId);
   const beforeLatexCode = readNullableString(value.beforeLatexCode);
   const afterLatexCode = readNullableString(value.afterLatexCode);
+  const customLatexCode =
+    value.customLatexCode === null ? null : readNullableString(value.customLatexCode);
   const reason = readNullableString(value.reason);
   const command = readNullableString(value.command);
   const rawSource = value.source;
@@ -364,6 +372,7 @@ function parseTailoredResumeBlockEditRecord(
     afterLatexCode,
     beforeLatexCode,
     command,
+    customLatexCode,
     editId: editId ?? `${segmentId}:${index + 1}`,
     reason,
     source,
@@ -372,15 +381,73 @@ function parseTailoredResumeBlockEditRecord(
   };
 }
 
+function normalizeTailoredResumeBlockEditRecords(
+  edits: ParsedTailoredResumeBlockEditRecord[],
+) {
+  const normalizedEditsBySegmentId = new Map<string, TailoredResumeBlockEditRecord>();
+  const orderedSegmentIds: string[] = [];
+
+  for (const edit of edits) {
+    const currentEdit = normalizedEditsBySegmentId.get(edit.segmentId);
+
+    if (!currentEdit) {
+      orderedSegmentIds.push(edit.segmentId);
+      normalizedEditsBySegmentId.set(edit.segmentId, {
+        afterLatexCode:
+          edit.source === "user" ? edit.beforeLatexCode : edit.afterLatexCode,
+        beforeLatexCode: edit.beforeLatexCode,
+        command: edit.command,
+        customLatexCode:
+          edit.customLatexCode ??
+          (edit.source === "user" && edit.state === "applied"
+            ? edit.afterLatexCode
+            : null),
+        editId: edit.editId,
+        reason: edit.reason,
+        state: edit.state,
+        segmentId: edit.segmentId,
+      });
+      continue;
+    }
+
+    if (edit.source === "model") {
+      normalizedEditsBySegmentId.set(edit.segmentId, {
+        afterLatexCode: edit.afterLatexCode,
+        beforeLatexCode: edit.beforeLatexCode,
+        command: edit.command,
+        customLatexCode: edit.customLatexCode ?? currentEdit.customLatexCode,
+        editId: edit.editId,
+        reason: edit.reason,
+        state: edit.state,
+        segmentId: edit.segmentId,
+      });
+      continue;
+    }
+
+    normalizedEditsBySegmentId.set(edit.segmentId, {
+      ...currentEdit,
+      command: edit.command ?? currentEdit.command,
+      customLatexCode: edit.state === "applied" ? edit.afterLatexCode : null,
+    });
+  }
+
+  return orderedSegmentIds.flatMap((segmentId) => {
+    const edit = normalizedEditsBySegmentId.get(segmentId);
+    return edit ? [edit] : [];
+  });
+}
+
 function parseTailoredResumeBlockEditRecords(value: unknown) {
   if (!Array.isArray(value)) {
     return [] as TailoredResumeBlockEditRecord[];
   }
 
-  return value.flatMap((entry, index) => {
+  const parsedEdits = value.flatMap((entry, index) => {
     const parsedEdit = parseTailoredResumeBlockEditRecord(entry, index);
     return parsedEdit ? [parsedEdit] : [];
   });
+
+  return normalizeTailoredResumeBlockEditRecords(parsedEdits);
 }
 
 function parseTailoredResumeThesis(value: unknown): TailoredResumeThesis | null {
@@ -401,13 +468,112 @@ function parseTailoredResumeThesis(value: unknown): TailoredResumeThesis | null 
   };
 }
 
+function parseTailoredResumePlanningChange(
+  value: unknown,
+): TailoredResumePlanningChange | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const segmentId = readNullableString(value.segmentId);
+  const reason = readNullableString(value.reason);
+  const desiredPlainText =
+    typeof value.desiredPlainText === "string" ? value.desiredPlainText : null;
+
+  if (!segmentId || desiredPlainText === null) {
+    return null;
+  }
+
+  if (!reason?.trim()) {
+    return null;
+  }
+
+  return {
+    desiredPlainText,
+    reason,
+    segmentId,
+  };
+}
+
+function parseTailoredResumePlanningResult(
+  value: unknown,
+): TailoredResumePlanningResult | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const companyName =
+    typeof value.companyName === "string" ? value.companyName : null;
+  const displayName = readNullableString(value.displayName);
+  const jobIdentifier = readNullableString(value.jobIdentifier);
+  const positionTitle =
+    typeof value.positionTitle === "string" ? value.positionTitle : null;
+  const thesis = parseTailoredResumeThesis(value.thesis);
+
+  if (
+    companyName === null ||
+    !displayName ||
+    !jobIdentifier ||
+    positionTitle === null ||
+    !thesis ||
+    !Array.isArray(value.changes)
+  ) {
+    return null;
+  }
+
+  const changes = value.changes.flatMap((change) => {
+    const parsedChange = parseTailoredResumePlanningChange(change);
+    return parsedChange ? [parsedChange] : [];
+  });
+
+  if (changes.length !== value.changes.length) {
+    return null;
+  }
+
+  return {
+    changes,
+    companyName,
+    displayName,
+    jobIdentifier,
+    positionTitle,
+    thesis,
+  };
+}
+
+function buildLegacyTailoredResumePlanningResult(input: {
+  companyName: string | null;
+  displayName: string | null;
+  jobIdentifier: string | null;
+  positionTitle: string | null;
+  thesis: TailoredResumeThesis | null;
+}) {
+  if (
+    input.companyName === null ||
+    !input.displayName ||
+    !input.jobIdentifier ||
+    input.positionTitle === null ||
+    !input.thesis
+  ) {
+    return null;
+  }
+
+  return {
+    changes: [],
+    companyName: input.companyName,
+    displayName: input.displayName,
+    jobIdentifier: input.jobIdentifier,
+    positionTitle: input.positionTitle,
+    thesis: input.thesis,
+  } satisfies TailoredResumePlanningResult;
+}
+
 function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null {
   if (!isRecord(value)) {
     return null;
   }
 
   const id = readNullableString(value.id);
-  const rawDisplayName = readNullableString(value.displayName);
+  const displayName = readNullableString(value.displayName);
   const jobDescription = readNullableString(value.jobDescription);
   const latexCode = readNullableString(value.latexCode);
   const annotatedLatexCode = readNullableString(value.annotatedLatexCode);
@@ -418,19 +584,18 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
   const sourceAnnotatedLatexCode = readNullableString(value.sourceAnnotatedLatexCode);
   const thesis = parseTailoredResumeThesis(value.thesis);
   const companyName =
-    readNullableString(value.companyName) ??
-    rawDisplayName?.split(" - ")[0]?.trim() ??
-    "";
+    typeof value.companyName === "string" ? value.companyName : null;
   const positionTitle =
-    readNullableString(value.positionTitle) ??
-    rawDisplayName?.split(" - ")[1]?.trim() ??
-    "";
-  const jobIdentifier = readNullableString(value.jobIdentifier) ?? "General";
-  const displayName =
-    rawDisplayName ??
-    buildTailoredResumeDisplayName({
+    typeof value.positionTitle === "string" ? value.positionTitle : null;
+  const jobIdentifier = readNullableString(value.jobIdentifier);
+  const planningResult =
+    parseTailoredResumePlanningResult(value.planningResult) ??
+    buildLegacyTailoredResumePlanningResult({
       companyName,
+      displayName,
+      jobIdentifier,
       positionTitle,
+      thesis,
     });
   const rawStatus = value.status;
   const status =
@@ -448,7 +613,12 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
     !latexCode ||
     !annotatedLatexCode ||
     !createdAt ||
-    !updatedAt
+    !updatedAt ||
+    companyName === null ||
+    positionTitle === null ||
+    !jobIdentifier ||
+    !planningResult ||
+    !thesis
   ) {
     return null;
   }
@@ -465,6 +635,7 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
     jobIdentifier,
     latexCode,
     pdfUpdatedAt,
+    planningResult,
     positionTitle,
     sourceAnnotatedLatexCode,
     status,

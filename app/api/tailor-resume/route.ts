@@ -901,6 +901,7 @@ export async function PATCH(request: Request) {
           jobIdentifier: tailoringResult.jobIdentifier,
           latexCode: tailoringResult.latexCode,
           pdfUpdatedAt: tailoringResult.previewPdf ? tailoredResumeUpdatedAt : null,
+          planningResult: tailoringResult.planningResult,
           positionTitle: tailoringResult.positionTitle,
           sourceAnnotatedLatexCode: normalizeTailorResumeLatex(
             processedBaseAnnotatedLatex.latexCode,

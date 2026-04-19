@@ -15,6 +15,8 @@ import {
 import type {
   TailorResumeLinkRecord,
   TailoredResumeBlockEditRecord,
+  TailoredResumePlanningChange,
+  TailoredResumePlanningResult,
   TailoredResumeThesis,
   TailorResumeSavedLinkUpdate,
 } from "./tailor-resume-types.ts";
@@ -81,12 +83,6 @@ const tailorResumeImplementationSchema = {
   required: ["changes"],
 } as const;
 
-type TailoredResumePlanChange = {
-  desiredPlainText: string;
-  reason: string;
-  segmentId: string;
-};
-
 type TailoredResumeImplementationChange = {
   latexCode: string;
   segmentId: string;
@@ -98,14 +94,7 @@ type TailoredResumeBlockChange = {
   segmentId: string;
 };
 
-type TailoredResumePlanResponse = {
-  changes: TailoredResumePlanChange[];
-  companyName: string;
-  displayName: string;
-  jobIdentifier: string;
-  positionTitle: string;
-  thesis: TailoredResumeThesis;
-};
+type TailoredResumePlanResponse = TailoredResumePlanningResult;
 
 type TailoredResumeStructuredResponse = {
   changes: TailoredResumeBlockChange[];
@@ -144,6 +133,7 @@ export type GenerateTailoredResumeResult = {
   latexCode: string;
   model: string;
   outcome: TailoredResumeGenerationOutcome;
+  planningResult: TailoredResumePlanningResult;
   positionTitle: string;
   previewPdf: Buffer | null;
   savedLinkUpdateCount: number;
@@ -274,7 +264,9 @@ function parseTailoredResumeThesis(value: unknown): TailoredResumeThesis {
   };
 }
 
-function parseTailoredResumePlanChange(value: unknown): TailoredResumePlanChange {
+function parseTailoredResumePlanChange(
+  value: unknown,
+): TailoredResumePlanningChange {
   if (!value || typeof value !== "object") {
     throw new Error("The model returned an invalid planned block change.");
   }
@@ -374,7 +366,7 @@ function parseTailoredResumeImplementationResponse(
 }
 
 function validateTailoredResumePlanChanges(input: {
-  changes: TailoredResumePlanChange[];
+  changes: TailoredResumePlanningChange[];
   planningBlocks: TailorResumePlanningBlock[];
 }) {
   const planningBlockIds = new Set(
@@ -401,7 +393,7 @@ function validateTailoredResumePlanChanges(input: {
 
 function buildTailoredResumeBlockChanges(input: {
   implementationChanges: TailoredResumeImplementationChange[];
-  plannedChanges: TailoredResumePlanChange[];
+  plannedChanges: TailoredResumePlanningChange[];
 }) {
   const plannedSegmentIds = new Set(
     input.plannedChanges.map((change) => change.segmentId),
@@ -462,7 +454,7 @@ function serializeTailorResumePlanningBlocks(
 
 function serializeTailorResumeImplementationBlocks(input: {
   planningBlocksById: Map<string, TailorResumePlanningBlock>;
-  plannedChanges: TailoredResumePlanChange[];
+  plannedChanges: TailoredResumePlanningChange[];
 }) {
   if (input.plannedChanges.length === 0) {
     return "[no planned changes]";
@@ -800,6 +792,19 @@ export async function generateTailoredResume(input: {
   const normalizedInput = normalizeTailorResumeLatex(input.annotatedLatexCode);
   const linkOverrides = input.linkOverrides ?? [];
   const fallbackMetadata = normalizeTailoredResumeMetadata({});
+  const fallbackPlanningResult: TailoredResumePlanningResult = {
+    changes: [],
+    companyName: fallbackMetadata.companyName,
+    displayName: fallbackMetadata.displayName,
+    jobIdentifier: fallbackMetadata.jobIdentifier,
+    positionTitle: fallbackMetadata.positionTitle,
+    thesis: {
+      jobDescriptionFocus:
+        "TEST_OPENAI_RESPONSE or fallback mode skipped the planning call, so no planner thesis was generated.",
+      resumeChanges:
+        "No intermediate plan was produced; the base resume was compiled without planned block edits.",
+    },
+  };
   const readGenerationDurationMs = () => Math.max(0, Date.now() - startedAt);
 
   if (isTestOpenAIResponseEnabled()) {
@@ -827,11 +832,12 @@ export async function generateTailoredResume(input: {
         hasAppliedCandidate: true,
         hasPreviewPdf: validation.ok,
       }),
+      planningResult: fallbackPlanningResult,
       positionTitle: fallbackMetadata.positionTitle,
       previewPdf: validation.ok ? validation.previewPdf : null,
       savedLinkUpdateCount: finalizedTestCandidate.updatedCount,
       savedLinkUpdates: finalizedTestCandidate.updatedLinks,
-      thesis: null,
+      thesis: fallbackPlanningResult.thesis,
       validationError: validation.ok ? null : validation.error,
     };
   }
@@ -853,6 +859,7 @@ export async function generateTailoredResume(input: {
   let lastSavedLinkUpdateCount = 0;
   let lastSavedLinkUpdates: TailorResumeSavedLinkUpdate[] = [];
   let lastThesis: TailoredResumeThesis | null = null;
+  let lastPlanningResult = fallbackPlanningResult;
   let lastModel = model;
   let hasAppliedCandidate = false;
   let completedPlanningAttempts = 0;
@@ -911,6 +918,7 @@ export async function generateTailoredResume(input: {
     plan = nextPlan;
     lastMetadata = normalizeTailoredResumeMetadata(nextPlan);
     lastThesis = nextPlan.thesis;
+    lastPlanningResult = nextPlan;
     break;
   }
 
@@ -929,6 +937,7 @@ export async function generateTailoredResume(input: {
         hasAppliedCandidate,
         hasPreviewPdf: false,
       }),
+      planningResult: lastPlanningResult,
       positionTitle: lastMetadata.positionTitle,
       previewPdf: null,
       savedLinkUpdateCount: lastSavedLinkUpdateCount,
@@ -971,6 +980,7 @@ export async function generateTailoredResume(input: {
           hasAppliedCandidate: true,
           hasPreviewPdf: true,
         }),
+        planningResult: lastPlanningResult,
         positionTitle: lastMetadata.positionTitle,
         previewPdf: validation.previewPdf,
         savedLinkUpdateCount: normalizedCandidate.updatedCount,
@@ -1002,6 +1012,7 @@ export async function generateTailoredResume(input: {
         hasAppliedCandidate: true,
         hasPreviewPdf: false,
       }),
+      planningResult: lastPlanningResult,
       positionTitle: lastMetadata.positionTitle,
       previewPdf: null,
       savedLinkUpdateCount: lastSavedLinkUpdateCount,
@@ -1144,6 +1155,7 @@ export async function generateTailoredResume(input: {
           hasAppliedCandidate: true,
           hasPreviewPdf: true,
         }),
+        planningResult: lastPlanningResult,
         positionTitle: lastMetadata.positionTitle,
         previewPdf: validation.previewPdf,
         savedLinkUpdateCount: normalizedCandidate.updatedCount,
@@ -1183,6 +1195,7 @@ export async function generateTailoredResume(input: {
       hasAppliedCandidate,
       hasPreviewPdf: false,
     }),
+    planningResult: lastPlanningResult,
     positionTitle: lastMetadata.positionTitle,
     previewPdf: null,
     savedLinkUpdateCount: lastSavedLinkUpdateCount,
