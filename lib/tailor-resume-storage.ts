@@ -7,6 +7,10 @@ import {
 } from "./tailor-resume-types.ts";
 import { stripTailorResumeProfileLinkLocks } from "./tailor-resume-locked-links.ts";
 
+// Tailor Resume persists one shared profile.json per user, so concurrent
+// read-modify-write requests need to queue or they can drop newer mutations.
+const tailorResumeProfileMutationQueueByUserId = new Map<string, Promise<void>>();
+
 function getTailorResumePrivateDir(userId: string) {
   return path.join(process.cwd(), ".job-helper-data", "tailor-resumes", userId);
 }
@@ -65,6 +69,32 @@ export async function readTailorResumeProfile(userId: string) {
     }
 
     throw error;
+  }
+}
+
+export async function withTailorResumeProfileLock<Result>(
+  userId: string,
+  task: () => Promise<Result>,
+) {
+  const previousTask =
+    tailorResumeProfileMutationQueueByUserId.get(userId) ?? Promise.resolve();
+  let releaseCurrentTask!: () => void;
+  const currentTask = new Promise<void>((resolve) => {
+    releaseCurrentTask = resolve;
+  });
+  const queuedTask = previousTask.catch(() => undefined).then(() => currentTask);
+
+  tailorResumeProfileMutationQueueByUserId.set(userId, queuedTask);
+  await previousTask.catch(() => undefined);
+
+  try {
+    return await task();
+  } finally {
+    releaseCurrentTask();
+
+    if (tailorResumeProfileMutationQueueByUserId.get(userId) === queuedTask) {
+      tailorResumeProfileMutationQueueByUserId.delete(userId);
+    }
   }
 }
 

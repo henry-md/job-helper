@@ -45,6 +45,7 @@ import { repairTailoredResumeForCompile } from "@/lib/tailored-resume-repair";
 import {
   deleteTailoredResumePdf,
   deleteTailorResumePreviewPdf,
+  withTailorResumeProfileLock,
   writeTailoredResumePdf,
   writeTailorResumePreviewPdf,
   writeTailorResumeProfile,
@@ -627,24 +628,25 @@ export async function PATCH(request: Request) {
     );
   }
 
-  const { lockedLinks, profile, rawProfile } = await readTailorResumeProfileState(
-    session.user.id,
-  );
+  return withTailorResumeProfileLock(session.user.id, async () => {
+    const { lockedLinks, profile, rawProfile } = await readTailorResumeProfileState(
+      session.user.id,
+    );
 
-  if ("action" in body && body.action === "reextract") {
-    if (!profile.resume) {
-      return NextResponse.json(
-        { error: "Upload a resume before extracting." },
-        { status: 400 },
-      );
+    if ("action" in body && body.action === "reextract") {
+      if (!profile.resume) {
+        return NextResponse.json(
+          { error: "Upload a resume before extracting." },
+          { status: 400 },
+        );
+      }
+
+      const extractionResult = await runResumeExtraction(session.user.id, {
+        lockedLinks,
+        rawProfile,
+      });
+      return NextResponse.json(buildExtractionResponse(extractionResult));
     }
-
-    const extractionResult = await runResumeExtraction(session.user.id, {
-      lockedLinks,
-      rawProfile,
-    });
-    return NextResponse.json(buildExtractionResponse(extractionResult));
-  }
 
   if ("action" in body && body.action === "saveLinksAndReextract") {
     if (!profile.resume) {
@@ -1484,11 +1486,12 @@ export async function PATCH(request: Request) {
     },
   );
 
-  return NextResponse.json({
-    latexLinkSyncSummary,
-    profile: nextProfile,
-    savedLinkUpdateCount,
-    savedLinkUpdates,
+    return NextResponse.json({
+      latexLinkSyncSummary,
+      profile: nextProfile,
+      savedLinkUpdateCount,
+      savedLinkUpdates,
+    });
   });
 }
 
@@ -1499,134 +1502,141 @@ export async function POST(request: Request) {
     return unauthorizedResponse();
   }
 
-  const formData = await request.formData();
-  const resumeFile = formData.get("resume");
+  return withTailorResumeProfileLock(session.user.id, async () => {
+    const formData = await request.formData();
+    const resumeFile = formData.get("resume");
 
-  if (!(resumeFile instanceof File)) {
-    return NextResponse.json(
-      { error: "Choose a resume file to upload." },
-      { status: 400 },
-    );
-  }
+    if (!(resumeFile instanceof File)) {
+      return NextResponse.json(
+        { error: "Choose a resume file to upload." },
+        { status: 400 },
+      );
+    }
 
-  try {
-    assertSupportedResumeFile(resumeFile);
-  } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Upload a PDF, PNG, JPG, or WebP resume.",
+    try {
+      assertSupportedResumeFile(resumeFile);
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Upload a PDF, PNG, JPG, or WebP resume.",
+        },
+        { status: 400 },
+      );
+    }
+
+    const existingState = await readTailorResumeProfileState(session.user.id);
+    const previousResumeStoragePath =
+      existingState.rawProfile.resume?.storagePath ?? null;
+    const persistedResume = await persistUserResume(resumeFile, session.user.id);
+    const profileWithSavedResume: TailorResumeProfile = {
+      ...existingState.rawProfile,
+      annotatedLatex: emptyTailorResumeAnnotatedLatexState(),
+      extraction: {
+        ...emptyTailorResumeExtractionState(),
+        status: "extracting",
+        updatedAt: new Date().toISOString(),
       },
-      { status: 400 },
-    );
-  }
+      latex: emptyTailorResumeLatexState(),
+      links: [],
+      resume: buildResumeRecord({
+        mimeType: resumeFile.type || "application/octet-stream",
+        originalFilename: resumeFile.name || "resume",
+        sizeBytes: persistedResume.sizeBytes,
+        storagePath: persistedResume.storagePath,
+      }),
+      tailoredResumes: [],
+      workspace: {
+        ...emptyTailorResumeWorkspaceState(),
+        updatedAt: new Date().toISOString(),
+      },
+    };
 
-  const existingState = await readTailorResumeProfileState(session.user.id);
-  const previousResumeStoragePath = existingState.rawProfile.resume?.storagePath ?? null;
-  const persistedResume = await persistUserResume(resumeFile, session.user.id);
-  const profileWithSavedResume: TailorResumeProfile = {
-    ...existingState.rawProfile,
-    annotatedLatex: emptyTailorResumeAnnotatedLatexState(),
-    extraction: {
-      ...emptyTailorResumeExtractionState(),
-      status: "extracting",
-      updatedAt: new Date().toISOString(),
-    },
-    latex: emptyTailorResumeLatexState(),
-    links: [],
-    resume: buildResumeRecord({
-      mimeType: resumeFile.type || "application/octet-stream",
-      originalFilename: resumeFile.name || "resume",
-      sizeBytes: persistedResume.sizeBytes,
-      storagePath: persistedResume.storagePath,
-    }),
-    tailoredResumes: [],
-    workspace: {
-      ...emptyTailorResumeWorkspaceState(),
-      updatedAt: new Date().toISOString(),
-    },
-  };
+    await writeTailorResumeProfile(session.user.id, profileWithSavedResume);
+    await deleteTailorResumePreviewPdf(session.user.id);
 
-  await writeTailorResumeProfile(session.user.id, profileWithSavedResume);
-  await deleteTailorResumePreviewPdf(session.user.id);
+    if (wantsTailorResumeUploadStream(request)) {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          const sendEvent = (event: unknown) => {
+            controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+          };
 
-  if (wantsTailorResumeUploadStream(request)) {
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      start(controller) {
-        const sendEvent = (event: unknown) => {
-          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
-        };
-
-        void (async () => {
-          try {
-            const extractionResult = await runResumeExtraction(
-              session.user.id,
-              {
-                lockedLinks: existingState.lockedLinks,
-                rawProfile: profileWithSavedResume,
-              },
-              {
-                onAttemptEvent: (attemptEvent) => {
-                  sendEvent({
-                    attemptEvent,
-                    type: "extraction-attempt",
-                  });
+          void (async () => {
+            try {
+              const extractionResult = await runResumeExtraction(
+                session.user.id,
+                {
+                  lockedLinks: existingState.lockedLinks,
+                  rawProfile: profileWithSavedResume,
                 },
-                preserveUnusedKnownLinks: false,
-              },
-            );
+                {
+                  onAttemptEvent: (attemptEvent) => {
+                    sendEvent({
+                      attemptEvent,
+                      type: "extraction-attempt",
+                    });
+                  },
+                  preserveUnusedKnownLinks: false,
+                },
+              );
 
-            if (
-              previousResumeStoragePath &&
-              previousResumeStoragePath !== persistedResume.storagePath
-            ) {
-              await deletePersistedUserResume(previousResumeStoragePath);
+              if (
+                previousResumeStoragePath &&
+                previousResumeStoragePath !== persistedResume.storagePath
+              ) {
+                await deletePersistedUserResume(previousResumeStoragePath);
+              }
+
+              sendEvent({
+                payload: buildExtractionResponse(extractionResult),
+                type: "done",
+              });
+            } catch (error) {
+              sendEvent({
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "Unable to save the resume.",
+                type: "error",
+              });
+            } finally {
+              controller.close();
             }
+          })();
+        },
+      });
 
-            sendEvent({
-              payload: buildExtractionResponse(extractionResult),
-              type: "done",
-            });
-          } catch (error) {
-            sendEvent({
-              error:
-                error instanceof Error
-                  ? error.message
-                  : "Unable to save the resume.",
-              type: "error",
-            });
-          } finally {
-            controller.close();
-          }
-        })();
+      return new NextResponse(stream, {
+        headers: {
+          "Cache-Control": "no-store",
+          "Content-Type": "text/x-ndjson; charset=utf-8",
+        },
+        status: 200,
+      });
+    }
+
+    const extractionResult = await runResumeExtraction(
+      session.user.id,
+      {
+        lockedLinks: existingState.lockedLinks,
+        rawProfile: profileWithSavedResume,
       },
-    });
-
-    return new NextResponse(stream, {
-      headers: {
-        "Cache-Control": "no-store",
-        "Content-Type": "text/x-ndjson; charset=utf-8",
+      {
+        preserveUnusedKnownLinks: false,
       },
-      status: 200,
-    });
-  }
+    );
 
-  const extractionResult = await runResumeExtraction(session.user.id, {
-    lockedLinks: existingState.lockedLinks,
-    rawProfile: profileWithSavedResume,
-  }, {
-    preserveUnusedKnownLinks: false,
+    if (
+      previousResumeStoragePath &&
+      previousResumeStoragePath !== persistedResume.storagePath
+    ) {
+      await deletePersistedUserResume(previousResumeStoragePath);
+    }
+
+    return NextResponse.json(buildExtractionResponse(extractionResult));
   });
-
-  if (
-    previousResumeStoragePath &&
-    previousResumeStoragePath !== persistedResume.storagePath
-  ) {
-    await deletePersistedUserResume(previousResumeStoragePath);
-  }
-
-  return NextResponse.json(buildExtractionResponse(extractionResult));
 }
