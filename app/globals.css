@@ -323,6 +323,26 @@ button {
   }
 }
 
+@keyframes public-flow {
+  0% {
+    opacity: 0;
+    transform: translate3d(-50%, -12px, 0);
+  }
+
+  18% {
+    opacity: 0.82;
+  }
+
+  82% {
+    opacity: 0.82;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate3d(-50%, 300px, 0);
+  }
+}
+
 @keyframes public-rise {
   0%,
   100% {
@@ -331,5 +351,33 @@ button {
 
   50% {
     transform: scaleY(1);
+  }
+}
+
+.public-hero-title-caret {
+  display: inline-block;
+  width: 0.085em;
+  height: 0.88em;
+  margin-left: 0.06em;
+  vertical-align: -0.08em;
+  border-radius: 999px;
+  background: rgba(244, 244, 245, 0.92);
+  box-shadow: 0 0 14px rgba(244, 244, 245, 0.14);
+  animation: public-caret-blink 0.95s steps(1, end) infinite;
+}
+
+.public-hero-title-caret--complete {
+  opacity: 0.72;
+}
+
+@keyframes public-caret-blink {
+  0%,
+  46% {
+    opacity: 1;
+  }
+
+  50%,
+  100% {
+    opacity: 0.16;
   }
 }

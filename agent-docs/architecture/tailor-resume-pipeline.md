@@ -1,0 +1,45 @@
+Tailor Resume pipeline:
+
+- Purpose: Tailor Resume is intentionally staged. We do not ask one model call to invent strategy, ask the user questions, write final LaTeX, and rescue page-count overflow all at once.
+- The signed-out preview, product copy, and architecture docs should all describe the same pipeline shape.
+
+Step 0. Generate LaTeX base resume
+- Save the uploaded resume locally.
+- Extract a LaTeX version of the resume and recover link hints when possible.
+- Compile a preview PDF from that base before any job-specific tailoring starts.
+- The generated LaTeX becomes the authoritative editing surface for later stages.
+
+Step 1. Generate plaintext generalized edits
+- The planning stage sees whole-resume plaintext plus document-ordered plaintext blocks keyed by `segmentId`.
+- It returns a tailoring thesis plus generalized plaintext edits for targeted blocks.
+- This stage decides what should change, but it does not write final LaTeX yet.
+
+Step 2. Ask user clarifications if useful
+- This stage is optional and should keep a high threshold.
+- Ask one question at a time only when a grounded answer could materially improve an already-adjacent resume block.
+- Store the questioning agenda, question budget, and learned facts mapped back to target `segmentId`s so later stages can use them surgically.
+
+Step 3. Generate block-scoped edits
+- The implementation stage takes the accepted plan plus any user-confirmed learnings and returns exact LaTeX replacements for only the targeted segments.
+- Failures here should retry the block-edit stage rather than forcing the model to rethink the whole thesis.
+- The goal is segment-safe replacements that preserve local LaTeX structure.
+
+Step 4. Condense edits to keep page size from growing
+- If the tailored preview exceeds the source resume's page count, run a compaction/refinement loop over the edited blocks only.
+- Use rendered preview evidence to cut just enough to fit again while preserving the tailoring thesis.
+- This is a follow-up guardrail stage, not a second full-resume rewrite.
+
+Retry model:
+- Extraction can retry LaTeX generation when the first pass is invalid.
+- Planning can retry independently if the structured plan is empty or malformed.
+- Block-scoped implementation retries stay local to the selected segments and compile validation.
+- Page-count compaction retries stay local to the edited blocks until the preview fits or the attempt budget is exhausted.
+- Design goal: retry the failing stage, not the entire pipeline.
+
+Relevant code paths:
+- Extraction: `lib/tailor-resume-extraction.ts`
+- Planning + implementation: `lib/tailor-resume-tailoring.ts`
+- Optional questioning: `lib/tailor-resume-questioning.ts`
+- Page-count compaction: `lib/tailor-resume-page-count-compaction.ts`
+- Prompt definitions: `lib/system-prompt-settings.ts`
+- Route orchestration + persistence: `app/api/tailor-resume/route.ts`

@@ -19,6 +19,7 @@ Important boundaries:
 - Screenshot file persistence is local filesystem storage under `public/uploads/job-screenshots/<userId>/`, not object storage.
 - Shared browser/automation ingestion is documented in `agent-docs/architecture/ingestion.md`.
 - Tailor Resume object naming and flow are documented in `agent-docs/architecture/tailor-resume-objects.md`.
+- Tailor Resume pipeline staging is documented in `agent-docs/architecture/tailor-resume-pipeline.md`.
 
 Current persistence nuance:
 - A saved application can own multiple `JobApplicationScreenshot` records through `JobApplicationScreenshot.applicationId`.
