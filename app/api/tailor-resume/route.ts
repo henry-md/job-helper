@@ -36,6 +36,12 @@ import {
   stripTailorResumeSegmentIds,
 } from "@/lib/tailor-resume-segmentation";
 import {
+  buildTailorResumeGenerationSourceSnapshot,
+  hasTailorResumeGenerationSourceChanged,
+  mergeTailorResumeFailedGeneration,
+  mergeTailorResumeSuccessfulGeneration,
+} from "@/lib/tailor-resume-tailoring-concurrency";
+import {
   buildTailoredResumeResolvedSegmentMap,
   rebuildTailoredResumeAnnotatedLatex,
   resolveTailoredResumeSourceAnnotatedLatex,
@@ -212,6 +218,211 @@ async function validateLatexLinks(latexCode: string) {
     links,
     summary: buildLinkValidationSummary(links),
   };
+}
+
+async function handleTailorResumeGeneration(
+  body: Record<string, unknown>,
+  userId: string,
+) {
+  const preparation = await withTailorResumeProfileLock(userId, async () => {
+    const { lockedLinks, profile, rawProfile } = await readTailorResumeProfileState(
+      userId,
+    );
+    const jobDescription =
+      typeof body.jobDescription === "string"
+        ? body.jobDescription
+        : profile.jobDescription;
+
+    if (!profile.latex.code.trim()) {
+      return {
+        response: NextResponse.json(
+          { error: "Upload or save a base resume before tailoring it." },
+          { status: 400 },
+        ),
+      };
+    }
+
+    if (!jobDescription.trim()) {
+      return {
+        response: NextResponse.json(
+          { error: "Paste a job description before tailoring the resume." },
+          { status: 400 },
+        ),
+      };
+    }
+
+    return {
+      jobDescription,
+      lockedLinks,
+      rawProfile,
+    };
+  });
+
+  if ("response" in preparation) {
+    return preparation.response;
+  }
+
+  const normalizedBaseLatex = normalizeAnnotatedLatexState(
+    preparation.rawProfile.latex.code,
+    new Date().toISOString(),
+  );
+  const processedBaseAnnotatedLatex = applyTailorResumeSourceLinkOverridesWithSummary(
+    normalizedBaseLatex.annotatedLatex.code,
+    {
+      currentLinks: preparation.rawProfile.links,
+      lockedLinks: preparation.lockedLinks,
+    },
+  );
+  const generationSourceSnapshot = buildTailorResumeGenerationSourceSnapshot(
+    preparation.rawProfile,
+    preparation.lockedLinks,
+  );
+  const tailoringResult = await generateTailoredResume({
+    annotatedLatexCode: processedBaseAnnotatedLatex.latexCode,
+    jobDescription: preparation.jobDescription,
+    linkOverrides: buildKnownTailorResumeLinks(
+      preparation.rawProfile.links,
+      preparation.lockedLinks,
+    ),
+    onBuildFailure: (latexCode, error, attempt) =>
+      logLatexBuildFailure({
+        userId,
+        source: tailorResumeDebugErrorSources.tailoringCompileFailure,
+        latexCode,
+        error,
+        attempt,
+      }),
+    onInvalidReplacement: (payload, error, attempt) =>
+      logTailorResumeDebugError({
+        userId,
+        source: tailorResumeDebugErrorSources.tailoringInvalidReplacement,
+        latexCode: payload,
+        error,
+        attempt,
+      }),
+  });
+
+  if (tailoringResult.outcome === "generation_failure") {
+    if (preparation.rawProfile.jobDescription !== preparation.jobDescription) {
+      await withTailorResumeProfileLock(userId, async () => {
+        const latestState = await readTailorResumeProfileState(userId);
+        const nextRawProfile = mergeTailorResumeFailedGeneration({
+          currentRawProfile: latestState.rawProfile,
+          jobDescription: preparation.jobDescription,
+          snapshotRawProfile: preparation.rawProfile,
+        });
+
+        if (nextRawProfile !== latestState.rawProfile) {
+          await writeTailorResumeProfile(userId, nextRawProfile);
+        }
+      });
+    }
+
+    const attemptLabel =
+      tailoringResult.attempts === 1 ? "attempt" : "attempts";
+    const failureMessage = tailoringResult.validationError?.trim()
+      ? `Unable to generate a valid tailored resume after ${tailoringResult.attempts} ${attemptLabel}: ${tailoringResult.validationError}`
+      : `Unable to generate a valid tailored resume after ${tailoringResult.attempts} ${attemptLabel}.`;
+
+    return NextResponse.json(
+      {
+        error: failureMessage,
+        tailoredResumeDurationMs: tailoringResult.generationDurationMs,
+      },
+      { status: 422 },
+    );
+  }
+
+  const tailoredResumeId = randomUUID();
+  const tailoredResumeUpdatedAt = new Date().toISOString();
+  const nextState = await withTailorResumeProfileLock(userId, async () => {
+    const latestState = await readTailorResumeProfileState(userId);
+
+    if (
+      hasTailorResumeGenerationSourceChanged({
+        currentLockedLinks: latestState.lockedLinks,
+        currentRawProfile: latestState.rawProfile,
+        snapshot: generationSourceSnapshot,
+      })
+    ) {
+      return null;
+    }
+
+    if (tailoringResult.previewPdf) {
+      await writeTailoredResumePdf(userId, tailoredResumeId, tailoringResult.previewPdf);
+    } else {
+      await deleteTailoredResumePdf(userId, tailoredResumeId);
+    }
+
+    const nextRawProfile = mergeTailorResumeSuccessfulGeneration({
+      annotatedLatex: normalizedBaseLatex.annotatedLatex,
+      currentRawProfile: latestState.rawProfile,
+      jobDescription: preparation.jobDescription,
+      snapshotRawProfile: preparation.rawProfile,
+      tailoredResume: {
+        annotatedLatexCode: tailoringResult.annotatedLatexCode,
+        companyName: tailoringResult.companyName,
+        createdAt: tailoredResumeUpdatedAt,
+        displayName: tailoringResult.displayName,
+        edits: tailoringResult.edits,
+        error: tailoringResult.validationError,
+        id: tailoredResumeId,
+        jobDescription: preparation.jobDescription,
+        jobIdentifier: tailoringResult.jobIdentifier,
+        latexCode: tailoringResult.latexCode,
+        openAiDebug: tailoringResult.openAiDebug,
+        pdfUpdatedAt: tailoringResult.previewPdf ? tailoredResumeUpdatedAt : null,
+        planningResult: tailoringResult.planningResult,
+        positionTitle: tailoringResult.positionTitle,
+        sourceAnnotatedLatexCode: normalizeTailorResumeLatex(
+          processedBaseAnnotatedLatex.latexCode,
+        ).annotatedLatex,
+        status: tailoringResult.previewPdf ? "ready" : "failed",
+        thesis: tailoringResult.thesis,
+        updatedAt: tailoredResumeUpdatedAt,
+      },
+    });
+
+    await writeTailorResumeProfile(userId, nextRawProfile);
+
+    return {
+      lockedLinks: latestState.lockedLinks,
+      rawProfile: nextRawProfile,
+    };
+  });
+
+  if (!nextState) {
+    return NextResponse.json(
+      {
+        error:
+          "The base resume changed while the tailored resume was generating. Review the latest resume and try again.",
+        tailoredResumeDurationMs: tailoringResult.generationDurationMs,
+      },
+      { status: 409 },
+    );
+  }
+
+  const nextProfile = mergeTailorResumeProfileWithLockedLinks(
+    nextState.rawProfile,
+    nextState.lockedLinks,
+    {
+      includeLockedOnly: true,
+    },
+  );
+
+  return NextResponse.json({
+    profile: nextProfile,
+    savedLinkUpdateCount:
+      processedBaseAnnotatedLatex.updatedCount +
+      tailoringResult.savedLinkUpdateCount,
+    savedLinkUpdates: [
+      ...processedBaseAnnotatedLatex.updatedLinks,
+      ...tailoringResult.savedLinkUpdates,
+    ],
+    tailoredResumeId,
+    tailoredResumeDurationMs: tailoringResult.generationDurationMs,
+    tailoredResumeError: tailoringResult.validationError,
+  });
 }
 
 function buildSourceLatexLinkRecords(
@@ -628,6 +839,10 @@ export async function PATCH(request: Request) {
     );
   }
 
+  if ("action" in body && body.action === "tailor") {
+    return handleTailorResumeGeneration(body as Record<string, unknown>, session.user.id);
+  }
+
   return withTailorResumeProfileLock(session.user.id, async () => {
     const { lockedLinks, profile, rawProfile } = await readTailorResumeProfileState(
       session.user.id,
@@ -795,151 +1010,6 @@ export async function PATCH(request: Request) {
       profile: nextProfile,
       savedLinkUpdateCount: sourceCompileLatex.updatedCount,
       savedLinkUpdates: sourceCompileLatex.updatedLinks,
-    });
-  }
-
-  if ("action" in body && body.action === "tailor") {
-    const jobDescription =
-      "jobDescription" in body && typeof body.jobDescription === "string"
-        ? body.jobDescription
-        : profile.jobDescription;
-
-    if (!profile.latex.code.trim()) {
-      return NextResponse.json(
-        { error: "Upload or save a base resume before tailoring it." },
-        { status: 400 },
-      );
-    }
-
-    if (!jobDescription.trim()) {
-      return NextResponse.json(
-        { error: "Paste a job description before tailoring the resume." },
-        { status: 400 },
-      );
-    }
-
-    const normalizedBaseLatex = normalizeAnnotatedLatexState(
-      rawProfile.latex.code,
-      new Date().toISOString(),
-    );
-    const processedBaseAnnotatedLatex = applyTailorResumeSourceLinkOverridesWithSummary(
-      normalizedBaseLatex.annotatedLatex.code,
-      {
-        currentLinks: rawProfile.links,
-        lockedLinks,
-      },
-    );
-    const tailoringResult = await generateTailoredResume({
-      annotatedLatexCode: processedBaseAnnotatedLatex.latexCode,
-      jobDescription,
-      linkOverrides: buildKnownTailorResumeLinks(rawProfile.links, lockedLinks),
-      onBuildFailure: (latexCode, error, attempt) =>
-        logLatexBuildFailure({
-          userId: session.user.id,
-          source: tailorResumeDebugErrorSources.tailoringCompileFailure,
-          latexCode,
-          error,
-          attempt,
-        }),
-      onInvalidReplacement: (payload, error, attempt) =>
-        logTailorResumeDebugError({
-          userId: session.user.id,
-          source: tailorResumeDebugErrorSources.tailoringInvalidReplacement,
-          latexCode: payload,
-          error,
-          attempt,
-        }),
-    });
-
-    if (tailoringResult.outcome === "generation_failure") {
-      if (rawProfile.jobDescription !== jobDescription) {
-        await writeTailorResumeProfile(session.user.id, {
-          ...rawProfile,
-          jobDescription,
-        });
-      }
-
-      const attemptLabel =
-        tailoringResult.attempts === 1 ? "attempt" : "attempts";
-      const failureMessage = tailoringResult.validationError?.trim()
-        ? `Unable to generate a valid tailored resume after ${tailoringResult.attempts} ${attemptLabel}: ${tailoringResult.validationError}`
-        : `Unable to generate a valid tailored resume after ${tailoringResult.attempts} ${attemptLabel}.`;
-
-      return NextResponse.json(
-        {
-          error: failureMessage,
-          tailoredResumeDurationMs: tailoringResult.generationDurationMs,
-        },
-        { status: 422 },
-      );
-    }
-
-    const tailoredResumeId = randomUUID();
-    const tailoredResumeUpdatedAt = new Date().toISOString();
-
-    if (tailoringResult.previewPdf) {
-      await writeTailoredResumePdf(
-        session.user.id,
-        tailoredResumeId,
-        tailoringResult.previewPdf,
-      );
-    } else {
-      await deleteTailoredResumePdf(session.user.id, tailoredResumeId);
-    }
-
-    const nextRawProfile: TailorResumeProfile = {
-      ...rawProfile,
-      annotatedLatex: normalizedBaseLatex.annotatedLatex,
-      jobDescription,
-      tailoredResumes: [
-        {
-          annotatedLatexCode: tailoringResult.annotatedLatexCode,
-          companyName: tailoringResult.companyName,
-          createdAt: tailoredResumeUpdatedAt,
-          displayName: tailoringResult.displayName,
-          edits: tailoringResult.edits,
-          error: tailoringResult.validationError,
-          id: tailoredResumeId,
-          jobDescription,
-          jobIdentifier: tailoringResult.jobIdentifier,
-          latexCode: tailoringResult.latexCode,
-          openAiDebug: tailoringResult.openAiDebug,
-          pdfUpdatedAt: tailoringResult.previewPdf ? tailoredResumeUpdatedAt : null,
-          planningResult: tailoringResult.planningResult,
-          positionTitle: tailoringResult.positionTitle,
-          sourceAnnotatedLatexCode: normalizeTailorResumeLatex(
-            processedBaseAnnotatedLatex.latexCode,
-          ).annotatedLatex,
-          status: tailoringResult.previewPdf ? "ready" : "failed",
-          thesis: tailoringResult.thesis,
-          updatedAt: tailoredResumeUpdatedAt,
-        },
-        ...rawProfile.tailoredResumes,
-      ],
-    };
-
-    await writeTailorResumeProfile(session.user.id, nextRawProfile);
-
-    const nextProfile = mergeTailorResumeProfileWithLockedLinks(
-      nextRawProfile,
-      lockedLinks,
-      {
-        includeLockedOnly: true,
-      },
-    );
-
-    return NextResponse.json({
-      profile: nextProfile,
-      savedLinkUpdateCount:
-        processedBaseAnnotatedLatex.updatedCount +
-        tailoringResult.savedLinkUpdateCount,
-      savedLinkUpdates: [
-        ...processedBaseAnnotatedLatex.updatedLinks,
-        ...tailoringResult.savedLinkUpdates,
-      ],
-      tailoredResumeId,
-      tailoredResumeDurationMs: tailoringResult.generationDurationMs,
-      tailoredResumeError: tailoringResult.validationError,
     });
   }
 
