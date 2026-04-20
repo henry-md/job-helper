@@ -1573,9 +1573,24 @@ export default function TailoredResumeReviewModal({
               </div>
 
               <div className="shrink-0 border-t border-white/8 bg-black/15 px-3 py-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  {isEditingLatexSegment ? (
-                    <>
+                {isEditingLatexSegment ? (
+                  <>
+                    <div className="rounded-[1rem] border border-white/10 bg-zinc-950/70 p-3">
+                      <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                        Interactive LaTeX segment
+                      </p>
+                      <textarea
+                        className="mt-3 min-h-[10rem] w-full rounded-[1rem] border border-white/10 bg-black/30 px-3 py-2.5 font-mono text-[11px] leading-5 text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-300/35 focus:ring-2 focus:ring-emerald-300/20"
+                        onChange={(event) =>
+                          setDraftEditedLatexCode(event.target.value)
+                        }
+                        ref={editedLatexTextareaRef}
+                        spellCheck={false}
+                        value={draftEditedLatexCode}
+                      />
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
                       <button
                         className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1.5 text-[10px] uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
                         disabled={isSavingTailoredResumeEdit}
@@ -1597,8 +1612,10 @@ export default function TailoredResumeReviewModal({
                       >
                         {isSavingTailoredResumeEdit ? "Saving..." : "Done"}
                       </button>
-                    </>
-                  ) : (
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1.5 text-[10px] uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
                       disabled={isSavingTailoredResumeEdit || !selectedSegmentSnapshot}
@@ -1607,25 +1624,8 @@ export default function TailoredResumeReviewModal({
                     >
                       Edit yourself
                     </button>
-                  )}
-                </div>
-
-                {isEditingLatexSegment ? (
-                  <div className="mt-2 rounded-[1rem] border border-white/10 bg-zinc-950/70 p-3">
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                      Interactive LaTeX segment
-                    </p>
-                    <textarea
-                      className="mt-3 min-h-[10rem] w-full rounded-[1rem] border border-white/10 bg-black/30 px-3 py-2.5 font-mono text-[11px] leading-5 text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-300/35 focus:ring-2 focus:ring-emerald-300/20"
-                      onChange={(event) =>
-                        setDraftEditedLatexCode(event.target.value)
-                      }
-                      ref={editedLatexTextareaRef}
-                      spellCheck={false}
-                      value={draftEditedLatexCode}
-                    />
                   </div>
-                ) : null}
+                )}
               </div>
             </>
           ) : (
