@@ -16,7 +16,7 @@ const errorMessages: Record<string, string> = {
   Callback:
     "Google returned successfully, but saving the user/session failed. Run your Prisma migration so the auth tables exist in Postgres, then try again.",
   OAuthSignin:
-    "Google sign-in could not start. Double-check the localhost origin and callback URI in Google Cloud.",
+    "Google sign-in could not start. Double-check the deployed origin and callback URI in Google Cloud.",
 };
 
 export default async function Home({ searchParams }: HomePageProps) {

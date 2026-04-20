@@ -1,7 +1,18 @@
 import type { NextAuthOptions } from "next-auth";
 import { PrismaAdapter } from "@next-auth/prisma-adapter";
 import GoogleProvider from "next-auth/providers/google";
+import { resolveAuthOrigin, shouldTrustAuthHost } from "@/lib/auth-origin";
 import { getPrismaClient } from "@/lib/prisma";
+
+const resolvedAuthOrigin = resolveAuthOrigin();
+
+if (resolvedAuthOrigin) {
+  process.env.NEXTAUTH_URL = resolvedAuthOrigin;
+}
+
+if (shouldTrustAuthHost()) {
+  process.env.AUTH_TRUST_HOST = "true";
+}
 
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(getPrismaClient() as never),
