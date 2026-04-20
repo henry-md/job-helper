@@ -90,6 +90,7 @@ const trackerRows = [
 ] as const;
 
 const trackerRowGapPx = 8;
+const trackerRowsTopInsetPx = 8;
 const defaultTrackerRowCount = 4;
 
 export default function PublicLandingShowcase() {
@@ -405,8 +406,9 @@ function JobTrackerPreview() {
     const updateVisibleRowCount = () => {
       const viewportHeight = viewportElement.clientHeight;
       const rowHeight = rowElement.clientHeight;
+      const availableHeight = viewportHeight - trackerRowsTopInsetPx;
 
-      if (viewportHeight <= 0 || rowHeight <= 0) {
+      if (availableHeight <= 0 || rowHeight <= 0) {
         return;
       }
 
@@ -415,7 +417,8 @@ function JobTrackerPreview() {
         Math.min(
           trackerRows.length,
           Math.floor(
-            (viewportHeight + trackerRowGapPx) / (rowHeight + trackerRowGapPx),
+            (availableHeight + trackerRowGapPx) /
+              (rowHeight + trackerRowGapPx),
           ),
         ),
       );
@@ -493,7 +496,7 @@ function JobTrackerPreview() {
           className="relative mt-2 flex-1 min-h-0 overflow-hidden sm:mt-3"
           data-preview-row-viewport="true"
         >
-          <div className="space-y-2">
+          <div className="space-y-2 pt-2">
             {visibleRows.map(([company, role, stage], index) => (
               <TrackerPreviewRow
                 key={company}
