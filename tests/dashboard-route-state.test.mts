@@ -35,6 +35,17 @@ test("dashboard route state keeps a tailored resume review id only on the tailor
       tailoredResumeId: null,
     },
   );
+
+  assert.deepEqual(
+    parseDashboardRouteState({
+      tab: "settings",
+      tailoredResumeId: "tailored-123",
+    }),
+    {
+      tab: "settings",
+      tailoredResumeId: null,
+    },
+  );
 });
 
 test("dashboard route state reads review state from URL search params", () => {
@@ -55,6 +66,10 @@ test("dashboard route state reads review state from URL search params", () => {
 test("dashboard href builder creates stable deep links for tailor review state", () => {
   assert.equal(buildDashboardHref({ tab: "tailor" }), "/dashboard");
   assert.equal(buildDashboardHref({ tab: "new" }), "/dashboard?tab=new");
+  assert.equal(
+    buildDashboardHref({ tab: "settings" }),
+    "/dashboard?tab=settings",
+  );
   assert.equal(
     buildDashboardHref({
       tab: "tailor",

@@ -1,4 +1,10 @@
 import OpenAI from "openai";
+import {
+  buildTailorResumeImplementationSystemPrompt,
+  buildTailorResumePlanningSystemPrompt,
+  createDefaultSystemPromptSettings,
+  type SystemPromptSettings,
+} from "./system-prompt-settings.ts";
 import { applyTailorResumeLinkOverridesWithSummary } from "./tailor-resume-link-overrides.ts";
 import { validateTailorResumeLatexDocument } from "./tailor-resume-link-validation.ts";
 import {
@@ -479,85 +485,27 @@ function serializeTailorResumeImplementationBlocks(input: {
     .join("\n\n");
 }
 
-function buildTailoringPlanInstructions(input: { feedback?: string }) {
-  const feedbackBlock = input.feedback?.trim()
-    ? `Previous attempt feedback:\n${input.feedback.trim()}\n\n`
-    : "";
-
-  return (
-    `${feedbackBlock}` +
-    "Plan resume edits using plaintext only. The whole resume is provided as plain text plus a document-ordered block list where each editable block already has a stable segmentId.\n\n" +
-    "You must return a strict JSON object containing thesis, metadata, and only the planned block edits to make.\n\n" +
-    "Planning rules:\n" +
-    "1. Work from the provided whole-resume plaintext and block plaintext. Do not write LaTeX.\n" +
-    "2. Each planned change must target one segmentId from the provided block list.\n" +
-    "3. desiredPlainText must be the intended final visible text for that single block only, with no LaTeX commands or segment markers.\n" +
-    "4. Keep the desired text faithful to the targeted block's scope. If a rewrite should affect multiple blocks, return multiple change objects.\n" +
-    "5. Do not reference structural blocks that were omitted from the plaintext block list.\n" +
-    "6. Never reference the same segmentId more than once.\n" +
-    "7. Every change must include a concise reason string that explains why the edit improves fit for this specific job description.\n" +
-    "8. Prefer the smallest set of content edits that materially improve fit.\n\n" +
-    "Metadata rules:\n" +
-    "1. companyName should be the employer if identifiable.\n" +
-    "2. positionTitle should be the role title if identifiable.\n" +
-    "3. jobIdentifier should be the best short disambiguator for this job: prefer the team name, otherwise location, otherwise a brief identifying phrase.\n" +
-    "4. displayName should be the user-facing saved name, preferably \"Company - Role\".\n\n" +
-    "Thesis rules:\n" +
-    "1. Return thesis.jobDescriptionFocus and thesis.resumeChanges.\n" +
-    "2. thesis.jobDescriptionFocus should explain what this job description emphasized beyond common denominator requirements like having a bachelor's degree, being a software engineer, or other baseline expectations. Strip out the generic signals and name the specific areas where this posting clearly over-indexes.\n" +
-    "3. thesis.jobDescriptionFocus should focus on 2-4 high-signal themes and can quote short exact phrases from the job description when helpful.\n" +
-    "4. thesis.resumeChanges should summarize the broad ways the resume should be or was changed to match those themes, such as which experience was elevated, compressed, reframed, or made more explicit.\n" +
-    "5. thesis.resumeChanges should stay at the strategy level, not a line-by-line diff.\n" +
-    "6. Keep each thesis field concise and high signal, ideally 2-4 sentences.\n\n" +
-    "Reason rules:\n" +
-    "1. Keep every reason to 1-2 short sentences maximum.\n" +
-    "2. Sentence 1 should briefly summarize the high-level change you made and name the concrete thing that changed, using the employer, project, feature, accomplishment, metric, or technology anchor from that resume block when possible.\n" +
-    "3. Do not write vague sentence-1 summaries like \"Reframes the accomplishment to...\" or \"Highlights relevant experience\" with no subject. Make sentence 1 understandable on its own without opening the diff.\n" +
-    "4. Sentence 2 should explain why that change matters for this role, preferably by quoting a short exact phrase from the job description in quotation marks.\n" +
-    "5. If the pasted job description makes the section clear, explicitly say whether that quote came from a required/basic qualification, a preferred/good-to-have qualification, responsibilities, or another labeled section.\n" +
-    "6. Do not guess section labels. If the pasted text does not clearly identify the section, just give the quote without inventing where it came from.\n" +
-    "7. When the job description explicitly emphasizes something, quote those exact words instead of vaguely saying it was emphasized or mentioned in the description.\n" +
-    "8. If no short exact quote fits naturally, use the closest brief phrase from the job description, but still avoid generic wording like \"matches the job description\" with no supporting detail.\n" +
-    "9. Prefer concise fragments or incomplete sentences over polished prose.\n" +
-    "10. NEVER under any circumstances write 3 sentences for a single block edit.\n" +
-    "11. Good examples: \"Reframes NewForm TikTok refactor accomplishment around developer experience. Responsibilities mention \\\"developer experience\\\".\" and \"Surfaces GitHub OSS work earlier. Required qualifications mention \\\"GitHub-hosted open-source projects\\\".\"\n" +
-    "12. Bad examples: \"Reframes the accomplishment to highlight developer experience.\" and \"Matches the required section\" with no quote.\n" +
-    "13. Focus on the job-description signal you matched, not on generic writing advice.\n\n" +
-    "Job description source quality:\n" +
-    "The job description below may be scraped from a job board page and can include navigation chrome, sidebar links, footer text, and listings for other roles. " +
-    "Identify and focus only on the single target job posting. Ignore unrelated job listings, site navigation, and boilerplate page text.\n\n" +
-    "Guardrails:\n" +
-    "1. Preserve factual accuracy. Never invent achievements, employers, dates, titles, technologies, metrics, degrees, or certifications.\n" +
-    "2. It is heavily discouraged to plan styling, page layout, margins, font sizing, spacing systems, or macro-structure changes unless the job fit clearly depends on them.\n"
+function buildTailoringPlanInstructions(input: {
+  feedback?: string;
+  promptSettings?: SystemPromptSettings;
+}) {
+  return buildTailorResumePlanningSystemPrompt(
+    input.promptSettings ?? createDefaultSystemPromptSettings(),
+    {
+      feedback: input.feedback,
+    },
   );
 }
 
-function buildTailoringImplementationInstructions(input: { feedback?: string }) {
-  const feedbackBlock = input.feedback?.trim()
-    ? `Previous implementation feedback:\n${input.feedback.trim()}\n\n`
-    : "";
-
-  return (
-    `${feedbackBlock}` +
-    "Implement the approved resume edit plan as exact LaTeX block replacements. The strategic edit choices, targeted segments, and desired visible text are already decided.\n\n" +
-    "You must return a strict JSON object containing only changes.\n\n" +
-    "Implementation rules:\n" +
-    "1. Return exactly one LaTeX replacement for every planned segmentId and no extras.\n" +
-    "2. latexCode must contain only the replacement for that one segment.\n" +
-    "3. Never include content from the previous or next segment inside the same latexCode string.\n" +
-    "4. Never invent, rename, or return % JOBHELPER_SEGMENT_ID comments. The server re-adds them deterministically after applying your edits.\n" +
-    "5. Keep the replacement faithful to the targeted block's existing shape. If the source block is one bullet, return one bullet. If the source block is an opening wrapper plus one bullet, return only that opening wrapper plus one bullet.\n" +
-    "6. Do not add or remove neighboring bullets, \\end{...} lines, or surrounding wrappers unless they are part of that exact targeted block.\n" +
-    "7. Use the planned desired text as the target visible output, but preserve the source block's macro style, argument structure, and local formatting conventions whenever possible.\n" +
-    "8. If the desired text is an empty string, use an empty latexCode only when removing that single block is clearly the right implementation.\n" +
-    "9. Prefer replacements whose visible text stays at or under the source block's character count when possible. Rewrite for higher signal instead of simply adding more words.\n" +
-    "10. Small length increases are acceptable when they materially improve fit for the role, but bias strongly against cumulative growth because the resume should stay under one page.\n" +
-    "11. Across all planned edits, avoid adding more than about 1-2 lines total unless that extra length is clearly necessary for a meaningfully better tailored resume.\n\n" +
-    "Common pitfalls:\n" +
-    "1. The most common structural failure is crossing a segment boundary. When in doubt, keep the replacement smaller and closer to the source block.\n" +
-    "2. If the source block is \\entryheading, \\projectheading, or \\labelline, preserve the existing command form and adapt the text inside its arguments instead of flattening it into a different shape.\n" +
-    "3. Keep the final document pdflatex-compatible after your replacements are applied.\n" +
-    "4. Special character escaping: in plain text content, the characters }, {, #, %, &, $, _, ^, ~, and \\ are special in LaTeX and must be escaped (e.g., \\}, \\{, \\#, \\%, \\&, \\$, \\_, \\^{}, \\~{}, \\textbackslash{}). A bare } or { in text content is the most common cause of 'Extra }' or 'Missing $' compile errors. Only leave these characters unescaped inside LaTeX command arguments where they serve a structural role (e.g., \\textbf{...}, \\href{...}{...}).\n"
+function buildTailoringImplementationInstructions(input: {
+  feedback?: string;
+  promptSettings?: SystemPromptSettings;
+}) {
+  return buildTailorResumeImplementationSystemPrompt(
+    input.promptSettings ?? createDefaultSystemPromptSettings(),
+    {
+      feedback: input.feedback,
+    },
   );
 }
 
@@ -825,6 +773,7 @@ export async function generateTailoredResume(input: {
     error: string,
     attempt: number,
   ) => Promise<void>;
+  promptSettings?: SystemPromptSettings;
 }): Promise<GenerateTailoredResumeResult> {
   const startedAt = Date.now();
   const model = process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
@@ -935,6 +884,7 @@ export async function generateTailoredResume(input: {
     });
     const planInstructions = buildTailoringPlanInstructions({
       feedback: planningFeedback,
+      promptSettings: input.promptSettings,
     });
     planningPrompt = serializeTailoredResumePrompt({
       inputMessages: planInput,
@@ -1131,6 +1081,7 @@ export async function generateTailoredResume(input: {
     });
     const implementationInstructions = buildTailoringImplementationInstructions({
       feedback: implementationFeedback,
+      promptSettings: input.promptSettings,
     });
     implementationPrompt = serializeTailoredResumePrompt({
       inputMessages: implementationInput,

@@ -1,4 +1,9 @@
 import OpenAI from "openai";
+import {
+  buildJobApplicationExtractionSystemPrompt,
+  createDefaultSystemPromptSettings,
+  type SystemPromptSettings,
+} from "@/lib/system-prompt-settings";
 import type {
   ApplicationStatusValue,
   EmploymentTypeValue,
@@ -548,6 +553,7 @@ function buildPageContextSummary(pageContext?: JobPageContext | null) {
 export async function extractJobApplicationFromEvidence(input: {
   existingDraft?: JobApplicationDraft | null;
   pageContext?: JobPageContext | null;
+  promptSettings?: SystemPromptSettings;
   screenshots?: Array<{
     dataUrl: string;
     filename: string;
@@ -577,8 +583,9 @@ export async function extractJobApplicationFromEvidence(input: {
   const client = getOpenAIClient();
   const response = await client.responses.create({
     model,
-    instructions:
-      "Extract job application details from the provided evidence. The evidence may include browser text, structured page hints, screenshots, or a combination. Never invent values that are not explicitly supported by the evidence. Return null for missing fields. Only return a referrerName when the evidence explicitly names the referring person. Only use remote, onsite, or hybrid for location when that classification is clearly supported. Only use SAVED, APPLIED, INTERVIEW, OFFER, REJECTED, or WITHDRAWN for status when it is clearly supported. Only use full_time, part_time, contract, or internship for employmentType when it is clearly supported. If screenshots and page text disagree, prefer the clearer evidence and reflect uncertainty in the confidence scores and evidence fields. If existing draft fields are provided from earlier evidence, preserve them unless the new evidence clearly adds or corrects them.",
+    instructions: buildJobApplicationExtractionSystemPrompt(
+      input.promptSettings ?? createDefaultSystemPromptSettings(),
+    ),
     input: [
       {
         role: "user",
@@ -651,9 +658,11 @@ export async function extractJobApplicationFromScreenshot(input: {
   existingDraft?: JobApplicationDraft | null;
   filename: string;
   mimeType: string;
+  promptSettings?: SystemPromptSettings;
 }) {
   return extractJobApplicationFromEvidence({
     existingDraft: input.existingDraft,
+    promptSettings: input.promptSettings,
     screenshots: [
       {
         dataUrl: input.dataUrl,

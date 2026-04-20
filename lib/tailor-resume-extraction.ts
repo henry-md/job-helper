@@ -1,4 +1,5 @@
 import OpenAI, { toFile } from "openai";
+import type { SystemPromptSettings } from "@/lib/system-prompt-settings";
 import { validateTailorResumeLatexDocument } from "@/lib/tailor-resume-link-validation";
 import {
   resumeLatexValidationTool,
@@ -53,6 +54,7 @@ type ExtractResumeLatexDocumentDependencies = {
   ) => void | Promise<void>;
   onBuildFailure?: (latexCode: string, error: string, attempt: number) => Promise<void>;
   preserveUnusedKnownLinks?: boolean;
+  promptSettings?: SystemPromptSettings;
   validateLatexDocument?: (
     latexCode: string,
   ) => ReturnType<typeof validateTailorResumeLatexDocument>;
@@ -240,6 +242,7 @@ export async function extractResumeLatexDocument(
           instructions: buildResumeLatexInstructions({
             attempt,
             maxAttempts: retryAttempts,
+            promptSettings: dependencies.promptSettings,
           }),
           input: responseInput,
           parallel_tool_calls: false,

@@ -1,3 +1,9 @@
+import {
+  createDefaultSystemPromptSettings,
+  mergeSystemPromptSettings,
+  type SystemPromptSettings,
+} from "./system-prompt-settings.ts";
+
 export type SavedResumeRecord = {
   mimeType: string;
   originalFilename: string;
@@ -65,6 +71,11 @@ export type TailorResumeAnnotatedLatexState = {
 export type TailorResumeWorkspaceState = {
   isBaseResumeStepComplete: boolean;
   updatedAt: string | null;
+};
+
+export type TailorResumePromptSettingsState = {
+  updatedAt: string | null;
+  values: SystemPromptSettings;
 };
 
 export type TailoredResumeBlockEditRecord = {
@@ -136,6 +147,7 @@ export type TailorResumeProfile = {
   jobDescription: string;
   latex: TailorResumeLatexState;
   links: TailorResumeLinkRecord[];
+  promptSettings: TailorResumePromptSettingsState;
   resume: SavedResumeRecord | null;
   tailoredResumes: TailoredResumeRecord[];
   workspace: TailorResumeWorkspaceState;
@@ -187,6 +199,13 @@ export function emptyTailorResumeWorkspaceState(): TailorResumeWorkspaceState {
   };
 }
 
+export function emptyTailorResumePromptSettingsState(): TailorResumePromptSettingsState {
+  return {
+    updatedAt: null,
+    values: createDefaultSystemPromptSettings(),
+  };
+}
+
 export function emptyTailorResumeProfile(): TailorResumeProfile {
   return {
     annotatedLatex: emptyTailorResumeAnnotatedLatexState(),
@@ -194,6 +213,7 @@ export function emptyTailorResumeProfile(): TailorResumeProfile {
     jobDescription: "",
     latex: emptyTailorResumeLatexState(),
     links: [],
+    promptSettings: emptyTailorResumePromptSettingsState(),
     resume: null,
     tailoredResumes: [],
     workspace: emptyTailorResumeWorkspaceState(),
@@ -343,6 +363,19 @@ function parseTailorResumeWorkspaceState(value: unknown): TailorResumeWorkspaceS
   return {
     isBaseResumeStepComplete: value.isBaseResumeStepComplete === true,
     updatedAt: readNullableString(value.updatedAt),
+  };
+}
+
+function parseTailorResumePromptSettingsState(
+  value: unknown,
+): TailorResumePromptSettingsState {
+  if (!isRecord(value)) {
+    return emptyTailorResumePromptSettingsState();
+  }
+
+  return {
+    updatedAt: readNullableString(value.updatedAt),
+    values: mergeSystemPromptSettings(value.values),
   };
 }
 
@@ -737,6 +770,7 @@ export function parseTailorResumeProfile(value: unknown): TailorResumeProfile {
     jobDescription: readString(value.jobDescription),
     latex: parseTailorResumeLatexState(value.latex),
     links: parseTailorResumeLinkRecords(value.links),
+    promptSettings: parseTailorResumePromptSettingsState(value.promptSettings),
     resume: parseSavedResumeRecord(value.resume),
     tailoredResumes: parseTailoredResumeRecords(value.tailoredResumes),
     workspace: parseTailorResumeWorkspaceState(value.workspace),

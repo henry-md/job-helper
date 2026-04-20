@@ -57,6 +57,14 @@ test("parseTailorResumeProfile reads the current LaTeX-only shape", () => {
   assert.equal(profile.links[1]?.url, null);
   assert.equal(profile.resume?.originalFilename, "resume.pdf");
   assert.deepEqual(profile.tailoredResumes, []);
+  assert.equal(
+    typeof profile.promptSettings.values.resumeLatexExtraction,
+    "string",
+  );
+  assert.equal(
+    typeof profile.promptSettings.values.tailorResumeRefinement,
+    "string",
+  );
   assert.equal(profile.workspace.isBaseResumeStepComplete, false);
 });
 
@@ -82,6 +90,31 @@ test("parseTailorResumeProfile upgrades legacy draft/generated fields into code"
   assert.equal(profile.workspace.isBaseResumeStepComplete, false);
 });
 
+test("parseTailorResumeProfile merges saved prompt overrides onto the defaults", () => {
+  const profile = parseTailorResumeProfile({
+    promptSettings: {
+      updatedAt: "2026-04-20T12:00:00.000Z",
+      values: {
+        tailorResumePlanning: "Custom planning prompt",
+      },
+    },
+  });
+
+  assert.equal(profile.promptSettings.updatedAt, "2026-04-20T12:00:00.000Z");
+  assert.equal(
+    profile.promptSettings.values.tailorResumePlanning,
+    "Custom planning prompt",
+  );
+  assert.equal(
+    typeof profile.promptSettings.values.resumeLatexExtraction,
+    "string",
+  );
+  assert.equal(
+    typeof profile.promptSettings.values.tailorResumeRefinement,
+    "string",
+  );
+});
+
 test("emptyTailorResumeProfile defaults to an empty LaTeX draft", () => {
   const profile = emptyTailorResumeProfile();
 
@@ -90,6 +123,11 @@ test("emptyTailorResumeProfile defaults to an empty LaTeX draft", () => {
   assert.equal(profile.annotatedLatex.segmentCount, 0);
   assert.equal(profile.extraction.status, "idle");
   assert.deepEqual(profile.links, []);
+  assert.equal(profile.promptSettings.updatedAt, null);
+  assert.equal(
+    typeof profile.promptSettings.values.jobApplicationExtraction,
+    "string",
+  );
   assert.equal(profile.resume, null);
   assert.deepEqual(profile.tailoredResumes, []);
   assert.equal(profile.workspace.isBaseResumeStepComplete, false);

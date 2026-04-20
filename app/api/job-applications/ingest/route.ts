@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { authOptions } from "@/auth";
 import { extractJobApplicationFromEvidence } from "@/lib/job-application-extraction";
 import { getPrismaClient } from "@/lib/prisma";
+import { readTailorResumeProfileState } from "@/lib/tailor-resume-profile-state";
 import type {
   ApplicationStatusValue,
   EmploymentTypeValue,
@@ -334,8 +335,12 @@ export async function POST(request: Request) {
   }
 
   try {
+    const promptSettings = (
+      await readTailorResumeProfileState(userId)
+    ).profile.promptSettings.values;
     const extractionResult = await extractJobApplicationFromEvidence({
       pageContext,
+      promptSettings,
       screenshots: await Promise.all(
         screenshotFiles.map(async (screenshotFile) => ({
           dataUrl: fileBufferToDataUrl(

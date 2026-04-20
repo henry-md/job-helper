@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import DashboardWorkspace from "@/components/dashboard-workspace";
 import { authOptions } from "@/auth";
 import { parseDashboardRouteState } from "@/lib/dashboard-route-state";
+import { createDefaultSystemPromptSettings } from "@/lib/system-prompt-settings";
 import {
   countDistinctApplicationCompanies,
   toJobApplicationRecord,
@@ -134,6 +135,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             applications={databaseStatus.applications}
             companyCount={databaseStatus.companyCount}
             companyOptions={databaseStatus.companies}
+            defaultPromptSettings={createDefaultSystemPromptSettings()}
             disabled={uploadDisabled}
             extractionModel={extractionModel}
             referrerOptions={databaseStatus.people}

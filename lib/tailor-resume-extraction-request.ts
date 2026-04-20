@@ -1,10 +1,11 @@
 import { fileBufferToDataUrl } from "./file-data-url.ts";
+import {
+  buildResumeLatexSystemPrompt,
+  createDefaultSystemPromptSettings,
+  type SystemPromptSettings,
+} from "./system-prompt-settings.ts";
 import type { ResumeLatexRetryContext } from "./tailor-resume-extraction-loop.ts";
 import { extractResumeLatexLinks } from "./tailor-resume-link-validation.ts";
-import {
-  tailorResumeLatexExample,
-  tailorResumeLatexTemplate,
-} from "./tailor-resume-latex-example.ts";
 import type { ExtractedTailorResumeLink } from "./tailor-resume-links.ts";
 import type { EmbeddedPdfLink } from "./tailor-resume-pdf-links.ts";
 import type { TailorResumeLinkRecord } from "./tailor-resume-types";
@@ -109,49 +110,15 @@ export function buildExtractedResumeLinksFromLatex(latexCode: string) {
 export function buildResumeLatexInstructions(input: {
   attempt: number;
   maxAttempts: number;
+  promptSettings?: SystemPromptSettings;
 }) {
-  const retryInstructions =
-    input.attempt > 1
-      ? `Retry attempt ${String(input.attempt)} of ${String(input.maxAttempts)}:
-- The retry input includes the original uploaded resume again plus the full LaTeX draft that was the output of your last model call.
-- Treat that prior LaTeX as the draft to edit surgically rather than starting over from scratch, unless a larger rewrite is absolutely necessary to stay faithful to the source resume.
-- Fix the exact reported validation error first, then review the rest of the document for any other compile or link problems before you call validate_resume_latex again.
-- Return the full standalone LaTeX document again from \\documentclass through \\end{document}. Never return only the changed snippets, never return a partial document, and never shorten bullets to their first sentence.
-- Preserve the full text of every bullet and every sentence from the source resume even if you are only making a small localized fix.
-
-`
-      : "";
-
-  return `${retryInstructions}Convert the provided resume into a complete standalone LaTeX document. Preserve every word from the resume exactly as written whenever it is legible. Never summarize, shorten, compress, or omit text. In particular, never truncate bullets to their first sentence. Keep the original section order and keep all bullets, dates, headings, labeled lines, links, and separators. Preserve visible bold, italics, underlines, bullet structure, and link styling when possible. Return a full LaTeX document from \\documentclass through \\end{document} that compiles with pdflatex. Prefer the exact template and macro vocabulary shown below. Use only standard LaTeX plus the packages already present in that template unless absolutely necessary. Inline formatting such as \\textbf, \\textit, \\tightul, and \\href may appear anywhere inside macro arguments when needed.
-
-Pay particular attention to these details because they are easy to get wrong:
-1. Header: match the centered header structure from the reference example, including how the name is centered and how the contact lines are centered beneath it.
-2. Education section: match the alignment pattern in the reference example, especially the left/right tabular alignment for school and dates, plus the indented follow-up lines below it.
-3. Technical skills section: do not align the text like the education section. Follow the reference example where each skills line continues naturally after the colon using the hanging-indent style rather than trying to force tabular left/right alignment.
-4. Bolding: pay special attention to what is visibly bolded in the uploaded image and reproduce that emphasis faithfully in LaTeX. Do not flatten bold emphasis, and do not assume only headings are bold; important phrases inside bullets, links, labels, names, and other inline fragments may need \\textbf{} as shown by the source image.
-5. Vertical spacing: pay close attention to the tight vertical spacing in the source image and the reference example. Use small spacing adjustments, including negative \\vspace{...} values when appropriate, to pull sections closer together and match the visual density of the original resume, especially between the centered header and the first section and around section transitions. Avoid leaving the document with loose default spacing when the source image is visibly tighter.
-6. Unicode safety: do not emit unsupported raw Unicode glyphs such as replacement characters or private-use characters. Replace them with LaTeX-safe ASCII or explicit LaTeX commands.
-7. Link fidelity: only preserve hyperlink styling when the destination is explicitly supported by the visible resume content, saved known links, or embedded PDF link metadata. If a destination fails validation or the visible text does not support a specific target, keep the visible text but remove \\href and link-only styling such as \\tightul instead of guessing a replacement.
-8. Deleted links: if saved context says a label should remain plain text, do not recreate a hyperlink for it even if the label looks like a valid URL.
-9. Special character escaping: in plain text content, the characters }, {, #, %, &, $, _, ^, ~, and \\ are special in LaTeX and must be escaped (e.g., \\}, \\{, \\#, \\%, \\&, \\$, \\_, \\^{}, \\~{}, \\textbackslash{}). A bare } or { in text content is the most common cause of 'Extra }' or 'Missing $' compile errors. Only leave these unescaped inside LaTeX command arguments where they serve a structural role (e.g., \\textbf{...}, \\href{...}{...}).
-
-Tool workflow:
-- Use the validate_resume_latex tool every time you draft or revise the full document.
-- Pass the complete standalone LaTeX document in the tool argument latexCode.
-- Always include a complete links array in the tool call. Each entry must describe one visible resume link or contact destination using { "label": "...", "url": "..." | null }.
-- Use the exact visible link text or label for links[].label whenever possible. If you are not confident about the destination URL, set links[].url to null.
-- The tool validates both pdflatex compilation and extracted hyperlinks.
-- If the tool reports a compile error or failed links, fix that exact issue while preserving the resume content. For failed links, preserve the visible text, remove hyperlink-specific styling, and keep the affected entry in links with url set to null instead of inventing a destination.
-- Never add link-style formatting when the destination does not resolve confidently.
-- Stop as soon as the tool reports success. You have at most ${String(input.maxAttempts)} validation attempts.
-
-Preferred template:
-
-${tailorResumeLatexTemplate}
-
-Reference example:
-
-${tailorResumeLatexExample}`;
+  return buildResumeLatexSystemPrompt(
+    input.promptSettings ?? createDefaultSystemPromptSettings(),
+    {
+      attempt: input.attempt,
+      maxAttempts: input.maxAttempts,
+    },
+  );
 }
 
 function buildResumeSourceContent(

@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/auth";
 import { extractJobApplicationFromScreenshot } from "@/lib/job-application-extraction";
+import { readTailorResumeProfileState } from "@/lib/tailor-resume-profile-state";
 import type { JobApplicationDraft } from "@/lib/job-application-types";
 import {
   assertSupportedImageFile,
@@ -108,6 +109,9 @@ export async function POST(request: Request) {
 
   try {
     const testOpenAIResponseEnabled = isTestOpenAIResponseEnabled();
+    const promptSettings = (
+      await readTailorResumeProfileState(session.user.id)
+    ).profile.promptSettings.values;
     const extractionResult = await extractJobApplicationFromScreenshot({
       dataUrl: testOpenAIResponseEnabled
         ? "data:image/png;base64,"
@@ -118,6 +122,7 @@ export async function POST(request: Request) {
       existingDraft: draftContext,
       filename: screenshotFile.name || "job-screenshot",
       mimeType: screenshotFile.type,
+      promptSettings,
     });
 
     return NextResponse.json({

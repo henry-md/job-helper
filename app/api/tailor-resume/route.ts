@@ -76,6 +76,11 @@ import {
   type TailorResumeSavedLinkUpdate,
 } from "@/lib/tailor-resume-types";
 import {
+  systemPromptSettingKeys,
+  type SystemPromptSettingKey,
+  type SystemPromptSettings,
+} from "@/lib/system-prompt-settings";
+import {
   assertSupportedResumeFile,
   deletePersistedUserResume,
   persistUserResume,
@@ -84,6 +89,7 @@ import {
 const maxJobDescriptionLength = 200_000;
 const maxLatexCodeLength = 300_000;
 const maxTailoredResumeDisplayNameLength = 200;
+const maxSystemPromptLength = 200_000;
 
 function normalizeAnnotatedLatexState(latexCode: string, updatedAt: string) {
   const normalizedLatex = normalizeTailorResumeLatex(latexCode);
@@ -300,6 +306,7 @@ async function handleTailorResumeGeneration(
         error,
         attempt,
       }),
+    promptSettings: preparation.rawProfile.promptSettings.values,
   });
 
   if (tailoringResult.outcome === "generation_failure") {
@@ -493,6 +500,39 @@ function readLinkUpdates(value: unknown) {
     }
 
     updates.push({ key, locked, url });
+  }
+
+  return updates;
+}
+
+function readPromptSettingsUpdates(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const rawUpdates = value as Partial<Record<SystemPromptSettingKey, unknown>>;
+  const updates: Partial<SystemPromptSettings> = {};
+  let changeCount = 0;
+
+  for (const key of systemPromptSettingKeys) {
+    const nextValue = rawUpdates[key];
+
+    if (typeof nextValue !== "string") {
+      continue;
+    }
+
+    if (nextValue.length > maxSystemPromptLength) {
+      throw new Error(
+        `Keep the ${key} prompt under ${maxSystemPromptLength.toLocaleString()} characters.`,
+      );
+    }
+
+    updates[key] = nextValue;
+    changeCount += 1;
+  }
+
+  if (changeCount === 0) {
+    return null;
   }
 
   return updates;
@@ -750,6 +790,7 @@ async function runResumeExtraction(
           attempt,
         }),
       preserveUnusedKnownLinks: options.preserveUnusedKnownLinks,
+      promptSettings: input.rawProfile.promptSettings.values,
     });
     const persistedLatex = await persistExtractedLatexResult(userId, extraction);
 
@@ -861,6 +902,52 @@ export async function PATCH(request: Request) {
         rawProfile,
       });
       return NextResponse.json(buildExtractionResponse(extractionResult));
+    }
+
+    if ("action" in body && body.action === "savePromptSettings") {
+      let promptSettingsUpdates: Partial<SystemPromptSettings> | null = null;
+
+      try {
+        promptSettingsUpdates = readPromptSettingsUpdates(
+          "promptSettings" in body ? body.promptSettings : null,
+        );
+      } catch (error) {
+        return NextResponse.json(
+          {
+            error:
+              error instanceof Error
+                ? error.message
+                : "Unable to save the prompt settings.",
+          },
+          { status: 413 },
+        );
+      }
+
+      if (!promptSettingsUpdates) {
+        return NextResponse.json(
+          { error: "Provide at least one prompt setting to save." },
+          { status: 400 },
+        );
+      }
+
+      const nextRawProfile: TailorResumeProfile = {
+        ...rawProfile,
+        promptSettings: {
+          updatedAt: new Date().toISOString(),
+          values: {
+            ...rawProfile.promptSettings.values,
+            ...promptSettingsUpdates,
+          },
+        },
+      };
+
+      await writeTailorResumeProfile(session.user.id, nextRawProfile);
+
+      return NextResponse.json({
+        profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
+          includeLockedOnly: true,
+        }),
+      });
     }
 
   if ("action" in body && body.action === "saveLinksAndReextract") {

@@ -1,4 +1,4 @@
-export type DashboardTabId = "new" | "tailor";
+export type DashboardTabId = "new" | "settings" | "tailor";
 
 export type DashboardRouteState = {
   tab: DashboardTabId;
@@ -18,7 +18,12 @@ export function parseDashboardRouteState(input?: {
   tab?: string | null | undefined;
   tailoredResumeId?: string | null | undefined;
 }): DashboardRouteState {
-  const tab = input?.tab === "new" ? "new" : "tailor";
+  const tab =
+    input?.tab === "new"
+      ? "new"
+      : input?.tab === "settings"
+        ? "settings"
+        : "tailor";
   const tailoredResumeId =
     tab === "tailor"
       ? normalizeRouteParamValue(input?.tailoredResumeId)
@@ -49,7 +54,7 @@ export function buildDashboardHref(input: {
   });
   const searchParams = new URLSearchParams();
 
-  if (routeState.tab === "new") {
+  if (routeState.tab === "new" || routeState.tab === "settings") {
     searchParams.set("tab", routeState.tab);
   }
 

@@ -77,6 +77,19 @@ Tailor Resume object model:
 - Successful compiles overwrite `.job-helper-data/tailor-resumes/<userId>/preview.pdf`.
 - Failed edits keep the previous successful preview when one already exists.
 
+7. Prompt Settings (`TailorResumePromptSettingsState`)
+- Files: `lib/system-prompt-settings.ts`, `lib/tailor-resume-types.ts`
+- Stored under `profile.promptSettings`.
+- This keeps the per-user system-prompt templates that power:
+  - job application extraction
+  - resume-to-LaTeX extraction
+  - tailored-resume planning
+  - tailored-resume block generation
+  - tailored-resume block refinement / regeneration
+- The stored values are editable from `/dashboard?tab=settings`.
+- The prompt strings may include template tokens such as `{{FEEDBACK_BLOCK}}`, `{{RETRY_INSTRUCTIONS}}`, and `{{MAX_ATTEMPTS}}`; runtime code expands those tokens before sending the final instructions to OpenAI.
+- Missing keys fall back to the shipped defaults so older saved profiles remain forward-compatible when new prompt-controlled flows are added.
+
 Current flow:
 
 1. Resume upload is saved locally.

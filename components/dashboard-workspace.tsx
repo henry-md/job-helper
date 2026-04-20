@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import JobApplicationIntake from "@/components/job-application-intake";
+import PromptSettingsWorkspace from "@/components/prompt-settings-workspace";
 import SignOutButton from "@/components/sign-out-button";
 import StatusToast from "@/components/status-toast";
 import TailoredResumeReviewModal from "@/components/tailored-resume-review-modal";
@@ -149,6 +150,7 @@ export default function DashboardWorkspace({
   applications,
   companyCount,
   companyOptions,
+  defaultPromptSettings,
   disabled,
   extractionModel,
   initialReviewingTailoredResumeId,
@@ -165,10 +167,11 @@ export default function DashboardWorkspace({
   applications: JobApplicationRecord[];
   companyCount: number;
   companyOptions: CompanyOption[];
+  defaultPromptSettings: TailorResumeProfile["promptSettings"]["values"];
   disabled: boolean;
   extractionModel: string;
   initialReviewingTailoredResumeId?: string | null;
-  initialTab: "new" | "tailor";
+  initialTab: "new" | "settings" | "tailor";
   referrerOptions: ReferrerOption[];
   statusMessage?: {
     text: string;
@@ -336,7 +339,7 @@ export default function DashboardWorkspace({
         </div>
 
         <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-2">
-          <nav className="grid w-full grid-cols-2 items-center gap-2 rounded-[1.4rem] border border-white/10 bg-black/20 p-1 sm:flex sm:w-auto sm:rounded-full">
+          <nav className="grid w-full grid-cols-3 items-center gap-2 rounded-[1.4rem] border border-white/10 bg-black/20 p-1 sm:flex sm:w-auto sm:rounded-full">
             <button
               className={`w-full min-w-0 whitespace-nowrap rounded-full px-2.5 py-2 text-center text-[0.7rem] uppercase leading-none tracking-[0.14em] transition sm:w-auto sm:px-3 sm:text-xs sm:tracking-[0.16em] ${
                 activeTab === "tailor"
@@ -358,6 +361,17 @@ export default function DashboardWorkspace({
               type="button"
             >
               Applications
+            </button>
+            <button
+              className={`w-full min-w-0 whitespace-nowrap rounded-full px-2.5 py-2 text-center text-[0.7rem] uppercase leading-none tracking-[0.14em] transition sm:w-auto sm:px-3 sm:text-xs sm:tracking-[0.16em] ${
+                activeTab === "settings"
+                  ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
+                  : "text-zinc-400 hover:text-zinc-200"
+              }`}
+              onClick={() => setActiveDashboardTab("settings")}
+              type="button"
+            >
+              Settings
             </button>
           </nav>
           <SignOutButton className="w-full sm:w-auto" />
@@ -485,7 +499,7 @@ export default function DashboardWorkspace({
               </section>
             </aside>
           </section>
-        ) : (
+        ) : activeTab === "tailor" ? (
           <section className="grid content-start gap-[clamp(0.75rem,1.2vh,1rem)] sm:h-full sm:min-h-0 xl:grid-cols-[1fr_0.4fr]">
             <div className="overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto">
               <TailorResumeWorkspace
@@ -564,6 +578,15 @@ export default function DashboardWorkspace({
                 )}
               </section>
             </aside>
+          </section>
+        ) : (
+          <section className="sm:h-full sm:min-h-0">
+            <div className="h-full overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto">
+              <PromptSettingsWorkspace
+                defaultPromptValues={defaultPromptSettings}
+                initialPromptSettings={tailorResumeProfile.promptSettings}
+              />
+            </div>
           </section>
         )}
       </div>
