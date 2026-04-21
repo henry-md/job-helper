@@ -34,16 +34,24 @@ export type TailorResumeGenerationProgressNotification = {
   tone: "error" | "info" | "success";
 };
 
-function getStepCardClassName(status: TailorResumeGenerationProgressStepStatus) {
-  switch (status) {
+function isSkippedClarificationStep(step: TailorResumeGenerationProgressStep) {
+  return step.status === "skipped" && step.stepNumber === 2;
+}
+
+function getStepCardClassName(step: TailorResumeGenerationProgressStep) {
+  if (isSkippedClarificationStep(step)) {
+    return "border-emerald-200/40 bg-[linear-gradient(180deg,rgba(187,247,208,0.16),rgba(74,222,128,0.08))] text-emerald-50";
+  }
+
+  switch (step.status) {
     case "succeeded":
-      return "border-emerald-200/45 bg-[linear-gradient(180deg,rgba(187,247,208,0.24),rgba(74,222,128,0.14))] text-emerald-50 shadow-[0_16px_40px_rgba(16,185,129,0.16)]";
+      return "border-emerald-200/40 bg-[linear-gradient(180deg,rgba(187,247,208,0.16),rgba(74,222,128,0.08))] text-emerald-50";
     case "current":
-      return "border-sky-300/40 bg-[linear-gradient(180deg,rgba(125,211,252,0.2),rgba(14,165,233,0.14))] text-sky-50 shadow-[0_16px_40px_rgba(14,165,233,0.14)]";
+      return "border-sky-300/36 bg-[linear-gradient(180deg,rgba(125,211,252,0.15),rgba(14,165,233,0.08))] text-sky-50";
     case "retrying":
-      return "border-amber-300/40 bg-[linear-gradient(180deg,rgba(253,230,138,0.22),rgba(251,191,36,0.14))] text-amber-50 shadow-[0_16px_40px_rgba(245,158,11,0.14)]";
+      return "border-amber-300/36 bg-[linear-gradient(180deg,rgba(253,230,138,0.16),rgba(251,191,36,0.08))] text-amber-50";
     case "failed":
-      return "border-rose-300/35 bg-[linear-gradient(180deg,rgba(253,164,175,0.18),rgba(225,29,72,0.16))] text-rose-50 shadow-[0_16px_40px_rgba(225,29,72,0.14)]";
+      return "border-rose-300/30 bg-[linear-gradient(180deg,rgba(253,164,175,0.14),rgba(225,29,72,0.08))] text-rose-50";
     case "skipped":
       return "border-white/12 bg-white/[0.045] text-zinc-200";
     case "pending":
@@ -53,6 +61,15 @@ function getStepCardClassName(status: TailorResumeGenerationProgressStepStatus) 
 }
 
 function getStatusBadge(step: TailorResumeGenerationProgressStep) {
+  if (isSkippedClarificationStep(step)) {
+    return {
+      className: "border-emerald-300/35 bg-emerald-200/16 text-emerald-100",
+      icon: CheckCircle2,
+      iconClassName: "text-emerald-200",
+      label: "Skipped",
+    };
+  }
+
   switch (step.status) {
     case "succeeded":
       return {
@@ -100,18 +117,48 @@ function getStatusBadge(step: TailorResumeGenerationProgressStep) {
   }
 }
 
-function getNotificationClassName(
+function getNotificationPresentation(
   tone: TailorResumeGenerationProgressNotification["tone"],
 ) {
   if (tone === "success") {
-    return "border-emerald-300/26 bg-[linear-gradient(180deg,rgba(52,211,153,0.14),rgba(6,95,70,0.22))] text-emerald-50";
+    return {
+      detailClassName: "text-zinc-400",
+      dotClassName: "bg-emerald-300 shadow-[0_0_16px_rgba(110,231,183,0.7)]",
+      icon: CheckCircle2,
+      iconClassName: "text-emerald-200",
+      iconWrapperClassName:
+        "bg-[linear-gradient(180deg,rgba(52,211,153,0.18),rgba(16,185,129,0.08))]",
+      labelClassName: "text-emerald-200/78",
+      surfaceClassName:
+        "bg-[linear-gradient(180deg,rgba(52,211,153,0.08),rgba(255,255,255,0.02))] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_18px_48px_rgba(0,0,0,0.22)]",
+    };
   }
 
   if (tone === "error") {
-    return "border-rose-300/24 bg-[linear-gradient(180deg,rgba(251,113,133,0.16),rgba(159,18,57,0.22))] text-rose-50";
+    return {
+      detailClassName: "text-zinc-400",
+      dotClassName: "bg-rose-300 shadow-[0_0_16px_rgba(253,164,175,0.7)]",
+      icon: XCircle,
+      iconClassName: "text-rose-200",
+      iconWrapperClassName:
+        "bg-[linear-gradient(180deg,rgba(251,113,133,0.18),rgba(225,29,72,0.08))]",
+      labelClassName: "text-rose-200/78",
+      surfaceClassName:
+        "bg-[linear-gradient(180deg,rgba(251,113,133,0.08),rgba(255,255,255,0.02))] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_18px_48px_rgba(0,0,0,0.22)]",
+    };
   }
 
-  return "border-sky-300/20 bg-[linear-gradient(180deg,rgba(56,189,248,0.12),rgba(8,47,73,0.24))] text-sky-50";
+  return {
+    detailClassName: "text-zinc-400",
+    dotClassName: "bg-emerald-200 shadow-[0_0_16px_rgba(167,243,208,0.66)]",
+    icon: LoaderCircle,
+    iconClassName: "animate-spin text-emerald-100",
+    iconWrapperClassName:
+      "bg-[linear-gradient(180deg,rgba(167,243,208,0.12),rgba(52,211,153,0.05))]",
+    labelClassName: "text-emerald-100/74",
+    surfaceClassName:
+      "bg-[linear-gradient(180deg,rgba(167,243,208,0.06),rgba(255,255,255,0.02))] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_18px_48px_rgba(0,0,0,0.22)]",
+  };
 }
 
 export function TailorResumeProgressToast({
@@ -126,7 +173,7 @@ export function TailorResumeProgressToast({
   return (
     <button
       aria-label={ariaLabel}
-      className="flex w-full min-w-0 appearance-none items-center border-0 bg-transparent p-0 text-left shadow-none outline-none"
+      className="flex w-full min-w-0 cursor-pointer appearance-none items-center border-0 bg-transparent p-0 text-left shadow-none outline-none"
       onClick={onOpen}
       type="button"
     >
@@ -148,6 +195,11 @@ export function TailorResumeProgressModal({
   onClose: () => void;
   steps: TailorResumeGenerationProgressStep[];
 }) {
+  const notificationPresentation = getNotificationPresentation(
+    latestNotification?.tone ?? "info",
+  );
+  const NotificationIcon = notificationPresentation.icon;
+
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -171,7 +223,14 @@ export function TailorResumeProgressModal({
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-[205] flex bg-black/82 px-4 py-6 backdrop-blur-sm sm:px-6">
+    <div
+      className="fixed inset-0 z-[205] flex bg-black/82 px-4 py-6 backdrop-blur-sm sm:px-6"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
       <button
         aria-label="Close resume generation progress"
         className="absolute right-5 top-5 rounded-full border border-white/15 bg-black/40 px-4 py-2 text-xs uppercase tracking-[0.18em] text-zinc-100 transition hover:border-white/30 hover:bg-black/60"
@@ -216,8 +275,8 @@ export function TailorResumeProgressModal({
                   >
                     <article
                       className={cn(
-                        "min-w-0 flex-1 rounded-[1.25rem] border px-4 py-4 shadow-[0_16px_40px_rgba(0,0,0,0.2)] transition",
-                        getStepCardClassName(step.status),
+                        "min-w-0 flex-1 rounded-[1.25rem] border px-4 py-4 shadow-[0_8px_24px_rgba(0,0,0,0.14)] transition",
+                        getStepCardClassName(step),
                       )}
                     >
                       <div className="flex items-center justify-between gap-3">
@@ -260,21 +319,48 @@ export function TailorResumeProgressModal({
           <div className="border-t border-white/10 px-5 py-5 sm:px-6">
             <div
               className={cn(
-                "rounded-[1.25rem] border px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]",
-                getNotificationClassName(latestNotification?.tone ?? "info"),
+                "rounded-[1rem] px-4 py-4 sm:px-5",
+                notificationPresentation.surfaceClassName,
               )}
             >
-              <p className="text-[10px] uppercase tracking-[0.24em] text-current opacity-70">
-                Latest update
-              </p>
-              <p className="mt-2 text-sm font-semibold tracking-tight text-current">
-                {latestNotification?.title ?? "Generating resume..."}
-              </p>
-              {latestNotification?.detail ? (
-                <p className="mt-2 text-sm leading-6 text-current opacity-80">
-                  {latestNotification.detail}
-                </p>
-              ) : null}
+              <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.22em]">
+                <span
+                  aria-hidden="true"
+                  className={cn("size-1.5 rounded-full", notificationPresentation.dotClassName)}
+                />
+                <span className={notificationPresentation.labelClassName}>
+                  Latest update
+                </span>
+              </div>
+
+              <div className="mt-3 flex items-start gap-3">
+                <span
+                  className={cn(
+                    "inline-flex size-8 shrink-0 items-center justify-center rounded-full",
+                    notificationPresentation.iconWrapperClassName,
+                  )}
+                >
+                  <NotificationIcon
+                    className={cn("size-4", notificationPresentation.iconClassName)}
+                  />
+                </span>
+
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold tracking-tight text-zinc-50">
+                    {latestNotification?.title ?? "Generating resume..."}
+                  </p>
+                  {latestNotification?.detail ? (
+                    <p
+                      className={cn(
+                        "mt-1.5 max-w-4xl text-sm leading-6",
+                        notificationPresentation.detailClassName,
+                      )}
+                    >
+                      {latestNotification.detail}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
             </div>
           </div>
         </section>

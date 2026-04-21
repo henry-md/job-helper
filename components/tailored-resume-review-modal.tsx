@@ -1,8 +1,8 @@
 "use client";
 
-import { Bot, Check, ChevronUp, Download, Pencil, X } from "lucide-react";
+import { Bot, Check, ChevronUp, Download, Lightbulb, Pencil, X } from "lucide-react";
 import { createPortal } from "react-dom";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import TailoredResumeInteractivePreview from "@/components/tailored-resume-interactive-preview";
 import {
@@ -89,6 +89,17 @@ type TailoredResumeDiffBlockScrollSyncState = {
 
 function normalizeComparedTailoredResumeBlock(latexCode: string | null | undefined) {
   return stripTailorResumeSegmentIds(latexCode ?? "").replace(/\n+$/, "");
+}
+
+function AiRefinementHelperBox({ children }: { children: ReactNode }) {
+  return (
+    <div className="relative rounded-[1.1rem] border border-dashed border-white/14 bg-white/[0.035] py-3 pl-11 pr-4 text-sm leading-6 text-zinc-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
+      <span className="absolute left-4 top-3.5 inline-flex size-5 items-center justify-center rounded-full bg-white/[0.06] text-zinc-400">
+        <Lightbulb aria-hidden="true" className="h-3.5 w-3.5" />
+      </span>
+      {children}
+    </div>
+  );
 }
 
 function resolveAcceptedBlockChoiceFromEditState(
@@ -2270,7 +2281,7 @@ export default function TailoredResumeReviewModal({
       </div>
 
       {reviewEdits.length > 0 ? (
-        <div className="shrink-0 bg-zinc-950/96 px-4 pb-3 sm:px-5 sm:pb-4">
+        <div className="shrink-0 bg-zinc-950/96 px-4 py-1.5 sm:px-5">
           <div className="flex justify-center">
             <button
               className="group inline-flex max-w-full items-center gap-2.5 rounded-full border border-white/10 bg-black/20 px-3 py-2 text-left transition hover:border-emerald-300/28 hover:bg-[linear-gradient(180deg,rgba(52,211,153,0.08),rgba(16,185,129,0.03))]"
@@ -2319,10 +2330,10 @@ export default function TailoredResumeReviewModal({
         className="app-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto bg-zinc-950/96 px-4 py-4 sm:px-5"
         ref={aiRefinementMessagesRef}
       >
-        <div className="rounded-[1.1rem] border border-emerald-300/16 bg-[linear-gradient(180deg,rgba(52,211,153,0.08),rgba(16,185,129,0.03))] px-4 py-3 text-sm leading-6 text-zinc-200">
+        <AiRefinementHelperBox>
           Preview screenshots are attached automatically when available, so this
           can react to layout issues that do not show up cleanly in raw LaTeX.
-        </div>
+        </AiRefinementHelperBox>
 
         {previewSnapshotDataUrls.length === 0 && record.pdfUpdatedAt ? (
           <div className="rounded-[1rem] border border-amber-300/14 bg-amber-400/8 px-4 py-3 text-sm leading-6 text-amber-100/90">
@@ -2333,11 +2344,11 @@ export default function TailoredResumeReviewModal({
         ) : null}
 
         {aiRefinementMessages.length === 0 ? (
-          <div className="rounded-[1.1rem] border border-white/8 bg-black/20 px-4 py-4 text-sm leading-7 text-zinc-300">
+          <AiRefinementHelperBox>
             Try something like “tighten the wording so nothing feels cramped,”
             “make the experience sound more backend/platform,” or “keep the same
             meaning but reduce the line count.”
-          </div>
+          </AiRefinementHelperBox>
         ) : null}
 
         {aiRefinementMessages.map((message) => (
@@ -2576,7 +2587,14 @@ export default function TailoredResumeReviewModal({
 
   return createPortal(
     <>
-      <div className="fixed inset-0 z-[210] flex overflow-hidden bg-black/88 px-4 py-5 backdrop-blur-sm sm:px-6">
+      <div
+        className="fixed inset-0 z-[210] flex overflow-hidden bg-black/88 px-4 py-5 backdrop-blur-sm sm:px-6"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) {
+            onClose();
+          }
+        }}
+      >
         <button
           aria-label="Close tailored resume review"
           className="absolute right-4 top-4 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-black/45 text-zinc-100 transition hover:border-white/30 hover:bg-black/65 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 sm:right-5 sm:top-5"

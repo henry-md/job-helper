@@ -1,6 +1,6 @@
 # Job Helper
 
-Premium zinc-themed Next.js workspace with Google OAuth, Prisma, and first-pass
+Next.js workspace with Google OAuth, Prisma, and first-pass
 automatic job tracking from uploaded screenshots.
 
 ## Setup

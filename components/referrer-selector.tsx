@@ -309,7 +309,14 @@ export default function ReferrerSelector({
       ) : null}
 
       {isCreateOpen ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setIsCreateOpen(false);
+            }
+          }}
+        >
           <div className="w-full max-w-md rounded-[1.25rem] border border-white/10 bg-zinc-950 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
             <div className="flex items-start justify-between gap-3">
               <div>

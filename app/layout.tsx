@@ -16,7 +16,7 @@ const serif = Cormorant_Garamond({
 
 export const metadata: Metadata = {
   title: "J*b 🥀",
-  description: "Google-authenticated workspace for a premium job search flow.",
+  description: "Google-authenticated workspace for a job search flow.",
 };
 
 export default function RootLayout({

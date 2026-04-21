@@ -409,7 +409,14 @@ export default function DashboardWorkspace({
       />
       {typeof document !== "undefined" && tailoredResumePendingDelete
         ? createPortal(
-            <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/58 p-4 backdrop-blur-sm">
+            <div
+              className="fixed inset-0 z-[220] flex items-center justify-center bg-black/58 p-4 backdrop-blur-sm"
+              onClick={(event) => {
+                if (event.target === event.currentTarget) {
+                  setTailoredResumePendingDeleteId(null);
+                }
+              }}
+            >
               <div
                 aria-describedby="delete-tailored-resume-description"
                 aria-labelledby="delete-tailored-resume-title"

@@ -159,6 +159,11 @@ const resumeLinkSaveToastId = "tailor-resume-link-save";
 const tailorResumeRunToastId = "tailor-resume-run";
 const resumeUploadToastId = "tailor-resume-resume-upload";
 const savedLinkUpdateToastId = "tailor-resume-saved-link-updates";
+const tailorResumeClickableToastClassNames = {
+  content: "min-w-0 flex-1 cursor-pointer",
+  title: "min-w-0 w-full cursor-pointer",
+  toast: "cursor-pointer",
+};
 const failedLinkToastDurationMs = 5 * 60 * 1_000;
 const tailorResumeGenerationStepLabels = [
   {
@@ -1091,10 +1096,7 @@ export default function TailorResumeWorkspace({
         onOpen={openTailorResumeInterview}
       />,
       {
-        classNames: {
-          content: "min-w-0 flex-1",
-          title: "min-w-0 w-full",
-        },
+        classNames: tailorResumeClickableToastClassNames,
         id: tailorResumeRunToastId,
       },
     );
@@ -1111,10 +1113,7 @@ export default function TailorResumeWorkspace({
       toast.loading(
         <TailorResumeProgressToast onOpen={openTailorResumeProgress} />,
         {
-          classNames: {
-            content: "min-w-0 flex-1",
-            title: "min-w-0 w-full",
-          },
+          classNames: tailorResumeClickableToastClassNames,
           id: tailorResumeRunToastId,
         },
       );
@@ -1818,11 +1817,6 @@ export default function TailorResumeWorkspace({
             status: response.status,
           };
       const payload = streamedResult.payload;
-
-      if (payload.userMarkdown) {
-        onUserMarkdownChange?.(payload.userMarkdown);
-      }
-
       const tailoringDurationMs = resolveElapsedDurationMs(
         payload.tailoredResumeDurationMs,
         tailoringStartedAt,
@@ -1830,6 +1824,10 @@ export default function TailorResumeWorkspace({
       const formattedTailoringDuration = formatElapsedDuration(
         tailoringDurationMs,
       );
+
+      if (payload.userMarkdown) {
+        onUserMarkdownChange?.(payload.userMarkdown);
+      }
 
       if (!streamedResult.ok || !payload.profile) {
         throw new Error(payload.error ?? "Unable to tailor the resume.");
@@ -1958,7 +1956,7 @@ export default function TailorResumeWorkspace({
             ok: response.ok,
             payload: (await response.json()) as TailorResumeRunResponsePayload,
             status: response.status,
-          };
+      };
       const payload = streamedResult.payload;
 
       if (payload.userMarkdown) {
@@ -2616,7 +2614,14 @@ export default function TailorResumeWorkspace({
 
       {isPreviewMounted && isTailorInterviewOpen && tailoringInterview
         ? createPortal(
-            <div className="fixed inset-0 z-[195] flex bg-black/82 px-4 py-6 backdrop-blur-sm sm:px-6">
+            <div
+              className="fixed inset-0 z-[195] flex bg-black/82 px-4 py-6 backdrop-blur-sm sm:px-6"
+              onClick={(event) => {
+                if (event.target === event.currentTarget) {
+                  setIsTailorInterviewOpen(false);
+                }
+              }}
+            >
               <button
                 aria-label="Close tailoring follow-up"
                 className="absolute right-5 top-5 rounded-full border border-white/15 bg-black/40 px-4 py-2 text-xs uppercase tracking-[0.18em] text-zinc-100 transition hover:border-white/30 hover:bg-black/60"
@@ -2764,7 +2769,14 @@ export default function TailorResumeWorkspace({
 
       {isPreviewMounted && isPreviewOpen && displayedResume
         ? createPortal(
-            <div className="fixed inset-0 z-[180] flex bg-black/90 backdrop-blur-sm">
+            <div
+              className="fixed inset-0 z-[180] flex bg-black/90 backdrop-blur-sm"
+              onClick={(event) => {
+                if (event.target === event.currentTarget) {
+                  setIsPreviewOpen(false);
+                }
+              }}
+            >
               <button
                 aria-label="Close resume preview"
                 className="absolute right-5 top-5 rounded-full border border-white/15 bg-black/40 px-4 py-2 text-xs uppercase tracking-[0.18em] text-zinc-100 transition hover:border-white/30 hover:bg-black/60"
@@ -2806,7 +2818,14 @@ export default function TailorResumeWorkspace({
 
       {isPreviewMounted && isLinkEditorOpen && hasEditableOrPendingLinks
         ? createPortal(
-            <div className="fixed inset-0 z-[190] flex bg-black/82 px-4 py-6 backdrop-blur-sm sm:px-6">
+            <div
+              className="fixed inset-0 z-[190] flex bg-black/82 px-4 py-6 backdrop-blur-sm sm:px-6"
+              onClick={(event) => {
+                if (event.target === event.currentTarget) {
+                  setIsLinkEditorOpen(false);
+                }
+              }}
+            >
               <button
                 aria-label="Close link review"
                 className="absolute right-5 top-5 rounded-full border border-white/15 bg-black/40 px-4 py-2 text-xs uppercase tracking-[0.18em] text-zinc-100 transition hover:border-white/30 hover:bg-black/60"
