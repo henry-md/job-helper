@@ -51,13 +51,21 @@ import { repairTailoredResumeForCompile } from "@/lib/tailored-resume-repair";
 import {
   deleteTailoredResumePdf,
   deleteTailorResumePreviewPdf,
+  readTailorResumePreviewPdf,
   withTailorResumeProfileLock,
   writeTailoredResumePdf,
   writeTailorResumePreviewPdf,
   writeTailorResumeProfile,
 } from "@/lib/tailor-resume-storage";
 import { readTailorResumeProfileState } from "@/lib/tailor-resume-profile-state";
-import { generateTailoredResume } from "@/lib/tailor-resume-tailoring";
+import { compactTailoredResumePageCount } from "@/lib/tailor-resume-page-count-compaction";
+import { buildTailorResumePlanningSnapshot } from "@/lib/tailor-resume-planning";
+import { advanceTailorResumeQuestioning } from "@/lib/tailor-resume-questioning";
+import { refineTailoredResume } from "@/lib/tailor-resume-refinement";
+import {
+  implementTailoredResumePlan,
+  planTailoredResume,
+} from "@/lib/tailor-resume-tailoring";
 import {
   tailorResumeDebugErrorSources,
 } from "@/lib/tailor-resume-debug-errors";
@@ -70,7 +78,10 @@ import {
   emptyTailorResumeExtractionState,
   emptyTailorResumeLatexState,
   emptyTailorResumeWorkspaceState,
+  type TailorResumeGenerationStepEvent,
+  type TailorResumePendingInterview,
   type TailorResumeLockedLinkRecord,
+  type TailoredResumePlanningResult as TailorResumePlanningResult,
   type TailoredResumeBlockEditRecord,
   type TailorResumeProfile,
   type TailorResumeSavedLinkUpdate,
@@ -80,6 +91,8 @@ import {
   type SystemPromptSettingKey,
   type SystemPromptSettings,
 } from "@/lib/system-prompt-settings";
+import type { TailorResumeGenerationSettings } from "@/lib/tailor-resume-generation-settings";
+import { countPdfPages } from "@/lib/tailored-resume-preview-snapshots";
 import {
   assertSupportedResumeFile,
   deletePersistedUserResume,
@@ -88,6 +101,8 @@ import {
 
 const maxJobDescriptionLength = 200_000;
 const maxLatexCodeLength = 300_000;
+const maxTailoredResumeRefinementPreviewImageCount = 6;
+const maxTailoredResumeRefinementPromptLength = 8_000;
 const maxTailoredResumeDisplayNameLength = 200;
 const maxSystemPromptLength = 200_000;
 
@@ -108,8 +123,12 @@ function unauthorizedResponse() {
   return NextResponse.json({ error: "Sign in to manage your resume." }, { status: 401 });
 }
 
-function wantsTailorResumeUploadStream(request: Request) {
+function wantsTailorResumeStream(request: Request) {
   return request.headers.get("x-tailor-resume-stream") === "1";
+}
+
+function wantsTailorResumeUploadStream(request: Request) {
+  return wantsTailorResumeStream(request);
 }
 
 function buildResumeRecord(input: {
@@ -133,6 +152,21 @@ function readExtractionError(profile: TailorResumeProfile) {
     : profile.latex.status === "failed"
       ? profile.latex.error
       : null;
+}
+
+function readRefinementPreviewImageDataUrls(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as string[];
+  }
+
+  return value
+    .filter(
+      (entry): entry is string =>
+        typeof entry === "string" &&
+        /^data:image\/(?:jpeg|jpg|png|webp);base64,/i.test(entry.trim()),
+    )
+    .map((entry) => entry.trim())
+    .slice(0, maxTailoredResumeRefinementPreviewImageCount);
 }
 
 function buildExtractionResponse(input: {
@@ -226,101 +260,328 @@ async function validateLatexLinks(latexCode: string) {
   };
 }
 
-async function handleTailorResumeGeneration(
-  body: Record<string, unknown>,
-  userId: string,
-) {
-  const preparation = await withTailorResumeProfileLock(userId, async () => {
-    const { lockedLinks, profile, rawProfile } = await readTailorResumeProfileState(
-      userId,
-    );
-    const jobDescription =
-      typeof body.jobDescription === "string"
-        ? body.jobDescription
-        : profile.jobDescription;
-
-    if (!profile.latex.code.trim()) {
-      return {
-        response: NextResponse.json(
-          { error: "Upload or save a base resume before tailoring it." },
-          { status: 400 },
-        ),
-      };
-    }
-
-    if (!jobDescription.trim()) {
-      return {
-        response: NextResponse.json(
-          { error: "Paste a job description before tailoring the resume." },
-          { status: 400 },
-        ),
-      };
-    }
-
-    return {
-      jobDescription,
-      lockedLinks,
-      rawProfile,
-    };
-  });
-
-  if ("response" in preparation) {
-    return preparation.response;
+async function readStoredResumePageCount(input: {
+  resume: TailorResumeProfile["resume"];
+}) {
+  if (!input.resume) {
+    return null;
   }
 
-  const normalizedBaseLatex = normalizeAnnotatedLatexState(
-    preparation.rawProfile.latex.code,
-    new Date().toISOString(),
-  );
-  const processedBaseAnnotatedLatex = applyTailorResumeSourceLinkOverridesWithSummary(
-    normalizedBaseLatex.annotatedLatex.code,
-    {
-      currentLinks: preparation.rawProfile.links,
-      lockedLinks: preparation.lockedLinks,
-    },
-  );
-  const generationSourceSnapshot = buildTailorResumeGenerationSourceSnapshot(
-    preparation.rawProfile,
-    preparation.lockedLinks,
-  );
-  const tailoringResult = await generateTailoredResume({
-    annotatedLatexCode: processedBaseAnnotatedLatex.latexCode,
-    jobDescription: preparation.jobDescription,
-    linkOverrides: buildKnownTailorResumeLinks(
-      preparation.rawProfile.links,
-      preparation.lockedLinks,
-    ),
-    onBuildFailure: (latexCode, error, attempt) =>
-      logLatexBuildFailure({
-        userId,
-        source: tailorResumeDebugErrorSources.tailoringCompileFailure,
-        latexCode,
-        error,
-        attempt,
-      }),
-    onInvalidReplacement: (payload, error, attempt) =>
-      logTailorResumeDebugError({
-        userId,
-        source: tailorResumeDebugErrorSources.tailoringInvalidReplacement,
-        latexCode: payload,
-        error,
-        attempt,
-      }),
-    promptSettings: preparation.rawProfile.promptSettings.values,
-  });
+  if (input.resume.mimeType !== "application/pdf") {
+    return 1;
+  }
+
+  const resumePath = path.join(process.cwd(), "public", input.resume.storagePath);
+  const resumeBuffer = await readFile(resumePath);
+  return countPdfPages(resumeBuffer);
+}
+
+async function resolveTailorResumeTargetPageCount(input: {
+  baseLatexCode: string;
+  resume: TailorResumeProfile["resume"];
+  userId: string;
+}) {
+  try {
+    const storedResumePageCount = await readStoredResumePageCount({
+      resume: input.resume,
+    });
+
+    if (storedResumePageCount && storedResumePageCount > 0) {
+      return storedResumePageCount;
+    }
+  } catch {
+    // Fall back to the compiled base resume preview below.
+  }
+
+  try {
+    return await countPdfPages(await readTailorResumePreviewPdf(input.userId));
+  } catch {
+    return countPdfPages(await compileTailorResumeLatex(input.baseLatexCode));
+  }
+}
+
+function buildPageCountLimitLabel(pageCount: number) {
+  return `${pageCount} page${pageCount === 1 ? "" : "s"}`;
+}
+
+function buildTailorResumeConversationMessage(input: {
+  role: "assistant" | "user";
+  text: string;
+}) {
+  return {
+    id: randomUUID(),
+    role: input.role,
+    text: input.text.trim(),
+  };
+}
+
+function buildTailorResumeInterviewQuestionText(input: {
+  planningResult: TailorResumePlanningResult;
+  question: string;
+}) {
+  const question = input.question.trim();
+  const summary = input.planningResult.questioningSummary;
+  const debugSentence =
+    summary?.debugDecision === "would_ask_without_debug"
+      ? " Debug mode note: I would have asked this even without the forced-conversation override."
+      : summary?.debugDecision === "forced_only"
+        ? " Debug mode note: I would not normally ask this, but I’m asking because debug mode is forcing at least one follow-up question."
+        : "";
+
+  if (!summary || summary.askedQuestionCount > 1) {
+    return debugSentence ? `${debugSentence.trim()}\n\n${question}` : question;
+  }
+
+  const questionCountLabel =
+    summary.totalQuestionBudget === 1 ? "1 quick question" : `up to ${String(summary.totalQuestionBudget)} quick questions`;
+  const agendaSentence = summary.agenda
+    ? ` I’m trying to clarify ${summary.agenda}.`
+    : "";
+
+  return `I have ${questionCountLabel} that could materially strengthen this tailored resume.${agendaSentence}${debugSentence}\n\n${question}`;
+}
+
+function readTailorResumeInterviewAttempt(
+  summary: TailorResumePlanningResult["questioningSummary"] | null | undefined,
+): number | null {
+  return typeof summary?.askedQuestionCount === "number"
+    ? summary.askedQuestionCount
+    : null;
+}
+
+function readNextTailorResumeInterviewAttempt(
+  summary: TailorResumePlanningResult["questioningSummary"] | null | undefined,
+): number {
+  const attempt = readTailorResumeInterviewAttempt(summary);
+  return attempt === null ? 1 : attempt + 1;
+}
+
+type TailorResumeGenerationPreparation =
+  | {
+      kind: "response";
+      response: Response;
+    }
+  | {
+      kind: "ready";
+      jobDescription: string;
+      lockedLinks: TailorResumeLockedLinkRecord[];
+      rawProfile: TailorResumeProfile;
+    };
+
+type TailorResumeInterviewPreparation =
+  | {
+      kind: "response";
+      response: Response;
+    }
+  | {
+      kind: "ready";
+      lockedLinks: TailorResumeLockedLinkRecord[];
+      rawProfile: TailorResumeProfile;
+      tailoringInterview: TailorResumePendingInterview;
+    };
+
+async function finalizeTailorResumeGeneration(input: {
+  clearTailoringInterview?: boolean;
+  generationSourceAnnotatedLatex: string;
+  generationSourceSnapshot: ReturnType<typeof buildTailorResumeGenerationSourceSnapshot>;
+  jobDescription: string;
+  lockedLinks: TailorResumeLockedLinkRecord[];
+  normalizedBaseLatex: ReturnType<typeof normalizeAnnotatedLatexState>;
+  onStepEvent?: (
+    event: TailorResumeGenerationStepEvent,
+  ) => void | Promise<void>;
+  processedBaseSavedLinkUpdateCount?: number;
+  processedBaseSavedLinkUpdates?: TailorResumeSavedLinkUpdate[];
+  rawProfile: TailorResumeProfile;
+  tailoringResult: Awaited<ReturnType<typeof implementTailoredResumePlan>>;
+  userId: string;
+}): Promise<Response> {
+  let tailoringResult = input.tailoringResult;
+  let pageCountStepHandled = false;
+
+  if (
+    tailoringResult.outcome !== "generation_failure" &&
+    tailoringResult.previewPdf
+  ) {
+    const pageCountStepStartedAt = Date.now();
+
+    try {
+      const targetPageCount = await resolveTailorResumeTargetPageCount({
+        baseLatexCode: stripTailorResumeSegmentIds(input.generationSourceAnnotatedLatex),
+        resume: input.rawProfile.resume,
+        userId: input.userId,
+      });
+      const generatedPageCount = await countPdfPages(tailoringResult.previewPdf);
+      const precheckDurationMs = Math.max(0, Date.now() - pageCountStepStartedAt);
+
+      if (!input.rawProfile.generationSettings.values.preventPageCountIncrease) {
+        pageCountStepHandled = true;
+        await input.onStepEvent?.({
+          attempt: null,
+          detail:
+            generatedPageCount > targetPageCount
+              ? `Page-count guard is disabled, so automatic compaction did not run even though the preview expanded to ${buildPageCountLimitLabel(generatedPageCount)}.`
+              : `Page-count guard is disabled, and the preview already fits within ${buildPageCountLimitLabel(targetPageCount)}.`,
+          durationMs: precheckDurationMs,
+          retrying: false,
+          status: "skipped",
+          stepCount: 4,
+          stepNumber: 4,
+          summary: "Keeping the tailored resume within the original page count",
+        });
+      } else if (generatedPageCount <= targetPageCount) {
+        pageCountStepHandled = true;
+        await input.onStepEvent?.({
+          attempt: null,
+          detail:
+            `The tailored preview stayed within ${buildPageCountLimitLabel(targetPageCount)}, ` +
+            "so no further page-count compaction was needed.",
+          durationMs: precheckDurationMs,
+          retrying: false,
+          status: "skipped",
+          stepCount: 4,
+          stepNumber: 4,
+          summary: "Keeping the tailored resume within the original page count",
+        });
+      } else {
+        pageCountStepHandled = true;
+
+        try {
+          const compactionResult = await compactTailoredResumePageCount({
+            annotatedLatexCode: tailoringResult.annotatedLatexCode,
+            edits: tailoringResult.edits,
+            initialPageCount: generatedPageCount,
+            latexCode: tailoringResult.latexCode,
+            onStepEvent: (event) =>
+              input.onStepEvent?.({
+                ...event,
+                durationMs: precheckDurationMs + event.durationMs,
+              }),
+            previewPdf: tailoringResult.previewPdf,
+            promptSettings: input.rawProfile.promptSettings.values,
+            sourceAnnotatedLatexCode: input.generationSourceAnnotatedLatex,
+            targetPageCount,
+            thesis: tailoringResult.thesis,
+          });
+
+          tailoringResult = {
+            ...tailoringResult,
+            annotatedLatexCode: compactionResult.annotatedLatexCode,
+            edits: compactionResult.edits,
+            generationDurationMs:
+              tailoringResult.generationDurationMs +
+              compactionResult.generationDurationMs,
+            latexCode: compactionResult.latexCode,
+            model: compactionResult.model,
+            previewPdf: compactionResult.previewPdf,
+            validationError: null,
+          };
+        } catch (error) {
+          tailoringResult = {
+            ...tailoringResult,
+            outcome: "generation_failure",
+            validationError:
+              error instanceof Error
+                ? error.message
+                : "Unable to keep the tailored resume within the original page count.",
+          };
+        }
+      }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Unable to compare the tailored resume page count.";
+      const durationMs = Math.max(0, Date.now() - pageCountStepStartedAt);
+
+      pageCountStepHandled = true;
+
+      if (input.rawProfile.generationSettings.values.preventPageCountIncrease) {
+        await input.onStepEvent?.({
+          attempt: null,
+          detail:
+            `Page-count verification could not be completed, so step 4 did not run: ${errorMessage}`,
+          durationMs,
+          retrying: false,
+          status: "skipped",
+          stepCount: 4,
+          stepNumber: 4,
+          summary: "Keeping the tailored resume within the original page count",
+        });
+        tailoringResult = {
+          ...tailoringResult,
+          outcome: "generation_failure",
+          validationError: errorMessage,
+        };
+      } else {
+        await input.onStepEvent?.({
+          attempt: null,
+          detail:
+            `Page-count guard is disabled, and page-count verification could not be completed: ${errorMessage}`,
+          durationMs,
+          retrying: false,
+          status: "skipped",
+          stepCount: 4,
+          stepNumber: 4,
+          summary: "Keeping the tailored resume within the original page count",
+        });
+      }
+    }
+  } else if (tailoringResult.outcome !== "generation_failure") {
+    pageCountStepHandled = true;
+    await input.onStepEvent?.({
+      attempt: null,
+      detail:
+        "Skipped page-count validation because the current tailored draft did not compile to a preview PDF yet.",
+      durationMs: 0,
+      retrying: false,
+      status: "skipped",
+      stepCount: 4,
+      stepNumber: 4,
+      summary: "Keeping the tailored resume within the original page count",
+    });
+  }
 
   if (tailoringResult.outcome === "generation_failure") {
-    if (preparation.rawProfile.jobDescription !== preparation.jobDescription) {
-      await withTailorResumeProfileLock(userId, async () => {
-        const latestState = await readTailorResumeProfileState(userId);
-        const nextRawProfile = mergeTailorResumeFailedGeneration({
+    if (!pageCountStepHandled) {
+      await input.onStepEvent?.({
+        attempt: null,
+        detail:
+          "Skipped page-count validation because block-scoped edits never produced a valid preview PDF.",
+        durationMs: 0,
+        retrying: false,
+        status: "skipped",
+        stepCount: 4,
+        stepNumber: 4,
+        summary: "Keeping the tailored resume within the original page count",
+      });
+    }
+
+    if (
+      input.rawProfile.jobDescription !== input.jobDescription ||
+      input.clearTailoringInterview
+    ) {
+      await withTailorResumeProfileLock(input.userId, async () => {
+        const latestState = await readTailorResumeProfileState(input.userId);
+        let nextRawProfile = mergeTailorResumeFailedGeneration({
           currentRawProfile: latestState.rawProfile,
-          jobDescription: preparation.jobDescription,
-          snapshotRawProfile: preparation.rawProfile,
+          jobDescription: input.jobDescription,
+          snapshotRawProfile: input.rawProfile,
         });
 
+        if (input.clearTailoringInterview) {
+          nextRawProfile = {
+            ...nextRawProfile,
+            workspace: {
+              ...nextRawProfile.workspace,
+              tailoringInterview: null,
+              updatedAt: new Date().toISOString(),
+            },
+          };
+        }
+
         if (nextRawProfile !== latestState.rawProfile) {
-          await writeTailorResumeProfile(userId, nextRawProfile);
+          await writeTailorResumeProfile(input.userId, nextRawProfile);
         }
       });
     }
@@ -342,30 +603,34 @@ async function handleTailorResumeGeneration(
 
   const tailoredResumeId = randomUUID();
   const tailoredResumeUpdatedAt = new Date().toISOString();
-  const nextState = await withTailorResumeProfileLock(userId, async () => {
-    const latestState = await readTailorResumeProfileState(userId);
+  const nextState = await withTailorResumeProfileLock(input.userId, async () => {
+    const latestState = await readTailorResumeProfileState(input.userId);
 
     if (
       hasTailorResumeGenerationSourceChanged({
         currentLockedLinks: latestState.lockedLinks,
         currentRawProfile: latestState.rawProfile,
-        snapshot: generationSourceSnapshot,
+        snapshot: input.generationSourceSnapshot,
       })
     ) {
       return null;
     }
 
     if (tailoringResult.previewPdf) {
-      await writeTailoredResumePdf(userId, tailoredResumeId, tailoringResult.previewPdf);
+      await writeTailoredResumePdf(
+        input.userId,
+        tailoredResumeId,
+        tailoringResult.previewPdf,
+      );
     } else {
-      await deleteTailoredResumePdf(userId, tailoredResumeId);
+      await deleteTailoredResumePdf(input.userId, tailoredResumeId);
     }
 
-    const nextRawProfile = mergeTailorResumeSuccessfulGeneration({
-      annotatedLatex: normalizedBaseLatex.annotatedLatex,
+    const mergedRawProfile = mergeTailorResumeSuccessfulGeneration({
+      annotatedLatex: input.normalizedBaseLatex.annotatedLatex,
       currentRawProfile: latestState.rawProfile,
-      jobDescription: preparation.jobDescription,
-      snapshotRawProfile: preparation.rawProfile,
+      jobDescription: input.jobDescription,
+      snapshotRawProfile: input.rawProfile,
       tailoredResume: {
         annotatedLatexCode: tailoringResult.annotatedLatexCode,
         companyName: tailoringResult.companyName,
@@ -374,23 +639,31 @@ async function handleTailorResumeGeneration(
         edits: tailoringResult.edits,
         error: tailoringResult.validationError,
         id: tailoredResumeId,
-        jobDescription: preparation.jobDescription,
+        jobDescription: input.jobDescription,
         jobIdentifier: tailoringResult.jobIdentifier,
         latexCode: tailoringResult.latexCode,
         openAiDebug: tailoringResult.openAiDebug,
         pdfUpdatedAt: tailoringResult.previewPdf ? tailoredResumeUpdatedAt : null,
         planningResult: tailoringResult.planningResult,
         positionTitle: tailoringResult.positionTitle,
-        sourceAnnotatedLatexCode: normalizeTailorResumeLatex(
-          processedBaseAnnotatedLatex.latexCode,
-        ).annotatedLatex,
+        sourceAnnotatedLatexCode: input.generationSourceAnnotatedLatex,
         status: tailoringResult.previewPdf ? "ready" : "failed",
         thesis: tailoringResult.thesis,
         updatedAt: tailoredResumeUpdatedAt,
       },
     });
+    const nextRawProfile = input.clearTailoringInterview
+      ? {
+          ...mergedRawProfile,
+          workspace: {
+            ...mergedRawProfile.workspace,
+            tailoringInterview: null,
+            updatedAt: new Date().toISOString(),
+          },
+        }
+      : mergedRawProfile;
 
-    await writeTailorResumeProfile(userId, nextRawProfile);
+    await writeTailorResumeProfile(input.userId, nextRawProfile);
 
     return {
       lockedLinks: latestState.lockedLinks,
@@ -420,15 +693,732 @@ async function handleTailorResumeGeneration(
   return NextResponse.json({
     profile: nextProfile,
     savedLinkUpdateCount:
-      processedBaseAnnotatedLatex.updatedCount +
+      (input.processedBaseSavedLinkUpdateCount ?? 0) +
       tailoringResult.savedLinkUpdateCount,
     savedLinkUpdates: [
-      ...processedBaseAnnotatedLatex.updatedLinks,
+      ...(input.processedBaseSavedLinkUpdates ?? []),
       ...tailoringResult.savedLinkUpdates,
     ],
     tailoredResumeId,
     tailoredResumeDurationMs: tailoringResult.generationDurationMs,
     tailoredResumeError: tailoringResult.validationError,
+  });
+}
+
+async function handleTailorResumeGeneration(
+  body: Record<string, unknown>,
+  userId: string,
+  options: {
+    onStepEvent?: (
+      event: TailorResumeGenerationStepEvent,
+    ) => void | Promise<void>;
+  } = {},
+): Promise<Response> {
+  const preparation: TailorResumeGenerationPreparation =
+    await withTailorResumeProfileLock(userId, async () => {
+    const { lockedLinks, profile, rawProfile } = await readTailorResumeProfileState(
+      userId,
+    );
+    if (rawProfile.workspace.tailoringInterview) {
+      return {
+        kind: "response",
+        response: NextResponse.json({
+          profile,
+          tailoringStatus: "needs_user_input" as const,
+        }),
+      };
+    }
+
+    const jobDescription =
+      typeof body.jobDescription === "string"
+        ? body.jobDescription
+        : profile.jobDescription;
+
+    if (!profile.latex.code.trim()) {
+      return {
+        kind: "response",
+        response: NextResponse.json(
+          { error: "Upload or save a base resume before tailoring it." },
+          { status: 400 },
+        ),
+      };
+    }
+
+    if (!jobDescription.trim()) {
+      return {
+        kind: "response",
+        response: NextResponse.json(
+          { error: "Paste a job description before tailoring the resume." },
+          { status: 400 },
+        ),
+      };
+    }
+
+    return {
+      kind: "ready",
+      jobDescription,
+      lockedLinks,
+      rawProfile,
+    };
+    });
+
+  if (preparation.kind === "response") {
+    return preparation.response!;
+  }
+
+  const normalizedBaseLatex = normalizeAnnotatedLatexState(
+    preparation.rawProfile.latex.code,
+    new Date().toISOString(),
+  );
+  const processedBaseAnnotatedLatex = applyTailorResumeSourceLinkOverridesWithSummary(
+    normalizedBaseLatex.annotatedLatex.code,
+    {
+      currentLinks: preparation.rawProfile.links,
+      lockedLinks: preparation.lockedLinks,
+    },
+  );
+  const generationSourceAnnotatedLatex = normalizeTailorResumeLatex(
+    processedBaseAnnotatedLatex.latexCode,
+  ).annotatedLatex;
+  const generationSourceSnapshot = buildTailorResumeGenerationSourceSnapshot(
+    preparation.rawProfile,
+    preparation.lockedLinks,
+  );
+  const planningStage = await planTailoredResume({
+    annotatedLatexCode: processedBaseAnnotatedLatex.latexCode,
+    jobDescription: preparation.jobDescription,
+    onStepEvent: options.onStepEvent,
+    promptSettings: preparation.rawProfile.promptSettings.values,
+  });
+
+  if (!planningStage.ok) {
+    if (preparation.rawProfile.jobDescription !== preparation.jobDescription) {
+      await withTailorResumeProfileLock(userId, async () => {
+        const latestState = await readTailorResumeProfileState(userId);
+        const nextRawProfile = mergeTailorResumeFailedGeneration({
+          currentRawProfile: latestState.rawProfile,
+          jobDescription: preparation.jobDescription,
+          snapshotRawProfile: preparation.rawProfile,
+        });
+
+        if (nextRawProfile !== latestState.rawProfile) {
+          await writeTailorResumeProfile(userId, nextRawProfile);
+        }
+      });
+    }
+
+    const attemptLabel =
+      planningStage.attempts === 1 ? "attempt" : "attempts";
+    const failureMessage = planningStage.validationError.trim()
+      ? `Unable to generate a valid tailored resume after ${planningStage.attempts} ${attemptLabel}: ${planningStage.validationError}`
+      : `Unable to generate a valid tailored resume after ${planningStage.attempts} ${attemptLabel}.`;
+
+    return NextResponse.json(
+      {
+        error: failureMessage,
+        tailoredResumeDurationMs: planningStage.generationDurationMs,
+      },
+      { status: 422 },
+    );
+  }
+
+  let planningResult = planningStage.planningResult;
+  let accumulatedModelDurationMs = planningStage.generationDurationMs;
+
+  if (planningResult.changes.length > 0) {
+    const questioningStartedAt = Date.now();
+    let questioningResult: Awaited<ReturnType<typeof advanceTailorResumeQuestioning>>;
+
+    try {
+      questioningResult = await advanceTailorResumeQuestioning({
+        conversation: [],
+        jobDescription: preparation.jobDescription,
+        planningResult,
+        planningSnapshot: planningStage.planningSnapshot,
+        promptSettings: preparation.rawProfile.promptSettings.values,
+      });
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Unable to determine whether follow-up questions are needed.";
+      const durationMs = Math.max(0, Date.now() - questioningStartedAt);
+
+      await options.onStepEvent?.({
+        attempt: 1,
+        detail: errorMessage,
+        durationMs,
+        retrying: false,
+        status: "failed",
+        stepCount: 4,
+        stepNumber: 2,
+        summary: "Preparing follow-up question for the user",
+      });
+
+      return NextResponse.json(
+        {
+          error: `Unable to continue tailoring after generating the plaintext outline: ${errorMessage}`,
+          tailoredResumeDurationMs: accumulatedModelDurationMs + durationMs,
+        },
+        { status: 422 },
+      );
+    }
+
+    accumulatedModelDurationMs += questioningResult.generationDurationMs;
+
+    if (questioningResult.action === "ask") {
+      await options.onStepEvent?.({
+        attempt: 1,
+        detail:
+          "A follow-up question is needed before the model can safely finish the block-scoped edits.",
+        durationMs: Math.max(0, Date.now() - questioningStartedAt),
+        retrying: false,
+        status: "succeeded",
+        stepCount: 4,
+        stepNumber: 2,
+        summary: "Preparing follow-up question for the user",
+      });
+      planningResult = {
+        ...planningResult,
+        questioningSummary: questioningResult.questioningSummary,
+      };
+      const pendingInterview: TailorResumePendingInterview = {
+        accumulatedModelDurationMs,
+        conversation: [
+          buildTailorResumeConversationMessage({
+            role: "assistant",
+            text: buildTailorResumeInterviewQuestionText({
+              planningResult,
+              question: questioningResult.question,
+            }),
+          }),
+        ],
+        createdAt: new Date().toISOString(),
+        generationSourceSnapshot,
+        id: randomUUID(),
+        jobDescription: preparation.jobDescription,
+        planningDebug: planningStage.planningDebug,
+        planningResult,
+        sourceAnnotatedLatexCode: generationSourceAnnotatedLatex,
+        updatedAt: new Date().toISOString(),
+      };
+      const nextState = await withTailorResumeProfileLock(userId, async () => {
+        const latestState = await readTailorResumeProfileState(userId);
+
+        if (
+          hasTailorResumeGenerationSourceChanged({
+            currentLockedLinks: latestState.lockedLinks,
+            currentRawProfile: latestState.rawProfile,
+            snapshot: generationSourceSnapshot,
+          }) ||
+          latestState.rawProfile.workspace.tailoringInterview
+        ) {
+          return null;
+        }
+
+        const nextRawProfile: TailorResumeProfile = {
+          ...latestState.rawProfile,
+          jobDescription:
+            latestState.rawProfile.jobDescription ===
+            preparation.rawProfile.jobDescription
+              ? preparation.jobDescription
+              : latestState.rawProfile.jobDescription,
+          workspace: {
+            ...latestState.rawProfile.workspace,
+            tailoringInterview: pendingInterview,
+            updatedAt: new Date().toISOString(),
+          },
+        };
+
+        await writeTailorResumeProfile(userId, nextRawProfile);
+
+        return {
+          lockedLinks: latestState.lockedLinks,
+          rawProfile: nextRawProfile,
+        };
+      });
+
+      if (!nextState) {
+        return NextResponse.json(
+          {
+            error:
+              "The base resume changed while the follow-up questions were being prepared. Review the latest resume and try again.",
+            tailoredResumeDurationMs: accumulatedModelDurationMs,
+          },
+          { status: 409 },
+        );
+      }
+
+      return NextResponse.json({
+        profile: mergeTailorResumeProfileWithLockedLinks(
+          nextState.rawProfile,
+          nextState.lockedLinks,
+          {
+            includeLockedOnly: true,
+          },
+        ),
+        tailoredResumeDurationMs: accumulatedModelDurationMs,
+        tailoringStatus: "needs_user_input" as const,
+      });
+    }
+
+    if (questioningResult.questioningSummary) {
+      planningResult = {
+        ...planningResult,
+        questioningSummary: questioningResult.questioningSummary,
+      };
+    }
+
+    await options.onStepEvent?.({
+      attempt: 1,
+      detail: "No follow-up question was needed, so generation can continue immediately.",
+      durationMs: Math.max(0, Date.now() - questioningStartedAt),
+      retrying: false,
+      status: "skipped",
+      stepCount: 4,
+      stepNumber: 2,
+      summary: "No need to ask the user any follow-up questions",
+    });
+  } else {
+    await options.onStepEvent?.({
+      attempt: null,
+      detail: "The planner did not propose any editable blocks, so no follow-up question was needed.",
+      durationMs: 0,
+      retrying: false,
+      status: "skipped",
+      stepCount: 4,
+      stepNumber: 2,
+      summary: "No need to ask the user any follow-up questions",
+    });
+  }
+
+  const tailoringResult = await implementTailoredResumePlan({
+    annotatedLatexCode: processedBaseAnnotatedLatex.latexCode,
+    generationDurationMsBase: accumulatedModelDurationMs,
+    jobDescription: preparation.jobDescription,
+    linkOverrides: buildKnownTailorResumeLinks(
+      preparation.rawProfile.links,
+      preparation.lockedLinks,
+    ),
+    onBuildFailure: (latexCode, error, attempt) =>
+      logLatexBuildFailure({
+        userId,
+        source: tailorResumeDebugErrorSources.tailoringCompileFailure,
+        latexCode,
+        error,
+        attempt,
+      }),
+    onInvalidReplacement: (payload, error, attempt) =>
+      logTailorResumeDebugError({
+        userId,
+        source: tailorResumeDebugErrorSources.tailoringInvalidReplacement,
+        latexCode: payload,
+        error,
+        attempt,
+      }),
+    onStepEvent: options.onStepEvent,
+    planningDebug: planningStage.planningDebug,
+    planningResult,
+    planningSnapshot: planningStage.planningSnapshot,
+    promptSettings: preparation.rawProfile.promptSettings.values,
+  });
+
+  return finalizeTailorResumeGeneration({
+    generationSourceAnnotatedLatex,
+    generationSourceSnapshot,
+    jobDescription: preparation.jobDescription,
+    lockedLinks: preparation.lockedLinks,
+    normalizedBaseLatex,
+    onStepEvent: options.onStepEvent,
+    processedBaseSavedLinkUpdateCount: processedBaseAnnotatedLatex.updatedCount,
+    processedBaseSavedLinkUpdates: processedBaseAnnotatedLatex.updatedLinks,
+    rawProfile: preparation.rawProfile,
+    tailoringResult,
+    userId,
+  });
+}
+
+async function handleAdvanceTailorResumeInterview(
+  body: Record<string, unknown>,
+  userId: string,
+  options: {
+    onStepEvent?: (
+      event: TailorResumeGenerationStepEvent,
+    ) => void | Promise<void>;
+  } = {},
+): Promise<Response> {
+  const interviewId =
+    typeof body.interviewId === "string" ? body.interviewId.trim() : "";
+  const answer = typeof body.answer === "string" ? body.answer.trim() : "";
+
+  if (!interviewId) {
+    return NextResponse.json(
+      { error: "Provide the tailoring interview id." },
+      { status: 400 },
+    );
+  }
+
+  if (!answer) {
+    return NextResponse.json(
+      { error: "Answer the current follow-up question first." },
+      { status: 400 },
+    );
+  }
+
+  const preparation: TailorResumeInterviewPreparation =
+    await withTailorResumeProfileLock(userId, async () => {
+    const { lockedLinks, rawProfile } = await readTailorResumeProfileState(userId);
+    const tailoringInterview = rawProfile.workspace.tailoringInterview;
+
+    if (!tailoringInterview) {
+      return {
+        kind: "response",
+        response: NextResponse.json(
+          { error: "There is no active tailoring interview to continue." },
+          { status: 409 },
+        ),
+      };
+    }
+
+    if (tailoringInterview.id !== interviewId) {
+      return {
+        kind: "response",
+        response: NextResponse.json(
+          {
+            error:
+              "The active tailoring interview changed. Reopen the latest follow-up questions and try again.",
+          },
+          { status: 409 },
+        ),
+      };
+    }
+
+    return {
+      kind: "ready",
+      lockedLinks,
+      rawProfile,
+      tailoringInterview,
+    };
+    });
+
+  if (preparation.kind === "response") {
+    return preparation.response!;
+  }
+
+  const nextConversation = [
+    ...preparation.tailoringInterview.conversation,
+    buildTailorResumeConversationMessage({
+      role: "user",
+      text: answer,
+    }),
+  ];
+  const planningSnapshot = buildTailorResumePlanningSnapshot(
+    preparation.tailoringInterview.sourceAnnotatedLatexCode,
+  );
+  const questioningStartedAt = Date.now();
+  let questioningResult: Awaited<ReturnType<typeof advanceTailorResumeQuestioning>>;
+
+  try {
+    questioningResult = await advanceTailorResumeQuestioning({
+      conversation: nextConversation,
+      jobDescription: preparation.tailoringInterview.jobDescription,
+      planningResult: preparation.tailoringInterview.planningResult,
+      planningSnapshot,
+      promptSettings: preparation.rawProfile.promptSettings.values,
+    });
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : "Unable to continue the tailoring follow-up questions.";
+
+    await options.onStepEvent?.({
+      attempt: readTailorResumeInterviewAttempt(
+        preparation.tailoringInterview.planningResult.questioningSummary,
+      ),
+      detail: errorMessage,
+      durationMs: Math.max(0, Date.now() - questioningStartedAt),
+      retrying: false,
+      status: "failed",
+      stepCount: 4,
+      stepNumber: 2,
+      summary: "Continuing the follow-up questions",
+    });
+
+    return NextResponse.json(
+      {
+        error: errorMessage,
+        tailoredResumeDurationMs:
+          preparation.tailoringInterview.accumulatedModelDurationMs,
+      },
+      { status: 422 },
+    );
+  }
+
+  const accumulatedModelDurationMs =
+    preparation.tailoringInterview.accumulatedModelDurationMs +
+    questioningResult.generationDurationMs;
+
+  if (questioningResult.action === "ask") {
+    await options.onStepEvent?.({
+      attempt: readNextTailorResumeInterviewAttempt(
+        preparation.tailoringInterview.planningResult.questioningSummary,
+      ),
+      detail:
+        "One more follow-up question is needed before the model can safely finish the block-scoped edits.",
+      durationMs: questioningResult.generationDurationMs,
+      retrying: false,
+      status: "succeeded",
+      stepCount: 4,
+      stepNumber: 2,
+      summary: "Continuing the follow-up questions",
+    });
+    const nextPlanningResult: TailorResumePlanningResult = {
+      ...preparation.tailoringInterview.planningResult,
+      questioningSummary: questioningResult.questioningSummary,
+    };
+    const nextInterview: TailorResumePendingInterview = {
+      ...preparation.tailoringInterview,
+      accumulatedModelDurationMs,
+      conversation: [
+        ...nextConversation,
+        buildTailorResumeConversationMessage({
+          role: "assistant",
+          text: buildTailorResumeInterviewQuestionText({
+            planningResult: nextPlanningResult,
+            question: questioningResult.question,
+          }),
+        }),
+      ],
+      planningResult: nextPlanningResult,
+      updatedAt: new Date().toISOString(),
+    };
+    const nextState = await withTailorResumeProfileLock(userId, async () => {
+      const latestState = await readTailorResumeProfileState(userId);
+      const latestInterview = latestState.rawProfile.workspace.tailoringInterview;
+
+      if (
+        !latestInterview ||
+        latestInterview.id !== interviewId ||
+        hasTailorResumeGenerationSourceChanged({
+          currentLockedLinks: latestState.lockedLinks,
+          currentRawProfile: latestState.rawProfile,
+          snapshot: preparation.tailoringInterview.generationSourceSnapshot,
+        })
+      ) {
+        return null;
+      }
+
+      const nextRawProfile: TailorResumeProfile = {
+        ...latestState.rawProfile,
+        workspace: {
+          ...latestState.rawProfile.workspace,
+          tailoringInterview: nextInterview,
+          updatedAt: new Date().toISOString(),
+        },
+      };
+
+      await writeTailorResumeProfile(userId, nextRawProfile);
+
+      return {
+        lockedLinks: latestState.lockedLinks,
+        rawProfile: nextRawProfile,
+      };
+    });
+
+    if (!nextState) {
+      return NextResponse.json(
+        {
+          error:
+            "The base resume changed while the follow-up questions were in progress. Review the latest resume and try again.",
+          tailoredResumeDurationMs: accumulatedModelDurationMs,
+        },
+        { status: 409 },
+      );
+    }
+
+    return NextResponse.json({
+      profile: mergeTailorResumeProfileWithLockedLinks(
+        nextState.rawProfile,
+        nextState.lockedLinks,
+        {
+          includeLockedOnly: true,
+        },
+      ),
+      tailoredResumeDurationMs: accumulatedModelDurationMs,
+      tailoringStatus: "needs_user_input" as const,
+    });
+  }
+
+  await options.onStepEvent?.({
+    attempt: readTailorResumeInterviewAttempt(
+      preparation.tailoringInterview.planningResult.questioningSummary,
+    ),
+    detail:
+      "Collected enough user context, so generation can continue without asking anything else.",
+    durationMs: questioningResult.generationDurationMs,
+    retrying: false,
+    status: "succeeded",
+    stepCount: 4,
+    stepNumber: 2,
+    summary: "Finishing the follow-up questions",
+  });
+
+  const finalizedPlanningResult: TailorResumePlanningResult = {
+    ...preparation.tailoringInterview.planningResult,
+    questioningSummary: questioningResult.questioningSummary,
+  };
+  const normalizedBaseLatex = normalizeAnnotatedLatexState(
+    preparation.rawProfile.latex.code,
+    new Date().toISOString(),
+  );
+  const processedBaseAnnotatedLatex = applyTailorResumeSourceLinkOverridesWithSummary(
+    normalizedBaseLatex.annotatedLatex.code,
+    {
+      currentLinks: preparation.rawProfile.links,
+      lockedLinks: preparation.lockedLinks,
+    },
+  );
+  const generationSourceAnnotatedLatex = normalizeTailorResumeLatex(
+    processedBaseAnnotatedLatex.latexCode,
+  ).annotatedLatex;
+  const tailoringResult = await implementTailoredResumePlan({
+    annotatedLatexCode: preparation.tailoringInterview.sourceAnnotatedLatexCode,
+    generationDurationMsBase: accumulatedModelDurationMs,
+    jobDescription: preparation.tailoringInterview.jobDescription,
+    linkOverrides: buildKnownTailorResumeLinks(
+      preparation.rawProfile.links,
+      preparation.lockedLinks,
+    ),
+    onBuildFailure: (latexCode, error, attempt) =>
+      logLatexBuildFailure({
+        userId,
+        source: tailorResumeDebugErrorSources.tailoringCompileFailure,
+        latexCode,
+        error,
+        attempt,
+      }),
+    onInvalidReplacement: (payload, error, attempt) =>
+      logTailorResumeDebugError({
+        userId,
+        source: tailorResumeDebugErrorSources.tailoringInvalidReplacement,
+        latexCode: payload,
+        error,
+        attempt,
+      }),
+    onStepEvent: options.onStepEvent,
+    planningDebug: preparation.tailoringInterview.planningDebug,
+    planningResult: finalizedPlanningResult,
+    planningSnapshot,
+    promptSettings: preparation.rawProfile.promptSettings.values,
+  });
+
+  return finalizeTailorResumeGeneration({
+    clearTailoringInterview: true,
+    generationSourceAnnotatedLatex,
+    generationSourceSnapshot: preparation.tailoringInterview.generationSourceSnapshot,
+    jobDescription: preparation.tailoringInterview.jobDescription,
+    lockedLinks: preparation.lockedLinks,
+    normalizedBaseLatex,
+    onStepEvent: options.onStepEvent,
+    processedBaseSavedLinkUpdateCount: processedBaseAnnotatedLatex.updatedCount,
+    processedBaseSavedLinkUpdates: processedBaseAnnotatedLatex.updatedLinks,
+    rawProfile: preparation.rawProfile,
+    tailoringResult,
+    userId,
+  });
+}
+
+async function handleCancelTailorResumeInterview(userId: string) {
+  return withTailorResumeProfileLock(userId, async () => {
+    const { lockedLinks, rawProfile } = await readTailorResumeProfileState(userId);
+
+    if (!rawProfile.workspace.tailoringInterview) {
+      return NextResponse.json(
+        { error: "There is no active tailoring interview to cancel." },
+        { status: 409 },
+      );
+    }
+
+    const nextRawProfile: TailorResumeProfile = {
+      ...rawProfile,
+      workspace: {
+        ...rawProfile.workspace,
+        tailoringInterview: null,
+        updatedAt: new Date().toISOString(),
+      },
+    };
+
+    await writeTailorResumeProfile(userId, nextRawProfile);
+
+    return NextResponse.json({
+      profile: mergeTailorResumeProfileWithLockedLinks(
+        nextRawProfile,
+        lockedLinks,
+        {
+          includeLockedOnly: true,
+        },
+      ),
+    });
+  });
+}
+
+function buildTailorResumeGenerationStreamResponse(
+  run: (
+    onStepEvent: (
+      event: TailorResumeGenerationStepEvent,
+    ) => void | Promise<void>,
+  ) => Promise<Response | undefined>,
+) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      const sendEvent = (event: unknown) => {
+        controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+      };
+
+      void (async () => {
+        try {
+          const response = await run((stepEvent) => {
+            sendEvent({
+              stepEvent,
+              type: "generation-step",
+            });
+          });
+
+          if (!response) {
+            throw new Error("Tailor Resume generation did not return a response.");
+          }
+
+          const payload = (await response.json()) as Record<string, unknown>;
+
+          sendEvent({
+            ok: response.ok,
+            payload,
+            status: response.status,
+            type: "done",
+          });
+        } catch (error) {
+          sendEvent({
+            error:
+              error instanceof Error
+                ? error.message
+                : "Unable to tailor the resume.",
+            type: "error",
+          });
+        } finally {
+          controller.close();
+        }
+      })();
+    },
+  });
+
+  return new NextResponse(stream, {
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "text/x-ndjson; charset=utf-8",
+    },
+    status: 200,
   });
 }
 
@@ -528,6 +1518,29 @@ function readPromptSettingsUpdates(value: unknown) {
     }
 
     updates[key] = nextValue;
+    changeCount += 1;
+  }
+
+  if (changeCount === 0) {
+    return null;
+  }
+
+  return updates;
+}
+
+function readGenerationSettingsUpdates(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const rawUpdates = value as Partial<
+    Record<keyof TailorResumeGenerationSettings, unknown>
+  >;
+  const updates: Partial<TailorResumeGenerationSettings> = {};
+  let changeCount = 0;
+
+  if (typeof rawUpdates.preventPageCountIncrease === "boolean") {
+    updates.preventPageCountIncrease = rawUpdates.preventPageCountIncrease;
     changeCount += 1;
   }
 
@@ -881,7 +1894,38 @@ export async function PATCH(request: Request) {
   }
 
   if ("action" in body && body.action === "tailor") {
+    if (wantsTailorResumeStream(request)) {
+      return buildTailorResumeGenerationStreamResponse((onStepEvent) =>
+        handleTailorResumeGeneration(body as Record<string, unknown>, session.user.id, {
+          onStepEvent,
+        }),
+      );
+    }
+
     return handleTailorResumeGeneration(body as Record<string, unknown>, session.user.id);
+  }
+
+  if ("action" in body && body.action === "advanceTailorResumeInterview") {
+    if (wantsTailorResumeStream(request)) {
+      return buildTailorResumeGenerationStreamResponse((onStepEvent) =>
+        handleAdvanceTailorResumeInterview(
+          body as Record<string, unknown>,
+          session.user.id,
+          {
+            onStepEvent,
+          },
+        ),
+      );
+    }
+
+    return handleAdvanceTailorResumeInterview(
+      body as Record<string, unknown>,
+      session.user.id,
+    );
+  }
+
+  if ("action" in body && body.action === "cancelTailorResumeInterview") {
+    return handleCancelTailorResumeInterview(session.user.id);
   }
 
   return withTailorResumeProfileLock(session.user.id, async () => {
@@ -950,7 +1994,39 @@ export async function PATCH(request: Request) {
       });
     }
 
-  if ("action" in body && body.action === "saveLinksAndReextract") {
+    if ("action" in body && body.action === "saveGenerationSettings") {
+      const generationSettingsUpdates = readGenerationSettingsUpdates(
+        "generationSettings" in body ? body.generationSettings : null,
+      );
+
+      if (!generationSettingsUpdates) {
+        return NextResponse.json(
+          { error: "Provide at least one generation setting to save." },
+          { status: 400 },
+        );
+      }
+
+      const nextRawProfile: TailorResumeProfile = {
+        ...rawProfile,
+        generationSettings: {
+          updatedAt: new Date().toISOString(),
+          values: {
+            ...rawProfile.generationSettings.values,
+            ...generationSettingsUpdates,
+          },
+        },
+      };
+
+      await writeTailorResumeProfile(session.user.id, nextRawProfile);
+
+      return NextResponse.json({
+        profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
+          includeLockedOnly: true,
+        }),
+      });
+    }
+
+    if ("action" in body && body.action === "saveLinksAndReextract") {
     if (!profile.resume) {
       return NextResponse.json(
         { error: "Upload a resume before saving link changes." },
@@ -1507,6 +2583,120 @@ export async function PATCH(request: Request) {
     });
   }
 
+  if ("action" in body && body.action === "refineTailoredResume") {
+    const tailoredResumeId =
+      "tailoredResumeId" in body && typeof body.tailoredResumeId === "string"
+        ? body.tailoredResumeId.trim()
+        : "";
+    const userPrompt =
+      "userPrompt" in body && typeof body.userPrompt === "string"
+        ? body.userPrompt.trim()
+        : "";
+    const previewImageDataUrls = readRefinementPreviewImageDataUrls(
+      "previewImageDataUrls" in body ? body.previewImageDataUrls : null,
+    );
+
+    if (!tailoredResumeId || !userPrompt) {
+      return NextResponse.json(
+        { error: "Provide the tailored resume and how you want the edits changed." },
+        { status: 400 },
+      );
+    }
+
+    if (userPrompt.length > maxTailoredResumeRefinementPromptLength) {
+      return NextResponse.json(
+        {
+          error: `Keep the AI follow-up request under ${maxTailoredResumeRefinementPromptLength.toLocaleString()} characters.`,
+        },
+        { status: 413 },
+      );
+    }
+
+    const tailoredResumeIndex = rawProfile.tailoredResumes.findIndex(
+      (record) => record.id === tailoredResumeId,
+    );
+
+    if (tailoredResumeIndex === -1) {
+      return NextResponse.json(
+        { error: "The tailored resume could not be found." },
+        { status: 404 },
+      );
+    }
+
+    const tailoredResume = rawProfile.tailoredResumes[tailoredResumeIndex];
+
+    if (tailoredResume.edits.length === 0) {
+      return NextResponse.json(
+        { error: "This tailored resume does not have model edits to refine yet." },
+        { status: 400 },
+      );
+    }
+
+    const sourceAnnotatedLatexCode = resolveTailoredResumeSourceAnnotatedLatex({
+      annotatedLatexCode: tailoredResume.annotatedLatexCode,
+      edits: tailoredResume.edits,
+      sourceAnnotatedLatexCode: tailoredResume.sourceAnnotatedLatexCode,
+    });
+
+    try {
+      const refinementResult = await refineTailoredResume({
+        edits: tailoredResume.edits,
+        previewImageDataUrls,
+        promptSettings: rawProfile.promptSettings.values,
+        sourceAnnotatedLatexCode,
+        thesis: tailoredResume.thesis,
+        userPrompt,
+      });
+      const nextUpdatedAt = new Date().toISOString();
+
+      await writeTailoredResumePdf(
+        session.user.id,
+        tailoredResumeId,
+        refinementResult.previewPdf,
+      );
+
+      const nextRawProfile: TailorResumeProfile = {
+        ...rawProfile,
+        tailoredResumes: rawProfile.tailoredResumes.map((record, index) =>
+          index === tailoredResumeIndex
+            ? {
+                ...record,
+                annotatedLatexCode: refinementResult.annotatedLatexCode,
+                edits: refinementResult.edits,
+                error: null,
+                latexCode: refinementResult.latexCode,
+                pdfUpdatedAt: nextUpdatedAt,
+                sourceAnnotatedLatexCode,
+                status: "ready",
+                updatedAt: nextUpdatedAt,
+              }
+            : record,
+        ),
+      };
+
+      await writeTailorResumeProfile(session.user.id, nextRawProfile);
+
+      return NextResponse.json({
+        assistantMessage: refinementResult.summary,
+        profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
+          includeLockedOnly: true,
+        }),
+        tailoredResumeDurationMs: refinementResult.generationDurationMs,
+        tailoredResumeId,
+      });
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unable to refine the tailored resume edits.",
+        },
+        { status: 422 },
+      );
+    }
+  }
+
   const nextRawProfile: TailorResumeProfile = {
     ...rawProfile,
     extraction: {
@@ -1555,6 +2745,7 @@ export async function PATCH(request: Request) {
     }
 
     nextRawProfile.workspace = {
+      ...nextRawProfile.workspace,
       isBaseResumeStepComplete: body.baseResumeStepComplete,
       updatedAt: new Date().toISOString(),
     };

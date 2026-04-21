@@ -1,4 +1,9 @@
 import {
+  createDefaultTailorResumeGenerationSettings,
+  mergeTailorResumeGenerationSettings,
+  type TailorResumeGenerationSettings,
+} from "./tailor-resume-generation-settings.ts";
+import {
   createDefaultSystemPromptSettings,
   mergeSystemPromptSettings,
   type SystemPromptSettings,
@@ -68,7 +73,41 @@ export type TailorResumeAnnotatedLatexState = {
   updatedAt: string | null;
 };
 
+export type TailorResumeGenerationSourceSnapshot = {
+  latexCode: string;
+  linkState: string;
+  lockedLinkState: string;
+  resumeStoragePath: string | null;
+  resumeUpdatedAt: string | null;
+};
+
+export type TailorResumeConversationMessage = {
+  id: string;
+  role: "assistant" | "user";
+  text: string;
+};
+
+export type TailoredResumeQuestionLearning = {
+  detail: string;
+  targetSegmentIds: string[];
+  topic: string;
+};
+
+export type TailorResumeInterviewDebugDecision =
+  | "forced_only"
+  | "not_applicable"
+  | "would_ask_without_debug";
+
+export type TailoredResumeQuestioningSummary = {
+  agenda: string;
+  askedQuestionCount: number;
+  debugDecision: TailorResumeInterviewDebugDecision | null;
+  learnings: TailoredResumeQuestionLearning[];
+  totalQuestionBudget: number;
+};
+
 export type TailorResumeWorkspaceState = {
+  tailoringInterview: TailorResumePendingInterview | null;
   isBaseResumeStepComplete: boolean;
   updatedAt: string | null;
 };
@@ -76,6 +115,11 @@ export type TailorResumeWorkspaceState = {
 export type TailorResumePromptSettingsState = {
   updatedAt: string | null;
   values: SystemPromptSettings;
+};
+
+export type TailorResumeGenerationSettingsState = {
+  updatedAt: string | null;
+  values: TailorResumeGenerationSettings;
 };
 
 export type TailoredResumeBlockEditRecord = {
@@ -94,6 +138,23 @@ export type TailoredResumeThesis = {
   resumeChanges: string;
 };
 
+export type TailorResumeGenerationStepStatus =
+  | "failed"
+  | "running"
+  | "skipped"
+  | "succeeded";
+
+export type TailorResumeGenerationStepEvent = {
+  attempt: number | null;
+  detail: string | null;
+  durationMs: number;
+  retrying: boolean;
+  status: TailorResumeGenerationStepStatus;
+  stepCount: number;
+  stepNumber: number;
+  summary: string;
+};
+
 export type TailoredResumePlanningChange = {
   desiredPlainText: string;
   reason: string;
@@ -106,6 +167,7 @@ export type TailoredResumePlanningResult = {
   displayName: string;
   jobIdentifier: string;
   positionTitle: string;
+  questioningSummary: TailoredResumeQuestioningSummary | null;
   thesis: TailoredResumeThesis;
 };
 
@@ -118,6 +180,19 @@ export type TailoredResumeOpenAiDebugStage = {
 export type TailoredResumeOpenAiDebugTrace = {
   implementation: TailoredResumeOpenAiDebugStage;
   planning: TailoredResumeOpenAiDebugStage;
+};
+
+export type TailorResumePendingInterview = {
+  accumulatedModelDurationMs: number;
+  conversation: TailorResumeConversationMessage[];
+  createdAt: string;
+  generationSourceSnapshot: TailorResumeGenerationSourceSnapshot;
+  id: string;
+  jobDescription: string;
+  planningDebug: TailoredResumeOpenAiDebugStage;
+  planningResult: TailoredResumePlanningResult;
+  sourceAnnotatedLatexCode: string;
+  updatedAt: string;
 };
 
 export type TailoredResumeRecord = {
@@ -144,6 +219,7 @@ export type TailoredResumeRecord = {
 export type TailorResumeProfile = {
   annotatedLatex: TailorResumeAnnotatedLatexState;
   extraction: TailorResumeExtractionState;
+  generationSettings: TailorResumeGenerationSettingsState;
   jobDescription: string;
   latex: TailorResumeLatexState;
   links: TailorResumeLinkRecord[];
@@ -194,6 +270,7 @@ export function emptyTailorResumeAnnotatedLatexState(): TailorResumeAnnotatedLat
 
 export function emptyTailorResumeWorkspaceState(): TailorResumeWorkspaceState {
   return {
+    tailoringInterview: null,
     isBaseResumeStepComplete: false,
     updatedAt: null,
   };
@@ -206,10 +283,18 @@ export function emptyTailorResumePromptSettingsState(): TailorResumePromptSettin
   };
 }
 
+export function emptyTailorResumeGenerationSettingsState(): TailorResumeGenerationSettingsState {
+  return {
+    updatedAt: null,
+    values: createDefaultTailorResumeGenerationSettings(),
+  };
+}
+
 export function emptyTailorResumeProfile(): TailorResumeProfile {
   return {
     annotatedLatex: emptyTailorResumeAnnotatedLatexState(),
     extraction: emptyTailorResumeExtractionState(),
+    generationSettings: emptyTailorResumeGenerationSettingsState(),
     jobDescription: "",
     latex: emptyTailorResumeLatexState(),
     links: [],
@@ -361,6 +446,7 @@ function parseTailorResumeWorkspaceState(value: unknown): TailorResumeWorkspaceS
   }
 
   return {
+    tailoringInterview: parseTailorResumePendingInterview(value.tailoringInterview),
     isBaseResumeStepComplete: value.isBaseResumeStepComplete === true,
     updatedAt: readNullableString(value.updatedAt),
   };
@@ -376,6 +462,19 @@ function parseTailorResumePromptSettingsState(
   return {
     updatedAt: readNullableString(value.updatedAt),
     values: mergeSystemPromptSettings(value.values),
+  };
+}
+
+function parseTailorResumeGenerationSettingsState(
+  value: unknown,
+): TailorResumeGenerationSettingsState {
+  if (!isRecord(value)) {
+    return emptyTailorResumeGenerationSettingsState();
+  }
+
+  return {
+    updatedAt: readNullableString(value.updatedAt),
+    values: mergeTailorResumeGenerationSettings(value.values),
   };
 }
 
@@ -540,6 +639,84 @@ function parseTailoredResumePlanningChange(
   };
 }
 
+function parseTailoredResumeQuestionLearning(
+  value: unknown,
+): TailoredResumeQuestionLearning | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const topic = readNullableString(value.topic)?.trim() ?? "";
+  const detail = readNullableString(value.detail)?.trim() ?? "";
+
+  if (!topic || !detail || !Array.isArray(value.targetSegmentIds)) {
+    return null;
+  }
+
+  const targetSegmentIds = value.targetSegmentIds.flatMap((segmentId) => {
+    const parsedSegmentId = readNullableString(segmentId)?.trim() ?? "";
+    return parsedSegmentId ? [parsedSegmentId] : [];
+  });
+
+  if (targetSegmentIds.length !== value.targetSegmentIds.length) {
+    return null;
+  }
+
+  return {
+    detail,
+    targetSegmentIds,
+    topic,
+  };
+}
+
+function parseTailoredResumeQuestioningSummary(
+  value: unknown,
+): TailoredResumeQuestioningSummary | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const agenda = readNullableString(value.agenda)?.trim() ?? "";
+  const debugDecision =
+    value.debugDecision === "forced_only" ||
+    value.debugDecision === "not_applicable" ||
+    value.debugDecision === "would_ask_without_debug"
+      ? value.debugDecision
+      : value.debugDecision == null
+        ? null
+        : "__invalid__";
+  const rawAskedQuestionCount = value.askedQuestionCount;
+  const rawTotalQuestionBudget = value.totalQuestionBudget;
+
+  if (
+    !Array.isArray(value.learnings) ||
+    debugDecision === "__invalid__" ||
+    typeof rawAskedQuestionCount !== "number" ||
+    !Number.isFinite(rawAskedQuestionCount) ||
+    typeof rawTotalQuestionBudget !== "number" ||
+    !Number.isFinite(rawTotalQuestionBudget)
+  ) {
+    return null;
+  }
+
+  const learnings = value.learnings.flatMap((learning) => {
+    const parsedLearning = parseTailoredResumeQuestionLearning(learning);
+    return parsedLearning ? [parsedLearning] : [];
+  });
+
+  if (learnings.length !== value.learnings.length) {
+    return null;
+  }
+
+  return {
+    agenda,
+    askedQuestionCount: Math.max(0, Math.floor(rawAskedQuestionCount)),
+    debugDecision,
+    learnings,
+    totalQuestionBudget: Math.max(0, Math.floor(rawTotalQuestionBudget)),
+  };
+}
+
 function parseTailoredResumePlanningResult(
   value: unknown,
 ): TailoredResumePlanningResult | null {
@@ -553,6 +730,9 @@ function parseTailoredResumePlanningResult(
   const jobIdentifier = readNullableString(value.jobIdentifier);
   const positionTitle =
     typeof value.positionTitle === "string" ? value.positionTitle : null;
+  const questioningSummary = parseTailoredResumeQuestioningSummary(
+    value.questioningSummary,
+  );
   const thesis = parseTailoredResumeThesis(value.thesis);
 
   if (
@@ -581,6 +761,7 @@ function parseTailoredResumePlanningResult(
     displayName,
     jobIdentifier,
     positionTitle,
+    questioningSummary,
     thesis,
   };
 }
@@ -608,6 +789,7 @@ function buildLegacyTailoredResumePlanningResult(input: {
     displayName: input.displayName,
     jobIdentifier: input.jobIdentifier,
     positionTitle: input.positionTitle,
+    questioningSummary: null,
     thesis: input.thesis,
   } satisfies TailoredResumePlanningResult;
 }
@@ -665,6 +847,122 @@ function parseTailoredResumeOpenAiDebugTrace(
   return {
     implementation,
     planning,
+  };
+}
+
+function parseTailorResumeGenerationSourceSnapshot(
+  value: unknown,
+): TailorResumeGenerationSourceSnapshot | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const latexCode = readNullableString(value.latexCode);
+  const linkState = readNullableString(value.linkState);
+  const lockedLinkState = readNullableString(value.lockedLinkState);
+  const resumeStoragePath = readNullableString(value.resumeStoragePath);
+  const resumeUpdatedAt = readNullableString(value.resumeUpdatedAt);
+
+  if (!latexCode || !linkState || !lockedLinkState) {
+    return null;
+  }
+
+  return {
+    latexCode,
+    linkState,
+    lockedLinkState,
+    resumeStoragePath,
+    resumeUpdatedAt,
+  };
+}
+
+function parseTailorResumeConversationMessage(
+  value: unknown,
+  index: number,
+): TailorResumeConversationMessage | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const text = readNullableString(value.text)?.trim() ?? "";
+  const role = value.role === "user" ? "user" : value.role === "assistant" ? "assistant" : null;
+  const id =
+    readNullableString(value.id) ??
+    (role ? `tailor-resume-conversation-${role}-${index + 1}` : null);
+
+  if (!id || !role || !text) {
+    return null;
+  }
+
+  return {
+    id,
+    role,
+    text,
+  };
+}
+
+function parseTailorResumeConversationMessages(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailorResumeConversationMessage[];
+  }
+
+  return value.flatMap((message, index) => {
+    const parsedMessage = parseTailorResumeConversationMessage(message, index);
+    return parsedMessage ? [parsedMessage] : [];
+  });
+}
+
+function parseTailorResumePendingInterview(
+  value: unknown,
+): TailorResumePendingInterview | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = readNullableString(value.id);
+  const createdAt = readNullableString(value.createdAt);
+  const updatedAt = readNullableString(value.updatedAt);
+  const jobDescription = readNullableString(value.jobDescription);
+  const sourceAnnotatedLatexCode = readNullableString(value.sourceAnnotatedLatexCode);
+  const planningDebug = parseTailoredResumeOpenAiDebugStage(value.planningDebug);
+  const planningResult = parseTailoredResumePlanningResult(value.planningResult);
+  const generationSourceSnapshot = parseTailorResumeGenerationSourceSnapshot(
+    value.generationSourceSnapshot,
+  );
+  const accumulatedModelDurationMs =
+    typeof value.accumulatedModelDurationMs === "number" &&
+    Number.isFinite(value.accumulatedModelDurationMs)
+      ? Math.max(0, value.accumulatedModelDurationMs)
+      : null;
+  const conversation = parseTailorResumeConversationMessages(value.conversation);
+
+  if (
+    !id ||
+    !createdAt ||
+    !updatedAt ||
+    jobDescription === null ||
+    sourceAnnotatedLatexCode === null ||
+    !planningDebug ||
+    !planningResult ||
+    !generationSourceSnapshot ||
+    accumulatedModelDurationMs === null ||
+    !Array.isArray(value.conversation) ||
+    conversation.length !== value.conversation.length
+  ) {
+    return null;
+  }
+
+  return {
+    accumulatedModelDurationMs,
+    conversation,
+    createdAt,
+    generationSourceSnapshot,
+    id,
+    jobDescription,
+    planningDebug,
+    planningResult,
+    sourceAnnotatedLatexCode,
+    updatedAt,
   };
 }
 
@@ -767,6 +1065,9 @@ export function parseTailorResumeProfile(value: unknown): TailorResumeProfile {
   return {
     annotatedLatex: parseTailorResumeAnnotatedLatexState(value.annotatedLatex),
     extraction: parseTailorResumeExtractionState(value.extraction),
+    generationSettings: parseTailorResumeGenerationSettingsState(
+      value.generationSettings,
+    ),
     jobDescription: readString(value.jobDescription),
     latex: parseTailorResumeLatexState(value.latex),
     links: parseTailorResumeLinkRecords(value.links),

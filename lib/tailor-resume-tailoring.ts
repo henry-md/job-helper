@@ -10,6 +10,7 @@ import { validateTailorResumeLatexDocument } from "./tailor-resume-link-validati
 import {
   buildTailorResumePlanningSnapshot,
   type TailorResumePlanningBlock,
+  type TailorResumePlanningSnapshot,
 } from "./tailor-resume-planning.ts";
 import { getRetryAttemptsToGenerateLatexEdits } from "./tailor-resume-retry-config.ts";
 import { buildTailoredResumeBlockEdits } from "./tailor-resume-review.ts";
@@ -19,8 +20,10 @@ import {
   stripTailorResumeSegmentIds,
 } from "./tailor-resume-segmentation.ts";
 import type {
+  TailorResumeGenerationStepEvent,
   TailorResumeLinkRecord,
   TailoredResumeBlockEditRecord,
+  TailoredResumeOpenAiDebugStage,
   TailoredResumeOpenAiDebugTrace,
   TailoredResumePlanningChange,
   TailoredResumePlanningResult,
@@ -29,6 +32,7 @@ import type {
 } from "./tailor-resume-types.ts";
 
 const TEST_OPENAI_RESPONSE_MODEL = "test-openai-response";
+const tailorResumeGenerationStepCount = 4;
 const tailorResumePlanSchema = {
   type: "object",
   additionalProperties: false,
@@ -69,6 +73,18 @@ const tailorResumePlanSchema = {
     "positionTitle",
   ],
 } as const;
+
+async function emitTailorResumeGenerationStep(
+  onStepEvent:
+    | ((event: TailorResumeGenerationStepEvent) => void | Promise<void>)
+    | undefined,
+  event: Omit<TailorResumeGenerationStepEvent, "stepCount">,
+) {
+  await onStepEvent?.({
+    ...event,
+    stepCount: tailorResumeGenerationStepCount,
+  });
+}
 
 const tailorResumeImplementationSchema = {
   type: "object",
@@ -128,6 +144,29 @@ type TailoredResumeResponse = {
   }>;
   output_text?: string;
 };
+
+export type PlanTailoredResumeResult =
+  | {
+      attempts: number;
+      generationDurationMs: number;
+      model: string;
+      ok: true;
+      planningDebug: TailoredResumeOpenAiDebugStage;
+      planningResult: TailoredResumePlanningResult;
+      planningSnapshot: TailorResumePlanningSnapshot;
+      thesis: TailoredResumeThesis;
+    }
+  | {
+      attempts: number;
+      generationDurationMs: number;
+      model: string;
+      ok: false;
+      planningDebug: TailoredResumeOpenAiDebugStage;
+      planningResult: TailoredResumePlanningResult;
+      planningSnapshot: TailorResumePlanningSnapshot;
+      thesis: TailoredResumeThesis | null;
+      validationError: string;
+    };
 
 export type GenerateTailoredResumeResult = {
   annotatedLatexCode: string;
@@ -325,6 +364,7 @@ export function parseTailoredResumePlanResponse(
   return {
     changes,
     ...normalizeTailoredResumeMetadata(value as TailoredResumePlanResponse),
+    questioningSummary: null,
     thesis: parseTailoredResumeThesis("thesis" in value ? value.thesis : null),
   };
 }
@@ -706,6 +746,26 @@ function buildTailoringImplementationInput(input: {
   planningBlocksById: Map<string, TailorResumePlanningBlock>;
   plan: TailoredResumePlanResponse;
 }) {
+  const questioningLearningsText =
+    input.plan.questioningSummary &&
+    input.plan.questioningSummary.learnings.length > 0
+      ? [
+          "User-confirmed background learnings:",
+          ...input.plan.questioningSummary.learnings.map((learning, index) =>
+            [
+              `${index + 1}. topic: ${learning.topic}`,
+              `   targetSegmentIds: ${
+                learning.targetSegmentIds.length > 0
+                  ? learning.targetSegmentIds.join(", ")
+                  : "[none]"
+              }`,
+              `   detail: ${learning.detail}`,
+            ].join("\n"),
+          ),
+          "",
+        ].join("\n")
+      : "";
+
   return [
     {
       role: "user" as const,
@@ -717,6 +777,7 @@ function buildTailoringImplementationInput(input: {
             "Accepted tailoring thesis:\n" +
             `jobDescriptionFocus: ${input.plan.thesis.jobDescriptionFocus}\n` +
             `resumeChanges: ${input.plan.thesis.resumeChanges}\n\n` +
+            questioningLearningsText +
             "Planned segment edits:\n" +
             serializeTailorResumeImplementationBlocks({
               planningBlocksById: input.planningBlocksById,
@@ -763,38 +824,27 @@ function serializeTailoredResumePrompt(input: {
   ].join("\n");
 }
 
-export async function generateTailoredResume(input: {
-  annotatedLatexCode: string;
-  jobDescription: string;
-  linkOverrides?: TailorResumeLinkRecord[];
-  onBuildFailure?: (latexCode: string, error: string, attempt: number) => Promise<void>;
-  onInvalidReplacement?: (
-    payload: string,
-    error: string,
-    attempt: number,
-  ) => Promise<void>;
-  promptSettings?: SystemPromptSettings;
-}): Promise<GenerateTailoredResumeResult> {
-  const startedAt = Date.now();
-  const model = process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
-  const maxTailoredResumeAttempts = getRetryAttemptsToGenerateLatexEdits();
-  const normalizedInput = normalizeTailorResumeLatex(input.annotatedLatexCode);
-  const linkOverrides = input.linkOverrides ?? [];
+function buildFallbackTailoredResumePlanningResult(): TailoredResumePlanningResult {
   const fallbackMetadata = normalizeTailoredResumeMetadata({});
-  const fallbackPlanningResult: TailoredResumePlanningResult = {
+
+  return {
     changes: [],
     companyName: fallbackMetadata.companyName,
     displayName: fallbackMetadata.displayName,
     jobIdentifier: fallbackMetadata.jobIdentifier,
     positionTitle: fallbackMetadata.positionTitle,
+    questioningSummary: null,
     thesis: {
       jobDescriptionFocus:
         "TEST_OPENAI_RESPONSE or fallback mode skipped the planning call, so no planner thesis was generated.",
       resumeChanges:
         "No intermediate plan was produced; the base resume was compiled without planned block edits.",
     },
-  };
-  const fallbackOpenAiDebug: TailoredResumeOpenAiDebugTrace = {
+  } satisfies TailoredResumePlanningResult;
+}
+
+function buildFallbackTailoredResumeOpenAiDebug() {
+  return {
     implementation: {
       outputJson: null,
       prompt: null,
@@ -807,7 +857,609 @@ export async function generateTailoredResume(input: {
       skippedReason:
         "Planning stage did not run because TEST_OPENAI_RESPONSE bypassed live OpenAI calls.",
     },
+  } satisfies TailoredResumeOpenAiDebugTrace;
+}
+
+export async function planTailoredResume(input: {
+  annotatedLatexCode: string;
+  jobDescription: string;
+  onStepEvent?: (
+    event: TailorResumeGenerationStepEvent,
+  ) => void | Promise<void>;
+  promptSettings?: SystemPromptSettings;
+}): Promise<PlanTailoredResumeResult> {
+  const startedAt = Date.now();
+  const model = process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
+  const maxPlanningAttempts = Math.min(2, getRetryAttemptsToGenerateLatexEdits());
+  const normalizedInput = normalizeTailorResumeLatex(input.annotatedLatexCode);
+  const planningSnapshot = buildTailorResumePlanningSnapshot(
+    normalizedInput.annotatedLatex,
+  );
+  const fallbackPlanningResult = buildFallbackTailoredResumePlanningResult();
+  const client = getOpenAIClient();
+  let planningFeedback = "";
+  let lastError =
+    `Unable to produce a tailored resume plan after ${maxPlanningAttempts} attempts.`;
+  let lastModel = model;
+  let lastPlanningResult = fallbackPlanningResult;
+  let lastPlanningDebug: TailoredResumeOpenAiDebugStage = {
+    outputJson: null,
+    prompt: null,
+    skippedReason:
+      "Planning stage did not run because no valid planner response was produced.",
   };
+
+  for (let attempt = 1; attempt <= maxPlanningAttempts; attempt += 1) {
+    const planInput = buildTailoringPlanInput({
+      jobDescription: input.jobDescription,
+      planningSnapshot,
+    });
+    const planInstructions = buildTailoringPlanInstructions({
+      feedback: planningFeedback,
+      promptSettings: input.promptSettings,
+    });
+    const planningPrompt = serializeTailoredResumePrompt({
+      inputMessages: planInput,
+      instructions: planInstructions,
+    });
+    const response = await client.responses.create({
+      input: planInput,
+      instructions: planInstructions,
+      model,
+      text: {
+        verbosity: "low",
+        format: {
+          type: "json_schema",
+          name: "tailor_resume_edit_plan",
+          strict: true,
+          schema: tailorResumePlanSchema,
+        },
+      },
+    });
+
+    lastModel = (response as { model?: string }).model ?? model;
+    const outputText = readOutputText(response);
+
+    if (!outputText) {
+      lastError = "The model returned an empty tailoring plan.";
+      await emitTailorResumeGenerationStep(input.onStepEvent, {
+        attempt,
+        detail: lastError,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        retrying: attempt < maxPlanningAttempts,
+        status: "failed",
+        stepNumber: 1,
+        summary: "Generating plaintext edit outline",
+      });
+      planningFeedback =
+        "The previous response was empty. Return the full structured response with thesis, metadata, and plaintext block changes.";
+      lastPlanningDebug = {
+        outputJson: null,
+        prompt: planningPrompt,
+        skippedReason: null,
+      };
+      continue;
+    }
+
+    try {
+      const nextPlan = parseTailoredResumePlanResponse(JSON.parse(outputText));
+      validateTailoredResumePlanChanges({
+        changes: nextPlan.changes,
+        planningBlocks: planningSnapshot.blocks,
+      });
+      lastPlanningResult = nextPlan;
+      lastPlanningDebug = {
+        outputJson: outputText,
+        prompt: planningPrompt,
+        skippedReason: null,
+      };
+      await emitTailorResumeGenerationStep(input.onStepEvent, {
+        attempt,
+        detail:
+          nextPlan.changes.length > 0
+            ? `Planner identified ${nextPlan.changes.length} block change${nextPlan.changes.length === 1 ? "" : "s"}.`
+            : "Planner found no block-level changes to apply.",
+        durationMs: Math.max(0, Date.now() - startedAt),
+        retrying: false,
+        status: "succeeded",
+        stepNumber: 1,
+        summary: "Generating plaintext edit outline",
+      });
+
+      return {
+        attempts: attempt,
+        generationDurationMs: Math.max(0, Date.now() - startedAt),
+        model: lastModel,
+        ok: true,
+        planningDebug: lastPlanningDebug,
+        planningResult: nextPlan,
+        planningSnapshot,
+        thesis: nextPlan.thesis,
+      };
+    } catch (error) {
+      lastError =
+        error instanceof Error
+          ? error.message
+          : "The model returned an unreadable tailoring plan.";
+      await emitTailorResumeGenerationStep(input.onStepEvent, {
+        attempt,
+        detail: lastError,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        retrying: attempt < maxPlanningAttempts,
+        status: "failed",
+        stepNumber: 1,
+        summary: "Generating plaintext edit outline",
+      });
+      planningFeedback =
+        `The previous response could not be parsed or validated.\n\nExact issue:\n${lastError}\n\nReturn the full structured response with thesis, metadata, and plaintext block changes.`;
+      lastPlanningDebug = {
+        outputJson: outputText,
+        prompt: planningPrompt,
+        skippedReason: null,
+      };
+    }
+  }
+
+  return {
+    attempts: maxPlanningAttempts,
+    generationDurationMs: Math.max(0, Date.now() - startedAt),
+    model: lastModel,
+    ok: false,
+    planningDebug: lastPlanningDebug,
+    planningResult: lastPlanningResult,
+    planningSnapshot,
+    thesis: lastPlanningResult.thesis,
+    validationError: lastError,
+  };
+}
+
+export async function implementTailoredResumePlan(input: {
+  annotatedLatexCode: string;
+  generationDurationMsBase?: number;
+  jobDescription: string;
+  linkOverrides?: TailorResumeLinkRecord[];
+  model?: string;
+  onBuildFailure?: (latexCode: string, error: string, attempt: number) => Promise<void>;
+  onInvalidReplacement?: (
+    payload: string,
+    error: string,
+    attempt: number,
+  ) => Promise<void>;
+  onStepEvent?: (
+    event: TailorResumeGenerationStepEvent,
+  ) => void | Promise<void>;
+  planningDebug: TailoredResumeOpenAiDebugStage;
+  planningResult: TailoredResumePlanningResult;
+  planningSnapshot?: TailorResumePlanningSnapshot;
+  promptSettings?: SystemPromptSettings;
+}): Promise<GenerateTailoredResumeResult> {
+  const startedAt = Date.now();
+  const model = input.model ?? process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
+  const normalizedInput = normalizeTailorResumeLatex(input.annotatedLatexCode);
+  const linkOverrides = input.linkOverrides ?? [];
+  const planningSnapshot =
+    input.planningSnapshot ??
+    buildTailorResumePlanningSnapshot(normalizedInput.annotatedLatex);
+  const planningBlocksById = new Map(
+    planningSnapshot.blocks.map((block) => [block.segmentId, block]),
+  );
+  const readGenerationDurationMs = () =>
+    (input.generationDurationMsBase ?? 0) + Math.max(0, Date.now() - startedAt);
+  const fallbackMetadata = normalizeTailoredResumeMetadata(input.planningResult);
+  let lastError: string | null = null;
+  let lastAnnotatedLatex = normalizedInput.annotatedLatex;
+  let lastEdits: TailoredResumeBlockEditRecord[] = [];
+  let lastSavedLinkUpdateCount = 0;
+  let lastSavedLinkUpdates: TailorResumeSavedLinkUpdate[] = [];
+  let lastModel = model;
+  let hasAppliedCandidate = false;
+  let completedImplementationAttempts = 0;
+  let implementationPrompt: string | null = null;
+  let implementationOutputJson: string | null = null;
+  let implementationSkippedReason: string | null =
+    "Implementation stage has not run yet.";
+
+  if (input.planningResult.changes.length === 0) {
+    implementationSkippedReason =
+      "Implementation stage was skipped because the planner returned no segment changes.";
+    await emitTailorResumeGenerationStep(input.onStepEvent, {
+      attempt: null,
+      detail: "The accepted plan did not require any block-scoped LaTeX replacements.",
+      durationMs: Math.max(0, Date.now() - startedAt),
+      retrying: false,
+      status: "skipped",
+      stepNumber: 3,
+      summary: "Planner found no block-scoped edits to apply",
+    });
+    const openAiDebug: TailoredResumeOpenAiDebugTrace = {
+      implementation: {
+        outputJson: null,
+        prompt: null,
+        skippedReason: implementationSkippedReason,
+      },
+      planning: input.planningDebug,
+    };
+    const normalizedCandidate = applySavedTailoredResumeLinks(
+      normalizedInput.annotatedLatex,
+      linkOverrides,
+    );
+    const validation = await validateTailorResumeLatexDocument(
+      stripTailorResumeSegmentIds(normalizedCandidate.normalizedLatex.annotatedLatex),
+    );
+
+    hasAppliedCandidate = true;
+    lastAnnotatedLatex = normalizedCandidate.normalizedLatex.annotatedLatex;
+    lastSavedLinkUpdateCount = normalizedCandidate.updatedCount;
+    lastSavedLinkUpdates = normalizedCandidate.updatedLinks;
+
+    if (validation.ok) {
+      return {
+        annotatedLatexCode: normalizedCandidate.normalizedLatex.annotatedLatex,
+        attempts: 1,
+        companyName: fallbackMetadata.companyName,
+        displayName: fallbackMetadata.displayName,
+        edits: [],
+        generationDurationMs: readGenerationDurationMs(),
+        jobIdentifier: fallbackMetadata.jobIdentifier,
+        latexCode: stripTailorResumeSegmentIds(
+          normalizedCandidate.normalizedLatex.annotatedLatex,
+        ),
+        model: lastModel,
+        openAiDebug,
+        outcome: classifyTailoredResumeGenerationOutcome({
+          hasAppliedCandidate: true,
+          hasPreviewPdf: true,
+        }),
+        planningResult: input.planningResult,
+        positionTitle: fallbackMetadata.positionTitle,
+        previewPdf: validation.previewPdf,
+        savedLinkUpdateCount: normalizedCandidate.updatedCount,
+        savedLinkUpdates: normalizedCandidate.updatedLinks,
+        thesis: input.planningResult.thesis,
+        validationError: null,
+      };
+    }
+
+    lastError = validation.error;
+
+    await input.onBuildFailure?.(
+      stripTailorResumeSegmentIds(normalizedCandidate.normalizedLatex.annotatedLatex),
+      validation.error,
+      1,
+    );
+
+    return {
+      annotatedLatexCode: lastAnnotatedLatex,
+      attempts: 1,
+      companyName: fallbackMetadata.companyName,
+      displayName: fallbackMetadata.displayName,
+      edits: [],
+      generationDurationMs: readGenerationDurationMs(),
+      jobIdentifier: fallbackMetadata.jobIdentifier,
+      latexCode: stripTailorResumeSegmentIds(lastAnnotatedLatex),
+      model: lastModel,
+      openAiDebug,
+      outcome: classifyTailoredResumeGenerationOutcome({
+        hasAppliedCandidate,
+        hasPreviewPdf: false,
+      }),
+      planningResult: input.planningResult,
+      positionTitle: fallbackMetadata.positionTitle,
+      previewPdf: null,
+      savedLinkUpdateCount: lastSavedLinkUpdateCount,
+      savedLinkUpdates: lastSavedLinkUpdates,
+      thesis: input.planningResult.thesis,
+      validationError: lastError,
+    };
+  }
+
+  const client = getOpenAIClient();
+  let implementationFeedback = "";
+  const maxTailoredResumeAttempts = getRetryAttemptsToGenerateLatexEdits();
+
+  for (let attempt = 1; attempt <= maxTailoredResumeAttempts; attempt += 1) {
+    const implementationInput = buildTailoringImplementationInput({
+      jobDescription: input.jobDescription,
+      plan: input.planningResult,
+      planningBlocksById,
+    });
+    const implementationInstructions = buildTailoringImplementationInstructions({
+      feedback: implementationFeedback,
+      promptSettings: input.promptSettings,
+    });
+    implementationPrompt = serializeTailoredResumePrompt({
+      inputMessages: implementationInput,
+      instructions: implementationInstructions,
+    });
+    const response = await client.responses.create({
+      input: implementationInput,
+      instructions: implementationInstructions,
+      model,
+      text: {
+        verbosity: "low",
+        format: {
+          type: "json_schema",
+          name: "tailor_resume_latex_implementation",
+          strict: true,
+          schema: tailorResumeImplementationSchema,
+        },
+      },
+    });
+
+    completedImplementationAttempts = attempt;
+    lastModel = (response as { model?: string }).model ?? model;
+    const outputText = readOutputText(response);
+
+    if (!outputText) {
+      lastError = "The model returned an empty LaTeX implementation.";
+      await emitTailorResumeGenerationStep(input.onStepEvent, {
+        attempt,
+        detail: lastError,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        retrying: attempt < maxTailoredResumeAttempts,
+        status: "failed",
+        stepNumber: 3,
+        summary: "Generating block-scoped edits",
+      });
+      implementationFeedback =
+        "The previous response was empty. Return the strict JSON object with one LaTeX replacement per planned segment.";
+      continue;
+    }
+
+    let implementation: TailoredResumeImplementationResponse;
+
+    try {
+      implementation = parseTailoredResumeImplementationResponse(
+        JSON.parse(outputText),
+      );
+    } catch (error) {
+      lastError =
+        error instanceof Error
+          ? error.message
+          : "The model returned an unreadable LaTeX implementation.";
+      await emitTailorResumeGenerationStep(input.onStepEvent, {
+        attempt,
+        detail: lastError,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        retrying: attempt < maxTailoredResumeAttempts,
+        status: "failed",
+        stepNumber: 3,
+        summary: "Generating block-scoped edits",
+      });
+      implementationFeedback =
+        `The previous implementation response could not be parsed.\n\nExact issue:\n${lastError}\n\nReturn the strict JSON object with one LaTeX replacement per planned segment.`;
+      continue;
+    }
+
+    implementationOutputJson = outputText;
+    const openAiDebug: TailoredResumeOpenAiDebugTrace = {
+      implementation: {
+        outputJson: implementationOutputJson,
+        prompt: implementationPrompt,
+        skippedReason: null,
+      },
+      planning: input.planningDebug,
+    };
+    const candidateForLogging: TailoredResumeStructuredResponse = {
+      changes: implementation.changes.map((change) => ({
+        latexCode: change.latexCode,
+        reason:
+          input.planningResult.changes.find(
+            (plannedChange) => plannedChange.segmentId === change.segmentId,
+          )?.reason ?? "[missing reason]",
+        segmentId: change.segmentId,
+      })),
+      companyName: fallbackMetadata.companyName,
+      displayName: fallbackMetadata.displayName,
+      jobIdentifier: fallbackMetadata.jobIdentifier,
+      positionTitle: fallbackMetadata.positionTitle,
+      thesis: input.planningResult.thesis,
+    };
+
+    let candidateChanges: TailoredResumeBlockChange[];
+    let candidateEdits: TailoredResumeBlockEditRecord[];
+    let appliedCandidate;
+
+    try {
+      candidateChanges = buildTailoredResumeBlockChanges({
+        implementationChanges: implementation.changes,
+        plannedChanges: input.planningResult.changes,
+      });
+      candidateEdits = buildTailoredResumeBlockEdits({
+        annotatedLatexCode: normalizedInput.annotatedLatex,
+        changes: candidateChanges,
+      });
+      appliedCandidate = applyTailorResumeBlockChanges({
+        annotatedLatexCode: normalizedInput.annotatedLatex,
+        changes: candidateChanges,
+      });
+    } catch (error) {
+      lastError =
+        error instanceof Error
+          ? error.message
+          : "Unable to apply the requested block replacements.";
+      await input.onInvalidReplacement?.(
+        buildInvalidTailorResumeReplacementLogPayload({
+          annotatedLatexCode: normalizedInput.annotatedLatex,
+          candidate: candidateForLogging,
+          error: lastError,
+        }),
+        lastError,
+        attempt,
+      );
+      await emitTailorResumeGenerationStep(input.onStepEvent, {
+        attempt,
+        detail: lastError,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        retrying: attempt < maxTailoredResumeAttempts,
+        status: "failed",
+        stepNumber: 3,
+        summary: "Generating block-scoped edits",
+      });
+      implementationFeedback =
+        `The previous LaTeX implementation referenced invalid segment edits.\n\nExact issue:\n${lastError}\n\nReturn a corrected strict JSON object with one LaTeX replacement per planned segment.`;
+      continue;
+    }
+
+    const normalizedCandidate = applySavedTailoredResumeLinks(
+      appliedCandidate.annotatedLatex,
+      linkOverrides,
+    );
+    hasAppliedCandidate = true;
+    const validation = await validateTailorResumeLatexDocument(
+      stripTailorResumeSegmentIds(normalizedCandidate.normalizedLatex.annotatedLatex),
+    );
+
+    lastAnnotatedLatex = normalizedCandidate.normalizedLatex.annotatedLatex;
+    lastEdits = candidateEdits;
+    lastSavedLinkUpdateCount = normalizedCandidate.updatedCount;
+    lastSavedLinkUpdates = normalizedCandidate.updatedLinks;
+
+    if (validation.ok) {
+      await emitTailorResumeGenerationStep(input.onStepEvent, {
+        attempt,
+        detail: `Generated ${candidateEdits.length} block edit${candidateEdits.length === 1 ? "" : "s"}.`,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        retrying: false,
+        status: "succeeded",
+        stepNumber: 3,
+        summary: "Generating block-scoped edits",
+      });
+      return {
+        annotatedLatexCode: normalizedCandidate.normalizedLatex.annotatedLatex,
+        attempts: attempt,
+        companyName: fallbackMetadata.companyName,
+        displayName: fallbackMetadata.displayName,
+        edits: candidateEdits,
+        generationDurationMs: readGenerationDurationMs(),
+        jobIdentifier: fallbackMetadata.jobIdentifier,
+        latexCode: stripTailorResumeSegmentIds(
+          normalizedCandidate.normalizedLatex.annotatedLatex,
+        ),
+        model: lastModel,
+        openAiDebug,
+        outcome: classifyTailoredResumeGenerationOutcome({
+          hasAppliedCandidate: true,
+          hasPreviewPdf: true,
+        }),
+        planningResult: input.planningResult,
+        positionTitle: fallbackMetadata.positionTitle,
+        previewPdf: validation.previewPdf,
+        savedLinkUpdateCount: normalizedCandidate.updatedCount,
+        savedLinkUpdates: normalizedCandidate.updatedLinks,
+        thesis: input.planningResult.thesis,
+        validationError: null,
+      };
+    }
+
+    lastError = validation.error;
+
+    await input.onBuildFailure?.(
+      stripTailorResumeSegmentIds(normalizedCandidate.normalizedLatex.annotatedLatex),
+      validation.error,
+      attempt,
+    );
+    await emitTailorResumeGenerationStep(input.onStepEvent, {
+      attempt,
+      detail: validation.error,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      retrying: attempt < maxTailoredResumeAttempts,
+      status: "failed",
+      stepNumber: 3,
+      summary: "Generating block-scoped edits",
+    });
+
+    implementationFeedback =
+      `Applying your previous LaTeX implementations produced a compile failure.\n\n` +
+      `Compiler error:\n${validation.error}\n\n` +
+      "Return corrected LaTeX replacements for the same planned segments only.";
+
+    if (attempt === maxTailoredResumeAttempts) {
+      return {
+        annotatedLatexCode: lastAnnotatedLatex,
+        attempts: completedImplementationAttempts,
+        companyName: fallbackMetadata.companyName,
+        displayName: fallbackMetadata.displayName,
+        edits: lastEdits,
+        generationDurationMs: readGenerationDurationMs(),
+        jobIdentifier: fallbackMetadata.jobIdentifier,
+        latexCode: stripTailorResumeSegmentIds(lastAnnotatedLatex),
+        model: lastModel,
+        openAiDebug,
+        outcome: classifyTailoredResumeGenerationOutcome({
+          hasAppliedCandidate,
+          hasPreviewPdf: false,
+        }),
+        planningResult: input.planningResult,
+        positionTitle: fallbackMetadata.positionTitle,
+        previewPdf: null,
+        savedLinkUpdateCount: lastSavedLinkUpdateCount,
+        savedLinkUpdates: lastSavedLinkUpdates,
+        thesis: input.planningResult.thesis,
+        validationError:
+          lastError ??
+          `Unable to implement a tailored resume after ${completedImplementationAttempts} attempts.`,
+      };
+    }
+  }
+
+  const openAiDebug: TailoredResumeOpenAiDebugTrace = {
+    implementation: {
+      outputJson: implementationOutputJson,
+      prompt: implementationPrompt,
+      skippedReason: implementationSkippedReason,
+    },
+    planning: input.planningDebug,
+  };
+
+  return {
+    annotatedLatexCode: lastAnnotatedLatex,
+    attempts: completedImplementationAttempts || maxTailoredResumeAttempts,
+    companyName: fallbackMetadata.companyName,
+    displayName: fallbackMetadata.displayName,
+    edits: lastEdits,
+    generationDurationMs: readGenerationDurationMs(),
+    jobIdentifier: fallbackMetadata.jobIdentifier,
+    latexCode: stripTailorResumeSegmentIds(lastAnnotatedLatex),
+    model: lastModel,
+    openAiDebug,
+    outcome: classifyTailoredResumeGenerationOutcome({
+      hasAppliedCandidate,
+      hasPreviewPdf: false,
+    }),
+    planningResult: input.planningResult,
+    positionTitle: fallbackMetadata.positionTitle,
+    previewPdf: null,
+    savedLinkUpdateCount: lastSavedLinkUpdateCount,
+    savedLinkUpdates: lastSavedLinkUpdates,
+    thesis: input.planningResult.thesis,
+    validationError:
+      lastError ??
+      `Unable to implement a tailored resume after ${completedImplementationAttempts || maxTailoredResumeAttempts} attempts.`,
+  };
+}
+
+export async function generateTailoredResume(input: {
+  annotatedLatexCode: string;
+  jobDescription: string;
+  linkOverrides?: TailorResumeLinkRecord[];
+  onBuildFailure?: (latexCode: string, error: string, attempt: number) => Promise<void>;
+  onInvalidReplacement?: (
+    payload: string,
+    error: string,
+    attempt: number,
+  ) => Promise<void>;
+  onStepEvent?: (
+    event: TailorResumeGenerationStepEvent,
+  ) => void | Promise<void>;
+  promptSettings?: SystemPromptSettings;
+}): Promise<GenerateTailoredResumeResult> {
+  const startedAt = Date.now();
+  const normalizedInput = normalizeTailorResumeLatex(input.annotatedLatexCode);
+  const linkOverrides = input.linkOverrides ?? [];
+  const fallbackMetadata = normalizeTailoredResumeMetadata({});
+  const fallbackPlanningResult = buildFallbackTailoredResumePlanningResult();
+  const fallbackOpenAiDebug = buildFallbackTailoredResumeOpenAiDebug();
   const readGenerationDurationMs = () => Math.max(0, Date.now() - startedAt);
 
   if (isTestOpenAIResponseEnabled()) {
@@ -846,436 +1498,58 @@ export async function generateTailoredResume(input: {
     };
   }
 
-  const client = getOpenAIClient();
-  const planningSnapshot = buildTailorResumePlanningSnapshot(
-    normalizedInput.annotatedLatex,
-  );
-  const planningBlocksById = new Map(
-    planningSnapshot.blocks.map((block) => [block.segmentId, block]),
-  );
-  const maxPlanningAttempts = Math.min(2, maxTailoredResumeAttempts);
-  let planningFeedback = "";
-  let implementationFeedback = "";
-  let lastError: string | null = null;
-  let lastMetadata = fallbackMetadata;
-  let lastAnnotatedLatex = normalizedInput.annotatedLatex;
-  let lastEdits: TailoredResumeBlockEditRecord[] = [];
-  let lastSavedLinkUpdateCount = 0;
-  let lastSavedLinkUpdates: TailorResumeSavedLinkUpdate[] = [];
-  let lastThesis: TailoredResumeThesis | null = null;
-  let lastPlanningResult = fallbackPlanningResult;
-  let lastOpenAiDebug = fallbackOpenAiDebug;
-  let lastModel = model;
-  let hasAppliedCandidate = false;
-  let completedPlanningAttempts = 0;
-  let completedImplementationAttempts = 0;
-  let plan: TailoredResumePlanResponse | null = null;
-  let planningPrompt: string | null = null;
-  let planningOutputJson: string | null = null;
-  let implementationPrompt: string | null = null;
-  let implementationOutputJson: string | null = null;
-  let implementationSkippedReason: string | null =
-    "Implementation stage has not run yet.";
+  const planningStage = await planTailoredResume({
+    annotatedLatexCode: input.annotatedLatexCode,
+    jobDescription: input.jobDescription,
+    onStepEvent: input.onStepEvent,
+    promptSettings: input.promptSettings,
+  });
 
-  for (let attempt = 1; attempt <= maxPlanningAttempts; attempt += 1) {
-    const planInput = buildTailoringPlanInput({
-      jobDescription: input.jobDescription,
-      planningSnapshot,
-    });
-    const planInstructions = buildTailoringPlanInstructions({
-      feedback: planningFeedback,
-      promptSettings: input.promptSettings,
-    });
-    planningPrompt = serializeTailoredResumePrompt({
-      inputMessages: planInput,
-      instructions: planInstructions,
-    });
-    const response = await client.responses.create({
-      input: planInput,
-      instructions: planInstructions,
-      model,
-      text: {
-        verbosity: "low",
-        format: {
-          type: "json_schema",
-          name: "tailor_resume_edit_plan",
-          strict: true,
-          schema: tailorResumePlanSchema,
-        },
-      },
-    });
-
-    completedPlanningAttempts = attempt;
-    lastModel = (response as { model?: string }).model ?? model;
-
-    const outputText = readOutputText(response);
-
-    if (!outputText) {
-      lastError = "The model returned an empty tailoring plan.";
-      planningFeedback =
-        "The previous response was empty. Return the full structured response with thesis, metadata, and plaintext block changes.";
-      continue;
-    }
-
-    let nextPlan: TailoredResumePlanResponse;
-
-    try {
-      nextPlan = parseTailoredResumePlanResponse(JSON.parse(outputText));
-      validateTailoredResumePlanChanges({
-        changes: nextPlan.changes,
-        planningBlocks: planningSnapshot.blocks,
-      });
-    } catch (error) {
-      lastError =
-        error instanceof Error
-          ? error.message
-          : "The model returned an unreadable tailoring plan.";
-      planningFeedback =
-        `The previous response could not be parsed or validated.\n\nExact issue:\n${lastError}\n\nReturn the full structured response with thesis, metadata, and plaintext block changes.`;
-      continue;
-    }
-
-    plan = nextPlan;
-    planningOutputJson = outputText;
-    lastMetadata = normalizeTailoredResumeMetadata(nextPlan);
-    lastThesis = nextPlan.thesis;
-    lastPlanningResult = nextPlan;
-    lastOpenAiDebug = {
-      implementation: {
-        outputJson: implementationOutputJson,
-        prompt: implementationPrompt,
-        skippedReason: implementationSkippedReason,
-      },
-      planning: {
-        outputJson: planningOutputJson,
-        prompt: planningPrompt,
-        skippedReason: null,
-      },
-    };
-    break;
-  }
-
-  if (!plan) {
-    return {
-      annotatedLatexCode: lastAnnotatedLatex,
-      attempts: completedPlanningAttempts || maxPlanningAttempts,
-      companyName: lastMetadata.companyName,
-      displayName: lastMetadata.displayName,
-      edits: lastEdits,
-      generationDurationMs: readGenerationDurationMs(),
-      jobIdentifier: lastMetadata.jobIdentifier,
-      latexCode: stripTailorResumeSegmentIds(lastAnnotatedLatex),
-      model: lastModel,
-      openAiDebug: lastOpenAiDebug,
-      outcome: classifyTailoredResumeGenerationOutcome({
-        hasAppliedCandidate,
-        hasPreviewPdf: false,
-      }),
-      planningResult: lastPlanningResult,
-      positionTitle: lastMetadata.positionTitle,
-      previewPdf: null,
-      savedLinkUpdateCount: lastSavedLinkUpdateCount,
-      savedLinkUpdates: lastSavedLinkUpdates,
-      thesis: lastThesis,
-      validationError:
-        lastError ??
-        `Unable to produce a tailored resume plan after ${maxPlanningAttempts} attempts.`,
-    };
-  }
-
-  if (plan.changes.length === 0) {
-    implementationSkippedReason =
-      "Implementation stage was skipped because the planner returned no segment changes.";
-    lastOpenAiDebug = {
-      implementation: {
-        outputJson: null,
-        prompt: null,
-        skippedReason: implementationSkippedReason,
-      },
-      planning: {
-        outputJson: planningOutputJson,
-        prompt: planningPrompt,
-        skippedReason: null,
-      },
-    };
-    const normalizedCandidate = applySavedTailoredResumeLinks(
-      normalizedInput.annotatedLatex,
-      linkOverrides,
-    );
-    const validation = await validateTailorResumeLatexDocument(
-      stripTailorResumeSegmentIds(normalizedCandidate.normalizedLatex.annotatedLatex),
-    );
-
-    hasAppliedCandidate = true;
-    lastAnnotatedLatex = normalizedCandidate.normalizedLatex.annotatedLatex;
-    lastSavedLinkUpdateCount = normalizedCandidate.updatedCount;
-    lastSavedLinkUpdates = normalizedCandidate.updatedLinks;
-
-    if (validation.ok) {
-      return {
-        annotatedLatexCode: normalizedCandidate.normalizedLatex.annotatedLatex,
-        attempts: completedPlanningAttempts || 1,
-        companyName: lastMetadata.companyName,
-        displayName: lastMetadata.displayName,
-        edits: [],
-        generationDurationMs: readGenerationDurationMs(),
-        jobIdentifier: lastMetadata.jobIdentifier,
-        latexCode: stripTailorResumeSegmentIds(
-          normalizedCandidate.normalizedLatex.annotatedLatex,
-        ),
-        model: lastModel,
-        openAiDebug: lastOpenAiDebug,
-        outcome: classifyTailoredResumeGenerationOutcome({
-          hasAppliedCandidate: true,
-          hasPreviewPdf: true,
-        }),
-        planningResult: lastPlanningResult,
-        positionTitle: lastMetadata.positionTitle,
-        previewPdf: validation.previewPdf,
-        savedLinkUpdateCount: normalizedCandidate.updatedCount,
-        savedLinkUpdates: normalizedCandidate.updatedLinks,
-        thesis: lastThesis,
-        validationError: null,
-      };
-    }
-
-    lastError = validation.error;
-
-    await input.onBuildFailure?.(
-      stripTailorResumeSegmentIds(normalizedCandidate.normalizedLatex.annotatedLatex),
-      validation.error,
-      completedPlanningAttempts || 1,
+  if (!planningStage.ok) {
+    const lastMetadata = normalizeTailoredResumeMetadata(
+      planningStage.planningResult,
     );
 
     return {
-      annotatedLatexCode: lastAnnotatedLatex,
-      attempts: completedPlanningAttempts || 1,
+      annotatedLatexCode: normalizedInput.annotatedLatex,
+      attempts: planningStage.attempts,
       companyName: lastMetadata.companyName,
       displayName: lastMetadata.displayName,
       edits: [],
-      generationDurationMs: readGenerationDurationMs(),
+      generationDurationMs: planningStage.generationDurationMs,
       jobIdentifier: lastMetadata.jobIdentifier,
-      latexCode: stripTailorResumeSegmentIds(lastAnnotatedLatex),
-      model: lastModel,
-      openAiDebug: lastOpenAiDebug,
+      latexCode: stripTailorResumeSegmentIds(normalizedInput.annotatedLatex),
+      model: planningStage.model,
+      openAiDebug: {
+        implementation: fallbackOpenAiDebug.implementation,
+        planning: planningStage.planningDebug,
+      },
       outcome: classifyTailoredResumeGenerationOutcome({
-        hasAppliedCandidate: true,
+        hasAppliedCandidate: false,
         hasPreviewPdf: false,
       }),
-      planningResult: lastPlanningResult,
+      planningResult: planningStage.planningResult,
       positionTitle: lastMetadata.positionTitle,
       previewPdf: null,
-      savedLinkUpdateCount: lastSavedLinkUpdateCount,
-      savedLinkUpdates: lastSavedLinkUpdates,
-      thesis: lastThesis,
-      validationError: lastError,
+      savedLinkUpdateCount: 0,
+      savedLinkUpdates: [],
+      thesis: planningStage.thesis,
+      validationError: planningStage.validationError,
     };
   }
 
-  implementationSkippedReason = null;
-  for (let attempt = 1; attempt <= maxTailoredResumeAttempts; attempt += 1) {
-    const implementationInput = buildTailoringImplementationInput({
-      jobDescription: input.jobDescription,
-      plan,
-      planningBlocksById,
-    });
-    const implementationInstructions = buildTailoringImplementationInstructions({
-      feedback: implementationFeedback,
-      promptSettings: input.promptSettings,
-    });
-    implementationPrompt = serializeTailoredResumePrompt({
-      inputMessages: implementationInput,
-      instructions: implementationInstructions,
-    });
-    const response = await client.responses.create({
-      input: implementationInput,
-      instructions: implementationInstructions,
-      model,
-      text: {
-        verbosity: "low",
-        format: {
-          type: "json_schema",
-          name: "tailor_resume_latex_implementation",
-          strict: true,
-          schema: tailorResumeImplementationSchema,
-        },
-      },
-    });
-
-    completedImplementationAttempts = attempt;
-    lastModel = (response as { model?: string }).model ?? model;
-
-    const outputText = readOutputText(response);
-
-    if (!outputText) {
-      lastError = "The model returned an empty LaTeX implementation.";
-      implementationFeedback =
-        "The previous response was empty. Return the strict JSON object with one LaTeX replacement per planned segment.";
-      continue;
-    }
-
-    let implementation: TailoredResumeImplementationResponse;
-
-    try {
-      implementation = parseTailoredResumeImplementationResponse(
-        JSON.parse(outputText),
-      );
-    } catch (error) {
-      lastError =
-        error instanceof Error
-          ? error.message
-          : "The model returned an unreadable LaTeX implementation.";
-      implementationFeedback =
-        `The previous implementation response could not be parsed.\n\nExact issue:\n${lastError}\n\nReturn the strict JSON object with one LaTeX replacement per planned segment.`;
-      continue;
-    }
-
-    implementationOutputJson = outputText;
-    lastOpenAiDebug = {
-      implementation: {
-        outputJson: implementationOutputJson,
-        prompt: implementationPrompt,
-        skippedReason: null,
-      },
-      planning: {
-        outputJson: planningOutputJson,
-        prompt: planningPrompt,
-        skippedReason: null,
-      },
-    };
-    const candidateForLogging: TailoredResumeStructuredResponse = {
-      changes: implementation.changes.map((change) => ({
-        latexCode: change.latexCode,
-        reason:
-          plan.changes.find(
-            (plannedChange) => plannedChange.segmentId === change.segmentId,
-          )?.reason ?? "[missing reason]",
-        segmentId: change.segmentId,
-      })),
-      companyName: lastMetadata.companyName,
-      displayName: lastMetadata.displayName,
-      jobIdentifier: lastMetadata.jobIdentifier,
-      positionTitle: lastMetadata.positionTitle,
-      thesis: plan.thesis,
-    };
-
-    let candidateChanges: TailoredResumeBlockChange[];
-    let candidateEdits: TailoredResumeBlockEditRecord[];
-    let appliedCandidate;
-
-    try {
-      candidateChanges = buildTailoredResumeBlockChanges({
-        implementationChanges: implementation.changes,
-        plannedChanges: plan.changes,
-      });
-      candidateEdits = buildTailoredResumeBlockEdits({
-        annotatedLatexCode: normalizedInput.annotatedLatex,
-        changes: candidateChanges,
-      });
-      appliedCandidate = applyTailorResumeBlockChanges({
-        annotatedLatexCode: normalizedInput.annotatedLatex,
-        changes: candidateChanges,
-      });
-    } catch (error) {
-      lastError =
-        error instanceof Error
-          ? error.message
-          : "Unable to apply the requested block replacements.";
-      await input.onInvalidReplacement?.(
-        buildInvalidTailorResumeReplacementLogPayload({
-          annotatedLatexCode: normalizedInput.annotatedLatex,
-          candidate: candidateForLogging,
-          error: lastError,
-        }),
-        lastError,
-        attempt,
-      );
-      implementationFeedback =
-        `The previous LaTeX implementation referenced invalid segment edits.\n\nExact issue:\n${lastError}\n\nReturn a corrected strict JSON object with one LaTeX replacement per planned segment.`;
-      continue;
-    }
-
-    const normalizedCandidate = applySavedTailoredResumeLinks(
-      appliedCandidate.annotatedLatex,
-      linkOverrides,
-    );
-    hasAppliedCandidate = true;
-    const validation = await validateTailorResumeLatexDocument(
-      stripTailorResumeSegmentIds(normalizedCandidate.normalizedLatex.annotatedLatex),
-    );
-
-    lastAnnotatedLatex = normalizedCandidate.normalizedLatex.annotatedLatex;
-    lastEdits = candidateEdits;
-    lastSavedLinkUpdateCount = normalizedCandidate.updatedCount;
-    lastSavedLinkUpdates = normalizedCandidate.updatedLinks;
-
-    if (validation.ok) {
-      return {
-        annotatedLatexCode: normalizedCandidate.normalizedLatex.annotatedLatex,
-        attempts: attempt,
-        companyName: lastMetadata.companyName,
-        displayName: lastMetadata.displayName,
-        edits: candidateEdits,
-        generationDurationMs: readGenerationDurationMs(),
-        jobIdentifier: lastMetadata.jobIdentifier,
-        latexCode: stripTailorResumeSegmentIds(
-          normalizedCandidate.normalizedLatex.annotatedLatex,
-        ),
-        model: lastModel,
-        openAiDebug: lastOpenAiDebug,
-        outcome: classifyTailoredResumeGenerationOutcome({
-          hasAppliedCandidate: true,
-          hasPreviewPdf: true,
-        }),
-        planningResult: lastPlanningResult,
-        positionTitle: lastMetadata.positionTitle,
-        previewPdf: validation.previewPdf,
-        savedLinkUpdateCount: normalizedCandidate.updatedCount,
-        savedLinkUpdates: normalizedCandidate.updatedLinks,
-        thesis: lastThesis,
-        validationError: null,
-      };
-    }
-
-    lastError = validation.error;
-
-    await input.onBuildFailure?.(
-      stripTailorResumeSegmentIds(normalizedCandidate.normalizedLatex.annotatedLatex),
-      validation.error,
-      attempt,
-    );
-
-    implementationFeedback =
-      `Applying your previous LaTeX implementations produced a compile failure.\n\n` +
-      `Compiler error:\n${validation.error}\n\n` +
-      "Return corrected LaTeX replacements for the same planned segments only.";
-  }
-
-  const failedAttempts = completedImplementationAttempts || maxTailoredResumeAttempts;
-
-  return {
-    annotatedLatexCode: lastAnnotatedLatex,
-    attempts: failedAttempts,
-    companyName: lastMetadata.companyName,
-    displayName: lastMetadata.displayName,
-    edits: lastEdits,
-    generationDurationMs: readGenerationDurationMs(),
-    jobIdentifier: lastMetadata.jobIdentifier,
-    latexCode: stripTailorResumeSegmentIds(lastAnnotatedLatex),
-    model: lastModel,
-    openAiDebug: lastOpenAiDebug,
-    outcome: classifyTailoredResumeGenerationOutcome({
-      hasAppliedCandidate,
-      hasPreviewPdf: false,
-    }),
-    planningResult: lastPlanningResult,
-    positionTitle: lastMetadata.positionTitle,
-    previewPdf: null,
-    savedLinkUpdateCount: lastSavedLinkUpdateCount,
-    savedLinkUpdates: lastSavedLinkUpdates,
-    thesis: lastThesis,
-    validationError:
-      lastError ??
-      `Unable to implement a tailored resume after ${failedAttempts} attempts.`,
-  };
+  return implementTailoredResumePlan({
+    annotatedLatexCode: input.annotatedLatexCode,
+    generationDurationMsBase: planningStage.generationDurationMs,
+    jobDescription: input.jobDescription,
+    linkOverrides,
+    model: planningStage.model,
+    onBuildFailure: input.onBuildFailure,
+    onInvalidReplacement: input.onInvalidReplacement,
+    onStepEvent: input.onStepEvent,
+    planningDebug: planningStage.planningDebug,
+    planningResult: planningStage.planningResult,
+    planningSnapshot: planningStage.planningSnapshot,
+    promptSettings: input.promptSettings,
+  });
 }

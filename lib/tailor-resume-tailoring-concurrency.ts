@@ -1,17 +1,10 @@
 import type {
   TailorResumeAnnotatedLatexState,
+  TailorResumeGenerationSourceSnapshot,
   TailorResumeLockedLinkRecord,
   TailorResumeProfile,
   TailoredResumeRecord,
 } from "./tailor-resume-types.ts";
-
-export type TailorResumeGenerationSourceSnapshot = {
-  latexCode: string;
-  linkState: string;
-  lockedLinkState: string;
-  resumeStoragePath: string | null;
-  resumeUpdatedAt: string | null;
-};
 
 function serializeGenerationLinks(links: TailorResumeProfile["links"]) {
   return JSON.stringify(

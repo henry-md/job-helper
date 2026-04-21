@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import type {
   PDFDocumentLoadingTask,
   PDFDocumentProxy,
@@ -26,6 +26,7 @@ type TailoredResumeInteractivePreviewProps = {
   focusQuery: TailoredResumePreviewFocusQuery | null;
   focusRequest: number;
   highlightQueries: TailoredResumeInteractivePreviewQuery[];
+  onPageSnapshot?: (input: { dataUrl: string | null; pageNumber: number }) => void;
   onRenderFailure?: () => void;
   pdfUrl: string | null;
 };
@@ -66,11 +67,185 @@ type PageHighlightSource = {
 let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
 const interactivePreviewLoadRetryDelays = [150, 400];
 const interactivePreviewGuidedFocusDurationMs = 320;
+const maxPreviewSnapshotWidth = 1200;
+
+type PreviewSnapshotHighlightTone = "added" | "changed" | "focus";
 
 function waitForInteractivePreviewRetry(delayMs: number) {
   return new Promise<void>((resolve) => {
     window.setTimeout(resolve, delayMs);
   });
+}
+
+function buildPreviewSnapshotHighlightStyle(tone: PreviewSnapshotHighlightTone) {
+  if (tone === "added") {
+    return {
+      fillStyle: "rgba(34, 197, 94, 0.24)",
+      shadowBlur: 18,
+      shadowColor: "rgba(22, 163, 74, 0.16)",
+      strokeStyle: "rgba(22, 163, 74, 0.2)",
+      strokeWidth: 1.2,
+    };
+  }
+
+  if (tone === "focus") {
+    return {
+      fillStyle: "rgba(37, 99, 235, 0.18)",
+      shadowBlur: 26,
+      shadowColor: "rgba(37, 99, 235, 0.2)",
+      strokeStyle: "rgba(96, 165, 250, 0.5)",
+      strokeWidth: 2,
+    };
+  }
+
+  return {
+    fillStyle: "rgba(245, 158, 11, 0.28)",
+    shadowBlur: 20,
+    shadowColor: "rgba(217, 119, 6, 0.18)",
+    strokeStyle: "rgba(217, 119, 6, 0.24)",
+    strokeWidth: 1.2,
+  };
+}
+
+function appendRoundedRectPath(input: {
+  context: CanvasRenderingContext2D;
+  height: number;
+  left: number;
+  radius: number;
+  top: number;
+  width: number;
+}) {
+  const right = input.left + input.width;
+  const bottom = input.top + input.height;
+  const radius = Math.max(
+    0,
+    Math.min(input.radius, input.width / 2, input.height / 2),
+  );
+
+  input.context.beginPath();
+  input.context.moveTo(input.left + radius, input.top);
+  input.context.lineTo(right - radius, input.top);
+  input.context.quadraticCurveTo(right, input.top, right, input.top + radius);
+  input.context.lineTo(right, bottom - radius);
+  input.context.quadraticCurveTo(right, bottom, right - radius, bottom);
+  input.context.lineTo(input.left + radius, bottom);
+  input.context.quadraticCurveTo(input.left, bottom, input.left, bottom - radius);
+  input.context.lineTo(input.left, input.top + radius);
+  input.context.quadraticCurveTo(input.left, input.top, input.left + radius, input.top);
+  input.context.closePath();
+}
+
+function drawPreviewSnapshotHighlight(input: {
+  context: CanvasRenderingContext2D;
+  downscaleRatio: number;
+  pageHeight: number;
+  pageWidth: number;
+  rect: HighlightRect;
+  tone: PreviewSnapshotHighlightTone;
+}) {
+  const style = buildPreviewSnapshotHighlightStyle(input.tone);
+  const scaleX = input.pageWidth > 0 ? input.downscaleRatio : 1;
+  const scaleY = input.pageHeight > 0 ? input.downscaleRatio : 1;
+  const left = input.rect.left * scaleX;
+  const top = input.rect.top * scaleY;
+  const width = input.rect.width * scaleX;
+  const height = input.rect.height * scaleY;
+  const radius = Math.max(2, Math.min(width, height) * 0.18);
+
+  input.context.save();
+  input.context.fillStyle = style.fillStyle;
+  input.context.strokeStyle = style.strokeStyle;
+  input.context.lineWidth = style.strokeWidth;
+  input.context.shadowBlur = style.shadowBlur;
+  input.context.shadowColor = style.shadowColor;
+  input.context.shadowOffsetX = 0;
+  input.context.shadowOffsetY = 0;
+  appendRoundedRectPath({
+    context: input.context,
+    height,
+    left,
+    radius,
+    top,
+    width,
+  });
+  input.context.fill();
+  input.context.shadowBlur = 0;
+  appendRoundedRectPath({
+    context: input.context,
+    height,
+    left,
+    radius,
+    top,
+    width,
+  });
+  input.context.stroke();
+  input.context.restore();
+}
+
+function buildPreviewSnapshotDataUrl(input: {
+  canvas: HTMLCanvasElement;
+  focusHighlightRects: HighlightRect[];
+  includeFocusHighlights: boolean;
+  pageHeight: number;
+  pageHighlightMatches: PageHighlightMatch[];
+  pageWidth: number;
+}) {
+  const { canvas } = input;
+  const sourceWidth = canvas.width;
+  const sourceHeight = canvas.height;
+
+  if (!sourceWidth || !sourceHeight) {
+    throw new Error("Unable to snapshot an empty PDF canvas.");
+  }
+
+  const downscaleRatio =
+    sourceWidth > maxPreviewSnapshotWidth
+      ? maxPreviewSnapshotWidth / sourceWidth
+      : 1;
+
+  if (downscaleRatio === 1) {
+    return canvas.toDataURL("image/jpeg", 0.92);
+  }
+
+  const exportCanvas = document.createElement("canvas");
+  exportCanvas.width = Math.max(1, Math.round(sourceWidth * downscaleRatio));
+  exportCanvas.height = Math.max(1, Math.round(sourceHeight * downscaleRatio));
+
+  const exportContext = exportCanvas.getContext("2d");
+
+  if (!exportContext) {
+    throw new Error("Unable to create a preview snapshot canvas.");
+  }
+
+  exportContext.drawImage(canvas, 0, 0, exportCanvas.width, exportCanvas.height);
+
+  for (const match of input.pageHighlightMatches) {
+    for (const rect of match.rects) {
+      drawPreviewSnapshotHighlight({
+        context: exportContext,
+        downscaleRatio,
+        pageHeight: input.pageHeight,
+        pageWidth: input.pageWidth,
+        rect,
+        tone: match.tone,
+      });
+    }
+  }
+
+  if (input.includeFocusHighlights) {
+    for (const rect of input.focusHighlightRects) {
+      drawPreviewSnapshotHighlight({
+        context: exportContext,
+        downscaleRatio,
+        pageHeight: input.pageHeight,
+        pageWidth: input.pageWidth,
+        rect,
+        tone: "focus",
+      });
+    }
+  }
+
+  return exportCanvas.toDataURL("image/jpeg", 0.92);
 }
 
 function installPdfJsCollectionPolyfills() {
@@ -538,6 +713,7 @@ function InteractivePreviewPage({
   focusQuery,
   focusRequest,
   highlightQueries,
+  onPageSnapshot,
   onRenderFailure,
   page,
   scale,
@@ -549,6 +725,7 @@ function InteractivePreviewPage({
   focusQuery: TailoredResumePreviewFocusQuery | null;
   focusRequest: number;
   highlightQueries: TailoredResumeInteractivePreviewQuery[];
+  onPageSnapshot?: (input: { dataUrl: string | null; pageNumber: number }) => void;
   onRenderFailure?: () => void;
   page: LoadedPdfPage;
   scale: number;
@@ -566,9 +743,16 @@ function InteractivePreviewPage({
   const [renderState, setRenderState] = useState<"error" | "loading" | "ready">(
     "loading",
   );
+  const pageHeight = page.baseHeight * scale;
+  const pageWidth = page.baseWidth * scale;
   const pageRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const lastScrolledFocusSignatureRef = useRef<string | null>(null);
+  const emitPageSnapshot = useEffectEvent(
+    (input: { dataUrl: string | null; pageNumber: number }) => {
+      onPageSnapshot?.(input);
+    },
+  );
 
   // Recompute overlays without repainting the underlying PDF page on every edit click.
   useEffect(() => {
@@ -707,6 +891,62 @@ function InteractivePreviewPage({
   }, [focusMatchKey, focusQuery, highlightQueries, highlightSource]);
 
   useEffect(() => {
+    const shouldIncludeFocusHighlight =
+      focusActive &&
+      focusHighlightRects.length > 0 &&
+      guidedFocusToken === `${focusKey}:${focusRequest}`;
+
+    if (renderState !== "ready") {
+      emitPageSnapshot({
+        dataUrl: null,
+        pageNumber: page.pageNumber,
+      });
+      return;
+    }
+
+    const canvas = canvasRef.current;
+
+    if (!canvas) {
+      emitPageSnapshot({
+        dataUrl: null,
+        pageNumber: page.pageNumber,
+      });
+      return;
+    }
+
+    try {
+      emitPageSnapshot({
+        dataUrl: buildPreviewSnapshotDataUrl({
+          canvas,
+          focusHighlightRects,
+          includeFocusHighlights: shouldIncludeFocusHighlight,
+          pageHeight,
+          pageHighlightMatches,
+          pageWidth,
+        }),
+        pageNumber: page.pageNumber,
+      });
+    } catch (snapshotError) {
+      console.warn("Unable to snapshot the interactive preview canvas.", snapshotError);
+      emitPageSnapshot({
+        dataUrl: null,
+        pageNumber: page.pageNumber,
+      });
+    }
+  }, [
+    focusActive,
+    focusHighlightRects,
+    focusKey,
+    focusRequest,
+    guidedFocusToken,
+    page.pageNumber,
+    pageHeight,
+    pageHighlightMatches,
+    pageWidth,
+    renderState,
+  ]);
+
+  useEffect(() => {
     if (!focusActive || !focusKey || focusHighlightRects.length === 0) {
       setGuidedFocusToken(null);
       return;
@@ -765,9 +1005,6 @@ function InteractivePreviewPage({
       window.clearTimeout(clearFocusTimer);
     };
   }, [focusActive, focusHighlightRects, focusKey, focusRequest, scrollContainerRef]);
-
-  const pageHeight = page.baseHeight * scale;
-  const pageWidth = page.baseWidth * scale;
 
   return (
     <div
@@ -851,6 +1088,7 @@ export default function TailoredResumeInteractivePreview({
   focusMatchKey,
   focusQuery,
   highlightQueries,
+  onPageSnapshot,
   onRenderFailure,
   pdfUrl,
 }: TailoredResumeInteractivePreviewProps) {
@@ -1030,6 +1268,7 @@ export default function TailoredResumeInteractivePreview({
                   focusRequest={focusRequest}
                   highlightQueries={highlightQueries}
                   key={page.pageNumber}
+                  onPageSnapshot={onPageSnapshot}
                   onRenderFailure={onRenderFailure}
                   page={page}
                   scale={pageScale}

@@ -584,7 +584,9 @@ export default function DashboardWorkspace({
             <div className="h-full overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto">
               <PromptSettingsWorkspace
                 defaultPromptValues={defaultPromptSettings}
+                initialGenerationSettings={tailorResumeProfile.generationSettings}
                 initialPromptSettings={tailorResumeProfile.promptSettings}
+                tailoredResumes={tailoredResumes}
               />
             </div>
           </section>

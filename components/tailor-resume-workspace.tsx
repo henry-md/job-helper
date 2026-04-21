@@ -2,6 +2,7 @@
 
 import {
   type ChangeEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
@@ -17,6 +18,12 @@ import { ChevronsLeft, ChevronsRight, Lock, LockOpen, Trash2 } from "lucide-reac
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import { toast } from "sonner";
 import {
+  TailorResumeProgressModal,
+  TailorResumeProgressToast,
+  type TailorResumeGenerationProgressNotification,
+  type TailorResumeGenerationProgressStep,
+} from "@/components/tailor-resume-generation-progress";
+import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
@@ -25,6 +32,8 @@ import { formatTailorResumeLatexError } from "@/lib/tailor-resume-error-format";
 import { normalizeTailorResumeLinkUrl } from "@/lib/tailor-resume-links";
 import type {
   SavedResumeRecord,
+  TailorResumeConversationMessage,
+  TailorResumeGenerationStepEvent,
   TailorResumeLinkRecord,
   TailorResumeProfile,
   TailorResumeSavedLinkUpdate,
@@ -96,6 +105,39 @@ type TailorResumeUploadStreamEvent =
       type: "error";
     };
 
+type TailorResumeRunResponsePayload = {
+  error?: string;
+  profile?: TailorResumeProfile;
+  savedLinkUpdateCount?: number;
+  savedLinkUpdates?: TailorResumeSavedLinkUpdate[];
+  tailoringStatus?: "needs_user_input";
+  tailoredResumeDurationMs?: number;
+  tailoredResumeError?: string | null;
+  tailoredResumeId?: string;
+};
+
+type TailorResumeRunStreamResult = {
+  ok: boolean;
+  payload: TailorResumeRunResponsePayload;
+  status: number;
+};
+
+type TailorResumeRunStreamEvent =
+  | {
+      stepEvent: TailorResumeGenerationStepEvent;
+      type: "generation-step";
+    }
+  | {
+      ok: boolean;
+      payload: TailorResumeRunResponsePayload;
+      status: number;
+      type: "done";
+    }
+  | {
+      error: string;
+      type: "error";
+    };
+
 const acceptedResumeMimeTypes = new Set([
   "application/pdf",
   "image/png",
@@ -111,10 +153,68 @@ const latexSaveToastId = "tailor-resume-latex-save";
 const latexLinkSyncToastId = "tailor-resume-latex-link-sync";
 const linkValidationToastId = "tailor-resume-link-validation";
 const resumeLinkSaveToastId = "tailor-resume-link-save";
+const tailorResumeRunToastId = "tailor-resume-run";
 const resumeUploadToastId = "tailor-resume-resume-upload";
 const savedLinkUpdateToastId = "tailor-resume-saved-link-updates";
 const failedLinkToastDurationMs = 5 * 60 * 1_000;
-const typicalTailoringDurationLabel = "~1:10";
+const tailorResumeGenerationStepLabels = [
+  {
+    label: "Plan targeted edits",
+    stepNumber: 1,
+  },
+  {
+    label: "Clarify missing details",
+    stepNumber: 2,
+  },
+  {
+    label: "Apply block-level resume changes",
+    stepNumber: 3,
+  },
+  {
+    label: "Keep the original page count",
+    stepNumber: 4,
+  },
+] as const;
+
+type TailorResumeGenerationProgressState = {
+  latestNotification: TailorResumeGenerationProgressNotification;
+  steps: TailorResumeGenerationProgressStep[];
+};
+
+function createTailorResumeProgressState(input?: {
+  activeStepNumber?: number;
+  completedStepNumbers?: number[];
+  detail?: string;
+}): TailorResumeGenerationProgressState {
+  const completedStepNumberSet = new Set(input?.completedStepNumbers ?? []);
+  const activeStepNumber = Math.min(
+    tailorResumeGenerationStepLabels.length,
+    Math.max(1, input?.activeStepNumber ?? 1),
+  );
+
+  return {
+    latestNotification: {
+      detail:
+        input?.detail ??
+        "Tracking the latest update from the 4-step generation flow.",
+      title: "Generating resume...",
+      tone: "info" as const,
+    },
+    steps: tailorResumeGenerationStepLabels.map(
+      (step): TailorResumeGenerationProgressStep => ({
+        attempt: null,
+        detail: null,
+        label: step.label,
+        stepNumber: step.stepNumber,
+        status: completedStepNumberSet.has(step.stepNumber)
+          ? "succeeded"
+          : step.stepNumber === activeStepNumber
+            ? "current"
+            : "pending",
+      }),
+    ),
+  };
+}
 
 function formatElapsedDuration(durationMs: number | null | undefined) {
   if (
@@ -140,41 +240,96 @@ function formatElapsedDuration(durationMs: number | null | undefined) {
   return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
 }
 
-function formatElapsedClock(durationMs: number) {
-  const totalSeconds = Math.max(0, Math.floor(durationMs / 1_000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+function buildTailorResumeProgressNotification(
+  event: TailorResumeGenerationStepEvent,
+): TailorResumeGenerationProgressNotification {
+  if (event.status === "running") {
+    return {
+      detail: event.detail,
+      title: `Step ${event.stepNumber} is running: ${event.summary}`,
+      tone: "info",
+    };
+  }
+
+  if (event.status === "failed" && event.retrying) {
+    return {
+      detail:
+        event.detail ??
+        `Attempt ${event.attempt ?? 1} failed, so this step started another pass automatically.`,
+      title: `Retrying step ${event.stepNumber}: ${event.summary}`,
+      tone: "error",
+    };
+  }
+
+  if (event.status === "failed") {
+    return {
+      detail: event.detail,
+      title: `Step ${event.stepNumber} failed: ${event.summary}`,
+      tone: "error",
+    };
+  }
+
+  if (event.status === "succeeded") {
+    return {
+      detail: event.detail,
+      title: `Step ${event.stepNumber} finished: ${event.summary}`,
+      tone: "success",
+    };
+  }
+
+  return {
+    detail: event.detail,
+    title: `Step ${event.stepNumber} skipped: ${event.summary}`,
+    tone: "info",
+  };
 }
 
-function TailoringProgressToast({ startedAt }: { startedAt: number }) {
-  const [elapsedMs, setElapsedMs] = useState(() =>
-    Math.max(0, performance.now() - startedAt),
-  );
+function applyTailorResumeStepEventToProgressState(
+  currentState: TailorResumeGenerationProgressState,
+  event: TailorResumeGenerationStepEvent,
+): TailorResumeGenerationProgressState {
+  const nextActiveStepNumber =
+    event.status === "running"
+      ? event.stepNumber
+      : event.status === "failed"
+        ? event.retrying
+          ? event.stepNumber
+          : null
+        : event.stepNumber < event.stepCount
+          ? event.stepNumber + 1
+          : null;
 
-  useEffect(() => {
-    const intervalId = window.setInterval(() => {
-      setElapsedMs(Math.max(0, performance.now() - startedAt));
-    }, 1_000);
+  return {
+    latestNotification: buildTailorResumeProgressNotification(event),
+    steps: currentState.steps.map((step): TailorResumeGenerationProgressStep => {
+      if (step.stepNumber < event.stepNumber) {
+        return step;
+      }
 
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [startedAt]);
+      if (step.stepNumber === event.stepNumber) {
+        return {
+          ...step,
+          attempt: event.attempt,
+          detail: event.detail,
+          status:
+            event.status === "running"
+              ? event.retrying
+                ? "retrying"
+                : "current"
+              : event.status === "failed"
+              ? event.retrying
+                ? "retrying"
+                : "failed"
+              : event.status,
+        };
+      }
 
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between gap-3">
-        <span>Tailoring a job-specific LaTeX resume...</span>
-        <span className="shrink-0 text-zinc-400">
-          {formatElapsedClock(elapsedMs)}
-        </span>
-      </div>
-      <div className="text-xs text-zinc-400">
-        usually takes {typicalTailoringDurationLabel}
-      </div>
-    </div>
-  );
+      return {
+        ...step,
+        status: nextActiveStepNumber === step.stepNumber ? "current" : "pending",
+      };
+    }),
+  };
 }
 
 function resolveElapsedDurationMs(
@@ -365,6 +520,73 @@ async function readTailorResumeUploadStream(
   }
 
   return finalPayload;
+}
+
+function isNdjsonResponse(response: Response) {
+  return (
+    response.headers
+      .get("Content-Type")
+      ?.toLowerCase()
+      .includes("text/x-ndjson") ?? false
+  );
+}
+
+async function readTailorResumeGenerationStream(
+  response: Response,
+  handlers: {
+    onStepEvent: (stepEvent: TailorResumeGenerationStepEvent) => void;
+  },
+) {
+  if (!response.body) {
+    throw new Error("The tailoring run did not return a readable response stream.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: TailorResumeRunStreamResult | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+
+      if (!trimmedLine) {
+        continue;
+      }
+
+      const event = JSON.parse(trimmedLine) as TailorResumeRunStreamEvent;
+
+      if (event.type === "generation-step") {
+        handlers.onStepEvent(event.stepEvent);
+        continue;
+      }
+
+      if (event.type === "error") {
+        throw new Error(event.error);
+      }
+
+      finalResult = {
+        ok: event.ok,
+        payload: event.payload,
+        status: event.status,
+      };
+    }
+
+    if (done) {
+      break;
+    }
+  }
+
+  if (!finalResult) {
+    throw new Error("The tailoring run finished without a final response payload.");
+  }
+
+  return finalResult;
 }
 
 function showExtractionAttemptToasts(
@@ -562,6 +784,7 @@ export default function TailorResumeWorkspace({
   const latestDraftLatexCodeRef = useRef(resolveSavedLatexCode(initialProfile));
   const pendingLatexCodeRef = useRef<string | null>(null);
   const isLatexSaveInFlightRef = useRef(false);
+  const isTailorInterviewSubmitInFlightRef = useRef(false);
   const lastAutoOpenedLinkReviewRef = useRef(initialProfile.extraction.updatedAt);
   const previousPreviewPdfUrlRef = useRef(
     buildPreviewPdfUrl(initialProfile.latex.pdfUpdatedAt),
@@ -584,6 +807,12 @@ export default function TailorResumeWorkspace({
   const [isSavingJobDescription, setIsSavingJobDescription] = useState(false);
   const [isSavingLatex, setIsSavingLatex] = useState(false);
   const [isSavingLinks, setIsSavingLinks] = useState(false);
+  const [isTailorInterviewOpen, setIsTailorInterviewOpen] = useState(false);
+  const [isTailorResumeProgressOpen, setIsTailorResumeProgressOpen] = useState(false);
+  const [isCancellingTailorInterview, setIsCancellingTailorInterview] =
+    useState(false);
+  const [isSubmittingTailorInterviewAnswer, setIsSubmittingTailorInterviewAnswer] =
+    useState(false);
   const [isTailoringResume, setIsTailoringResume] = useState(false);
   const [isUpdatingBaseResumeStep, setIsUpdatingBaseResumeStep] = useState(false);
   const [isUploadingResume, setIsUploadingResume] = useState(false);
@@ -600,8 +829,29 @@ export default function TailorResumeWorkspace({
   const [latexState, setLatexState] = useState<"idle" | "saved" | "saving">(
     "idle",
   );
+  const [tailorResumeGenerationProgress, setTailorResumeGenerationProgress] =
+    useState<TailorResumeGenerationProgressState>(() =>
+      createTailorResumeProgressState(),
+    );
+  const [draftTailorInterviewAnswer, setDraftTailorInterviewAnswer] = useState("");
+  const [pendingTailorInterviewAnswerMessage, setPendingTailorInterviewAnswerMessage] =
+    useState<TailorResumeConversationMessage | null>(null);
 
   const resume = profile.resume;
+  const tailoringInterview = profile.workspace.tailoringInterview;
+  const tailoringInterviewSummary =
+    tailoringInterview?.planningResult.questioningSummary ?? null;
+  const hasTailoringInterview = tailoringInterview !== null;
+  const displayedTailoringInterviewConversation = tailoringInterview
+    ? pendingTailorInterviewAnswerMessage &&
+        tailoringInterview.conversation.at(-1)?.id !==
+          pendingTailorInterviewAnswerMessage.id
+      ? [
+          ...tailoringInterview.conversation,
+          pendingTailorInterviewAnswerMessage,
+        ]
+      : tailoringInterview.conversation
+    : [];
   const displayedResume = pendingResume ?? resume;
   const pendingDeletedLinkKeySet = new Set(pendingDeletedLinkKeys);
   const editableLinks = profile.links.filter(
@@ -620,7 +870,8 @@ export default function TailorResumeWorkspace({
     );
   const previewAsImage = displayedResume?.mimeType.startsWith("image/") ?? false;
   const isBaseResumeStepComplete = profile.workspace.isBaseResumeStepComplete;
-  const isJobDescriptionLocked = !isBaseResumeStepComplete;
+  const isJobDescriptionLocked =
+    !isBaseResumeStepComplete || hasTailoringInterview;
   const hasUnsavedJobDescriptionChanges =
     draftJobDescription !== lastSavedJobDescriptionRef.current;
   const editorDisabled = isUploadingResume;
@@ -674,6 +925,7 @@ export default function TailorResumeWorkspace({
     latestDraftLatexCodeRef.current = resolvedLatexCode;
     pendingLatexCodeRef.current = null;
     isLatexSaveInFlightRef.current = false;
+    isTailorInterviewSubmitInFlightRef.current = false;
     lastAutoOpenedLinkReviewRef.current = initialProfile.extraction.updatedAt;
     previousPreviewPdfUrlRef.current = buildPreviewPdfUrl(
       initialProfile.latex.pdfUpdatedAt,
@@ -683,9 +935,16 @@ export default function TailorResumeWorkspace({
     setIsPreviewCollapsed(false);
     setIsPreviewFrameLoading(false);
     setIsSavingLinks(false);
+    setIsTailorInterviewOpen(false);
+    setIsTailorResumeProgressOpen(false);
+    setIsCancellingTailorInterview(false);
+    setIsSubmittingTailorInterviewAnswer(false);
     setIsTailoringResume(false);
     setIsUpdatingBaseResumeStep(false);
     setActiveLatexView("source");
+    setTailorResumeGenerationProgress(createTailorResumeProgressState());
+    setDraftTailorInterviewAnswer("");
+    setPendingTailorInterviewAnswerMessage(null);
     setDraftLinkLocks(buildLinkLockDrafts(initialProfile.links));
     setDraftLinkUrls(buildLinkUrlDrafts(initialProfile.links));
     setJobDescriptionState(
@@ -693,6 +952,22 @@ export default function TailorResumeWorkspace({
     );
     setLatexState("idle");
   }, [initialProfile]);
+
+  useEffect(() => {
+    if (!tailoringInterview) {
+      isTailorInterviewSubmitInFlightRef.current = false;
+      setIsTailorInterviewOpen(false);
+      setDraftTailorInterviewAnswer("");
+      setPendingTailorInterviewAnswerMessage(null);
+      setIsCancellingTailorInterview(false);
+      setIsSubmittingTailorInterviewAnswer(false);
+      return;
+    }
+
+    isTailorInterviewSubmitInFlightRef.current = false;
+    setDraftTailorInterviewAnswer("");
+    setPendingTailorInterviewAnswerMessage(null);
+  }, [tailoringInterview?.id, tailoringInterview]);
 
   useEffect(() => {
     setDraftLinkUrls((currentDraftLinkUrls) => {
@@ -791,6 +1066,74 @@ export default function TailorResumeWorkspace({
       revokeObjectUrl(pendingResume?.storagePath);
     };
   }, [pendingResume]);
+
+  const closeTailorResumeProgress = useCallback(() => {
+    setIsTailorResumeProgressOpen(false);
+  }, []);
+
+  const openTailorResumeProgress = useCallback(() => {
+    setIsTailorResumeProgressOpen(true);
+  }, []);
+
+  const openTailorResumeInterview = useCallback(() => {
+    setIsTailorInterviewOpen(true);
+  }, []);
+
+  const showTailorResumeInterviewToast = useCallback(() => {
+    toast(
+      <TailorResumeProgressToast
+        ariaLabel="Open resume follow-up questions"
+        label="Resume questions pending..."
+        onOpen={openTailorResumeInterview}
+      />,
+      {
+        classNames: {
+          content: "min-w-0 flex-1",
+          title: "min-w-0 w-full",
+        },
+        id: tailorResumeRunToastId,
+      },
+    );
+  }, [openTailorResumeInterview]);
+
+  const startTailorResumeProgress = useCallback(
+    (input?: {
+      activeStepNumber?: number;
+      completedStepNumbers?: number[];
+      detail?: string;
+    }) => {
+      setIsTailorResumeProgressOpen(true);
+      setTailorResumeGenerationProgress(createTailorResumeProgressState(input));
+      toast.loading(
+        <TailorResumeProgressToast onOpen={openTailorResumeProgress} />,
+        {
+          classNames: {
+            content: "min-w-0 flex-1",
+            title: "min-w-0 w-full",
+          },
+          id: tailorResumeRunToastId,
+        },
+      );
+    },
+    [openTailorResumeProgress],
+  );
+
+  const handleTailorResumeStepEvent = useCallback(
+    (stepEvent: TailorResumeGenerationStepEvent) => {
+      setTailorResumeGenerationProgress((currentProgress) =>
+        applyTailorResumeStepEventToProgressState(currentProgress, stepEvent),
+      );
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!hasTailoringInterview) {
+      return;
+    }
+
+    showTailorResumeInterviewToast();
+  }, [hasTailoringInterview, showTailorResumeInterviewToast, tailoringInterview?.id]);
 
   const flushPendingLatexSave = useCallback(async () => {
     if (isLatexSaveInFlightRef.current) {
@@ -1003,6 +1346,24 @@ export default function TailorResumeWorkspace({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [isLinkEditorOpen]);
+
+  useEffect(() => {
+    if (!isTailorInterviewOpen) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsTailorInterviewOpen(false);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isTailorInterviewOpen]);
 
   async function uploadResume(file: File) {
     const validationError = validateResumeFile(file);
@@ -1404,6 +1765,11 @@ export default function TailorResumeWorkspace({
   }
 
   async function tailorResume() {
+    if (tailoringInterview) {
+      setIsTailorInterviewOpen(true);
+      return;
+    }
+
     if (!openAIReady) {
       toast.error("Add OPENAI_API_KEY before tailoring the resume.");
       return;
@@ -1421,8 +1787,9 @@ export default function TailorResumeWorkspace({
 
     setIsTailoringResume(true);
     const tailoringStartedAt = performance.now();
-    toast.loading(<TailoringProgressToast startedAt={tailoringStartedAt} />, {
-      id: "tailor-resume-run",
+    startTailorResumeProgress({
+      activeStepNumber: 1,
+      detail: "Tracking each of the 4 tailoring steps while the resume is being generated.",
     });
 
     try {
@@ -1433,18 +1800,20 @@ export default function TailorResumeWorkspace({
         }),
         headers: {
           "Content-Type": "application/json",
+          "x-tailor-resume-stream": "1",
         },
         method: "PATCH",
       });
-      const payload = (await response.json()) as {
-        error?: string;
-        profile?: TailorResumeProfile;
-        savedLinkUpdateCount?: number;
-        savedLinkUpdates?: TailorResumeSavedLinkUpdate[];
-        tailoredResumeId?: string;
-        tailoredResumeDurationMs?: number;
-        tailoredResumeError?: string | null;
-      };
+      const streamedResult = isNdjsonResponse(response)
+        ? await readTailorResumeGenerationStream(response, {
+            onStepEvent: handleTailorResumeStepEvent,
+          })
+        : {
+            ok: response.ok,
+            payload: (await response.json()) as TailorResumeRunResponsePayload,
+            status: response.status,
+          };
+      const payload = streamedResult.payload;
       const tailoringDurationMs = resolveElapsedDurationMs(
         payload.tailoredResumeDurationMs,
         tailoringStartedAt,
@@ -1453,7 +1822,7 @@ export default function TailorResumeWorkspace({
         tailoringDurationMs,
       );
 
-      if (!response.ok || !payload.profile) {
+      if (!streamedResult.ok || !payload.profile) {
         throw new Error(payload.error ?? "Unable to tailor the resume.");
       }
 
@@ -1467,6 +1836,13 @@ export default function TailorResumeWorkspace({
             : "idle"
           : "dirty",
       );
+      closeTailorResumeProgress();
+      if (payload.profile.workspace.tailoringInterview) {
+        setIsTailorInterviewOpen(true);
+        showTailorResumeInterviewToast();
+        return;
+      }
+
       showSavedLinkUpdateToast(
         payload.savedLinkUpdateCount,
         payload.savedLinkUpdates,
@@ -1480,7 +1856,7 @@ export default function TailorResumeWorkspace({
             ? `Saved a tailored draft in ${formattedTailoringDuration}, but it still needs review: ${payload.tailoredResumeError}. Opening review.`
             : `Saved a tailored draft, but it still needs review: ${payload.tailoredResumeError}. Opening review.`,
           {
-            id: "tailor-resume-run",
+            id: tailorResumeRunToastId,
           },
         );
       } else {
@@ -1489,7 +1865,7 @@ export default function TailorResumeWorkspace({
             ? `Saved a job-specific tailored resume in ${formattedTailoringDuration}. Opening review.`
             : "Saved a job-specific tailored resume. Opening review.",
           {
-            id: "tailor-resume-run",
+            id: tailorResumeRunToastId,
           },
         );
       }
@@ -1503,16 +1879,223 @@ export default function TailorResumeWorkspace({
       );
       const errorMessage =
         error instanceof Error ? error.message : "Unable to tailor the resume.";
+      closeTailorResumeProgress();
       toast.error(
         formattedTailoringDuration
           ? `${errorMessage} (${formattedTailoringDuration})`
           : errorMessage,
         {
-          id: "tailor-resume-run",
+          id: tailorResumeRunToastId,
         },
       );
     } finally {
       setIsTailoringResume(false);
+    }
+  }
+
+  async function submitTailorResumeInterviewAnswer() {
+    if (
+      !tailoringInterview ||
+      isTailorInterviewSubmitInFlightRef.current ||
+      isSubmittingTailorInterviewAnswer ||
+      isCancellingTailorInterview
+    ) {
+      return;
+    }
+
+    const trimmedAnswer = draftTailorInterviewAnswer.trim();
+
+    if (!trimmedAnswer) {
+      return;
+    }
+
+    const optimisticAnswerMessage: TailorResumeConversationMessage = {
+      id: `pending-tailor-interview-answer-${Date.now()}`,
+      role: "user",
+      text: trimmedAnswer,
+    };
+
+    isTailorInterviewSubmitInFlightRef.current = true;
+    setPendingTailorInterviewAnswerMessage(optimisticAnswerMessage);
+    setDraftTailorInterviewAnswer("");
+    setIsTailorInterviewOpen(false);
+    setIsSubmittingTailorInterviewAnswer(true);
+    const tailoringStartedAt = performance.now();
+    startTailorResumeProgress({
+      activeStepNumber: 2,
+      completedStepNumbers: [1],
+      detail:
+        "Picking back up from the follow-up question step before we finish the remaining stages.",
+    });
+
+    try {
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({
+          action: "advanceTailorResumeInterview",
+          answer: trimmedAnswer,
+          interviewId: tailoringInterview.id,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+          "x-tailor-resume-stream": "1",
+        },
+        method: "PATCH",
+      });
+      const streamedResult = isNdjsonResponse(response)
+        ? await readTailorResumeGenerationStream(response, {
+            onStepEvent: handleTailorResumeStepEvent,
+          })
+        : {
+            ok: response.ok,
+            payload: (await response.json()) as TailorResumeRunResponsePayload,
+            status: response.status,
+          };
+      const payload = streamedResult.payload;
+
+      if (!streamedResult.ok || !payload.profile) {
+        throw new Error(
+          payload.error ?? "Unable to continue the tailoring follow-up questions.",
+        );
+      }
+
+      setPendingTailorInterviewAnswerMessage(null);
+      setProfile(payload.profile);
+      lastSavedJobDescriptionRef.current = payload.profile.jobDescription;
+      onTailoredResumesChange?.(payload.profile.tailoredResumes);
+      closeTailorResumeProgress();
+
+      if (payload.profile.workspace.tailoringInterview) {
+        setIsTailorInterviewOpen(true);
+        showTailorResumeInterviewToast();
+        return;
+      }
+
+      setIsTailorInterviewOpen(false);
+      showSavedLinkUpdateToast(
+        payload.savedLinkUpdateCount,
+        payload.savedLinkUpdates,
+      );
+      const formattedTailoringDuration = formatElapsedDuration(
+        resolveElapsedDurationMs(
+          payload.tailoredResumeDurationMs,
+          tailoringStartedAt,
+        ),
+      );
+      const nextTailoredResumeId =
+        payload.tailoredResumeId ?? payload.profile.tailoredResumes[0]?.id ?? null;
+
+      if (payload.tailoredResumeError) {
+        toast.error(
+          formattedTailoringDuration
+            ? `Saved a tailored draft in ${formattedTailoringDuration}, but it still needs review: ${payload.tailoredResumeError}. Opening review.`
+            : `Saved a tailored draft, but it still needs review: ${payload.tailoredResumeError}. Opening review.`,
+          {
+            id: tailorResumeRunToastId,
+          },
+        );
+      } else {
+        toast.success(
+          formattedTailoringDuration
+            ? `Saved a job-specific tailored resume in ${formattedTailoringDuration}. Opening review.`
+            : "Saved a job-specific tailored resume. Opening review.",
+          {
+            id: tailorResumeRunToastId,
+          },
+        );
+      }
+
+      if (nextTailoredResumeId) {
+        onReviewTailoredResume?.(nextTailoredResumeId);
+      }
+    } catch (error) {
+      const formattedTailoringDuration = formatElapsedDuration(
+        Math.max(0, performance.now() - tailoringStartedAt),
+      );
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Unable to continue the tailoring follow-up questions.";
+      setPendingTailorInterviewAnswerMessage(null);
+      setDraftTailorInterviewAnswer(trimmedAnswer);
+      setIsTailorInterviewOpen(true);
+      closeTailorResumeProgress();
+      toast.error(
+        formattedTailoringDuration
+          ? `${errorMessage} (${formattedTailoringDuration})`
+          : errorMessage,
+        {
+          id: tailorResumeRunToastId,
+        },
+      );
+    } finally {
+      isTailorInterviewSubmitInFlightRef.current = false;
+      setIsSubmittingTailorInterviewAnswer(false);
+    }
+  }
+
+  function handleTailorInterviewAnswerKeyDown(
+    event: ReactKeyboardEvent<HTMLTextAreaElement>,
+  ) {
+    if (
+      event.repeat ||
+      event.nativeEvent.isComposing ||
+      event.key !== "Enter" ||
+      event.shiftKey ||
+      (!event.metaKey && !event.ctrlKey)
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    void submitTailorResumeInterviewAnswer();
+  }
+
+  async function cancelTailorResumeInterview() {
+    if (!tailoringInterview || isCancellingTailorInterview) {
+      return;
+    }
+
+    setIsCancellingTailorInterview(true);
+
+    try {
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({
+          action: "cancelTailorResumeInterview",
+        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        profile?: TailorResumeProfile;
+      };
+
+      if (!response.ok || !payload.profile) {
+        throw new Error(
+          payload.error ?? "Unable to discard the tailoring follow-up questions.",
+        );
+      }
+
+      setProfile(payload.profile);
+      setIsTailorInterviewOpen(false);
+      setDraftTailorInterviewAnswer("");
+      toast.success("Discarded the tailoring follow-up questions.", {
+        id: tailorResumeRunToastId,
+      });
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Unable to discard the tailoring follow-up questions.",
+        {
+          id: tailorResumeRunToastId,
+        },
+      );
+    } finally {
+      setIsCancellingTailorInterview(false);
     }
   }
 
@@ -1747,13 +2330,13 @@ export default function TailorResumeWorkspace({
 
               <button
                 className={`rounded-full px-3 py-2 text-[11px] uppercase tracking-[0.2em] transition ${
-                  isUpdatingBaseResumeStep
+                  isUpdatingBaseResumeStep || hasTailoringInterview
                     ? "cursor-wait border border-white/10 bg-white/5 text-zinc-500"
                     : isBaseResumeStepComplete
                       ? "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
                       : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
                 }`}
-                disabled={isUpdatingBaseResumeStep}
+                disabled={isUpdatingBaseResumeStep || hasTailoringInterview}
                 onClick={() =>
                   void setBaseResumeStepComplete(!isBaseResumeStepComplete)
                 }
@@ -1761,6 +2344,8 @@ export default function TailorResumeWorkspace({
               >
                 {isUpdatingBaseResumeStep
                   ? "Updating..."
+                  : hasTailoringInterview
+                    ? "Questions pending"
                   : isBaseResumeStepComplete
                     ? "Edit again"
                     : "Mark complete"}
@@ -1904,7 +2489,7 @@ export default function TailorResumeWorkspace({
                   Submitting this creates a separate tailored resume with saved
                   company, role, and job-specific identifier metadata.
                 </p>
-                {isJobDescriptionLocked ? (
+                {!isBaseResumeStepComplete ? (
                   <p className="mt-3 rounded-[1rem] border border-white/10 bg-black/20 px-3 py-2 text-sm leading-6 text-zinc-400">
                     Mark step 1 complete to unlock job descriptions and resume tailoring.
                   </p>
@@ -1913,8 +2498,10 @@ export default function TailorResumeWorkspace({
 
               <div className="flex flex-wrap items-center gap-2">
                 <StatusPill>
-                  {isJobDescriptionLocked
+                  {!isBaseResumeStepComplete
                     ? "Step 1 required"
+                    : hasTailoringInterview
+                    ? "Questions pending"
                     : isSavingJobDescription
                     ? "Saving..."
                     : jobDescriptionState === "saved"
@@ -1925,14 +2512,16 @@ export default function TailorResumeWorkspace({
                 </StatusPill>
                 <button
                   className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
-                    isJobDescriptionLocked ||
+                    !isBaseResumeStepComplete ||
+                    hasTailoringInterview ||
                     isSavingJobDescription ||
                     !hasUnsavedJobDescriptionChanges
                       ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
                       : "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
                   }`}
                   disabled={
-                    isJobDescriptionLocked ||
+                    !isBaseResumeStepComplete ||
+                    hasTailoringInterview ||
                     isSavingJobDescription ||
                     !hasUnsavedJobDescriptionChanges
                   }
@@ -1945,24 +2534,42 @@ export default function TailorResumeWorkspace({
                   className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
                     !openAIReady ||
                     isTailoringResume ||
-                    isJobDescriptionLocked ||
-                    draftJobDescription.trim().length === 0
+                    (!hasTailoringInterview && isJobDescriptionLocked) ||
+                    (!hasTailoringInterview &&
+                      draftJobDescription.trim().length === 0)
                       ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
                       : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
                   }`}
                   disabled={
                     !openAIReady ||
                     isTailoringResume ||
-                    isJobDescriptionLocked ||
-                    draftJobDescription.trim().length === 0
+                    (!hasTailoringInterview && isJobDescriptionLocked) ||
+                    (!hasTailoringInterview &&
+                      draftJobDescription.trim().length === 0)
                   }
                   onClick={() => void tailorResume()}
                   type="button"
                 >
                   {isTailoringResume
                     ? "Creating..."
+                    : hasTailoringInterview
+                    ? "Resume questions"
                     : "Create tailored resume"}
                 </button>
+                {hasTailoringInterview ? (
+                  <button
+                    className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
+                      isCancellingTailorInterview
+                        ? "cursor-wait border border-white/10 bg-white/5 text-zinc-500"
+                        : "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
+                    }`}
+                    disabled={isCancellingTailorInterview}
+                    onClick={() => void cancelTailorResumeInterview()}
+                    type="button"
+                  >
+                    {isCancellingTailorInterview ? "Discarding..." : "Discard"}
+                  </button>
+                ) : null}
               </div>
             </div>
 
@@ -1975,8 +2582,10 @@ export default function TailorResumeWorkspace({
               disabled={isJobDescriptionLocked}
               onChange={handleJobDescriptionChange}
               placeholder={
-                isJobDescriptionLocked
+                !isBaseResumeStepComplete
                   ? "Complete step 1 to unlock the job description field."
+                  : hasTailoringInterview
+                  ? "Resume or discard the follow-up questions before editing the description."
                   : "Paste job-description snippets here from as many sources as you need, then save or create the tailored resume."
               }
               value={draftJobDescription}
@@ -1984,6 +2593,161 @@ export default function TailorResumeWorkspace({
           </section>
         </>
       ) : null}
+
+      <TailorResumeProgressModal
+        isOpen={isPreviewMounted && isTailorResumeProgressOpen}
+        latestNotification={tailorResumeGenerationProgress.latestNotification}
+        onClose={closeTailorResumeProgress}
+        steps={tailorResumeGenerationProgress.steps}
+      />
+
+      {isPreviewMounted && isTailorInterviewOpen && tailoringInterview
+        ? createPortal(
+            <div className="fixed inset-0 z-[195] flex bg-black/82 px-4 py-6 backdrop-blur-sm sm:px-6">
+              <button
+                aria-label="Close tailoring follow-up"
+                className="absolute right-5 top-5 rounded-full border border-white/15 bg-black/40 px-4 py-2 text-xs uppercase tracking-[0.18em] text-zinc-100 transition hover:border-white/30 hover:bg-black/60"
+                onClick={() => setIsTailorInterviewOpen(false)}
+                type="button"
+              >
+                Close
+              </button>
+
+              <div className="mx-auto flex h-full w-full max-w-3xl items-center justify-center">
+                <section className="glass-panel soft-ring flex max-h-full w-full flex-col overflow-hidden rounded-[1.6rem] border border-white/10 bg-zinc-950/96 shadow-[0_30px_120px_rgba(0,0,0,0.58)] ring-1 ring-white/10 backdrop-blur-xl">
+                  <div className="border-b border-white/10 px-5 pb-4 pt-5 sm:px-6 sm:pb-5 sm:pt-6">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+                          Tailor Resume Follow-Up
+                        </p>
+                        <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
+                          Quick background questions
+                        </h2>
+                        <p className="mt-3 text-sm leading-6 text-zinc-400">
+                          {tailoringInterviewSummary?.agenda
+                            ? `The assistant is clarifying ${tailoringInterviewSummary.agenda}.`
+                            : "The assistant is gathering a little more adjacent context before rewriting the tailored resume."}
+                        </p>
+                        {tailoringInterviewSummary?.debugDecision ===
+                        "would_ask_without_debug" ? (
+                          <p className="mt-2 text-xs leading-5 text-amber-200/85">
+                            Debug mode is forcing the interview stage on, but
+                            the assistant believes this question would still be
+                            worth asking normally.
+                          </p>
+                        ) : tailoringInterviewSummary?.debugDecision ===
+                          "forced_only" ? (
+                          <p className="mt-2 text-xs leading-5 text-amber-200/85">
+                            Debug mode is forcing the interview stage on, and
+                            this question is being asked only because the
+                            override requires at least one follow-up.
+                          </p>
+                        ) : null}
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        <StatusPill>
+                          Question{" "}
+                          {String(
+                            tailoringInterviewSummary?.askedQuestionCount ?? 1,
+                          )}{" "}
+                          of up to{" "}
+                          {String(
+                            tailoringInterviewSummary?.totalQuestionBudget ?? 1,
+                          )}
+                        </StatusPill>
+                        <StatusPill>
+                          {tailoringInterviewSummary?.learnings.length ?? 0}{" "}
+                          learning
+                          {(tailoringInterviewSummary?.learnings.length ?? 0) === 1
+                            ? ""
+                            : "s"}
+                        </StatusPill>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="app-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5 sm:px-6">
+                    {displayedTailoringInterviewConversation.map((message) => (
+                      <div
+                        className={`max-w-[85%] rounded-[1.15rem] border px-4 py-3 text-sm leading-6 shadow-[0_18px_40px_rgba(0,0,0,0.18)] ${
+                          message.role === "assistant"
+                            ? "border-emerald-300/18 bg-emerald-400/10 text-emerald-50"
+                            : "ml-auto border-white/10 bg-white/[0.06] text-zinc-100"
+                        }`}
+                        key={message.id}
+                      >
+                        <p className="whitespace-pre-wrap">{message.text}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="border-t border-white/10 px-5 py-5 sm:px-6">
+                    <textarea
+                      className="min-h-[8.5rem] w-full rounded-[1.1rem] border border-white/10 bg-black/25 px-3 py-3 text-sm leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-300/35 focus:ring-2 focus:ring-emerald-300/18"
+                      disabled={
+                        isSubmittingTailorInterviewAnswer ||
+                        isCancellingTailorInterview
+                      }
+                      onKeyDown={handleTailorInterviewAnswerKeyDown}
+                      onChange={(event) =>
+                        setDraftTailorInterviewAnswer(event.target.value)
+                      }
+                      placeholder="Answer the current question here..."
+                      value={draftTailorInterviewAnswer}
+                    />
+
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                      <p className="text-xs leading-5 text-zinc-500">
+                        The follow-up stays compact and only the compressed
+                        learnings are passed into the next resume-writing step.
+                      </p>
+
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
+                            isCancellingTailorInterview
+                              ? "cursor-wait border border-white/10 bg-white/5 text-zinc-500"
+                              : "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
+                          }`}
+                          disabled={
+                            isCancellingTailorInterview ||
+                            isSubmittingTailorInterviewAnswer
+                          }
+                          onClick={() => void cancelTailorResumeInterview()}
+                          type="button"
+                        >
+                          {isCancellingTailorInterview ? "Discarding..." : "Discard"}
+                        </button>
+                        <button
+                          className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
+                            isSubmittingTailorInterviewAnswer ||
+                            draftTailorInterviewAnswer.trim().length === 0
+                              ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
+                              : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
+                          }`}
+                          disabled={
+                            isSubmittingTailorInterviewAnswer ||
+                            isCancellingTailorInterview ||
+                            draftTailorInterviewAnswer.trim().length === 0
+                          }
+                          onClick={() => void submitTailorResumeInterviewAnswer()}
+                          type="button"
+                        >
+                          {isSubmittingTailorInterviewAnswer
+                            ? "Thinking..."
+                            : "Send answer"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
 
       {isPreviewMounted && isPreviewOpen && displayedResume
         ? createPortal(

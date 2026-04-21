@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Download, Pencil, X } from "lucide-react";
+import { Bot, Check, ChevronUp, Download, Pencil, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -180,11 +180,34 @@ function DiffCell({
 }
 
 type TailoredResumeMutationResponse = {
+  assistantMessage?: string;
   error?: string;
   profile?: TailorResumeProfile;
   tailoredResumeEditId?: string;
   tailoredResumeId?: string;
+  tailoredResumeDurationMs?: number;
 };
+
+type TailoredResumeAiChatMessage = {
+  id: string;
+  role: "assistant" | "user";
+  status: "error" | "ready";
+  text: string;
+};
+
+function createTailoredResumeAiChatMessage(
+  input: Omit<TailoredResumeAiChatMessage, "id">,
+): TailoredResumeAiChatMessage {
+  const randomId =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `tailored-resume-ai-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  return {
+    id: randomId,
+    ...input,
+  };
+}
 
 const defaultReviewDetailsPaneSize = 58;
 const defaultReviewPreviewPaneSize = 42;
@@ -503,7 +526,10 @@ export default function TailoredResumeReviewModal({
     () => record?.displayName ?? "",
   );
   const [draftEditedLatexCode, setDraftEditedLatexCode] = useState("");
+  const [draftAiRefinementPrompt, setDraftAiRefinementPrompt] = useState("");
   const [isDownloadingPreviewPdf, setIsDownloadingPreviewPdf] = useState(false);
+  const [isAiRefinementOpen, setIsAiRefinementOpen] = useState(false);
+  const [isRefiningTailoredResume, setIsRefiningTailoredResume] = useState(false);
   const [isSavingDisplayName, setIsSavingDisplayName] = useState(false);
   const [optimisticEditStateById, setOptimisticEditStateById] = useState<
     Partial<Record<string, TailoredResumeEditState>>
@@ -515,6 +541,12 @@ export default function TailoredResumeReviewModal({
   const [expandedEditReasonEditId, setExpandedEditReasonEditId] = useState<
     string | null
   >(null);
+  const [aiRefinementMessages, setAiRefinementMessages] = useState<
+    TailoredResumeAiChatMessage[]
+  >([]);
+  const [previewSnapshotDataUrlByPage, setPreviewSnapshotDataUrlByPage] = useState<
+    Record<number, string>
+  >({});
   const [isWideLayout, setIsWideLayout] = useState(
     () =>
       typeof window !== "undefined" &&
@@ -526,6 +558,8 @@ export default function TailoredResumeReviewModal({
   const devInspectorCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const expandedReasonCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const editedLatexTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const aiRefinementMessagesRef = useRef<HTMLDivElement | null>(null);
+  const aiRefinementTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const lastPreviewRecoveryRecordIdRef = useRef<string | null>(null);
   const thesisPopoverRef = useRef<HTMLDivElement | null>(null);
 
@@ -561,9 +595,32 @@ export default function TailoredResumeReviewModal({
     scrollEditIntoView(editId, options.behavior ?? "smooth");
   }
 
+  function openAiRefinementPane() {
+    setIsEditingLatexSegment(false);
+    setExpandedEditReasonEditId(null);
+    setIsThesisOpen(false);
+    setIsAiRefinementOpen(true);
+  }
+
+  function closeAiRefinementPane() {
+    if (isRefiningTailoredResume) {
+      return;
+    }
+
+    setIsAiRefinementOpen(false);
+  }
+
   const reviewEdits = useMemo(
     () => (record ? buildTailoredResumeReviewEdits(record) : []),
     [record],
+  );
+  const previewSnapshotDataUrls = useMemo(
+    () =>
+      Object.entries(previewSnapshotDataUrlByPage)
+        .sort(([leftPage], [rightPage]) => Number(leftPage) - Number(rightPage))
+        .map(([, dataUrl]) => dataUrl)
+        .filter(Boolean),
+    [previewSnapshotDataUrlByPage],
   );
   const resolvedSelectedEditId =
     reviewEdits.some((edit) => edit.editId === selectedEditId)
@@ -583,6 +640,13 @@ export default function TailoredResumeReviewModal({
       if (event.key === "Escape") {
         if (isDevInspectorOpen) {
           setIsDevInspectorOpen(false);
+          return;
+        }
+
+        if (isAiRefinementOpen) {
+          if (!isRefiningTailoredResume) {
+            setIsAiRefinementOpen(false);
+          }
           return;
         }
 
@@ -606,7 +670,7 @@ export default function TailoredResumeReviewModal({
         return;
       }
 
-      if (expandedEditReasonEditId || isDevInspectorOpen) {
+      if (expandedEditReasonEditId || isAiRefinementOpen || isDevInspectorOpen) {
         return;
       }
 
@@ -657,7 +721,9 @@ export default function TailoredResumeReviewModal({
     };
   }, [
     expandedEditReasonEditId,
+    isAiRefinementOpen,
     isDevInspectorOpen,
+    isRefiningTailoredResume,
     isRenamingDisplayName,
     isThesisOpen,
     onClose,
@@ -880,12 +946,29 @@ export default function TailoredResumeReviewModal({
 
   useEffect(() => {
     setInteractivePreviewFocusRequest(0);
+    setAiRefinementMessages([]);
+    setDraftAiRefinementPrompt("");
+    setIsAiRefinementOpen(false);
+    setIsRefiningTailoredResume(false);
     setOptimisticEditStateById({});
+    setPreviewSnapshotDataUrlByPage({});
     setExpandedEditReasonEditId(null);
     setSuppressedAcceptedBlockChoiceEditId(null);
     lastPreviewRecoveryRecordIdRef.current = null;
     setIsRecoveringPreview(false);
   }, [record?.id]);
+
+  useEffect(() => {
+    setPreviewSnapshotDataUrlByPage({});
+  }, [record?.id, record?.pdfUpdatedAt]);
+
+  useEffect(() => {
+    if (reviewEdits.length > 0 || !isAiRefinementOpen) {
+      return;
+    }
+
+    setIsAiRefinementOpen(false);
+  }, [isAiRefinementOpen, reviewEdits.length]);
 
   useEffect(() => {
     if (
@@ -1009,6 +1092,30 @@ export default function TailoredResumeReviewModal({
     setIsDevInspectorOpen(false);
   }, [record?.id]);
 
+  useEffect(() => {
+    if (!isAiRefinementOpen) {
+      return;
+    }
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      aiRefinementTextareaRef.current?.focus();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+    };
+  }, [isAiRefinementOpen]);
+
+  useEffect(() => {
+    const element = aiRefinementMessagesRef.current;
+
+    if (!element) {
+      return;
+    }
+
+    element.scrollTop = element.scrollHeight;
+  }, [aiRefinementMessages, isAiRefinementOpen]);
+
   async function updateSelectedEditState(nextState: "applied" | "rejected") {
     if (!record || !selectedEdit) {
       return;
@@ -1111,6 +1218,84 @@ export default function TailoredResumeReviewModal({
       );
     } finally {
       setIsSavingTailoredResumeEdit(false);
+    }
+  }
+
+  async function submitAiRefinementPrompt() {
+    if (!record || isRefiningTailoredResume) {
+      return;
+    }
+
+    const trimmedPrompt = draftAiRefinementPrompt.trim();
+
+    if (!trimmedPrompt) {
+      return;
+    }
+
+    setAiRefinementMessages((currentMessages) => [
+      ...currentMessages,
+      createTailoredResumeAiChatMessage({
+        role: "user",
+        status: "ready",
+        text: trimmedPrompt,
+      }),
+    ]);
+    setDraftAiRefinementPrompt("");
+    setIsRefiningTailoredResume(true);
+
+    try {
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({
+          action: "refineTailoredResume",
+          previewImageDataUrls: previewSnapshotDataUrls,
+          tailoredResumeId: record.id,
+          userPrompt: trimmedPrompt,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
+      const payload = (await response.json()) as TailoredResumeMutationResponse;
+
+      if (!response.ok || !payload.profile) {
+        throw new Error(
+          payload.error ?? "Unable to refine the tailored resume edits.",
+        );
+      }
+
+      onTailoredResumesChange(payload.profile.tailoredResumes);
+      setIsEditingLatexSegment(false);
+      setSuppressedAcceptedBlockChoiceEditId(null);
+      setInteractivePreviewFocusRequest((currentRequest) => currentRequest + 1);
+      setAiRefinementMessages((currentMessages) => [
+        ...currentMessages,
+        createTailoredResumeAiChatMessage({
+          role: "assistant",
+          status: "ready",
+          text:
+            payload.assistantMessage ??
+            "Updated the tailored resume blocks from your follow-up request.",
+        }),
+      ]);
+      toast.success("Updated the AI-tailored edits.");
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Unable to refine the tailored resume edits.";
+
+      setAiRefinementMessages((currentMessages) => [
+        ...currentMessages,
+        createTailoredResumeAiChatMessage({
+          role: "assistant",
+          status: "error",
+          text: errorMessage,
+        }),
+      ]);
+      toast.error(errorMessage);
+    } finally {
+      setIsRefiningTailoredResume(false);
     }
   }
 
@@ -1635,6 +1820,145 @@ export default function TailoredResumeReviewModal({
           )}
         </div>
       </div>
+
+      {reviewEdits.length > 0 ? (
+        <div className="shrink-0 bg-zinc-950/96 px-4 pb-3 sm:px-5 sm:pb-4">
+          <div className="flex justify-center">
+            <button
+              className="group inline-flex max-w-full items-center gap-2.5 rounded-full border border-white/10 bg-black/20 px-3 py-2 text-left transition hover:border-emerald-300/28 hover:bg-[linear-gradient(180deg,rgba(52,211,153,0.08),rgba(16,185,129,0.03))]"
+              onClick={openAiRefinementPane}
+              type="button"
+            >
+              <span className="inline-flex size-5 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-400 transition group-hover:border-emerald-300/25 group-hover:text-emerald-200">
+                <ChevronUp aria-hidden="true" className="h-3.5 w-3.5" />
+              </span>
+              <span className="inline-flex items-center gap-1.5 truncate text-[11px] uppercase tracking-[0.18em] text-zinc-400 transition group-hover:text-zinc-100">
+                <span>Iterate with</span>
+                <Bot aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+              </span>
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+
+  const aiRefinementPane = (
+    <section className="flex h-full min-h-0 flex-col bg-white/8">
+      <div className="shrink-0 border-b border-white/8 bg-zinc-950/96 px-4 py-3 sm:px-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+              Improve with AI
+            </p>
+            <p className="mt-1 text-sm leading-6 text-zinc-200">
+              Ask for a revision and the assistant will use the current preview,
+              the original LaTeX, and the latest model edits.
+            </p>
+          </div>
+          <button
+            className="shrink-0 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={isRefiningTailoredResume}
+            onClick={closeAiRefinementPane}
+            type="button"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+
+      <div
+        className="app-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto bg-zinc-950/96 px-4 py-4 sm:px-5"
+        ref={aiRefinementMessagesRef}
+      >
+        <div className="rounded-[1.1rem] border border-emerald-300/16 bg-[linear-gradient(180deg,rgba(52,211,153,0.08),rgba(16,185,129,0.03))] px-4 py-3 text-sm leading-6 text-zinc-200">
+          Preview screenshots are attached automatically when available, so this
+          can react to layout issues that do not show up cleanly in raw LaTeX.
+        </div>
+
+        {previewSnapshotDataUrls.length === 0 && record.pdfUpdatedAt ? (
+          <div className="rounded-[1rem] border border-amber-300/14 bg-amber-400/8 px-4 py-3 text-sm leading-6 text-amber-100/90">
+            Waiting on the rendered preview snapshot. You can still send a
+            request now, but the assistant may have to work from the LaTeX
+            alone if the preview is still loading.
+          </div>
+        ) : null}
+
+        {aiRefinementMessages.length === 0 ? (
+          <div className="rounded-[1.1rem] border border-white/8 bg-black/20 px-4 py-4 text-sm leading-7 text-zinc-300">
+            Try something like “tighten the wording so nothing feels cramped,”
+            “make the experience sound more backend/platform,” or “keep the same
+            meaning but reduce the line count.”
+          </div>
+        ) : null}
+
+        {aiRefinementMessages.map((message) => (
+          <div
+            className={`max-w-[46rem] rounded-[1.2rem] border px-4 py-3 text-sm leading-7 shadow-[0_20px_55px_rgba(0,0,0,0.18)] ${
+              message.role === "user"
+                ? "ml-auto border-emerald-300/20 bg-[linear-gradient(180deg,rgba(52,211,153,0.11),rgba(16,185,129,0.05))] text-zinc-100"
+                : message.status === "error"
+                  ? "border-rose-300/18 bg-[linear-gradient(180deg,rgba(251,113,133,0.08),rgba(127,29,29,0.12))] text-rose-50"
+                  : "border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] text-zinc-100"
+            }`}
+            key={message.id}
+          >
+            <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+              {message.role === "user" ? "You" : "Assistant"}
+            </p>
+            <p className="whitespace-pre-wrap break-words">{message.text}</p>
+          </div>
+        ))}
+
+        {isRefiningTailoredResume ? (
+          <div className="max-w-[42rem] rounded-[1.2rem] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] px-4 py-3 text-sm leading-7 text-zinc-100 shadow-[0_20px_55px_rgba(0,0,0,0.18)]">
+            <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+              Assistant
+            </p>
+            <p>Reworking the model blocks now...</p>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="shrink-0 border-t border-white/8 bg-zinc-950/96 px-4 py-4 sm:px-5">
+        <form
+          className="space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submitAiRefinementPrompt();
+          }}
+        >
+          <textarea
+            className="min-h-[8.5rem] w-full rounded-[1.1rem] border border-white/10 bg-black/25 px-3 py-3 text-sm leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-300/35 focus:ring-2 focus:ring-emerald-300/18"
+            onChange={(event) => setDraftAiRefinementPrompt(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                void submitAiRefinementPrompt();
+              }
+            }}
+            placeholder="Tell the assistant how you want the edits changed..."
+            ref={aiRefinementTextareaRef}
+            value={draftAiRefinementPrompt}
+          />
+
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs leading-5 text-zinc-500">
+              The reply overwrites the current model block set, while the diff
+              stays anchored to your original resume LaTeX.
+            </p>
+            <button
+              className="rounded-full border border-emerald-300/30 bg-emerald-400/10 px-3.5 py-1.5 text-[10px] uppercase tracking-[0.18em] text-emerald-100 transition hover:border-emerald-200/45 hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={
+                isRefiningTailoredResume || draftAiRefinementPrompt.trim().length === 0
+              }
+              type="submit"
+            >
+              {isRefiningTailoredResume ? "Refining..." : "Send"}
+            </button>
+          </div>
+        </form>
+      </div>
     </section>
   );
 
@@ -1767,6 +2091,30 @@ export default function TailoredResumeReviewModal({
             focusQuery={interactiveFocusQuery}
             focusRequest={interactivePreviewFocusRequest}
             highlightQueries={interactivePreviewQueries?.highlightQueries ?? []}
+            onPageSnapshot={({ dataUrl, pageNumber }) => {
+              setPreviewSnapshotDataUrlByPage((currentSnapshots) => {
+                if (!dataUrl) {
+                  if (!(pageNumber in currentSnapshots)) {
+                    return currentSnapshots;
+                  }
+
+                  const nextSnapshots = {
+                    ...currentSnapshots,
+                  };
+                  delete nextSnapshots[pageNumber];
+                  return nextSnapshots;
+                }
+
+                if (currentSnapshots[pageNumber] === dataUrl) {
+                  return currentSnapshots;
+                }
+
+                return {
+                  ...currentSnapshots,
+                  [pageNumber]: dataUrl,
+                };
+              });
+            }}
             pdfUrl={interactivePreviewUrl}
           />
         ) : (
@@ -1814,7 +2162,7 @@ export default function TailoredResumeReviewModal({
                 defaultSize={defaultReviewDetailsPaneSize}
                 minSize={isWideLayout ? 40 : 55}
               >
-                {reviewDetailsPane}
+                {isAiRefinementOpen ? aiRefinementPane : reviewDetailsPane}
               </ResizablePanel>
 
               <ResizableHandle className="group relative bg-transparent after:hidden before:absolute before:bg-white/8 before:content-[''] before:transition-colors focus-visible:ring-0 hover:before:bg-white/15 aria-[orientation=vertical]:w-4 aria-[orientation=vertical]:before:inset-y-0 aria-[orientation=vertical]:before:left-1/2 aria-[orientation=vertical]:before:w-px aria-[orientation=vertical]:before:-translate-x-1/2 aria-[orientation=horizontal]:h-4 aria-[orientation=horizontal]:before:inset-x-0 aria-[orientation=horizontal]:before:top-1/2 aria-[orientation=horizontal]:before:h-px aria-[orientation=horizontal]:before:-translate-y-1/2" />

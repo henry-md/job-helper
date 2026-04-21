@@ -7,8 +7,10 @@ export const systemPromptSettingKeys = [
   "jobApplicationExtraction",
   "resumeLatexExtraction",
   "tailorResumePlanning",
+  "tailorResumeInterview",
   "tailorResumeImplementation",
   "tailorResumeRefinement",
+  "tailorResumePageCountCompaction",
 ] as const;
 
 export type SystemPromptSettingKey = (typeof systemPromptSettingKeys)[number];
@@ -57,6 +59,60 @@ function buildFeedbackBlock(
   }
 
   return `${label}:\n${trimmedFeedback}\n\n`;
+}
+
+function buildTailorResumeInterviewDebugBlock(input: {
+  debugForceConversation: boolean;
+}) {
+  if (!input.debugForceConversation) {
+    return "";
+  }
+
+  return (
+    "Debug override:\n" +
+    "1. DEBUG_FORCE_CONVERSATION_IN_TAILOR_PIPELINE is enabled for this run.\n" +
+    "2. On the first interview turn, you must ask at least one follow-up question. Do not return action \"skip\" or \"done\" on that first turn.\n" +
+    "3. When action is \"ask\" during this debug mode, set debugDecision to \"would_ask_without_debug\" if you genuinely would have asked that question even without the override.\n" +
+    "4. Otherwise set debugDecision to \"forced_only\" if you are only asking because debug mode requires at least one question.\n" +
+    "5. When action is not \"ask\", set debugDecision to \"not_applicable\".\n\n"
+  );
+}
+
+const pageCountWords = new Map<number, string>([
+  [1, "single"],
+  [2, "two"],
+  [3, "three"],
+  [4, "four"],
+  [5, "five"],
+]);
+
+function buildPageCountRequirement(pageCount: number) {
+  const normalizedPageCount = Math.max(1, Math.floor(pageCount));
+
+  if (normalizedPageCount === 1) {
+    return "a single page";
+  }
+
+  const pageCountWord = pageCountWords.get(normalizedPageCount);
+
+  return pageCountWord
+    ? `${pageCountWord} pages`
+    : `${normalizedPageCount} pages`;
+}
+
+function buildPageCountHardRequirement(pageCount: number) {
+  const normalizedPageCount = Math.max(1, Math.floor(pageCount));
+
+  if (normalizedPageCount === 1) {
+    return "Single page is a hard requirement.";
+  }
+
+  const pageCountWord = pageCountWords.get(normalizedPageCount);
+  const leadingText = pageCountWord
+    ? `${pageCountWord[0]?.toUpperCase() ?? ""}${pageCountWord.slice(1)} pages`
+    : `${normalizedPageCount} pages`;
+
+  return `${leadingText} is a hard requirement.`;
 }
 
 const defaultSystemPromptSettings = {
@@ -127,6 +183,25 @@ const defaultSystemPromptSettings = {
     "Guardrails:\n" +
     "1. Preserve factual accuracy. Never invent achievements, employers, dates, titles, technologies, metrics, degrees, or certifications.\n" +
     "2. It is heavily discouraged to plan styling, page layout, margins, font sizing, spacing systems, or macro-structure changes unless the job fit clearly depends on them.\n",
+  tailorResumeInterview:
+    "{{FEEDBACK_BLOCK}}{{DEBUG_FORCE_BLOCK}}Decide whether the user should be asked a few follow-up questions before the tailored resume is implemented in LaTeX.\n\n" +
+    "You must return a strict JSON object with action, agenda, totalQuestionBudget, question, learnings, and debugDecision.\n\n" +
+    "Questioning rules:\n" +
+    "1. Asking the user is optional and should be rare. Default to action \"skip\" when the resume can already be tailored well enough from the existing evidence.\n" +
+    "2. Only ask when the answer would materially improve this specific tailored resume, cannot already be inferred from the resume, and is adjacent enough to existing resume text that the experience is plausibly already there.\n" +
+    "3. Never ask speculative resume-expansion questions that would require inventing a brand-new project, employer, credential, responsibility, or domain that is not already adjacent to the current resume.\n" +
+    "4. Keep a relatively high threshold for the first question. If you have already asked one question, lower the threshold for a small number of follow-ups that close the loop on that same high-value area instead of stopping after collecting only partial detail.\n" +
+    "5. Ask one question at a time.\n" +
+    "6. totalQuestionBudget must be an integer from 0 to 5. On the first turn, choose the full budget you expect to need. On later turns, preserve the existing budget.\n" +
+    "7. If action is \"ask\", question must contain exactly one user-facing question.\n" +
+    "8. Prefer open-ended questions when they can efficiently surface the needed detail, but keep the question tightly scoped to the adjacent resume evidence.\n" +
+    "9. agenda should be one short sentence summarizing the specific background area you are trying to clarify. If no questions are needed, return an empty string.\n" +
+    "10. learnings must be a compact working summary for the next model stage, not a transcript dump. Only include details grounded in the user's answers or directly restated from the accepted plan.\n" +
+    "11. Every learning.targetSegmentIds entry must reference only segmentIds from the accepted plan.\n" +
+    "12. If action is \"done\", return the final compressed learnings needed for implementation.\n" +
+    "13. If no questions are worth asking on the first turn, return action \"skip\", totalQuestionBudget 0, an empty question string, and an empty learnings array.\n" +
+    "14. Never exceed five total questions.\n" +
+    "15. Set debugDecision to \"not_applicable\" unless a debug override explicitly requires otherwise.\n",
   tailorResumeImplementation:
     "{{FEEDBACK_BLOCK}}Implement the approved resume edit plan as exact LaTeX block replacements. The strategic edit choices, targeted segments, and desired visible text are already decided.\n\n" +
     "You must return a strict JSON object containing only changes.\n\n" +
@@ -141,7 +216,9 @@ const defaultSystemPromptSettings = {
     "8. If the desired text is an empty string, use an empty latexCode only when removing that single block is clearly the right implementation.\n" +
     "9. Prefer replacements whose visible text stays at or under the source block's character count when possible. Rewrite for higher signal instead of simply adding more words.\n" +
     "10. Small length increases are acceptable when they materially improve fit for the role, but bias strongly against cumulative growth because the resume should stay under one page.\n" +
-    "11. Across all planned edits, avoid adding more than about 1-2 lines total unless that extra length is clearly necessary for a meaningfully better tailored resume.\n\n" +
+    "11. Across all planned edits, avoid adding more than about 1-2 lines total unless that extra length is clearly necessary for a meaningfully better tailored resume.\n" +
+    "12. If user-confirmed background learnings are provided, you may use them only in the targeted segments they reference. Do not spread them to unrelated blocks.\n" +
+    "13. Treat user-confirmed background learnings as factual additions, but never invent beyond what the user explicitly confirmed.\n\n" +
     "Common pitfalls:\n" +
     "1. The most common structural failure is crossing a segment boundary. When in doubt, keep the replacement smaller and closer to the source block.\n" +
     "2. If the source block is \\entryheading, \\projectheading, or \\labelline, preserve the existing command form and adapt the text inside its arguments instead of flattening it into a different shape.\n" +
@@ -170,9 +247,18 @@ const defaultSystemPromptSettings = {
     "5. Preserve factual accuracy. Never invent achievements, employers, dates, titles, technologies, metrics, degrees, or certifications.\n" +
     "6. Keep the tailored resume pdflatex-compatible.\n" +
     "7. If a block is already good, you may return it unchanged, but you must still include it in changes.\n" +
-    "8. Keep every reason concise and specific to the user's requested adjustment.\n" +
-    "9. Avoid resume-wide rewrites. Make the smallest set of block-level improvements that satisfy the follow-up request.\n" +
-    "10. Special character escaping still matters in plain text content: escape }, {, #, %, &, $, _, ^, ~, and \\\\ when they are literal text rather than LaTeX structure.\n",
+    "8. Each returned reason fully replaces the old saved reason for that block, so it must stand on its own. Restate why the final wording is better for the role or better for the visible resume, and do not make the reason just say that the block was shortened, compressed, or made shorter.\n" +
+    "9. If helpful, a reason may mention a stronger but longer discarded option in this pattern: \"A stronger version could look like the following, but was not chosen because it would add an extra line: ...\" Use that only when it adds real explanatory value.\n" +
+    "10. When the request is about page count, overflow, or saving space, use the rendered PDF screenshots to judge whether an edit actually removes a full rendered line. Avoid edits that make a two-line bullet merely a little shorter while keeping the same vertical footprint.\n" +
+    "11. If the PDF suggests that only one line needs to be reclaimed overall, prefer one minimal edit to one original block and keep the rest of the edited blocks otherwise the same unless another change is clearly necessary.\n" +
+    "12. Avoid resume-wide rewrites. Make the smallest set of block-level improvements that satisfy the follow-up request.\n" +
+    "13. Special character escaping still matters in plain text content: escape }, {, #, %, &, $, _, ^, ~, and \\\\ when they are literal text rather than LaTeX structure.\n",
+  tailorResumePageCountCompaction:
+    "Please tighten to keep this resume to {{TARGET_PAGE_COUNT_REQUIREMENT}}. {{TARGET_PAGE_COUNT_HARD_REQUIREMENT}} " +
+    "The current tailored preview is {{CURRENT_PAGE_COUNT}} {{CURRENT_PAGE_LABEL}}, so make the smallest block-level cuts needed to get back within the limit while preserving the tailoring thesis. " +
+    "Use the rendered PDF with highlights to decide whether a candidate rewrite will actually remove a full line. Do not shorten a bullet unless the PDF suggests it really needs compaction and the rewrite is likely to reduce the visible line count, not just turn a two-line bullet into roughly one-and-a-half lines while taking the same vertical space. " +
+    "If only one line needs to be reclaimed overall, strongly prefer making one minimal change to one original block and leaving the other edited blocks effectively the same. " +
+    "For every returned block reason, remember that it fully replaces the old reason shown to the user, so restate the substantive reason for the final wording instead of just saying that it was shortened.",
 } satisfies SystemPromptSettings;
 
 export function createDefaultSystemPromptSettings(): SystemPromptSettings {
@@ -246,6 +332,24 @@ export function buildTailorResumeImplementationSystemPrompt(
   }).trim();
 }
 
+export function buildTailorResumeInterviewSystemPrompt(
+  settings: SystemPromptSettings,
+  input: {
+    debugForceConversation?: boolean;
+    feedback?: string;
+  },
+) {
+  return renderSystemPromptTemplate(settings.tailorResumeInterview, {
+    DEBUG_FORCE_BLOCK: buildTailorResumeInterviewDebugBlock({
+      debugForceConversation: input.debugForceConversation === true,
+    }),
+    FEEDBACK_BLOCK: buildFeedbackBlock(
+      "Previous interview feedback",
+      input.feedback,
+    ),
+  }).trim();
+}
+
 export function buildTailorResumeRefinementSystemPrompt(
   settings: SystemPromptSettings,
   input: { feedback?: string },
@@ -254,6 +358,29 @@ export function buildTailorResumeRefinementSystemPrompt(
     FEEDBACK_BLOCK: buildFeedbackBlock(
       "Previous refinement feedback",
       input.feedback,
+    ),
+  }).trim();
+}
+
+export function buildTailorResumePageCountCompactionPrompt(
+  settings: SystemPromptSettings,
+  input: {
+    currentPageCount: number;
+    targetPageCount: number;
+  },
+) {
+  const normalizedCurrentPageCount = Math.max(1, Math.floor(input.currentPageCount));
+  const normalizedTargetPageCount = Math.max(1, Math.floor(input.targetPageCount));
+
+  return renderSystemPromptTemplate(settings.tailorResumePageCountCompaction, {
+    CURRENT_PAGE_COUNT: String(normalizedCurrentPageCount),
+    CURRENT_PAGE_LABEL: normalizedCurrentPageCount === 1 ? "page" : "pages",
+    TARGET_PAGE_COUNT: String(normalizedTargetPageCount),
+    TARGET_PAGE_COUNT_HARD_REQUIREMENT: buildPageCountHardRequirement(
+      normalizedTargetPageCount,
+    ),
+    TARGET_PAGE_COUNT_REQUIREMENT: buildPageCountRequirement(
+      normalizedTargetPageCount,
     ),
   }).trim();
 }
