@@ -1,6 +1,5 @@
-import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
-import { authOptions } from "@/auth";
+import { getApiSession } from "@/lib/api-auth";
 import { extractTailorResumeActualLatexError } from "@/lib/tailor-resume-error-format";
 import { compileTailorResumeLatex } from "@/lib/tailor-resume-latex";
 import { buildTailoredResumeReviewHighlightedLatex } from "@/lib/tailor-resume-preview-highlight";
@@ -94,7 +93,7 @@ async function readOrCompileTailoredResumePdf(input: {
 }
 
 export async function GET(request: Request) {
-  const session = await getServerSession(authOptions);
+  const session = await getApiSession(request);
 
   if (!session?.user?.id) {
     return NextResponse.json(

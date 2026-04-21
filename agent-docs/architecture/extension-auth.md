@@ -1,0 +1,11 @@
+Chrome extension auth:
+- The extension does not connect to Postgres directly. It obtains a Google access token with Chrome's identity API and sends it to `POST /api/extension/auth/google`.
+- The server verifies the token audience against `GOOGLE_EXTENSION_CLIENT_ID`, reads Google userinfo, links or creates the normal `google` `Account`, and creates a standard NextAuth database `Session`.
+- Extension API calls send the returned session token as `Authorization: Bearer <token>`. Server routes that need extension access should use `getApiSession(request)` instead of calling `getServerSession(authOptions)` directly.
+- `GET /api/tailor-resume` returns the authenticated user's Tailor Resume profile, including all `profile.tailoredResumes`; extension callers should read this endpoint with the bearer session token instead of trying to read profile storage or Postgres directly.
+- Opening protected browser pages from the extension goes through `POST /api/extension/auth/browser-session`, which returns a short-lived encrypted handoff URL. The handoff route sets the normal NextAuth session cookie and redirects to a same-origin callback path.
+- No Prisma migration is needed for the basic bridge because it reuses the existing `User`, `Account`, and `Session` tables.
+- Google Cloud needs two OAuth clients: the existing web client for NextAuth callback redirects and a separate Chrome Extension client whose Item ID matches the loaded extension id from `chrome://extensions`.
+- `GOOGLE_EXTENSION_CLIENT_ID` must be available to the server, while `VITE_JOB_HELPER_APP_BASE_URL` must be available at extension build/dev time. The extension Vite config loads env from both the repo root and the extension directory.
+- A missing visible OAuth popup is not necessarily a failure. Chrome can silently reuse an existing Google profile/grant, so the side panel should show the connected Google avatar/email to make the active account visible.
+- If Chrome reports that the token audience is wrong, first compare the loaded extension id with the Google OAuth client's Item ID. If the unpacked id is drifting, set a stable `CHROME_EXTENSION_PUBLIC_KEY` before rebuilding.

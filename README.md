@@ -6,7 +6,7 @@ automatic job tracking from uploaded screenshots.
 ## Setup
 
 1. Copy `.env.example` to `.env`.
-2. Fill in `NEXTAUTH_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `DATABASE_URL`, `OPENAI_API_KEY`, and `JOB_HELPER_INGEST_SECRET`.
+2. Fill in `NEXTAUTH_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `DATABASE_URL`, `OPENAI_API_KEY`, and `JOB_HELPER_INGEST_SECRET`. For the Chrome extension, also set `GOOGLE_EXTENSION_CLIENT_ID` and `VITE_JOB_HELPER_APP_BASE_URL`.
 3. Create and apply the Prisma migrations against Railway:
 
 ```bash
@@ -19,6 +19,12 @@ npx prisma migrate dev
 http://localhost:3000/api/auth/callback/google
 [And your Railway site]
 ```
+
+For the Chrome extension, create a separate OAuth client with application type
+`Chrome Extension`, using the unpacked or published extension id as the item id.
+Put that client id in `GOOGLE_EXTENSION_CLIENT_ID`. If you need a stable unpacked
+extension id across machines or paths, set `CHROME_EXTENSION_PUBLIC_KEY` before
+building the extension.
 
 5. Start the app:
 
@@ -163,5 +169,6 @@ end)
 - The Tailor Resume tab stores the uploaded resume under `public/uploads/resumes/<userId>/`, saves a private per-user profile under `.job-helper-data/tailor-resumes/<userId>/profile.json`, extracts LaTeX directly with the OpenAI Responses API, and keeps that LaTeX as the editable source of truth alongside a compiled PDF preview.
 - The Hammerspoon hotkey posts directly to `/api/job-applications/ingest`, so it needs `JOB_HELPER_INGEST_SECRET` in `.env` and the matching secret plus Google account email in `~/.hammerspoon/init.lua`.
 - The shared ingestion endpoint accepts screenshots, structured page context, raw page text, or any combination. Hammerspoon currently sends screenshots.
-- The Chrome extension hotkey now scrapes structured browser evidence from the active job page and sends it to `PATCH /api/tailor-resume` with `action: "tailor"` so Tailor Resume runs directly from the page content.
+- The Chrome extension signs in through Chrome's identity API, exchanges the verified Google account for a normal database-backed Job Helper session, then sends a bearer session token to `PATCH /api/tailor-resume` with `action: "tailor"`.
+- When the extension opens the dashboard or a tailored-resume review, it uses `/api/extension/auth/browser-session` to mint a short-lived handoff URL that sets the normal NextAuth cookie before redirecting into the protected app.
 - The default extraction model is `gpt-5-mini`; override it with `OPENAI_JOB_EXTRACTION_MODEL`.

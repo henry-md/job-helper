@@ -1,9 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
-import { authOptions } from "@/auth";
+import { getApiSession } from "@/lib/api-auth";
 import {
   extractResumeLatexDocument,
   type ExtractResumeLatexDocumentResult,
@@ -1986,8 +1985,20 @@ async function runResumeExtraction(
   }
 }
 
+export async function GET(request: Request) {
+  const session = await getApiSession(request);
+
+  if (!session?.user?.id) {
+    return unauthorizedResponse();
+  }
+
+  const { profile } = await readTailorResumeProfileState(session.user.id);
+
+  return NextResponse.json({ profile });
+}
+
 export async function PATCH(request: Request) {
-  const session = await getServerSession(authOptions);
+  const session = await getApiSession(request);
 
   if (!session?.user?.id) {
     return unauthorizedResponse();
@@ -3164,7 +3175,7 @@ export async function PATCH(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const session = await getServerSession(authOptions);
+  const session = await getApiSession(request);
 
   if (!session?.user?.id) {
     return unauthorizedResponse();

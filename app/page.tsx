@@ -48,6 +48,8 @@ function getHeroTypingAnimationWordPauseMs() {
 const errorMessages: Record<string, string> = {
   Callback:
     "Google returned successfully, but saving the user/session failed. Run your Prisma migration so the auth tables exist in Postgres, then try again.",
+  ExtensionAuth:
+    "Chrome extension sign-in could not be completed. Try connecting from the extension again.",
   OAuthSignin:
     "Google sign-in could not start. Double-check the deployed origin and callback URI in Google Cloud.",
 };
