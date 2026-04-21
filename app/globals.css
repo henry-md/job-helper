@@ -324,6 +324,110 @@ button {
   background: transparent;
 }
 
+.tailor-history-shell {
+  container-type: inline-size;
+}
+
+.tailor-history-heading-compact {
+  display: none;
+}
+
+@container (max-width: 23rem) {
+  .tailor-history-panel {
+    border-radius: 1.25rem;
+    padding: 1rem;
+  }
+
+  .tailor-history-header {
+    align-items: flex-start;
+    gap: 0.65rem;
+  }
+
+  .tailor-history-heading {
+    letter-spacing: 0.18em;
+  }
+
+  .tailor-history-heading-full {
+    display: none;
+  }
+
+  .tailor-history-heading-compact {
+    display: inline;
+  }
+
+  .tailor-history-count {
+    font-size: 0.68rem;
+    letter-spacing: 0.14em;
+    padding: 0.25rem 0.65rem;
+  }
+
+  .tailor-history-row-open {
+    padding-left: 0.8rem;
+    padding-right: 0.35rem;
+  }
+
+  .tailor-history-row {
+    align-items: start;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .tailor-history-row-open {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .tailor-history-delete {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .tailor-history-meta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+
+  .tailor-history-company {
+    flex: none;
+    width: 100%;
+  }
+
+  .tailor-history-date {
+    align-self: flex-start;
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: start;
+    margin-top: -0.35rem;
+    padding: 0 0.8rem 0.85rem;
+    text-align: left;
+  }
+}
+
+@container (max-width: 19rem) {
+  .tailor-history-header {
+    flex-direction: column;
+  }
+
+  .tailor-history-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tailor-history-row-open {
+    padding-right: 2.5rem;
+  }
+
+  .tailor-history-date {
+    padding-right: 2.5rem;
+  }
+
+  .tailor-history-delete {
+    margin: 0;
+    position: absolute;
+    right: 0.35rem;
+    top: 0.35rem;
+  }
+}
+
 .resume-interactive-page {
   position: relative;
   background: white;

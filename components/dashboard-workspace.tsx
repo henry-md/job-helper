@@ -12,6 +12,11 @@ import StatusToast from "@/components/status-toast";
 import TailoredResumeReviewModal from "@/components/tailored-resume-review-modal";
 import TailorResumeWorkspace from "@/components/tailor-resume-workspace";
 import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
+import {
   buildDashboardHref,
   parseDashboardRouteStateFromSearchParams,
   type DashboardRouteState,
@@ -57,6 +62,12 @@ const dashboardTabs = [
   id: DashboardTabId;
   label: string;
 }>;
+
+const defaultTailorWorkspacePaneSize = "72%";
+const defaultTailorHistoryPaneSize = "28%";
+const minTailorWorkspacePaneSize = "58%";
+const minTailorHistoryPaneSize = "18rem";
+const maxTailorHistoryPaneSize = "42%";
 
 function getValidProfileImageSrc(value: string | null | undefined) {
   const normalizedValue = value?.trim();
@@ -222,6 +233,7 @@ export default function DashboardWorkspace({
   );
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isDeletingTailoredResume, setIsDeletingTailoredResume] = useState(false);
+  const [isWideDashboardLayout, setIsWideDashboardLayout] = useState(false);
   const activeTab = dashboardRouteState.tab;
   const reviewingTailoredResumeId = dashboardRouteState.tailoredResumeId;
   const reviewingTailoredResume =
@@ -242,6 +254,20 @@ export default function DashboardWorkspace({
   useEffect(() => {
     setDashboardRouteState(parseDashboardRouteStateFromSearchParams(searchParams));
   }, [searchParams]);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(min-width: 1280px)");
+    const syncLayoutMode = () => {
+      setIsWideDashboardLayout(mediaQuery.matches);
+    };
+
+    syncLayoutMode();
+    mediaQuery.addEventListener("change", syncLayoutMode);
+
+    return () => {
+      mediaQuery.removeEventListener("change", syncLayoutMode);
+    };
+  }, []);
 
   useEffect(() => {
     setTailorResumeProfileState(tailorResumeProfile);
@@ -387,6 +413,92 @@ export default function DashboardWorkspace({
     }
   }
 
+  const tailorResumeWorkspacePane = (
+    <div className="h-full overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto">
+      <TailorResumeWorkspace
+        debugUiEnabled={tailorResumeDebugUiEnabled}
+        openAIReady={tailorResumeOpenAIReady}
+        initialProfile={tailorResumeProfileState}
+        onReviewTailoredResume={openTailoredResumeReview}
+        onTailoredResumesChange={setTailoredResumes}
+        onUserMarkdownChange={setTailorResumeUserMarkdownState}
+      />
+    </div>
+  );
+
+  const tailorResumeHistoryPane = (
+    <aside className="tailor-history-shell h-full overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto sm:pr-1">
+      <section className="tailor-history-panel glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
+        <div className="tailor-history-header mb-3 flex items-center justify-between gap-3">
+          <p className="tailor-history-heading min-w-0 text-xs uppercase tracking-[0.24em] text-zinc-500">
+            <span className="tailor-history-heading-full">
+              Recent tailored resumes
+            </span>
+            <span className="tailor-history-heading-compact">History</span>
+          </p>
+          <span
+            className="tailor-history-count shrink-0 whitespace-nowrap rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400"
+            title={`${tailoredResumes.length} total tailored resume${
+              tailoredResumes.length === 1 ? "" : "s"
+            }`}
+          >
+            {tailoredResumeCountLabel}
+          </span>
+        </div>
+        {tailoredResumes.length === 0 ? (
+          <p className="text-sm text-zinc-400">No tailored resumes yet.</p>
+        ) : (
+          <div className="tailor-history-list grid gap-2">
+            {tailoredResumes.map((tailoredResume) => (
+              <div
+                key={tailoredResume.id}
+                className="tailor-history-row group relative grid grid-cols-[minmax(0,1fr)_auto_auto] items-center overflow-hidden rounded-[1rem] border border-white/8 bg-black/20 transition hover:border-emerald-400/25 hover:bg-emerald-400/6 focus-within:border-emerald-300/45"
+              >
+                <button
+                  className="tailor-history-row-open min-w-0 overflow-hidden px-3 py-2.5 pr-1 text-left focus-visible:outline-none"
+                  onClick={() => openTailoredResumeReview(tailoredResume.id)}
+                  type="button"
+                >
+                  <div className="min-w-0 overflow-hidden">
+                    <p
+                      className="tailor-history-title truncate text-sm font-medium text-zinc-100"
+                      title={tailoredResume.displayName}
+                    >
+                      {formatTailoredResumeSidebarName(tailoredResume)}
+                    </p>
+                    <div className="tailor-history-meta mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                      <p className="tailor-history-company min-w-0 flex-1 truncate text-sm text-zinc-400">
+                        {tailoredResume.companyName}
+                      </p>
+                    </div>
+                  </div>
+                </button>
+                <span className="tailor-history-date self-center px-2 text-center text-xs text-zinc-500">
+                  {formatCompactDateOrSameDayTime(
+                    tailoredResume.updatedAt,
+                    {
+                      includeYear: includeYearInTailoredResumeDates,
+                    },
+                  )}
+                </span>
+                <button
+                  aria-label={`Delete ${tailoredResume.displayName}`}
+                  className="tailor-history-delete mr-1 mt-2 shrink-0 rounded-full p-2 text-zinc-500 transition hover:bg-rose-400/10 hover:text-rose-200 focus-visible:bg-rose-400/10 focus-visible:text-rose-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:text-zinc-700"
+                  disabled={isDeletingTailoredResume}
+                  onClick={() => setTailoredResumePendingDeleteId(tailoredResume.id)}
+                  title="Delete tailored resume"
+                  type="button"
+                >
+                  <Trash2 aria-hidden="true" className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </aside>
+  );
+
   return (
     <div className="flex min-h-0 flex-col gap-[clamp(0.75rem,1.2vh,1rem)] sm:h-full sm:min-h-0">
       <StatusToast
@@ -446,6 +558,7 @@ export default function DashboardWorkspace({
           </nav>
           <SignOutButton className="w-full sm:w-auto" />
         </div>
+
       </header>
 
       {typeof document !== "undefined" && isMobileMenuOpen
@@ -640,85 +753,39 @@ export default function DashboardWorkspace({
             </aside>
           </section>
         ) : activeTab === "tailor" ? (
-          <section className="grid content-start gap-[clamp(0.75rem,1.2vh,1rem)] sm:h-full sm:min-h-0 xl:grid-cols-[1fr_0.4fr]">
-            <div className="overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto">
-              <TailorResumeWorkspace
-                debugUiEnabled={tailorResumeDebugUiEnabled}
-                openAIReady={tailorResumeOpenAIReady}
-                initialProfile={tailorResumeProfileState}
-                onReviewTailoredResume={openTailoredResumeReview}
-                onTailoredResumesChange={setTailoredResumes}
-                onUserMarkdownChange={setTailorResumeUserMarkdownState}
-              />
-            </div>
+          <section className="sm:h-full sm:min-h-0">
+            {isWideDashboardLayout ? (
+              <ResizablePanelGroup
+                className="min-h-0"
+                orientation="horizontal"
+              >
+                <ResizablePanel
+                  className="min-h-0 min-w-0 pr-1"
+                  defaultSize={defaultTailorWorkspacePaneSize}
+                  minSize={minTailorWorkspacePaneSize}
+                >
+                  {tailorResumeWorkspacePane}
+                </ResizablePanel>
 
-            <aside className="overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto sm:pr-1">
-              <section className="glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                    Recent tailored resumes
-                  </p>
-                  <span
-                    className="shrink-0 whitespace-nowrap rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400"
-                    title={`${tailoredResumes.length} total tailored resume${
-                      tailoredResumes.length === 1 ? "" : "s"
-                    }`}
-                  >
-                    {tailoredResumeCountLabel}
-                  </span>
-                </div>
-                {tailoredResumes.length === 0 ? (
-                  <p className="text-sm text-zinc-400">No tailored resumes yet.</p>
-                ) : (
-                  <div className="grid gap-2">
-                    {tailoredResumes.map((tailoredResume) => (
-                      <div
-                        key={tailoredResume.id}
-                        className="group flex items-start gap-1 rounded-[1rem] border border-white/8 bg-black/20 transition hover:border-emerald-400/25 hover:bg-emerald-400/6 focus-within:border-emerald-300/45"
-                      >
-                        <button
-                          className="min-w-0 flex-1 overflow-hidden px-3 py-2.5 text-left focus-visible:outline-none"
-                          onClick={() => openTailoredResumeReview(tailoredResume.id)}
-                          type="button"
-                        >
-                          <div className="flex items-center gap-3 overflow-hidden">
-                            <div className="min-w-0 flex-1">
-                              <p
-                                className="truncate text-sm font-medium text-zinc-100"
-                                title={tailoredResume.displayName}
-                              >
-                                {formatTailoredResumeSidebarName(tailoredResume)}
-                              </p>
-                              <p className="truncate text-sm text-zinc-400">
-                                {tailoredResume.companyName}
-                              </p>
-                            </div>
-                            <span className="shrink-0 self-center text-xs text-zinc-500">
-                              {formatCompactDateOrSameDayTime(
-                                tailoredResume.updatedAt,
-                                {
-                                  includeYear: includeYearInTailoredResumeDates,
-                                },
-                              )}
-                            </span>
-                          </div>
-                        </button>
-                        <button
-                          aria-label={`Delete ${tailoredResume.displayName}`}
-                          className="mr-1 mt-2 shrink-0 rounded-full p-2 text-zinc-500 transition hover:bg-rose-400/10 hover:text-rose-200 focus-visible:bg-rose-400/10 focus-visible:text-rose-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:text-zinc-700"
-                          disabled={isDeletingTailoredResume}
-                          onClick={() => setTailoredResumePendingDeleteId(tailoredResume.id)}
-                          title="Delete tailored resume"
-                          type="button"
-                        >
-                          <Trash2 aria-hidden="true" className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <ResizableHandle className="relative z-30 w-2 bg-transparent after:hidden focus-visible:ring-0" />
+
+                <ResizablePanel
+                  className="min-h-0 min-w-0 pl-1"
+                  collapsedSize={0}
+                  collapsible
+                  defaultSize={defaultTailorHistoryPaneSize}
+                  maxSize={maxTailorHistoryPaneSize}
+                  minSize={minTailorHistoryPaneSize}
+                >
+                  {tailorResumeHistoryPane}
+                </ResizablePanel>
+              </ResizablePanelGroup>
+            ) : (
+              <section className="grid content-start gap-[clamp(0.75rem,1.2vh,1rem)] sm:h-full sm:min-h-0">
+                {tailorResumeWorkspacePane}
+                {tailorResumeHistoryPane}
               </section>
-            </aside>
+            )}
           </section>
         ) : (
           <section className="sm:h-full sm:min-h-0">

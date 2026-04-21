@@ -3,8 +3,6 @@
 import {
   type ChangeEvent,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent,
-  type PointerEvent,
   type ReactNode,
   useCallback,
   useEffect,
@@ -14,8 +12,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { ChevronsLeft, ChevronsRight, Lock, LockOpen, Trash2 } from "lucide-react";
-import type { PanelImperativeHandle } from "react-resizable-panels";
+import { Lock, LockOpen, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   TailorResumeProgressModal,
@@ -784,7 +781,6 @@ export default function TailorResumeWorkspace({
 }: TailorResumeWorkspaceProps) {
   const fileInputId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const previewPanelRef = useRef<PanelImperativeHandle | null>(null);
   const jobDescriptionSaveSequenceRef = useRef(0);
   const latexSaveSequenceRef = useRef(0);
   const lastSavedJobDescriptionRef = useRef(initialProfile.jobDescription);
@@ -826,7 +822,6 @@ export default function TailorResumeWorkspace({
   const [isUpdatingBaseResumeStep, setIsUpdatingBaseResumeStep] = useState(false);
   const [isUploadingResume, setIsUploadingResume] = useState(false);
   const [isWideLayout, setIsWideLayout] = useState(false);
-  const [isPreviewCollapsed, setIsPreviewCollapsed] = useState(false);
   const [activeLatexView, setActiveLatexView] = useState<"annotated" | "source">(
     "source",
   );
@@ -941,7 +936,6 @@ export default function TailorResumeWorkspace({
     );
     setPendingDeletedLinkKeys([]);
     setIsLinkEditorOpen(false);
-    setIsPreviewCollapsed(false);
     setIsPreviewFrameLoading(false);
     setIsSavingLinks(false);
     setIsTailorInterviewOpen(false);
@@ -2110,28 +2104,6 @@ export default function TailorResumeWorkspace({
     }
   }
 
-  function handlePreviewPanelResize(panelSize: {
-    asPercentage: number;
-    inPixels: number;
-  }) {
-    setIsPreviewCollapsed(panelSize.asPercentage < 1);
-  }
-
-  function togglePreviewPane() {
-    if (previewPanelRef.current?.isCollapsed()) {
-      previewPanelRef.current.expand();
-      return;
-    }
-
-    previewPanelRef.current?.collapse();
-  }
-
-  function stopHandleButtonEvent(
-    event: MouseEvent<HTMLButtonElement> | PointerEvent<HTMLButtonElement>,
-  ) {
-    event.stopPropagation();
-  }
-
   const editorPanelContent = (
     <section
       aria-busy={editorDisabled}
@@ -2396,41 +2368,21 @@ export default function TailorResumeWorkspace({
                     orientation="horizontal"
                   >
                     <ResizablePanel
-                      className="min-w-0 overflow-hidden pr-2"
+                      className="min-w-0 overflow-hidden pr-1"
                       defaultSize={defaultEditorPaneSize}
                       minSize={42}
                     >
                       {editorPanelContent}
                     </ResizablePanel>
 
-                    <ResizableHandle className="group relative w-4 bg-transparent after:hidden focus-visible:ring-0">
-                      <button
-                        aria-label={isPreviewCollapsed ? "Show preview" : "Hide preview"}
-                        className="absolute left-1/2 top-3 z-20 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-white/14 bg-zinc-950/96 text-zinc-100 shadow-[0_10px_26px_rgba(0,0,0,0.32)] transition hover:border-white/25 hover:bg-zinc-900"
-                        onClick={(event) => {
-                          stopHandleButtonEvent(event);
-                          togglePreviewPane();
-                        }}
-                        onMouseDown={stopHandleButtonEvent}
-                        onPointerDown={stopHandleButtonEvent}
-                        type="button"
-                      >
-                        {isPreviewCollapsed ? (
-                          <ChevronsLeft className="h-4 w-4" />
-                        ) : (
-                          <ChevronsRight className="h-4 w-4" />
-                        )}
-                      </button>
-                    </ResizableHandle>
+                    <ResizableHandle className="group relative w-2 bg-transparent after:hidden focus-visible:ring-0" />
 
                     <ResizablePanel
-                      className="min-w-0 overflow-hidden pl-2"
+                      className="min-w-0 overflow-hidden pl-1"
                       collapsedSize={0}
                       collapsible
                       defaultSize={defaultPreviewPaneSize}
                       minSize={22}
-                      onResize={handlePreviewPanelResize}
-                      panelRef={previewPanelRef}
                     >
                       {previewPanelContent}
                     </ResizablePanel>
