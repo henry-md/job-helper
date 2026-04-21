@@ -17,6 +17,7 @@ import {
   type TailoredResumeInteractivePreviewQuery,
   type TailoredResumePreviewHighlightTone,
 } from "./tailor-resume-preview-focus.ts";
+import { ensurePdfJsServerWorker } from "./pdfjs-server-worker.ts";
 
 type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
 type PdfPageViewport = ReturnType<PDFPageProxy["getViewport"]>;
@@ -173,6 +174,7 @@ function installPdfJsNodeGlobals() {
 
 async function loadPdfJsModule() {
   installPdfJsNodeGlobals();
+  await ensurePdfJsServerWorker();
   pdfJsModulePromise ??= import("pdfjs-dist/legacy/build/pdf.mjs");
   return pdfJsModulePromise;
 }
