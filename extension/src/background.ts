@@ -1,9 +1,17 @@
 import {
+  AUTH_SESSION_STORAGE_KEY,
   buildTailoredResumeReviewUrl,
   CAPTURE_COMMAND_NAME,
+  DEFAULT_DASHBOARD_URL,
   DEFAULT_TAILOR_RESUME_ENDPOINT,
+  EXTENSION_AUTH_GOOGLE_ENDPOINT,
+  EXTENSION_AUTH_SESSION_ENDPOINT,
+  EXTENSION_BROWSER_SESSION_ENDPOINT,
   LAST_TAILORING_STORAGE_KEY,
+  type JobHelperAuthSession,
+  type JobHelperAuthUser,
   type JobPageContext,
+  readTailoredResumeSummaries,
   type TailorResumeRunRecord,
 } from "./job-helper";
 
@@ -15,6 +23,15 @@ type TailorResumeSummary = {
   positionTitle: string | null;
   status: string | null;
 };
+
+type RuntimeMessage = {
+  payload?: unknown;
+  type?: string;
+};
+
+type AuthStatus =
+  | { session: JobHelperAuthSession; status: "signedIn" }
+  | { status: "signedOut" };
 
 let isCaptureInFlight = false;
 
@@ -314,6 +331,274 @@ async function persistResult(record: TailorResumeRunRecord) {
   });
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readPayloadString(payload: unknown, key: string) {
+  if (!isRecord(payload)) {
+    return "";
+  }
+
+  const value = payload[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function readAuthUser(value: unknown): JobHelperAuthUser | null {
+  if (!isRecord(value) || typeof value.id !== "string") {
+    return null;
+  }
+
+  return {
+    email: typeof value.email === "string" ? value.email : null,
+    id: value.id,
+    image: typeof value.image === "string" ? value.image : null,
+    name: typeof value.name === "string" ? value.name : null,
+  };
+}
+
+function readAuthSession(value: unknown): JobHelperAuthSession | null {
+  if (
+    !isRecord(value) ||
+    typeof value.sessionToken !== "string" ||
+    typeof value.expires !== "string"
+  ) {
+    return null;
+  }
+
+  const user = readAuthUser(value.user);
+
+  if (!user) {
+    return null;
+  }
+
+  return {
+    expires: value.expires,
+    sessionToken: value.sessionToken,
+    user,
+  };
+}
+
+function isAuthSessionFresh(session: JobHelperAuthSession) {
+  const expiresAt = new Date(session.expires).getTime();
+
+  return Number.isFinite(expiresAt) && expiresAt > Date.now() + 60_000;
+}
+
+async function readStoredAuthSession() {
+  const result = await chrome.storage.local.get(AUTH_SESSION_STORAGE_KEY);
+  return readAuthSession(result[AUTH_SESSION_STORAGE_KEY]);
+}
+
+async function writeStoredAuthSession(session: JobHelperAuthSession) {
+  await chrome.storage.local.set({
+    [AUTH_SESSION_STORAGE_KEY]: session,
+  });
+}
+
+async function clearStoredAuthSession() {
+  await chrome.storage.local.remove(AUTH_SESSION_STORAGE_KEY);
+}
+
+async function readJsonResponse(response: Response) {
+  try {
+    return (await response.json()) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function readResponseError(
+  payload: Record<string, unknown>,
+  fallbackMessage: string,
+) {
+  return typeof payload.error === "string" && payload.error.trim()
+    ? payload.error
+    : fallbackMessage;
+}
+
+function authorizationHeaders(session: JobHelperAuthSession) {
+  return {
+    Authorization: `Bearer ${session.sessionToken}`,
+  };
+}
+
+async function validateStoredAuthSession(session: JobHelperAuthSession) {
+  const response = await fetch(EXTENSION_AUTH_SESSION_ENDPOINT, {
+    credentials: "include",
+    headers: authorizationHeaders(session),
+  });
+  const payload = await readJsonResponse(response);
+
+  if (!response.ok) {
+    await clearStoredAuthSession();
+    return null;
+  }
+
+  const user = readAuthUser(payload.user);
+  const expires = typeof payload.expires === "string" ? payload.expires : session.expires;
+  const validatedSession = user
+    ? {
+        ...session,
+        expires,
+        user,
+      }
+    : session;
+
+  if (!isAuthSessionFresh(validatedSession)) {
+    await clearStoredAuthSession();
+    return null;
+  }
+
+  await writeStoredAuthSession(validatedSession);
+  return validatedSession;
+}
+
+async function getAuthStatus(): Promise<AuthStatus> {
+  const storedSession = await readStoredAuthSession();
+
+  if (!storedSession || !isAuthSessionFresh(storedSession)) {
+    await clearStoredAuthSession();
+    return { status: "signedOut" };
+  }
+
+  const validatedSession = await validateStoredAuthSession(storedSession);
+
+  return validatedSession
+    ? { session: validatedSession, status: "signedIn" }
+    : { status: "signedOut" };
+}
+
+async function requestGoogleAccessToken(interactive: boolean) {
+  if (!chrome.identity?.getAuthToken) {
+    throw new Error("Chrome identity permissions are not available.");
+  }
+
+  const result = (await chrome.identity.getAuthToken({
+    interactive,
+  })) as { token?: string } | string;
+  const token = typeof result === "string" ? result : result.token;
+
+  if (!token) {
+    throw new Error("Google did not return an extension access token.");
+  }
+
+  return token;
+}
+
+async function signInToJobHelper() {
+  const accessToken = await requestGoogleAccessToken(true);
+  const response = await fetch(EXTENSION_AUTH_GOOGLE_ENDPOINT, {
+    body: JSON.stringify({ accessToken }),
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+  const payload = await readJsonResponse(response);
+
+  if (!response.ok) {
+    throw new Error(readResponseError(payload, "Unable to connect Job Helper."));
+  }
+
+  const session = readAuthSession(payload);
+
+  if (!session || !isAuthSessionFresh(session)) {
+    throw new Error("Job Helper did not return a usable extension session.");
+  }
+
+  await writeStoredAuthSession(session);
+
+  return session;
+}
+
+async function ensureJobHelperSession(input: { interactive: boolean }) {
+  const storedSession = await readStoredAuthSession();
+
+  if (storedSession && isAuthSessionFresh(storedSession)) {
+    return storedSession;
+  }
+
+  await clearStoredAuthSession();
+
+  if (!input.interactive) {
+    throw new Error("Sign in to Job Helper from the extension first.");
+  }
+
+  return signInToJobHelper();
+}
+
+async function signOutOfJobHelper() {
+  const storedSession = await readStoredAuthSession();
+
+  if (storedSession) {
+    await fetch(EXTENSION_AUTH_SESSION_ENDPOINT, {
+      credentials: "include",
+      headers: authorizationHeaders(storedSession),
+      method: "DELETE",
+    }).catch(() => undefined);
+  }
+
+  await clearStoredAuthSession();
+
+  return { status: "signedOut" } satisfies AuthStatus;
+}
+
+async function buildBrowserSessionUrl(
+  session: JobHelperAuthSession,
+  callbackUrl: string,
+) {
+  const response = await fetch(EXTENSION_BROWSER_SESSION_ENDPOINT, {
+    body: JSON.stringify({ callbackUrl }),
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(session),
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+  const payload = await readJsonResponse(response);
+
+  if (!response.ok || typeof payload.url !== "string") {
+    throw new Error(
+      readResponseError(payload, "Unable to open Job Helper in the browser."),
+    );
+  }
+
+  return payload.url;
+}
+
+async function openJobHelperCallbackUrl(callbackUrl: string) {
+  const session = await ensureJobHelperSession({ interactive: true });
+  const url = await buildBrowserSessionUrl(session, callbackUrl);
+
+  await chrome.tabs.create({ url });
+}
+
+async function getTailoredResumeSummaries() {
+  const session = await ensureJobHelperSession({ interactive: false });
+  const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
+    credentials: "include",
+    headers: authorizationHeaders(session),
+  });
+  const payload = await readJsonResponse(response);
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      await clearStoredAuthSession();
+    }
+
+    throw new Error(
+      readResponseError(payload, "Could not load tailored resumes."),
+    );
+  }
+
+  return {
+    records: readTailoredResumeSummaries(payload),
+  };
+}
+
 async function tailorResumeForActiveTab() {
   const activeTab = await getActiveTab();
   const tabId = activeTab.id;
@@ -321,6 +606,8 @@ async function tailorResumeForActiveTab() {
   if (typeof tabId !== "number") {
     throw new Error("The active tab does not expose an id.");
   }
+
+  const authSession = await ensureJobHelperSession({ interactive: true });
 
   await showOverlay(tabId, "Job Helper is reading this job post", "info");
 
@@ -346,12 +633,17 @@ async function tailorResumeForActiveTab() {
     }),
     credentials: "include",
     headers: {
+      ...authorizationHeaders(authSession),
       "Content-Type": "application/json",
     },
   });
   const payload = (await response.json()) as Record<string, unknown>;
 
   if (!response.ok) {
+    if (response.status === 401) {
+      await clearStoredAuthSession();
+    }
+
     throw new Error(
       typeof payload.error === "string"
         ? payload.error
@@ -395,8 +687,10 @@ async function tailorResumeForActiveTab() {
   );
 
   if (latestTailoredResume?.id) {
+    const browserReviewUrl = await buildBrowserSessionUrl(authSession, reviewUrl);
+
     await chrome.tabs.create({
-      url: reviewUrl,
+      url: browserReviewUrl,
     });
   }
 }
@@ -458,6 +752,24 @@ chrome.commands.onCommand.addListener((command) => {
   void runCaptureFlow();
 });
 
+function sendAsyncResponse(
+  sendResponse: (response?: unknown) => void,
+  handler: () => Promise<object>,
+) {
+  void handler()
+    .then((response) => {
+      sendResponse({ ok: true, ...response });
+    })
+    .catch((error) => {
+      sendResponse({
+        error: error instanceof Error ? error.message : "Job Helper failed.",
+        ok: false,
+      });
+    });
+
+  return true;
+}
+
 chrome.runtime.onMessage.addListener((
   message: unknown,
   _sender: chrome.runtime.MessageSender,
@@ -465,13 +777,43 @@ chrome.runtime.onMessage.addListener((
 ) => {
   const typedMessage =
     typeof message === "object" && message !== null
-      ? (message as { type?: string })
+      ? (message as RuntimeMessage)
       : null;
 
-  if (typedMessage?.type !== "JOB_HELPER_TRIGGER_CAPTURE") {
+  if (typedMessage?.type === "JOB_HELPER_TRIGGER_CAPTURE") {
+    void runCaptureFlow();
+    sendResponse({ ok: true });
     return;
   }
 
-  void runCaptureFlow();
-  sendResponse({ ok: true });
+  if (typedMessage?.type === "JOB_HELPER_AUTH_STATUS") {
+    return sendAsyncResponse(sendResponse, async () => getAuthStatus());
+  }
+
+  if (typedMessage?.type === "JOB_HELPER_SIGN_IN") {
+    return sendAsyncResponse(sendResponse, async () => ({
+      session: await signInToJobHelper(),
+      status: "signedIn",
+    }));
+  }
+
+  if (typedMessage?.type === "JOB_HELPER_SIGN_OUT") {
+    return sendAsyncResponse(sendResponse, signOutOfJobHelper);
+  }
+
+  if (typedMessage?.type === "JOB_HELPER_TAILORED_RESUMES") {
+    return sendAsyncResponse(sendResponse, getTailoredResumeSummaries);
+  }
+
+  if (typedMessage?.type === "JOB_HELPER_OPEN_DASHBOARD") {
+    return sendAsyncResponse(sendResponse, async () => {
+      const callbackUrl =
+        readPayloadString(typedMessage.payload, "callbackUrl") ||
+        DEFAULT_DASHBOARD_URL;
+
+      await openJobHelperCallbackUrl(callbackUrl);
+
+      return {};
+    });
+  }
 });
