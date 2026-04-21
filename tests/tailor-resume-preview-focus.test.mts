@@ -37,6 +37,19 @@ test("renderTailoredResumeLatexToPlainText flattens heading commands into search
   );
 });
 
+test("renderTailoredResumeLatexToPlainText keeps a section body after the heading command", () => {
+  assert.equal(
+    renderTailoredResumeLatexToPlainText(String.raw`\resumeSection{TECHNICAL SKILLS}
+{\BodyFont
+\noindent\textbf{Languages: }%
+\hangindent=74pt
+\hangafter=1
+Python, C++, Java, JavaScript, TypeScript\par
+}`),
+    "TECHNICAL SKILLS Languages: Python, C++, Java, JavaScript, TypeScript",
+  );
+});
+
 test("buildTailoredResumePreviewFocusQuery targets the changed span inside the current block text", () => {
   const focusQuery = buildTailoredResumePreviewFocusQuery({
     beforeLatexCode:
@@ -60,6 +73,45 @@ test("buildTailoredResumePreviewFocusQuery targets the changed span inside the c
     ],
     mode: "changed",
   });
+});
+
+test("buildTailoredResumePreviewFocusQuery highlights technical skill body edits instead of the shared heading", () => {
+  const focusQuery = buildTailoredResumePreviewFocusQuery({
+    beforeLatexCode: String.raw`\resumeSection{TECHNICAL SKILLS}
+{\BodyFont
+\noindent\textbf{Developer Tools / DevOps: }%
+\hangindent=112pt
+\hangafter=1
+Git, GitHub, CI/CD, Docker, Kubernetes, AWS (EC2, Amplify), Unix/Linux\par
+}`,
+    currentLatexCode: String.raw`\resumeSection{TECHNICAL SKILLS}
+{\BodyFont
+\noindent\textbf{Languages: }%
+\hangindent=74pt
+\hangafter=1
+Python, C++, Java, JavaScript, TypeScript\par
+}`,
+    state: "applied",
+  });
+
+  assert.ok(focusQuery);
+  assert.equal(
+    focusQuery.anchorText,
+    "TECHNICAL SKILLS Languages: Python, C++, Java, JavaScript, TypeScript",
+  );
+  assert.equal(focusQuery.mode, "changed");
+  assert.notDeepEqual(focusQuery.highlightRanges, []);
+
+  const pageText =
+    "TECHNICAL SKILLS Languages: Python, C++, Java, JavaScript, TypeScript";
+  const resolvedTexts = resolveTailoredResumePreviewFocusRanges({
+    pageText,
+    query: focusQuery,
+  }).map((range) => pageText.slice(range.start, range.end).trim());
+
+  assert.deepEqual(resolvedTexts, [
+    "Languages: Python, C++, Java, JavaScript, TypeScript",
+  ]);
 });
 
 test("buildTailoredResumePreviewFocusQuery preserves shared anchors as neutral context", () => {

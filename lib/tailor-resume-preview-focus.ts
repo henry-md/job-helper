@@ -38,6 +38,65 @@ type ParsedCommand = {
   end: number;
 };
 
+const fixedLatexCommandArgCounts = new Map<string, number>([
+  ["BodyFont", 0],
+  ["EntryGap", 0],
+  ["NameFont", 0],
+  ["SectionFont", 0],
+  ["bgroup", 0],
+  ["cdot", 0],
+  ["egroup", 0],
+  ["hrule", 0],
+  ["item", 0],
+  ["ldots", 0],
+  ["noindent", 0],
+  ["par", 0],
+  ["pdfgentounicode", 0],
+  ["selectfont", 0],
+  ["textasciicircum", 0],
+  ["textasciitilde", 0],
+  ["textbackslash", 0],
+  ["textbar", 0],
+  ["textemdash", 0],
+  ["textendash", 0],
+  ["textgreater", 0],
+  ["textless", 0],
+  ["descline", 1],
+  ["documentclass", 1],
+  ["emph", 1],
+  ["hspace", 1],
+  ["hspace*", 1],
+  ["input", 1],
+  ["llap", 1],
+  ["makebox", 1],
+  ["pagestyle", 1],
+  ["resumeSection", 1],
+  ["resumeitem", 1],
+  ["smash", 1],
+  ["textbf", 1],
+  ["textit", 1],
+  ["textsc", 1],
+  ["texttt", 1],
+  ["tightul", 1],
+  ["uline", 1],
+  ["underline", 1],
+  ["urlstyle", 1],
+  ["usepackage", 1],
+  ["vspace", 1],
+  ["vspace*", 1],
+  ["href", 2],
+  ["labelline", 2],
+  ["linespread", 1],
+  ["newcommand", 2],
+  ["projectheading", 2],
+  ["renewcommand", 2],
+  ["setlength", 2],
+  ["textcolor", 2],
+  ["definecolor", 3],
+  ["entryheading", 3],
+  ["newenvironment", 3],
+]);
+
 const escapedLatexCharacters = new Map<string, string>([
   ["&", "&"],
   ["%", "%"],
@@ -96,6 +155,28 @@ function readBalancedGroup(value: string, start: number, end = value.length) {
   return null;
 }
 
+function getLatexCommandArgLimit(commandName: string, args: string[]) {
+  if (commandName === "begin") {
+    const environmentName = args[0];
+
+    if (environmentName === "tabular*") {
+      return 3;
+    }
+
+    if (environmentName === "tabular") {
+      return 2;
+    }
+
+    return 1;
+  }
+
+  if (commandName === "end") {
+    return 1;
+  }
+
+  return fixedLatexCommandArgCounts.get(commandName) ?? null;
+}
+
 function readCommandAt(value: string, start: number, end = value.length): ParsedCommand | null {
   if (value[start] !== "\\") {
     return null;
@@ -116,7 +197,14 @@ function readCommandAt(value: string, start: number, end = value.length): Parsed
   const args: string[] = [];
 
   while (cursor < end) {
+    const argLimit = getLatexCommandArgLimit(commandName, args);
+
+    if (argLimit !== null && args.length >= argLimit) {
+      break;
+    }
+
     const nextCursor = skipWhitespace(value, cursor, end);
+    const skippedWhitespace = value.slice(cursor, nextCursor);
     const nextChar = value[nextCursor];
 
     if (nextChar === "[") {
@@ -131,6 +219,10 @@ function readCommandAt(value: string, start: number, end = value.length): Parsed
     }
 
     if (nextChar !== "{") {
+      break;
+    }
+
+    if (argLimit === null && args.length > 0 && skippedWhitespace.includes("\n")) {
       break;
     }
 
@@ -215,6 +307,8 @@ function renderCommandToPlainText(
       return "<";
     case "textgreater":
       return ">";
+    case "textcolor":
+      return renderGroup(args[1] ?? "");
     case "textbar":
       return "|";
     case "textbackslash":
