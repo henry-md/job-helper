@@ -99,6 +99,23 @@ button {
 }
 
 @media (max-width: 39.999rem) {
+  .dashboard-page {
+    background:
+      radial-gradient(circle at top left, rgba(52, 211, 153, 0.08), transparent 28rem),
+      radial-gradient(circle at top right, rgba(244, 244, 245, 0.06), transparent 24rem),
+      linear-gradient(180deg, #09090b 0%, #050507 100%);
+  }
+
+  .dashboard-page header.glass-panel {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 0.25rem 0 0.5rem;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
   .public-home-page {
     background:
       radial-gradient(circle at top left, rgba(52, 211, 153, 0.12), transparent 34rem),

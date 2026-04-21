@@ -142,8 +142,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   });
 
   return (
-    <main className="min-h-[100dvh] overflow-x-hidden px-4 py-4 sm:h-[100dvh] sm:overflow-hidden sm:px-[clamp(1.4rem,2.4vw,2.8rem)] sm:py-[clamp(0.75rem,1.6vh,1.25rem)]">
-      <div className="mx-auto flex min-h-full w-full max-w-[1800px] flex-col gap-[clamp(0.75rem,1.2vh,1rem)] sm:h-full">
+    <main className="dashboard-page min-h-svh overflow-x-hidden px-4 pb-8 pt-4 sm:h-[100dvh] sm:overflow-hidden sm:px-[clamp(1.4rem,2.4vw,2.8rem)] sm:py-[clamp(0.75rem,1.6vh,1.25rem)]">
+      <div className="mx-auto flex w-full max-w-[1800px] flex-col gap-[clamp(0.75rem,1.2vh,1rem)] sm:h-full sm:min-h-full">
         <section className="flex flex-1 flex-col gap-[clamp(0.75rem,1.2vh,1rem)] sm:min-h-0">
           <DashboardWorkspace
             applicationCount={databaseStatus.applicationCount}

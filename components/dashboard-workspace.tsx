@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 import { useEffect, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { Menu, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import JobApplicationIntake from "@/components/job-application-intake";
 import PromptSettingsWorkspace from "@/components/prompt-settings-workspace";
@@ -39,6 +39,24 @@ type TailoredResumeSidebarMutationResponse = {
   profile?: TailorResumeProfile;
   tailoredResumeId?: string;
 };
+
+const dashboardTabs = [
+  {
+    id: "tailor",
+    label: "Tailor Resume",
+  },
+  {
+    id: "new",
+    label: "Applications",
+  },
+  {
+    id: "settings",
+    label: "Settings",
+  },
+] as const satisfies Array<{
+  id: DashboardTabId;
+  label: string;
+}>;
 
 function getValidProfileImageSrc(value: string | null | undefined) {
   const normalizedValue = value?.trim();
@@ -202,6 +220,7 @@ export default function DashboardWorkspace({
   const [tailoredResumes, setTailoredResumes] = useState<TailoredResumeRecord[]>(
     () => tailorResumeProfile.tailoredResumes,
   );
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isDeletingTailoredResume, setIsDeletingTailoredResume] = useState(false);
   const activeTab = dashboardRouteState.tab;
   const reviewingTailoredResumeId = dashboardRouteState.tailoredResumeId;
@@ -218,7 +237,7 @@ export default function DashboardWorkspace({
     tailoredResumes.map((tailoredResume) => tailoredResume.updatedAt),
   );
   const tailoredResumeCountLabel =
-    `${tailoredResumes.length} ${tailoredResumes.length === 1 ? "resume" : "resumes"}`;
+    `${tailoredResumes.length}\u00A0${tailoredResumes.length === 1 ? "resume" : "resumes"}`;
 
   useEffect(() => {
     setDashboardRouteState(parseDashboardRouteStateFromSearchParams(searchParams));
@@ -255,6 +274,7 @@ export default function DashboardWorkspace({
   }
 
   function setActiveDashboardTab(nextTab: DashboardTabId) {
+    setIsMobileMenuOpen(false);
     navigateDashboard({
       tab: nextTab,
       tailoredResumeId: null,
@@ -292,6 +312,37 @@ export default function DashboardWorkspace({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [isDeletingTailoredResume, tailoredResumePendingDelete]);
+
+  useEffect(() => {
+    if (!isMobileMenuOpen) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsMobileMenuOpen(false);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isMobileMenuOpen]);
+
+  useEffect(() => {
+    if (!isMobileMenuOpen) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isMobileMenuOpen]);
 
   async function deleteTailoredResume() {
     if (!tailoredResumePendingDelete) {
@@ -337,67 +388,127 @@ export default function DashboardWorkspace({
   }
 
   return (
-    <div className="flex min-h-full flex-col gap-[clamp(0.75rem,1.2vh,1rem)] sm:h-full sm:min-h-0">
+    <div className="flex min-h-0 flex-col gap-[clamp(0.75rem,1.2vh,1rem)] sm:h-full sm:min-h-0">
       <StatusToast
         message={statusMessage?.text}
         tone={statusMessage?.tone}
       />
 
-      <header className="glass-panel soft-ring flex flex-col gap-4 rounded-[1.5rem] px-4 py-4 sm:min-h-[88px] sm:flex-row sm:items-center sm:justify-between sm:px-5">
-        <div className="flex min-w-0 items-center gap-3">
-          <ProfileAvatar
-            imageSrc={profileImageSrc}
-            name={userName ?? "Profile"}
-          />
-          <div className="min-w-0">
-            <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">
-              Dashboard
-            </p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-50">
-              {displayName}
-            </h1>
+      <header className="dashboard-header glass-panel soft-ring flex flex-col gap-3 rounded-[1.5rem] px-4 py-4 sm:min-h-[88px] sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
+        <div className="flex min-w-0 items-center justify-between gap-3 sm:justify-start">
+          <div className="flex min-w-0 items-center gap-3">
+            <ProfileAvatar
+              imageSrc={profileImageSrc}
+              name={userName ?? "Profile"}
+            />
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">
+                Dashboard
+              </p>
+              <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-50">
+                {displayName}
+              </h1>
+            </div>
           </div>
+
+          <button
+            aria-controls="dashboard-mobile-menu"
+            aria-expanded={isMobileMenuOpen}
+            aria-label={isMobileMenuOpen ? "Close dashboard menu" : "Open dashboard menu"}
+            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/30 sm:hidden"
+            onClick={() => setIsMobileMenuOpen((current) => !current)}
+            type="button"
+          >
+            {isMobileMenuOpen ? (
+              <X aria-hidden="true" className="h-5 w-5" />
+            ) : (
+              <Menu aria-hidden="true" className="h-5 w-5" />
+            )}
+          </button>
         </div>
 
-        <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-2">
+        <div className="hidden w-full flex-col gap-3 sm:flex sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-2">
           <nav className="grid w-full grid-cols-3 items-center gap-2 rounded-[1.4rem] border border-white/10 bg-black/20 p-1 sm:flex sm:w-auto sm:rounded-full">
-            <button
-              className={`w-full min-w-0 whitespace-nowrap rounded-full px-2.5 py-2 text-center text-[0.7rem] uppercase leading-none tracking-[0.14em] transition sm:w-auto sm:px-3 sm:text-xs sm:tracking-[0.16em] ${
-                activeTab === "tailor"
-                  ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
-                  : "text-zinc-400 hover:text-zinc-200"
-              }`}
-              onClick={() => setActiveDashboardTab("tailor")}
-              type="button"
-            >
-              Tailor Resume
-            </button>
-            <button
-              className={`w-full min-w-0 whitespace-nowrap rounded-full px-2.5 py-2 text-center text-[0.7rem] uppercase leading-none tracking-[0.14em] transition sm:w-auto sm:px-3 sm:text-xs sm:tracking-[0.16em] ${
-                activeTab === "new"
-                  ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
-                  : "text-zinc-400 hover:text-zinc-200"
-              }`}
-              onClick={() => setActiveDashboardTab("new")}
-              type="button"
-            >
-              Applications
-            </button>
-            <button
-              className={`w-full min-w-0 whitespace-nowrap rounded-full px-2.5 py-2 text-center text-[0.7rem] uppercase leading-none tracking-[0.14em] transition sm:w-auto sm:px-3 sm:text-xs sm:tracking-[0.16em] ${
-                activeTab === "settings"
-                  ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
-                  : "text-zinc-400 hover:text-zinc-200"
-              }`}
-              onClick={() => setActiveDashboardTab("settings")}
-              type="button"
-            >
-              Settings
-            </button>
+            {dashboardTabs.map((tab) => (
+              <button
+                key={tab.id}
+                className={`w-full min-w-0 whitespace-nowrap rounded-full px-2.5 py-2 text-center text-[0.7rem] uppercase leading-none tracking-[0.14em] transition sm:w-auto sm:px-3 sm:text-xs sm:tracking-[0.16em] ${
+                  activeTab === tab.id
+                    ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
+                    : "text-zinc-400 hover:text-zinc-200"
+                }`}
+                onClick={() => setActiveDashboardTab(tab.id)}
+                type="button"
+              >
+                {tab.label}
+              </button>
+            ))}
           </nav>
           <SignOutButton className="w-full sm:w-auto" />
         </div>
       </header>
+
+      {typeof document !== "undefined" && isMobileMenuOpen
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[210] bg-black/64 backdrop-blur-sm sm:hidden"
+              onClick={(event) => {
+                if (event.target === event.currentTarget) {
+                  setIsMobileMenuOpen(false);
+                }
+              }}
+            >
+              <div
+                aria-modal="true"
+                className="absolute inset-x-0 top-0 rounded-b-[1.75rem] border-b border-white/10 bg-zinc-950/96 px-5 pb-5 pt-[max(1rem,env(safe-area-inset-top))] shadow-[0_24px_90px_rgba(0,0,0,0.5)]"
+                id="dashboard-mobile-menu"
+                role="dialog"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[0.68rem] uppercase tracking-[0.24em] text-zinc-500">
+                      Menu
+                    </p>
+                    <p className="mt-1 truncate text-lg font-semibold text-zinc-50">
+                      {displayName}
+                    </p>
+                  </div>
+                  <button
+                    aria-label="Close dashboard menu"
+                    className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/30"
+                    onClick={() => setIsMobileMenuOpen(false)}
+                    type="button"
+                  >
+                    <X aria-hidden="true" className="h-5 w-5" />
+                  </button>
+                </div>
+
+                <nav className="mt-5 grid gap-1">
+                  {dashboardTabs.map((tab) => (
+                    <button
+                      key={tab.id}
+                      aria-current={activeTab === tab.id ? "page" : undefined}
+                      className={`flex min-h-12 items-center rounded-[0.95rem] px-1 text-left text-base font-medium transition ${
+                        activeTab === tab.id
+                          ? "text-emerald-200"
+                          : "text-zinc-300 hover:text-zinc-100"
+                      }`}
+                      onClick={() => setActiveDashboardTab(tab.id)}
+                      type="button"
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </nav>
+
+                <div className="mt-4 border-t border-white/10 pt-4">
+                  <SignOutButton className="w-full justify-center" />
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
 
       <TailoredResumeReviewModal
         debugUiEnabled={tailorResumeDebugUiEnabled}
@@ -488,11 +599,11 @@ export default function DashboardWorkspace({
                     Recent applications
                   </p>
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
-                      {applicationCount} apps
+                    <span className="shrink-0 whitespace-nowrap rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
+                      {applicationCount}&nbsp;apps
                     </span>
-                    <span className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
-                      {companyCount} companies
+                    <span className="shrink-0 whitespace-nowrap rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
+                      {companyCount}&nbsp;companies
                     </span>
                   </div>
                 </div>
@@ -548,7 +659,7 @@ export default function DashboardWorkspace({
                     Recent tailored resumes
                   </p>
                   <span
-                    className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400"
+                    className="shrink-0 whitespace-nowrap rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400"
                     title={`${tailoredResumes.length} total tailored resume${
                       tailoredResumes.length === 1 ? "" : "s"
                     }`}
