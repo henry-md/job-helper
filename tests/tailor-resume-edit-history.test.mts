@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  applyTailoredResumeEditToSourceLatex,
   buildTailoredResumeReviewEdits,
   buildTailoredResumeCombinedActiveEdits,
   rebuildTailoredResumeAnnotatedLatex,
@@ -214,4 +215,54 @@ test("source annotated latex falls back by reversing the earliest edit on legacy
     sourceAnnotatedLatex,
     /Created full-stack dashboard for project management with \\textbf\{React \(Next\.js\) and JavaScript\}, with user authentication/,
   );
+});
+
+test("applying a tailored edit to source latex replaces the matching source block", () => {
+  const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
+  const sourceBlock = findBlockBySnippet(
+    normalized.annotatedLatex,
+    "Created full-stack dashboard for project management",
+  );
+  const result = applyTailoredResumeEditToSourceLatex({
+    beforeLatexCode: sourceBlock.latexCode,
+    replacementLatexCode:
+      "\\resumeitem{Added explicit open-source collaboration bullet}",
+    segmentId: sourceBlock.id,
+    sourceLatexCode: tailorResumeLatexExample,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.changed, true);
+  assert.match(
+    result.latexCode,
+    /Added explicit open-source collaboration bullet/,
+  );
+  assert.doesNotMatch(
+    result.latexCode,
+    /Created full-stack dashboard for project management/,
+  );
+});
+
+test("applying a tailored edit to source latex refuses stale source blocks", () => {
+  const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
+  const sourceBlock = findBlockBySnippet(
+    normalized.annotatedLatex,
+    "Created full-stack dashboard for project management",
+  );
+  const staleSourceLatex = replaceBlockInAnnotatedLatex({
+    annotatedLatexCode: normalized.annotatedLatex,
+    replacementLatexCode:
+      "\\resumeitem{Existing source edit that should not be overwritten}",
+    segmentId: sourceBlock.id,
+  });
+  const result = applyTailoredResumeEditToSourceLatex({
+    beforeLatexCode: sourceBlock.latexCode,
+    replacementLatexCode:
+      "\\resumeitem{Added explicit open-source collaboration bullet}",
+    segmentId: sourceBlock.id,
+    sourceLatexCode: staleSourceLatex,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "source_block_changed");
 });

@@ -6,6 +6,16 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import TailoredResumeInteractivePreview from "@/components/tailored-resume-interactive-preview";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
@@ -183,6 +193,11 @@ type TailoredResumeMutationResponse = {
   assistantMessage?: string;
   error?: string;
   profile?: TailorResumeProfile;
+  sourceResumeEdit?: {
+    changed: boolean;
+    editId: string;
+    tailoredResumeId: string;
+  };
   tailoredResumeEditId?: string;
   tailoredResumeId?: string;
   tailoredResumeDurationMs?: number;
@@ -564,11 +579,13 @@ function TailoredResumeDevInspectorSection({
 export default function TailoredResumeReviewModal({
   debugUiEnabled,
   onClose,
+  onTailorResumeProfileChange,
   onTailoredResumesChange,
   record,
 }: {
   debugUiEnabled: boolean;
   onClose: () => void;
+  onTailorResumeProfileChange?: (profile: TailorResumeProfile) => void;
   onTailoredResumesChange: (
     tailoredResumes: TailorResumeProfile["tailoredResumes"],
   ) => void;
@@ -597,6 +614,10 @@ export default function TailoredResumeReviewModal({
   const [isAiRefinementOpen, setIsAiRefinementOpen] = useState(false);
   const [isRefiningTailoredResume, setIsRefiningTailoredResume] = useState(false);
   const [isSavingDisplayName, setIsSavingDisplayName] = useState(false);
+  const [isSourceResumeEditDialogOpen, setIsSourceResumeEditDialogOpen] =
+    useState(false);
+  const [isApplyingSourceResumeEdit, setIsApplyingSourceResumeEdit] =
+    useState(false);
   const [optimisticEditStateById, setOptimisticEditStateById] = useState<
     Partial<Record<string, TailoredResumeEditState>>
   >({});
@@ -696,6 +717,10 @@ export default function TailoredResumeReviewModal({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (isSourceResumeEditDialogOpen) {
+          return;
+        }
+
         if (isDevInspectorOpen) {
           setIsDevInspectorOpen(false);
           return;
@@ -728,7 +753,12 @@ export default function TailoredResumeReviewModal({
         return;
       }
 
-      if (expandedEditReasonEditId || isAiRefinementOpen || isDevInspectorOpen) {
+      if (
+        expandedEditReasonEditId ||
+        isAiRefinementOpen ||
+        isDevInspectorOpen ||
+        isSourceResumeEditDialogOpen
+      ) {
         return;
       }
 
@@ -785,6 +815,7 @@ export default function TailoredResumeReviewModal({
     isDevInspectorOpen,
     isRefiningTailoredResume,
     isRenamingDisplayName,
+    isSourceResumeEditDialogOpen,
     isThesisOpen,
     onClose,
     record,
@@ -1014,6 +1045,8 @@ export default function TailoredResumeReviewModal({
     setPreviewSnapshotDataUrlByPage({});
     setExpandedEditReasonEditId(null);
     setSuppressedAcceptedBlockChoiceEditId(null);
+    setIsSourceResumeEditDialogOpen(false);
+    setIsApplyingSourceResumeEdit(false);
     lastPreviewRecoveryRecordIdRef.current = null;
     setIsRecoveringPreview(false);
   }, [record?.id]);
@@ -1497,6 +1530,56 @@ export default function TailoredResumeReviewModal({
     void updateSelectedEditState(nextState);
   }
 
+  async function applySelectedEditToSourceResume() {
+    if (!record || !selectedEdit || isApplyingSourceResumeEdit) {
+      return;
+    }
+
+    const targetEditId = selectedEdit.editId;
+    setIsApplyingSourceResumeEdit(true);
+
+    try {
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({
+          action: "applyTailoredResumeEditToSourceResume",
+          editId: targetEditId,
+          tailoredResumeId: record.id,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
+      const payload = (await response.json()) as TailoredResumeMutationResponse;
+
+      if (!response.ok || !payload.profile) {
+        throw new Error(payload.error ?? "Unable to update the source resume.");
+      }
+
+      onTailoredResumesChange(payload.profile.tailoredResumes);
+      onTailorResumeProfileChange?.(payload.profile);
+      setIsSourceResumeEditDialogOpen(false);
+
+      if (payload.sourceResumeEdit?.changed === false) {
+        toast.success("The source resume already includes this edit.");
+      } else if (payload.profile.latex.status === "failed") {
+        toast.warning(
+          "Updated the source resume, but its LaTeX preview needs review.",
+        );
+      } else {
+        toast.success("Updated the source resume.");
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Unable to update the source resume.",
+      );
+    } finally {
+      setIsApplyingSourceResumeEdit(false);
+    }
+  }
+
   useEffect(() => {
     const element = editRailRef.current;
 
@@ -1871,6 +1954,19 @@ export default function TailoredResumeReviewModal({
                     >
                       Edit yourself
                     </button>
+                    <button
+                      className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/24 bg-emerald-400/10 px-2.5 py-1.5 text-[10px] uppercase tracking-[0.18em] text-emerald-100 transition hover:border-emerald-200/40 hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={
+                        isSavingTailoredResumeEdit ||
+                        isApplyingSourceResumeEdit ||
+                        !selectedEdit
+                      }
+                      onClick={() => setIsSourceResumeEditDialogOpen(true)}
+                      type="button"
+                    >
+                      <Pencil aria-hidden="true" className="h-3.5 w-3.5" />
+                      <span>Edit Source Resume</span>
+                    </button>
                   </div>
                 )}
               </div>
@@ -2240,6 +2336,48 @@ export default function TailoredResumeReviewModal({
           </section>
         </div>
       </div>
+
+      <AlertDialog
+        open={isSourceResumeEditDialogOpen}
+        onOpenChange={(open) => {
+          if (!isApplyingSourceResumeEdit) {
+            setIsSourceResumeEditDialogOpen(open);
+          }
+        }}
+      >
+        <AlertDialogContent className="border-white/10 bg-zinc-950 text-zinc-50 ring-white/10 sm:max-w-md">
+          <AlertDialogHeader className="place-items-start text-left">
+            <AlertDialogTitle>Edit the source resume?</AlertDialogTitle>
+            <AlertDialogDescription className="text-left leading-6 text-zinc-400">
+              This replaces the matching block in your saved source LaTeX resume
+              with the{" "}
+              {selectedEdit?.customLatexCode !== null &&
+              selectedEdit?.customLatexCode !== undefined
+                ? "custom"
+                : "tailored"}{" "}
+              version from this review. Future tailored resumes will branch from
+              that updated source, and this saved tailored resume will stay in
+              History.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="border-white/10 bg-black/20">
+            <AlertDialogCancel
+              className="rounded-full border-white/10 bg-white/[0.04] text-zinc-200 hover:border-white/20 hover:bg-white/[0.08]"
+              disabled={isApplyingSourceResumeEdit}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="rounded-full border border-emerald-300/28 bg-emerald-400/12 text-emerald-100 hover:bg-emerald-400/18 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isApplyingSourceResumeEdit || !selectedEdit}
+              onClick={() => void applySelectedEditToSourceResume()}
+              type="button"
+            >
+              {isApplyingSourceResumeEdit ? "Applying..." : "OK, edit source resume"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {debugUiEnabled && isDevInspectorOpen ? (
         <div className="fixed inset-0 z-[230] flex items-center justify-center bg-black/48 p-4 backdrop-blur-[1px] sm:p-5">

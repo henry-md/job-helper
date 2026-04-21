@@ -211,3 +211,106 @@ export function buildTailoredResumeResolvedSegmentMap(
 
   return new Map(rebuiltBlocks.map((block) => [block.id, block]));
 }
+
+export type ApplyTailoredResumeEditToSourceLatexResult =
+  | {
+      annotatedLatexCode: string;
+      changed: boolean;
+      latexCode: string;
+      ok: true;
+    }
+  | {
+      currentLatexCode?: string;
+      ok: false;
+      reason:
+        | "empty_replacement"
+        | "multiple_replacement_segments"
+        | "segment_not_found"
+        | "source_block_changed";
+    };
+
+export function applyTailoredResumeEditToSourceLatex(input: {
+  beforeLatexCode: string;
+  replacementLatexCode: string;
+  segmentId: string;
+  sourceLatexCode: string;
+}): ApplyTailoredResumeEditToSourceLatexResult {
+  const sourceAnnotatedLatexCode = readNormalizedAnnotatedLatex(input.sourceLatexCode);
+  const sourceBlocks = readAnnotatedTailorResumeBlocks(sourceAnnotatedLatexCode);
+  const sourceBlock = sourceBlocks.find((block) => block.id === input.segmentId);
+
+  if (!sourceBlock) {
+    return {
+      ok: false,
+      reason: "segment_not_found",
+    };
+  }
+
+  const normalizedBeforeLatexCode = normalizeStoredBlockLatex(input.beforeLatexCode);
+  const normalizedReplacementLatexCode = normalizeStoredBlockLatex(
+    input.replacementLatexCode,
+  );
+
+  if (!normalizedReplacementLatexCode.trim()) {
+    return {
+      ok: false,
+      reason: "empty_replacement",
+    };
+  }
+
+  if (normalizeTailorResumeLatex(normalizedReplacementLatexCode).segmentCount > 1) {
+    return {
+      ok: false,
+      reason: "multiple_replacement_segments",
+    };
+  }
+
+  const normalizedCurrentLatexCode = normalizeStoredBlockLatex(sourceBlock.latexCode);
+
+  if (normalizedCurrentLatexCode === normalizedReplacementLatexCode) {
+    return {
+      annotatedLatexCode: sourceAnnotatedLatexCode,
+      changed: false,
+      latexCode: stripTailorResumeSegmentIds(sourceAnnotatedLatexCode),
+      ok: true,
+    };
+  }
+
+  if (normalizedCurrentLatexCode !== normalizedBeforeLatexCode) {
+    return {
+      currentLatexCode: normalizedCurrentLatexCode,
+      ok: false,
+      reason: "source_block_changed",
+    };
+  }
+
+  const chunks: string[] = [];
+  let cursor = 0;
+
+  for (const block of sourceBlocks) {
+    chunks.push(sourceAnnotatedLatexCode.slice(cursor, block.markerStart));
+
+    appendReplacementChunk({
+      chunks,
+      contentEnd: block.contentEnd,
+      replacementLatexCode:
+        block.id === input.segmentId
+          ? normalizedReplacementLatexCode
+          : block.latexCode,
+      totalLength: sourceAnnotatedLatexCode.length,
+    });
+
+    cursor = block.contentEnd;
+  }
+
+  chunks.push(sourceAnnotatedLatexCode.slice(cursor));
+
+  const annotatedLatexCode = readNormalizedAnnotatedLatex(chunks.join(""));
+
+  return {
+    annotatedLatexCode,
+    changed: true,
+    latexCode: stripTailorResumeSegmentIds(annotatedLatexCode),
+    ok: true,
+  };
+}

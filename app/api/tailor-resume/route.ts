@@ -42,6 +42,7 @@ import {
   mergeTailorResumeSuccessfulGeneration,
 } from "@/lib/tailor-resume-tailoring-concurrency";
 import {
+  applyTailoredResumeEditToSourceLatex,
   buildTailoredResumeResolvedSegmentMap,
   rebuildTailoredResumeAnnotatedLatex,
   resolveTailoredResumeSourceAnnotatedLatex,
@@ -2415,6 +2416,146 @@ export async function PATCH(request: Request) {
       }),
       tailoredResumeEditId: editId,
       tailoredResumeId,
+    });
+  }
+
+  if ("action" in body && body.action === "applyTailoredResumeEditToSourceResume") {
+    const tailoredResumeId =
+      "tailoredResumeId" in body && typeof body.tailoredResumeId === "string"
+        ? body.tailoredResumeId.trim()
+        : "";
+    const editId =
+      "editId" in body && typeof body.editId === "string"
+        ? body.editId.trim()
+        : "";
+
+    if (!tailoredResumeId || !editId) {
+      return NextResponse.json(
+        { error: "Provide the tailored resume edit to apply to the source resume." },
+        { status: 400 },
+      );
+    }
+
+    if (!rawProfile.latex.code.trim()) {
+      return NextResponse.json(
+        { error: "Upload or save a source resume before applying this edit." },
+        { status: 400 },
+      );
+    }
+
+    const tailoredResume = rawProfile.tailoredResumes.find(
+      (record) => record.id === tailoredResumeId,
+    );
+
+    if (!tailoredResume) {
+      return NextResponse.json(
+        { error: "The tailored resume could not be found." },
+        { status: 404 },
+      );
+    }
+
+    const sourceEdit = tailoredResume.edits.find((edit) => edit.editId === editId);
+
+    if (!sourceEdit) {
+      return NextResponse.json(
+        { error: "The tailored resume edit could not be found." },
+        { status: 404 },
+      );
+    }
+
+    const sourceEditResult = applyTailoredResumeEditToSourceLatex({
+      beforeLatexCode: sourceEdit.beforeLatexCode,
+      replacementLatexCode: sourceEdit.customLatexCode ?? sourceEdit.afterLatexCode,
+      segmentId: sourceEdit.segmentId,
+      sourceLatexCode: rawProfile.latex.code,
+    });
+
+    if (!sourceEditResult.ok) {
+      const error =
+        sourceEditResult.reason === "segment_not_found"
+          ? "The matching block could not be found in the source resume."
+          : sourceEditResult.reason === "source_block_changed"
+            ? "The matching source resume block has changed since this tailored resume was created. Review the source resume or create a fresh tailored resume before applying this edit."
+            : sourceEditResult.reason === "multiple_replacement_segments"
+              ? "This edit no longer maps to exactly one source resume block."
+              : "This edit does not contain a source resume replacement.";
+      const status =
+        sourceEditResult.reason === "segment_not_found"
+          ? 404
+          : sourceEditResult.reason === "source_block_changed"
+            ? 409
+            : 400;
+
+      return NextResponse.json({ error }, { status });
+    }
+
+    if (sourceEditResult.latexCode.length > maxLatexCodeLength) {
+      return NextResponse.json(
+        { error: "Keep the LaTeX under 300,000 characters." },
+        { status: 413 },
+      );
+    }
+
+    if (!sourceEditResult.changed) {
+      return NextResponse.json({
+        profile: mergeTailorResumeProfileWithLockedLinks(rawProfile, lockedLinks, {
+          includeLockedOnly: true,
+        }),
+        sourceResumeEdit: {
+          changed: false,
+          editId,
+          tailoredResumeId,
+        },
+      });
+    }
+
+    const nextRawProfile: TailorResumeProfile = {
+      ...rawProfile,
+      links: buildSourceLatexLinkRecords(
+        sourceEditResult.latexCode,
+        rawProfile.links,
+        lockedLinks,
+      ),
+    };
+    const sourceCompileLatex = applyTailorResumeSourceLinkOverridesWithSummary(
+      sourceEditResult.latexCode,
+      {
+        currentLinks: nextRawProfile.links,
+        lockedLinks,
+      },
+    );
+    const compiledLatex = await compileLatexDraft(
+      session.user.id,
+      {
+        compileCode: sourceCompileLatex.latexCode,
+        sourceCode: sourceCompileLatex.latexCode,
+      },
+      rawProfile.latex.pdfUpdatedAt,
+    );
+
+    nextRawProfile.annotatedLatex = compiledLatex.annotatedLatex;
+    nextRawProfile.latex = compiledLatex.latex;
+
+    await writeTailorResumeProfile(session.user.id, nextRawProfile);
+
+    const nextProfile = mergeTailorResumeProfileWithLockedLinks(
+      nextRawProfile,
+      lockedLinks,
+      {
+        includeLockedOnly: true,
+      },
+    );
+
+    return NextResponse.json({
+      latexLinkSyncSummary: buildLatexLinkSyncSummary(profile.links, nextProfile.links),
+      profile: nextProfile,
+      savedLinkUpdateCount: sourceCompileLatex.updatedCount,
+      savedLinkUpdates: sourceCompileLatex.updatedLinks,
+      sourceResumeEdit: {
+        changed: true,
+        editId,
+        tailoredResumeId,
+      },
     });
   }
 

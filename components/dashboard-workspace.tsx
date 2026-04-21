@@ -191,6 +191,8 @@ export default function DashboardWorkspace({
       tailoredResumeId: initialReviewingTailoredResumeId ?? null,
     }),
   );
+  const [tailorResumeProfileState, setTailorResumeProfileState] =
+    useState<TailorResumeProfile>(() => tailorResumeProfile);
   const [tailoredResumePendingDeleteId, setTailoredResumePendingDeleteId] = useState<string | null>(null);
   const [tailoredResumes, setTailoredResumes] = useState<TailoredResumeRecord[]>(
     () => tailorResumeProfile.tailoredResumes,
@@ -216,6 +218,16 @@ export default function DashboardWorkspace({
   useEffect(() => {
     setDashboardRouteState(parseDashboardRouteStateFromSearchParams(searchParams));
   }, [searchParams]);
+
+  useEffect(() => {
+    setTailorResumeProfileState(tailorResumeProfile);
+    setTailoredResumes(tailorResumeProfile.tailoredResumes);
+  }, [tailorResumeProfile]);
+
+  function applyTailorResumeProfileChange(nextProfile: TailorResumeProfile) {
+    setTailorResumeProfileState(nextProfile);
+    setTailoredResumes(nextProfile.tailoredResumes);
+  }
 
   function navigateDashboard(nextRouteState: DashboardRouteState) {
     setDashboardRouteState(nextRouteState);
@@ -296,7 +308,7 @@ export default function DashboardWorkspace({
         throw new Error(payload.error ?? "Unable to delete the tailored resume.");
       }
 
-      setTailoredResumes(payload.profile.tailoredResumes);
+      applyTailorResumeProfileChange(payload.profile);
       setTailoredResumePendingDeleteId(null);
 
       if (reviewingTailoredResumeId === tailoredResumePendingDelete.id) {
@@ -382,6 +394,7 @@ export default function DashboardWorkspace({
         debugUiEnabled={tailorResumeDebugUiEnabled}
         key={reviewingTailoredResume?.id ?? "closed"}
         onClose={closeTailoredResumeReview}
+        onTailorResumeProfileChange={applyTailorResumeProfileChange}
         onTailoredResumesChange={setTailoredResumes}
         record={reviewingTailoredResume}
       />
@@ -505,7 +518,7 @@ export default function DashboardWorkspace({
               <TailorResumeWorkspace
                 debugUiEnabled={tailorResumeDebugUiEnabled}
                 openAIReady={tailorResumeOpenAIReady}
-                initialProfile={tailorResumeProfile}
+                initialProfile={tailorResumeProfileState}
                 onReviewTailoredResume={openTailoredResumeReview}
                 onTailoredResumesChange={setTailoredResumes}
               />
@@ -584,8 +597,8 @@ export default function DashboardWorkspace({
             <div className="h-full overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto">
               <PromptSettingsWorkspace
                 defaultPromptValues={defaultPromptSettings}
-                initialGenerationSettings={tailorResumeProfile.generationSettings}
-                initialPromptSettings={tailorResumeProfile.promptSettings}
+                initialGenerationSettings={tailorResumeProfileState.generationSettings}
+                initialPromptSettings={tailorResumeProfileState.promptSettings}
                 tailoredResumes={tailoredResumes}
               />
             </div>
