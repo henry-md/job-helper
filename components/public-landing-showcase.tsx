@@ -97,13 +97,13 @@ export default function PublicLandingShowcase() {
   const [activePreview, setActivePreview] = useState<PreviewModeId>("helper");
 
   return (
-    <section className="relative h-full min-h-0 overflow-hidden rounded-[1.75rem] border border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.92),rgba(9,9,11,0.98))] p-2 sm:p-4">
+    <section className="public-showcase-card relative h-full min-h-0 overflow-hidden rounded-[1.75rem] border border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.92),rgba(9,9,11,0.98))] p-2 sm:p-4">
       <div className="pointer-events-none absolute left-8 top-6 h-24 w-24 rounded-full bg-emerald-300/10 blur-3xl [animation:public-drift_12s_ease-in-out_infinite]" />
       <div className="pointer-events-none absolute bottom-0 right-0 h-28 w-28 rounded-full bg-cyan-300/10 blur-3xl [animation:public-drift_15s_ease-in-out_infinite_reverse]" />
 
-      <div className="relative flex h-full min-h-0 flex-col gap-2 sm:gap-2">
-        <div className="flex flex-col gap-2">
-          <div className="inline-flex w-fit items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] p-0.75 sm:p-1">
+      <div className="public-showcase-inner relative flex h-full min-h-0 flex-col gap-2 sm:gap-2">
+        <div className="public-preview-tabs-wrap flex flex-col gap-2">
+          <div className="public-preview-tabs inline-flex w-fit items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] p-0.75 sm:p-1">
             {previewModes.map((mode) => {
               const isActive = mode.id === activePreview;
 
@@ -112,7 +112,7 @@ export default function PublicLandingShowcase() {
                   key={mode.id}
                   type="button"
                   aria-pressed={isActive}
-                  className={`rounded-full px-3 py-1.5 text-[0.94rem] font-medium transition sm:px-4 sm:py-2 sm:text-sm ${
+                  className={`public-preview-tab rounded-full px-3 py-1.5 text-[0.94rem] font-medium transition sm:px-4 sm:py-2 sm:text-sm ${
                     isActive
                       ? "bg-zinc-50 text-zinc-950 shadow-[0_12px_30px_rgba(255,255,255,0.14)]"
                       : "text-zinc-300 hover:bg-white/6 hover:text-zinc-100"
@@ -128,7 +128,7 @@ export default function PublicLandingShowcase() {
           </div>
         </div>
 
-        <div className="min-h-0 flex-1">
+        <div className="public-showcase-body min-h-0 flex-1">
           {activePreview === "helper" ? (
             <TailorResumePreview />
           ) : (
@@ -145,8 +145,8 @@ function TailorResumePreview() {
   const pipelineStages = [tailorBaseStage, ...tailorPipelineStages];
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-start justify-between gap-3 px-1">
+    <div className="public-tailor-preview flex h-full min-h-0 flex-col">
+      <div className="public-tailor-heading flex items-start justify-between gap-3 px-1">
         <div>
           <p className="text-[0.58rem] uppercase tracking-[0.28em] text-zinc-500 sm:text-[0.64rem]">
             Actual pipeline
@@ -164,12 +164,12 @@ function TailorResumePreview() {
         </span>
       </div>
 
-      <div className="relative mt-2 flex-1 overflow-hidden rounded-[1.15rem] border border-white/8 bg-[linear-gradient(180deg,rgba(18,18,21,0.98),rgba(10,10,12,0.98))] p-2.5 sm:rounded-[1.25rem] sm:p-3.5">
+      <div className="public-pipeline-frame relative mt-2 flex-1 overflow-hidden rounded-[1.15rem] border border-white/8 bg-[linear-gradient(180deg,rgba(18,18,21,0.98),rgba(10,10,12,0.98))] p-2.5 sm:rounded-[1.25rem] sm:p-3.5">
         <div className="pointer-events-none absolute left-6 top-0 h-24 w-24 rounded-full bg-cyan-300/10 blur-3xl [animation:public-drift_13s_ease-in-out_infinite]" />
         <div className="pointer-events-none absolute bottom-0 right-8 h-24 w-24 rounded-full bg-emerald-300/10 blur-3xl [animation:public-drift_16s_ease-in-out_infinite_reverse]" />
 
-        <div className="relative h-full overflow-y-auto pr-1 app-scrollbar">
-          <div className="mx-auto w-full max-w-[42rem] pb-1">
+        <div className="public-pipeline-scroll relative h-full overflow-y-auto pr-1 app-scrollbar">
+          <div className="public-pipeline-list mx-auto w-full max-w-[42rem] pb-1">
             {pipelineStages.map((stage, index) => (
               <Fragment key={stage.step}>
                 <TailorPipelineNode
@@ -246,7 +246,7 @@ function TailorPipelineNode(input: {
   return (
     <div>
       <div
-        className={`group relative block w-full overflow-hidden rounded-[0.95rem] border px-3 text-left transition sm:rounded-[1rem] sm:px-4 ${
+        className={`public-pipeline-node group relative block w-full overflow-hidden rounded-[0.95rem] border px-3 text-left transition sm:rounded-[1rem] sm:px-4 ${
           isBase
             ? "border-cyan-300/20 bg-[linear-gradient(135deg,rgba(8,47,73,0.34),rgba(20,20,24,0.96))]"
             : "border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.95),rgba(10,10,12,0.98))]"
@@ -268,10 +268,10 @@ function TailorPipelineNode(input: {
           }`}
         />
 
-        <div className="relative flex items-start justify-between gap-3 py-2.5 sm:py-3">
+        <div className="public-pipeline-node-content relative flex items-start justify-between gap-3 py-2.5 sm:py-3">
           <div className="min-w-0 flex items-start gap-2.5 sm:gap-3">
             <span
-              className={`inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-full border text-[0.56rem] font-semibold sm:h-8 sm:w-8 sm:text-[0.72rem] ${
+              className={`public-pipeline-step-badge inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-full border text-[0.56rem] font-semibold sm:h-8 sm:w-8 sm:text-[0.72rem] ${
                 isBase
                   ? "border-cyan-200/22 bg-cyan-200/10 text-cyan-100"
                   : "border-emerald-200/20 bg-emerald-300/10 text-emerald-100"
@@ -286,14 +286,15 @@ function TailorPipelineNode(input: {
                     isBase ? "text-cyan-100/90" : "text-zinc-300"
                   }`}
                 />
-                <p className="truncate text-[0.76rem] font-semibold text-zinc-50 sm:text-[0.96rem]">
+                <p className="public-pipeline-title truncate text-[0.76rem] font-semibold text-zinc-50 sm:text-[0.96rem]">
                   {input.title}
                 </p>
               </div>
               <p
                 id={detailsId}
                 ref={descriptorRef}
-                className={`mt-1 text-[0.72rem] leading-relaxed text-zinc-400 transition-[opacity] duration-200 sm:text-[0.8rem] ${
+                data-expanded={input.expanded ? "true" : "false"}
+                className={`public-pipeline-description mt-1 text-[0.72rem] leading-relaxed text-zinc-400 transition-[opacity] duration-200 sm:text-[0.8rem] ${
                   input.expanded
                     ? "block max-w-[30rem] whitespace-normal opacity-100 lg:max-w-none"
                     : "block overflow-hidden text-ellipsis whitespace-nowrap opacity-100 lg:overflow-visible lg:whitespace-normal"
@@ -344,7 +345,7 @@ function TailorPipelineNode(input: {
 
 function TailorPipelineArrow() {
   return (
-    <div className="relative flex h-6 items-center justify-center sm:h-7">
+    <div className="public-pipeline-arrow relative flex h-6 items-center justify-center sm:h-7">
       <svg
         aria-hidden="true"
         className="h-3.5 w-4.5 text-emerald-100/72 sm:h-4 sm:w-5"

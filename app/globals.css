@@ -98,6 +98,174 @@ button {
     0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 
+@media (max-width: 39.999rem) {
+  .public-home-page {
+    background:
+      radial-gradient(circle at top left, rgba(52, 211, 153, 0.12), transparent 34rem),
+      radial-gradient(circle at top right, rgba(34, 211, 238, 0.1), transparent 30rem),
+      linear-gradient(180deg, #0d1110 0%, #090b0d 42%, #09090b 100%);
+    min-height: max(100svh, 100%);
+    overflow-x: hidden;
+    padding: 1.7rem 1rem 2.25rem;
+  }
+
+  .public-home-shell.glass-panel {
+    align-content: stretch;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    display: flex;
+    flex-direction: column;
+    gap: 1.35rem;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    padding: 0;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .public-home-copy {
+    align-items: center;
+    gap: 1.5rem;
+    justify-content: flex-start;
+    min-height: auto;
+    padding-top: 0.2rem;
+    text-align: center;
+  }
+
+  .public-home-title {
+    font-size: clamp(2.45rem, 11vw, 3.15rem);
+    line-height: 1.04;
+    margin-inline: auto;
+    max-width: min(100%, 30rem);
+  }
+
+  .public-home-actions {
+    margin-inline: auto;
+    max-width: 30rem;
+    width: 100%;
+  }
+
+  .public-sign-in-button {
+    min-height: 3.25rem;
+  }
+
+  .public-home-showcase {
+    min-height: auto;
+  }
+
+  .public-showcase-card {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .public-showcase-inner {
+    gap: 0.75rem;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .public-preview-tabs-wrap {
+    align-items: center;
+  }
+
+  .public-preview-tabs {
+    justify-content: center;
+    max-width: 23rem;
+    padding: 0.25rem;
+    width: 100%;
+  }
+
+  .public-preview-tab {
+    flex: 1;
+    padding: 0.72rem 0.75rem;
+    text-align: center;
+  }
+
+  .public-showcase-body,
+  .public-tailor-preview,
+  .public-pipeline-frame {
+    flex: none;
+    min-height: 0;
+  }
+
+  .public-tailor-preview {
+    height: auto;
+  }
+
+  .public-tailor-heading {
+    align-items: center;
+    padding-inline: 0.25rem;
+  }
+
+  .public-pipeline-frame {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    margin-top: 0.7rem;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .public-pipeline-scroll {
+    height: auto;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .public-pipeline-list {
+    max-width: 100%;
+    padding-bottom: 2.5rem;
+  }
+
+  .public-pipeline-node {
+    border-radius: 1rem;
+    padding-inline: 0.9rem;
+  }
+
+  .public-pipeline-node-content {
+    align-items: center;
+    padding-bottom: 0.9rem;
+    padding-top: 0.9rem;
+  }
+
+  .public-pipeline-step-badge {
+    font-size: 0.64rem;
+    height: 1.75rem;
+    width: 1.75rem;
+  }
+
+  .public-pipeline-title {
+    font-size: 0.84rem;
+  }
+
+  .public-pipeline-description[data-expanded="false"] {
+    display: -webkit-box;
+    overflow: hidden;
+    text-overflow: clip;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .public-pipeline-description[data-expanded="true"] {
+    overflow: visible;
+    white-space: normal;
+  }
+
+  .public-pipeline-arrow {
+    height: 1.25rem;
+  }
+}
+
 .serif-display {
   font-family: var(--font-cormorant), serif;
 }

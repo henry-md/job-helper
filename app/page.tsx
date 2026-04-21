@@ -70,7 +70,7 @@ export default async function Home({ searchParams }: HomePageProps) {
   }
 
   return (
-    <main className="relative h-[100vh] overflow-hidden px-2.5 py-2.5 text-zinc-100 sm:px-4 sm:py-4">
+    <main className="public-home-page relative min-h-svh overflow-x-hidden px-2.5 py-2.5 text-zinc-100 sm:h-[100vh] sm:overflow-hidden sm:px-4 sm:py-4">
       <StatusToast message={authErrorMessage} tone="error" />
 
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -79,14 +79,14 @@ export default async function Home({ searchParams }: HomePageProps) {
         <div className="absolute bottom-[-10rem] left-1/3 h-72 w-72 rounded-full bg-white/6 blur-3xl [animation:public-pulse_9s_ease-in-out_infinite]" />
       </div>
 
-      <section className="glass-panel soft-ring relative mx-auto grid h-full max-w-6xl grid-rows-[auto_minmax(0,1fr)] gap-2.5 overflow-hidden rounded-[2rem] p-2.5 sm:p-5 lg:grid-cols-[minmax(0,0.56fr)_minmax(0,1fr)] lg:grid-rows-1 lg:gap-4 xl:gap-5">
-        <div className="relative z-10 flex min-h-0 flex-col justify-center gap-3 lg:px-2">
+      <section className="public-home-shell glass-panel soft-ring relative mx-auto grid h-full max-w-6xl grid-rows-[auto_minmax(0,1fr)] gap-2.5 overflow-hidden rounded-[2rem] p-2.5 sm:p-5 lg:grid-cols-[minmax(0,0.56fr)_minmax(0,1fr)] lg:grid-rows-1 lg:gap-4 xl:gap-5">
+        <div className="public-home-copy relative z-10 flex min-h-0 flex-col justify-center gap-3 lg:px-2">
           <div className="space-y-2 sm:space-y-3">
             <p className="hidden text-[0.72rem] uppercase tracking-[0.34em] text-zinc-500 sm:block">
               No one-shot rewriting
             </p>
             <PublicHeroTitle
-              className="max-w-sm text-[clamp(1.72rem,8vw,2.56rem)] leading-[0.92] font-semibold tracking-tight text-zinc-50 sm:max-w-xl sm:text-[clamp(2.45rem,7.4vw,4.9rem)] sm:leading-[0.9]"
+              className="public-home-title max-w-sm text-[clamp(1.72rem,8vw,2.56rem)] leading-[0.92] font-semibold tracking-tight text-zinc-50 sm:max-w-xl sm:text-[clamp(2.45rem,7.4vw,4.9rem)] sm:leading-[0.9]"
               sentencePauseMs={heroTypingAnimationSentencePauseMs}
               text={"Tailor the resume.\nTrack the search."}
               wordPauseMs={heroTypingAnimationWordPauseMs}
@@ -101,7 +101,7 @@ export default async function Home({ searchParams }: HomePageProps) {
             </p>
           </div>
 
-          <div className="max-w-md space-y-2 sm:space-y-3">
+          <div className="public-home-actions max-w-md space-y-2 sm:space-y-3">
             <SignInButton />
             <p className="hidden text-sm leading-relaxed text-zinc-500 sm:block">
               Sign in with Google to open your saved dashboard, tailored
@@ -110,7 +110,7 @@ export default async function Home({ searchParams }: HomePageProps) {
           </div>
         </div>
 
-        <aside className="relative z-10 min-h-0 min-w-0">
+        <aside className="public-home-showcase relative z-10 min-h-0 min-w-0">
           <PublicLandingShowcase />
         </aside>
       </section>
