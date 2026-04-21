@@ -30,6 +30,7 @@ import type {
   TailoredResumeThesis,
   TailorResumeSavedLinkUpdate,
 } from "./tailor-resume-types.ts";
+import type { TailorResumeUserMarkdownState } from "./tailor-resume-user-memory.ts";
 
 const TEST_OPENAI_RESPONSE_MODEL = "test-openai-response";
 const tailorResumeGenerationStepCount = 4;
@@ -525,6 +526,38 @@ function serializeTailorResumeImplementationBlocks(input: {
     .join("\n\n");
 }
 
+function buildUserMarkdownPlanningContext(
+  userMarkdown: TailorResumeUserMarkdownState | undefined,
+) {
+  const markdown = userMarkdown?.markdown.trim();
+
+  if (!markdown || markdown === "# USER.md") {
+    return "";
+  }
+
+  return (
+    "USER.md memory context:\n" +
+    "The following is durable, user-confirmed resume context. Use it only when it directly supports a planned edit to an existing resume block, and do not treat job-description-only facts as user experience.\n" +
+    `${markdown}\n\n`
+  );
+}
+
+function buildUserMarkdownImplementationContext(
+  userMarkdown: TailorResumeUserMarkdownState | undefined,
+) {
+  const markdown = userMarkdown?.markdown.trim();
+
+  if (!markdown || markdown === "# USER.md") {
+    return "";
+  }
+
+  return (
+    "USER.md memory context:\n" +
+    "Follow-up questions are disabled for this run, so use this durable user-confirmed context only where it directly supports the accepted planned segment edits. Do not spread unrelated facts to unrelated blocks.\n" +
+    `${markdown}\n\n`
+  );
+}
+
 function buildTailoringPlanInstructions(input: {
   feedback?: string;
   promptSettings?: SystemPromptSettings;
@@ -723,6 +756,7 @@ function applySavedTailoredResumeLinks(
 function buildTailoringPlanInput(input: {
   jobDescription: string;
   planningSnapshot: ReturnType<typeof buildTailorResumePlanningSnapshot>;
+  userMarkdown?: TailorResumeUserMarkdownState;
 }) {
   return [
     {
@@ -733,6 +767,7 @@ function buildTailoringPlanInput(input: {
           text:
             `Job description:\n${input.jobDescription}\n\n` +
             `Whole resume plain text:\n${input.planningSnapshot.resumePlainText}\n\n` +
+            buildUserMarkdownPlanningContext(input.userMarkdown) +
             "Editable resume blocks (document order):\n" +
             serializeTailorResumePlanningBlocks(input.planningSnapshot.blocks),
         },
@@ -745,6 +780,7 @@ function buildTailoringImplementationInput(input: {
   jobDescription: string;
   planningBlocksById: Map<string, TailorResumePlanningBlock>;
   plan: TailoredResumePlanResponse;
+  userMarkdown?: TailorResumeUserMarkdownState;
 }) {
   const questioningLearningsText =
     input.plan.questioningSummary &&
@@ -778,6 +814,7 @@ function buildTailoringImplementationInput(input: {
             `jobDescriptionFocus: ${input.plan.thesis.jobDescriptionFocus}\n` +
             `resumeChanges: ${input.plan.thesis.resumeChanges}\n\n` +
             questioningLearningsText +
+            buildUserMarkdownImplementationContext(input.userMarkdown) +
             "Planned segment edits:\n" +
             serializeTailorResumeImplementationBlocks({
               planningBlocksById: input.planningBlocksById,
@@ -867,6 +904,7 @@ export async function planTailoredResume(input: {
     event: TailorResumeGenerationStepEvent,
   ) => void | Promise<void>;
   promptSettings?: SystemPromptSettings;
+  userMarkdown?: TailorResumeUserMarkdownState;
 }): Promise<PlanTailoredResumeResult> {
   const startedAt = Date.now();
   const model = process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
@@ -893,6 +931,7 @@ export async function planTailoredResume(input: {
     const planInput = buildTailoringPlanInput({
       jobDescription: input.jobDescription,
       planningSnapshot,
+      userMarkdown: input.userMarkdown,
     });
     const planInstructions = buildTailoringPlanInstructions({
       feedback: planningFeedback,
@@ -1032,6 +1071,7 @@ export async function implementTailoredResumePlan(input: {
   planningResult: TailoredResumePlanningResult;
   planningSnapshot?: TailorResumePlanningSnapshot;
   promptSettings?: SystemPromptSettings;
+  userMarkdown?: TailorResumeUserMarkdownState;
 }): Promise<GenerateTailoredResumeResult> {
   const startedAt = Date.now();
   const model = input.model ?? process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
@@ -1162,6 +1202,7 @@ export async function implementTailoredResumePlan(input: {
       jobDescription: input.jobDescription,
       plan: input.planningResult,
       planningBlocksById,
+      userMarkdown: input.userMarkdown,
     });
     const implementationInstructions = buildTailoringImplementationInstructions({
       feedback: implementationFeedback,
@@ -1453,6 +1494,7 @@ export async function generateTailoredResume(input: {
     event: TailorResumeGenerationStepEvent,
   ) => void | Promise<void>;
   promptSettings?: SystemPromptSettings;
+  userMarkdown?: TailorResumeUserMarkdownState;
 }): Promise<GenerateTailoredResumeResult> {
   const startedAt = Date.now();
   const normalizedInput = normalizeTailorResumeLatex(input.annotatedLatexCode);
@@ -1503,6 +1545,7 @@ export async function generateTailoredResume(input: {
     jobDescription: input.jobDescription,
     onStepEvent: input.onStepEvent,
     promptSettings: input.promptSettings,
+    userMarkdown: input.userMarkdown,
   });
 
   if (!planningStage.ok) {
@@ -1551,5 +1594,6 @@ export async function generateTailoredResume(input: {
     planningResult: planningStage.planningResult,
     planningSnapshot: planningStage.planningSnapshot,
     promptSettings: input.promptSettings,
+    userMarkdown: input.userMarkdown,
   });
 }

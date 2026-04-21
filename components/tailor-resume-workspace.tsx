@@ -38,6 +38,7 @@ import type {
   TailorResumeProfile,
   TailorResumeSavedLinkUpdate,
 } from "@/lib/tailor-resume-types";
+import type { TailorResumeUserMarkdownState } from "@/lib/tailor-resume-user-memory";
 
 type TailorResumeWorkspaceProps = {
   debugUiEnabled: boolean;
@@ -46,6 +47,7 @@ type TailorResumeWorkspaceProps = {
   onTailoredResumesChange?: (
     tailoredResumes: TailorResumeProfile["tailoredResumes"],
   ) => void;
+  onUserMarkdownChange?: (userMarkdown: TailorResumeUserMarkdownState) => void;
   openAIReady: boolean;
 };
 
@@ -114,6 +116,7 @@ type TailorResumeRunResponsePayload = {
   tailoredResumeDurationMs?: number;
   tailoredResumeError?: string | null;
   tailoredResumeId?: string;
+  userMarkdown?: TailorResumeUserMarkdownState;
 };
 
 type TailorResumeRunStreamResult = {
@@ -771,6 +774,7 @@ export default function TailorResumeWorkspace({
   initialProfile,
   onReviewTailoredResume,
   onTailoredResumesChange,
+  onUserMarkdownChange,
   openAIReady,
 }: TailorResumeWorkspaceProps) {
   const fileInputId = useId();
@@ -1814,6 +1818,11 @@ export default function TailorResumeWorkspace({
             status: response.status,
           };
       const payload = streamedResult.payload;
+
+      if (payload.userMarkdown) {
+        onUserMarkdownChange?.(payload.userMarkdown);
+      }
+
       const tailoringDurationMs = resolveElapsedDurationMs(
         payload.tailoredResumeDurationMs,
         tailoringStartedAt,
@@ -1951,6 +1960,10 @@ export default function TailorResumeWorkspace({
             status: response.status,
           };
       const payload = streamedResult.payload;
+
+      if (payload.userMarkdown) {
+        onUserMarkdownChange?.(payload.userMarkdown);
+      }
 
       if (!streamedResult.ok || !payload.profile) {
         throw new Error(

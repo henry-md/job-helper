@@ -95,6 +95,13 @@ import {
 import type { TailorResumeGenerationSettings } from "@/lib/tailor-resume-generation-settings";
 import { countPdfPages } from "@/lib/tailored-resume-preview-snapshots";
 import {
+  maxTailorResumeUserMarkdownLength,
+  readTailorResumeUserMarkdown,
+  saveTailorResumeUserMarkdown,
+  type TailorResumeUserMarkdownPatchResult,
+  type TailorResumeUserMarkdownState,
+} from "@/lib/tailor-resume-user-memory";
+import {
   assertSupportedResumeFile,
   deletePersistedUserResume,
   persistUserResume,
@@ -190,6 +197,59 @@ function buildExtractionResponse(input: {
     profile: input.profile,
     savedLinkUpdateCount: input.savedLinkUpdateCount,
     savedLinkUpdates: input.savedLinkUpdates,
+  };
+}
+
+async function persistTailorResumeUserMarkdownPatchResult(input: {
+  baseState: TailorResumeUserMarkdownState;
+  patchResult: TailorResumeUserMarkdownPatchResult | null;
+  userId: string;
+}): Promise<
+  | {
+      ok: true;
+      userMarkdown: TailorResumeUserMarkdownState;
+    }
+  | {
+      ok: false;
+      response: Response;
+    }
+> {
+  if (
+    !input.patchResult ||
+    !input.patchResult.ok ||
+    !input.patchResult.changed
+  ) {
+    return {
+      ok: true,
+      userMarkdown: input.baseState,
+    };
+  }
+
+  const saveResult = await saveTailorResumeUserMarkdown(
+    input.userId,
+    input.patchResult.markdown,
+    {
+      expectedUpdatedAt: input.baseState.updatedAt,
+    },
+  );
+
+  if (!saveResult.ok) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        {
+          error:
+            "USER.md changed while the tailoring follow-up was running. Review the latest memory and try again.",
+          userMarkdown: saveResult.state,
+        },
+        { status: 409 },
+      ),
+    };
+  }
+
+  return {
+    ok: true,
+    userMarkdown: saveResult.state,
   };
 }
 
@@ -386,6 +446,7 @@ async function finalizeTailorResumeGeneration(input: {
   rawProfile: TailorResumeProfile;
   tailoringResult: Awaited<ReturnType<typeof implementTailoredResumePlan>>;
   userId: string;
+  userMarkdown?: TailorResumeUserMarkdownState;
 }): Promise<Response> {
   let tailoringResult = input.tailoringResult;
   let pageCountStepHandled = false;
@@ -587,6 +648,7 @@ async function finalizeTailorResumeGeneration(input: {
       {
         error: failureMessage,
         tailoredResumeDurationMs: tailoringResult.generationDurationMs,
+        userMarkdown: input.userMarkdown,
       },
       { status: 422 },
     );
@@ -668,6 +730,7 @@ async function finalizeTailorResumeGeneration(input: {
         error:
           "The base resume changed while the tailored resume was generating. Review the latest resume and try again.",
         tailoredResumeDurationMs: tailoringResult.generationDurationMs,
+        userMarkdown: input.userMarkdown,
       },
       { status: 409 },
     );
@@ -693,6 +756,7 @@ async function finalizeTailorResumeGeneration(input: {
     tailoredResumeId,
     tailoredResumeDurationMs: tailoringResult.generationDurationMs,
     tailoredResumeError: tailoringResult.validationError,
+    userMarkdown: input.userMarkdown,
   });
 }
 
@@ -815,9 +879,10 @@ async function handleTailorResumeGeneration(
 
   let planningResult = planningStage.planningResult;
   let accumulatedModelDurationMs = planningStage.generationDurationMs;
-
+  let userMarkdownAfterQuestioning: TailorResumeUserMarkdownState | undefined;
   if (planningResult.changes.length > 0) {
     const questioningStartedAt = Date.now();
+    const userMarkdownBeforeQuestioning = await readTailorResumeUserMarkdown(userId);
     let questioningResult: Awaited<ReturnType<typeof advanceTailorResumeQuestioning>>;
 
     try {
@@ -827,6 +892,7 @@ async function handleTailorResumeGeneration(
         planningResult,
         planningSnapshot: planningStage.planningSnapshot,
         promptSettings: preparation.rawProfile.promptSettings.values,
+        userMarkdown: userMarkdownBeforeQuestioning,
       });
     } catch (error) {
       const errorMessage =
@@ -856,18 +922,29 @@ async function handleTailorResumeGeneration(
     }
 
     accumulatedModelDurationMs += questioningResult.generationDurationMs;
+    const userMarkdownSaveResult =
+      await persistTailorResumeUserMarkdownPatchResult({
+        baseState: userMarkdownBeforeQuestioning,
+        patchResult: questioningResult.userMarkdownPatchResult,
+        userId,
+      });
 
+    if (!userMarkdownSaveResult.ok) {
+      return userMarkdownSaveResult.response;
+    }
+
+    userMarkdownAfterQuestioning = userMarkdownSaveResult.userMarkdown;
     if (questioningResult.action === "ask") {
       await options.onStepEvent?.({
         attempt: 1,
         detail:
-          "A follow-up question is needed before the model can safely finish the block-scoped edits.",
+          "A follow-up question is ready, so step 2 is waiting for the user's answer before the remaining generation steps start.",
         durationMs: Math.max(0, Date.now() - questioningStartedAt),
         retrying: false,
-        status: "succeeded",
+        status: "running",
         stepCount: 4,
         stepNumber: 2,
-        summary: "Preparing follow-up question for the user",
+        summary: "Waiting for a follow-up answer from the user",
       });
       planningResult = {
         ...planningResult,
@@ -935,6 +1012,7 @@ async function handleTailorResumeGeneration(
             error:
               "The base resume changed while the follow-up questions were being prepared. Review the latest resume and try again.",
             tailoredResumeDurationMs: accumulatedModelDurationMs,
+            userMarkdown: userMarkdownAfterQuestioning,
           },
           { status: 409 },
         );
@@ -950,6 +1028,7 @@ async function handleTailorResumeGeneration(
         ),
         tailoredResumeDurationMs: accumulatedModelDurationMs,
         tailoringStatus: "needs_user_input" as const,
+        userMarkdown: userMarkdownAfterQuestioning,
       });
     }
 
@@ -1026,6 +1105,7 @@ async function handleTailorResumeGeneration(
     rawProfile: preparation.rawProfile,
     tailoringResult,
     userId,
+    userMarkdown: userMarkdownAfterQuestioning,
   });
 }
 
@@ -1107,6 +1187,7 @@ async function handleAdvanceTailorResumeInterview(
     preparation.tailoringInterview.sourceAnnotatedLatexCode,
   );
   const questioningStartedAt = Date.now();
+  const userMarkdownBeforeQuestioning = await readTailorResumeUserMarkdown(userId);
   let questioningResult: Awaited<ReturnType<typeof advanceTailorResumeQuestioning>>;
 
   try {
@@ -1116,6 +1197,7 @@ async function handleAdvanceTailorResumeInterview(
       planningResult: preparation.tailoringInterview.planningResult,
       planningSnapshot,
       promptSettings: preparation.rawProfile.promptSettings.values,
+      userMarkdown: userMarkdownBeforeQuestioning,
     });
   } catch (error) {
     const errorMessage =
@@ -1149,6 +1231,18 @@ async function handleAdvanceTailorResumeInterview(
   const accumulatedModelDurationMs =
     preparation.tailoringInterview.accumulatedModelDurationMs +
     questioningResult.generationDurationMs;
+  const userMarkdownSaveResult =
+    await persistTailorResumeUserMarkdownPatchResult({
+      baseState: userMarkdownBeforeQuestioning,
+      patchResult: questioningResult.userMarkdownPatchResult,
+      userId,
+    });
+
+  if (!userMarkdownSaveResult.ok) {
+    return userMarkdownSaveResult.response;
+  }
+
+  const userMarkdownAfterQuestioning = userMarkdownSaveResult.userMarkdown;
 
   if (questioningResult.action === "ask") {
     await options.onStepEvent?.({
@@ -1156,13 +1250,13 @@ async function handleAdvanceTailorResumeInterview(
         preparation.tailoringInterview.planningResult.questioningSummary,
       ),
       detail:
-        "One more follow-up question is needed before the model can safely finish the block-scoped edits.",
+        "One more follow-up question is ready, so step 2 is still waiting for the user's answer.",
       durationMs: questioningResult.generationDurationMs,
       retrying: false,
-      status: "succeeded",
+      status: "running",
       stepCount: 4,
       stepNumber: 2,
-      summary: "Continuing the follow-up questions",
+      summary: "Waiting for another follow-up answer from the user",
     });
     const nextPlanningResult: TailorResumePlanningResult = {
       ...preparation.tailoringInterview.planningResult,
@@ -1223,6 +1317,7 @@ async function handleAdvanceTailorResumeInterview(
           error:
             "The base resume changed while the follow-up questions were in progress. Review the latest resume and try again.",
           tailoredResumeDurationMs: accumulatedModelDurationMs,
+          userMarkdown: userMarkdownAfterQuestioning,
         },
         { status: 409 },
       );
@@ -1238,6 +1333,7 @@ async function handleAdvanceTailorResumeInterview(
       ),
       tailoredResumeDurationMs: accumulatedModelDurationMs,
       tailoringStatus: "needs_user_input" as const,
+      userMarkdown: userMarkdownAfterQuestioning,
     });
   }
 
@@ -1317,6 +1413,7 @@ async function handleAdvanceTailorResumeInterview(
     rawProfile: preparation.rawProfile,
     tailoringResult,
     userId,
+    userMarkdown: userMarkdownAfterQuestioning,
   });
 }
 
@@ -1917,6 +2014,67 @@ export async function PATCH(request: Request) {
 
   if ("action" in body && body.action === "cancelTailorResumeInterview") {
     return handleCancelTailorResumeInterview(session.user.id);
+  }
+
+  if ("action" in body && body.action === "saveUserMarkdown") {
+    const markdown = "markdown" in body ? body.markdown : null;
+    const expectedUpdatedAt =
+      "updatedAt" in body
+        ? typeof body.updatedAt === "string"
+          ? body.updatedAt
+          : body.updatedAt === null
+            ? null
+            : undefined
+        : undefined;
+
+    if (typeof markdown !== "string") {
+      return NextResponse.json(
+        { error: "Provide USER.md markdown to save." },
+        { status: 400 },
+      );
+    }
+
+    if (markdown.length > maxTailorResumeUserMarkdownLength) {
+      return NextResponse.json(
+        {
+          error: `Keep USER.md under ${maxTailorResumeUserMarkdownLength.toLocaleString()} characters.`,
+        },
+        { status: 413 },
+      );
+    }
+
+    let saveResult: Awaited<ReturnType<typeof saveTailorResumeUserMarkdown>>;
+
+    try {
+      saveResult = await saveTailorResumeUserMarkdown(
+        session.user.id,
+        markdown,
+        expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt },
+      );
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error ? error.message : "Unable to save USER.md.",
+        },
+        { status: 413 },
+      );
+    }
+
+    if (!saveResult.ok) {
+      return NextResponse.json(
+        {
+          error:
+            "USER.md changed since you opened it. Review the latest version before saving.",
+          userMarkdown: saveResult.state,
+        },
+        { status: 409 },
+      );
+    }
+
+    return NextResponse.json({
+      userMarkdown: saveResult.state,
+    });
   }
 
   return withTailorResumeProfileLock(session.user.id, async () => {

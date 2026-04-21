@@ -32,6 +32,7 @@ import type {
   TailorResumeProfile,
   TailoredResumeRecord,
 } from "@/lib/tailor-resume-types";
+import type { TailorResumeUserMarkdownState } from "@/lib/tailor-resume-user-memory";
 
 type TailoredResumeSidebarMutationResponse = {
   error?: string;
@@ -160,6 +161,7 @@ export default function DashboardWorkspace({
   tailorResumeDebugUiEnabled,
   tailorResumeOpenAIReady,
   tailorResumeProfile,
+  tailorResumeUserMarkdown,
   userImage,
   userName,
 }: {
@@ -180,6 +182,7 @@ export default function DashboardWorkspace({
   tailorResumeDebugUiEnabled: boolean;
   tailorResumeOpenAIReady: boolean;
   tailorResumeProfile: TailorResumeProfile;
+  tailorResumeUserMarkdown: TailorResumeUserMarkdownState;
   userImage: string | null | undefined;
   userName: string | null | undefined;
 }) {
@@ -193,6 +196,8 @@ export default function DashboardWorkspace({
   );
   const [tailorResumeProfileState, setTailorResumeProfileState] =
     useState<TailorResumeProfile>(() => tailorResumeProfile);
+  const [tailorResumeUserMarkdownState, setTailorResumeUserMarkdownState] =
+    useState<TailorResumeUserMarkdownState>(() => tailorResumeUserMarkdown);
   const [tailoredResumePendingDeleteId, setTailoredResumePendingDeleteId] = useState<string | null>(null);
   const [tailoredResumes, setTailoredResumes] = useState<TailoredResumeRecord[]>(
     () => tailorResumeProfile.tailoredResumes,
@@ -223,6 +228,10 @@ export default function DashboardWorkspace({
     setTailorResumeProfileState(tailorResumeProfile);
     setTailoredResumes(tailorResumeProfile.tailoredResumes);
   }, [tailorResumeProfile]);
+
+  useEffect(() => {
+    setTailorResumeUserMarkdownState(tailorResumeUserMarkdown);
+  }, [tailorResumeUserMarkdown]);
 
   function applyTailorResumeProfileChange(nextProfile: TailorResumeProfile) {
     setTailorResumeProfileState(nextProfile);
@@ -521,6 +530,7 @@ export default function DashboardWorkspace({
                 initialProfile={tailorResumeProfileState}
                 onReviewTailoredResume={openTailoredResumeReview}
                 onTailoredResumesChange={setTailoredResumes}
+                onUserMarkdownChange={setTailorResumeUserMarkdownState}
               />
             </div>
 
@@ -599,6 +609,8 @@ export default function DashboardWorkspace({
                 defaultPromptValues={defaultPromptSettings}
                 initialGenerationSettings={tailorResumeProfileState.generationSettings}
                 initialPromptSettings={tailorResumeProfileState.promptSettings}
+                initialUserMarkdown={tailorResumeUserMarkdownState}
+                onUserMarkdownChange={setTailorResumeUserMarkdownState}
                 tailoredResumes={tailoredResumes}
               />
             </div>

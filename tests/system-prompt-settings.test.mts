@@ -74,9 +74,23 @@ test("buildTailorResumeInterviewSystemPrompt requires concise question framing",
   );
 
   assert.match(prompt, /keep the user-facing question concise/i);
-  assert.match(prompt, /name the exact job-description signal/i);
-  assert.match(prompt, /say what kind of answer would improve the resume/i);
-  assert.match(prompt, /metrics, scope, ownership, tools, domain context, or outcomes/i);
+  assert.match(prompt, /say what in the job description suggests this skill or detail is important/i);
+  assert.match(prompt, /could not find that same skill or detail in the resume/i);
+  assert.match(prompt, /give 1-2 brief examples of strong answers/i);
+  assert.match(prompt, /tailored to that job-description signal/i);
+  assert.match(prompt, /specific tools, ownership, practices, metrics, scope, domain context, or outcomes/i);
+  assert.match(prompt, /possible answer shapes, not claims about what the user did/i);
+  assert.match(prompt, /ask_tailor_resume_follow_up/i);
+  assert.match(prompt, /finish_tailor_resume_interview/i);
+  assert.match(prompt, /Do not finish just because the user sent one answer/i);
+  assert.match(prompt, /sample bullet, example, draft, clarification, or review/i);
+  assert.match(prompt, /close neighbors of resume-supported experience/i);
+  assert.match(prompt, /JavaScript framework/i);
+  assert.match(prompt, /resume lists C\+\+/i);
+  assert.match(prompt, /During the NewForm refactor, which observability\/diagnosability tools/i);
+  assert.match(prompt, /job description mentions structured logging and OpenTelemetry/i);
+  assert.match(prompt, /I added OpenTelemetry tracing to tRPC endpoints/i);
+  assert.match(prompt, /I built alerts\/dashboards that cut debugging time by 30%/i);
 });
 
 test("buildTailorResumeInterviewSystemPrompt injects debug-force instructions", () => {

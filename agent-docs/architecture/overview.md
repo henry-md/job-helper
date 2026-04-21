@@ -27,3 +27,4 @@ Current persistence nuance:
 - Tailor Resume stores the public resume asset under `public/uploads/resumes/<userId>/` and the private editable profile JSON under `.job-helper-data/tailor-resumes/<userId>/profile.json`.
 - The same profile JSON also stores prompt template overrides for job extraction, resume-to-LaTeX generation, tailoring, and tailored-resume refinement, so the dashboard settings tab and the API routes read from one source of truth.
 - Tailor Resume locked links are the exception: they are persisted in Prisma (`TailorResumeLockedLink`) so lock state remains independent from raw LaTeX reparsing.
+- Tailor Resume user memory is also persisted in Prisma (`TailorResumeUserMemory`) as a DB-backed Markdown document exposed as `USER.md` in settings. The Step 2 interview receives it to avoid repetitive questions and can update it with transactionally validated markdown patch operations.

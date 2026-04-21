@@ -15,15 +15,65 @@ import type {
   TailorResumePlanningBlock,
   TailorResumePlanningSnapshot,
 } from "./tailor-resume-planning.ts";
+import {
+  applyTailorResumeUserMarkdownPatch,
+  defaultTailorResumeUserMarkdown,
+  type TailorResumeUserMarkdownPatchOperation,
+  type TailorResumeUserMarkdownPatchResult,
+  type TailorResumeUserMarkdownState,
+} from "./tailor-resume-user-memory.ts";
 
-const tailorResumeInterviewSchema = {
+const tailorResumeInterviewLearningSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    action: {
-      type: "string",
-      enum: ["ask", "done", "skip"],
+    detail: { type: "string" },
+    targetSegmentIds: {
+      type: "array",
+      items: { type: "string" },
     },
+    topic: { type: "string" },
+  },
+  required: ["topic", "detail", "targetSegmentIds"],
+} as const;
+
+const tailorResumeUserMarkdownEditOperationSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    anchorMarkdown: { type: "string" },
+    headingPath: {
+      type: "array",
+      items: { type: "string" },
+    },
+    markdown: { type: "string" },
+    newMarkdown: { type: "string" },
+    oldMarkdown: { type: "string" },
+    op: {
+      type: "string",
+      enum: [
+        "append",
+        "delete_exact",
+        "insert_after",
+        "insert_before",
+        "replace_exact",
+      ],
+    },
+  },
+  required: [
+    "anchorMarkdown",
+    "headingPath",
+    "markdown",
+    "newMarkdown",
+    "oldMarkdown",
+    "op",
+  ],
+} as const;
+
+const askTailorResumeFollowUpToolParameters = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
     agenda: { type: "string" },
     debugDecision: {
       type: "string",
@@ -35,36 +85,95 @@ const tailorResumeInterviewSchema = {
     },
     learnings: {
       type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          detail: { type: "string" },
-          targetSegmentIds: {
-            type: "array",
-            items: { type: "string" },
-          },
-          topic: { type: "string" },
-        },
-        required: ["topic", "detail", "targetSegmentIds"],
-      },
+      items: tailorResumeInterviewLearningSchema,
     },
     question: { type: "string" },
     totalQuestionBudget: {
       type: "integer",
-      minimum: 0,
+      minimum: 1,
       maximum: 5,
+    },
+    userMarkdownEditOperations: {
+      type: "array",
+      items: tailorResumeUserMarkdownEditOperationSchema,
     },
   },
   required: [
-    "action",
     "agenda",
     "debugDecision",
     "learnings",
     "question",
     "totalQuestionBudget",
+    "userMarkdownEditOperations",
   ],
 } as const;
+
+const finishTailorResumeInterviewToolParameters = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    agenda: { type: "string" },
+    learnings: {
+      type: "array",
+      items: tailorResumeInterviewLearningSchema,
+    },
+    totalQuestionBudget: {
+      type: "integer",
+      minimum: 1,
+      maximum: 5,
+    },
+    userMarkdownEditOperations: {
+      type: "array",
+      items: tailorResumeUserMarkdownEditOperationSchema,
+    },
+  },
+  required: [
+    "agenda",
+    "learnings",
+    "totalQuestionBudget",
+    "userMarkdownEditOperations",
+  ],
+} as const;
+
+const skipTailorResumeInterviewToolParameters = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    reason: { type: "string" },
+    userMarkdownEditOperations: {
+      type: "array",
+      items: tailorResumeUserMarkdownEditOperationSchema,
+    },
+  },
+  required: ["reason", "userMarkdownEditOperations"],
+} as const;
+
+const tailorResumeInterviewTools = [
+  {
+    type: "function" as const,
+    name: "ask_tailor_resume_follow_up",
+    description:
+      "Ask exactly one additional user-facing follow-up question and keep the tailoring interview open.",
+    parameters: askTailorResumeFollowUpToolParameters,
+    strict: true,
+  },
+  {
+    type: "function" as const,
+    name: "finish_tailor_resume_interview",
+    description:
+      "Explicitly end an active tailoring interview after the useful learnings are complete.",
+    parameters: finishTailorResumeInterviewToolParameters,
+    strict: true,
+  },
+  {
+    type: "function" as const,
+    name: "skip_tailor_resume_interview",
+    description:
+      "Skip the interview before any follow-up question has been asked because no user input is useful.",
+    parameters: skipTailorResumeInterviewToolParameters,
+    strict: true,
+  },
+];
 
 type TailorResumeInterviewResponse = {
   action: "ask" | "done" | "skip";
@@ -73,22 +182,13 @@ type TailorResumeInterviewResponse = {
   learnings: TailoredResumeQuestionLearning[];
   question: string;
   totalQuestionBudget: number;
+  userMarkdownEditOperations: TailorResumeUserMarkdownPatchOperation[];
 };
 
 export function normalizeTailorResumeInterviewResponseForCurrentTurn(input: {
   previousSummary: TailoredResumeQuestioningSummary | null;
   response: TailorResumeInterviewResponse;
 }): TailorResumeInterviewResponse {
-  if (
-    input.previousSummary &&
-    input.response.action === "skip"
-  ) {
-    return {
-      ...input.response,
-      action: "done",
-    };
-  }
-
   return input.response;
 }
 
@@ -98,23 +198,34 @@ export type AdvanceTailorResumeQuestioningResult =
       generationDurationMs: number;
       question: string;
       questioningSummary: TailoredResumeQuestioningSummary;
+      userMarkdownPatchResult: TailorResumeUserMarkdownPatchResult | null;
     }
   | {
       action: "done" | "skip";
       generationDurationMs: number;
       questioningSummary: TailoredResumeQuestioningSummary | null;
+      userMarkdownPatchResult: TailorResumeUserMarkdownPatchResult | null;
     };
 
 type TailoredResumeResponse = {
   model?: string;
   output?: Array<{
+    arguments?: unknown;
+    call_id?: unknown;
     content?: Array<{
-      text?: string;
-      type?: string;
+      text?: unknown;
+      type?: unknown;
     }>;
-    type?: string;
+    name?: unknown;
+    type?: unknown;
   }>;
   output_text?: string;
+};
+
+type TailoredResumeFunctionToolCall = {
+  arguments: string;
+  callId: string | null;
+  name: string;
 };
 
 function getOpenAIClient() {
@@ -197,6 +308,64 @@ function parseTailoredResumeQuestionLearning(
   };
 }
 
+function parseTailorResumeUserMarkdownEditOperations(
+  value: unknown,
+): TailorResumeUserMarkdownPatchOperation[] {
+  if (typeof value === "undefined" || value === null) {
+    return [];
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error("The model returned invalid USER.md edit operations.");
+  }
+
+  return value.map((entry) => {
+    if (!entry || typeof entry !== "object") {
+      throw new Error("The model returned an invalid USER.md edit operation.");
+    }
+
+    const op = "op" in entry ? entry.op : null;
+
+    if (
+      op !== "append" &&
+      op !== "delete_exact" &&
+      op !== "insert_after" &&
+      op !== "insert_before" &&
+      op !== "replace_exact"
+    ) {
+      throw new Error("The model returned an unsupported USER.md edit operation.");
+    }
+
+    const headingPath =
+      "headingPath" in entry && Array.isArray(entry.headingPath)
+        ? entry.headingPath
+            .map((heading: unknown) => readTrimmedString(heading))
+            .filter(Boolean)
+        : [];
+
+    return {
+      anchorMarkdown:
+        "anchorMarkdown" in entry && typeof entry.anchorMarkdown === "string"
+          ? entry.anchorMarkdown
+          : "",
+      headingPath,
+      markdown:
+        "markdown" in entry && typeof entry.markdown === "string"
+          ? entry.markdown
+          : "",
+      newMarkdown:
+        "newMarkdown" in entry && typeof entry.newMarkdown === "string"
+          ? entry.newMarkdown
+          : "",
+      oldMarkdown:
+        "oldMarkdown" in entry && typeof entry.oldMarkdown === "string"
+          ? entry.oldMarkdown
+          : "",
+      op,
+    };
+  });
+}
+
 function parseTailorResumeInterviewResponse(
   value: unknown,
 ): TailorResumeInterviewResponse {
@@ -225,6 +394,11 @@ function parseTailorResumeInterviewResponse(
       ? Math.max(0, Math.floor(value.totalQuestionBudget))
       : null;
   const rawLearnings = "learnings" in value ? value.learnings : null;
+  const userMarkdownEditOperations = parseTailorResumeUserMarkdownEditOperations(
+    "userMarkdownEditOperations" in value
+      ? value.userMarkdownEditOperations
+      : undefined,
+  );
 
   if (
     !action ||
@@ -242,7 +416,99 @@ function parseTailorResumeInterviewResponse(
     learnings: rawLearnings.map(parseTailoredResumeQuestionLearning),
     question,
     totalQuestionBudget,
+    userMarkdownEditOperations,
   };
+}
+
+function parseToolCallArguments(toolCall: TailoredResumeFunctionToolCall) {
+  try {
+    return JSON.parse(toolCall.arguments) as unknown;
+  } catch {
+    throw new Error(
+      `The model called ${toolCall.name} with unreadable JSON arguments.`,
+    );
+  }
+}
+
+function readFunctionToolCalls(
+  response: TailoredResumeResponse,
+): TailoredResumeFunctionToolCall[] {
+  return (response.output ?? []).flatMap((outputItem) => {
+    if (
+      outputItem.type !== "function_call" ||
+      typeof outputItem.name !== "string" ||
+      typeof outputItem.arguments !== "string"
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        arguments: outputItem.arguments,
+        callId:
+          typeof outputItem.call_id === "string" ? outputItem.call_id : null,
+        name: outputItem.name,
+      },
+    ];
+  });
+}
+
+export function parseTailorResumeInterviewResponseFromModelOutput(
+  response: TailoredResumeResponse,
+): TailorResumeInterviewResponse {
+  const toolCalls = readFunctionToolCalls(response);
+
+  if (toolCalls.length !== 1) {
+    const outputText = readOutputText(response);
+
+    throw new Error(
+      outputText
+        ? "The model returned text instead of exactly one interview tool call."
+        : "The model did not call exactly one interview tool.",
+    );
+  }
+
+  const toolCall = toolCalls[0]!;
+  const argumentsJson = parseToolCallArguments(toolCall);
+
+  if (toolCall.name === "ask_tailor_resume_follow_up") {
+    return parseTailorResumeInterviewResponse({
+      ...(argumentsJson && typeof argumentsJson === "object" ? argumentsJson : {}),
+      action: "ask",
+    });
+  }
+
+  if (toolCall.name === "finish_tailor_resume_interview") {
+    return parseTailorResumeInterviewResponse({
+      ...(argumentsJson && typeof argumentsJson === "object" ? argumentsJson : {}),
+      action: "done",
+      debugDecision: "not_applicable",
+      question: "",
+    });
+  }
+
+  if (toolCall.name === "skip_tailor_resume_interview") {
+    const userMarkdownEditOperations =
+      argumentsJson && typeof argumentsJson === "object"
+        ? parseTailorResumeUserMarkdownEditOperations(
+            "userMarkdownEditOperations" in argumentsJson
+              ? argumentsJson.userMarkdownEditOperations
+              : undefined,
+          )
+        : [];
+
+    return {
+      action: "skip",
+      agenda: "",
+      debugDecision: "not_applicable",
+      learnings: [],
+      question: "",
+      totalQuestionBudget: 0,
+      userMarkdownEditOperations,
+    };
+  }
+
+  throw new Error(`The model called unknown interview tool ${toolCall.name}.`);
 }
 
 function serializePlannedBlocks(input: {
@@ -317,6 +583,7 @@ function buildTailorResumeInterviewInput(input: {
   planningBlocksById: Map<string, TailorResumePlanningBlock>;
   planningResult: TailoredResumePlanningResult;
   planningSnapshot: TailorResumePlanningSnapshot;
+  userMarkdown: TailorResumeUserMarkdownState;
 }) {
   return [
     {
@@ -336,6 +603,14 @@ function buildTailorResumeInterviewInput(input: {
         {
           type: "input_text" as const,
           text: `Whole resume plain text:\n${input.planningSnapshot.resumePlainText}`,
+        },
+        {
+          type: "input_text" as const,
+          text:
+            "Current USER.md memory for this user:\n" +
+            (input.userMarkdown.markdown.trim()
+              ? input.userMarkdown.markdown
+              : "[empty USER.md]"),
         },
         {
           type: "input_text" as const,
@@ -376,7 +651,29 @@ function buildTailorResumeInterviewInstructions(input: {
   );
 }
 
+function latestUserMessageRequestsAssistantReply(
+  messages: TailorResumeConversationMessage[],
+) {
+  const latestUserMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "user");
+  const text = latestUserMessage?.text.trim() ?? "";
+
+  if (!text) {
+    return false;
+  }
+
+  return (
+    /[?？]/.test(text) ||
+    /\b(?:can|could|would|will|should)\s+you\b/i.test(text) ||
+    /\b(?:sample|example|draft|suggest|review|clarify|show me|give me)\b/i.test(
+      text,
+    )
+  );
+}
+
 function validateTailorResumeInterviewResponse(input: {
+  conversation: TailorResumeConversationMessage[];
   debugForceConversation: boolean;
   plannedSegmentIds: Set<string>;
   previousSummary: TailoredResumeQuestioningSummary | null;
@@ -411,6 +708,10 @@ function validateTailorResumeInterviewResponse(input: {
         "The model changed the interview question budget after the conversation had already started.",
       );
     }
+  } else if (input.response.action === "done") {
+    throw new Error(
+      "The model called finish_tailor_resume_interview before the interview started. Use skip_tailor_resume_interview when no first question is needed.",
+    );
   }
 
   if (
@@ -463,6 +764,15 @@ function validateTailorResumeInterviewResponse(input: {
     throw new Error('Action "done" must not return another question.');
   }
 
+  if (
+    input.response.action === "done" &&
+    latestUserMessageRequestsAssistantReply(input.conversation)
+  ) {
+    throw new Error(
+      "The latest user answer asks for an assistant reply. Use ask_tailor_resume_follow_up with a concise response and one confirmation or correction question instead of ending the interview.",
+    );
+  }
+
   if (input.response.action === "ask") {
     if (input.debugForceConversation) {
       if (
@@ -495,22 +805,47 @@ function validateTailorResumeInterviewResponse(input: {
   }
 }
 
+function buildUserMarkdownPatchFailureFeedback(
+  result: Extract<TailorResumeUserMarkdownPatchResult, { ok: false }>,
+) {
+  return [
+    "Your USER.md edit operations could not be applied.",
+    "The current USER.md is included again in the input. Retry with exact text from that document, use append if an exact restructure is unnecessary, and do not include placeholder text.",
+    "",
+    "Patch result:",
+    JSON.stringify(
+      {
+        ok: result.ok,
+        results: result.results,
+      },
+      null,
+      2,
+    ),
+  ].join("\n");
+}
+
 export async function advanceTailorResumeQuestioning(input: {
   conversation: TailorResumeConversationMessage[];
   jobDescription: string;
   planningResult: TailoredResumePlanningResult;
   planningSnapshot: TailorResumePlanningSnapshot;
   promptSettings?: SystemPromptSettings;
+  userMarkdown?: TailorResumeUserMarkdownState;
 }): Promise<AdvanceTailorResumeQuestioningResult> {
   if (input.planningResult.changes.length === 0) {
     return {
       action: "skip",
       generationDurationMs: 0,
       questioningSummary: null,
+      userMarkdownPatchResult: null,
     };
   }
 
   const startedAt = Date.now();
+  const userMarkdown = input.userMarkdown ?? {
+    markdown: defaultTailorResumeUserMarkdown,
+    updatedAt: null,
+  };
   const model = process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
   const client = getOpenAIClient();
   const debugForceConversation =
@@ -532,6 +867,7 @@ export async function advanceTailorResumeQuestioning(input: {
       planningBlocksById,
       planningResult: input.planningResult,
       planningSnapshot: input.planningSnapshot,
+      userMarkdown,
     });
     const instructions = buildTailorResumeInterviewInstructions({
       debugForceConversation,
@@ -542,34 +878,22 @@ export async function advanceTailorResumeQuestioning(input: {
       input: interviewInput,
       instructions,
       model,
+      tool_choice: "required",
+      tools: tailorResumeInterviewTools,
       text: {
         verbosity: "low",
-        format: {
-          type: "json_schema",
-          name: "tailor_resume_interview_turn",
-          strict: true,
-          schema: tailorResumeInterviewSchema,
-        },
       },
     });
-
-    const outputText = readOutputText(response);
-
-    if (!outputText) {
-      lastError = "The model returned an empty interview response.";
-      feedback =
-        'The previous response was empty. Return the full JSON object with action, agenda, totalQuestionBudget, question, learnings, and debugDecision.';
-      continue;
-    }
 
     let parsedResponse: TailorResumeInterviewResponse;
 
     try {
       parsedResponse = normalizeTailorResumeInterviewResponseForCurrentTurn({
         previousSummary,
-        response: parseTailorResumeInterviewResponse(JSON.parse(outputText)),
+        response: parseTailorResumeInterviewResponseFromModelOutput(response),
       });
       validateTailorResumeInterviewResponse({
+        conversation: input.conversation,
         debugForceConversation,
         plannedSegmentIds,
         previousSummary,
@@ -581,8 +905,23 @@ export async function advanceTailorResumeQuestioning(input: {
           ? error.message
           : "The model returned an invalid interview response.";
       feedback =
-        `${lastError}\nReturn a valid JSON object. Keep the question budget stable once the interview has started, ask only one question at a time, keep learnings compact, and always include debugDecision.`;
+        `${lastError}\nCall exactly one valid interview tool. Keep the question budget stable once the interview has started, ask only one question at a time, keep learnings compact, and only call finish_tailor_resume_interview when you intentionally want the chat to end.`;
       continue;
+    }
+
+    let userMarkdownPatchResult: TailorResumeUserMarkdownPatchResult | null = null;
+
+    if (parsedResponse.userMarkdownEditOperations.length > 0) {
+      userMarkdownPatchResult = applyTailorResumeUserMarkdownPatch(
+        userMarkdown.markdown,
+        parsedResponse.userMarkdownEditOperations,
+      );
+
+      if (!userMarkdownPatchResult.ok) {
+        lastError = "The USER.md edit operations could not be applied.";
+        feedback = buildUserMarkdownPatchFailureFeedback(userMarkdownPatchResult);
+        continue;
+      }
     }
 
     if (parsedResponse.action === "skip") {
@@ -590,6 +929,7 @@ export async function advanceTailorResumeQuestioning(input: {
         action: "skip",
         generationDurationMs: Math.max(0, Date.now() - startedAt),
         questioningSummary: null,
+        userMarkdownPatchResult,
       };
     }
 
@@ -616,6 +956,7 @@ export async function advanceTailorResumeQuestioning(input: {
         generationDurationMs: Math.max(0, Date.now() - startedAt),
         question: parsedResponse.question,
         questioningSummary,
+        userMarkdownPatchResult,
       };
     }
 
@@ -623,6 +964,7 @@ export async function advanceTailorResumeQuestioning(input: {
       action: "done",
       generationDurationMs: Math.max(0, Date.now() - startedAt),
       questioningSummary,
+      userMarkdownPatchResult,
     };
   }
 

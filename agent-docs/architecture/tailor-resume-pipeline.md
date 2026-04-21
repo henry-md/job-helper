@@ -16,8 +16,10 @@ Step 1. Generate plaintext generalized edits
 
 Step 2. Ask user clarifications if useful
 - This stage is optional and should keep a high threshold.
+- The stage receives the logged-in user's DB-backed `USER.md` memory and should use it to avoid asking repetitive questions about already-confirmed experience, non-experience, preferences, or constraints.
 - Ask one question at a time only when a grounded answer could materially improve an already-adjacent resume block.
 - Store the questioning agenda, question budget, and learned facts mapped back to target `segmentId`s so later stages can use them surgically.
+- When the user's answer reveals durable context likely to matter later, the interview tool may submit `USER.md` markdown patch operations. Normal additions should append under a chosen heading path; restructuring should use exact-match replace/insert/delete operations. Failed exact matches are fed back to the model for a retry instead of allowing full-document replacement.
 
 Step 3. Generate block-scoped edits
 - The implementation stage takes the accepted plan plus any user-confirmed learnings and returns exact LaTeX replacements for only the targeted segments.

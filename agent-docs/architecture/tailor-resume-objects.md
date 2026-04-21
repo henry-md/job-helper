@@ -99,6 +99,15 @@ Tailor Resume object model:
 - The current setting is whether tailoring should automatically reject page-count growth by running a compaction follow-up pass when needed.
 - These values are editable from `/dashboard?tab=settings`.
 
+9. User Memory (`TailorResumeUserMemory`)
+- Files: `prisma/schema.prisma`, `lib/tailor-resume-user-memory.ts`
+- Stored in Prisma as a DB-backed Markdown document for the logged-in user, exposed as `USER.md` in settings.
+- The Step 2 tailoring interview receives this Markdown so it can avoid repeating questions the user has already answered.
+- The interview model can update the document with markdown patch operations:
+  - `append` under a chosen heading path for ordinary new memory
+  - `replace_exact`, `insert_before`, `insert_after`, and `delete_exact` for deliberate restructuring
+- Exact-match operations must match once; failures are returned as structured retry feedback. Full-document replacement is intentionally not part of the model-facing edit contract.
+
 Current flow:
 
 1. Resume upload is saved locally.
@@ -120,6 +129,7 @@ Tailoring generation:
   - an implementation pass that sees only the selected blocks and translates the approved plaintext plan plus any compressed user learnings back into block-local LaTeX replacements
 - The questioning pass should stay rare. It should only ask when the answer would materially improve the tailored resume, cannot already be inferred from the current resume, and is adjacent enough to existing resume text that the experience is plausibly already there.
 - When questioning does happen, persist only a compact summary of the learnings for the next model stage rather than forwarding the full chat transcript.
+- Existing `USER.md` memory can be copied into the compact learning summary when it answers a planned edit's factual gap; new durable facts from user answers can be written back to `USER.md` through patch operations.
 - When the page-count guardrail is enabled and the compiled tailored preview exceeds the original resume's page count, the flow runs a third conditional stage:
   - a refinement-style compaction pass that re-prompts only the existing edited blocks, sends highlighted rendered preview screenshots, and retries until the preview fits within the original page count or the attempt budget is exhausted
 - Compile retries stay scoped to the implementation pass so LaTeX escaping and block-boundary fixes do not force the model to rethink the whole editing thesis on every retry.
@@ -142,6 +152,7 @@ Relevant code paths:
 - LaTeX compile helper: `lib/tailor-resume-latex.ts`
 - Review highlight implementation notes: `agent-docs/architecture/tailor-resume-preview-highlighting.md`
 - Saved profile + preview persistence: `lib/tailor-resume-storage.ts`
+- User memory persistence + patching: `lib/tailor-resume-user-memory.ts`
 - API orchestration: `app/api/tailor-resume/route.ts`
 - Preview route: `app/api/tailor-resume/preview/route.ts`
 - Tailor Resume workspace: `components/tailor-resume-workspace.tsx`

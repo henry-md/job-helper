@@ -4,6 +4,7 @@ import {
   advanceTailorResumeQuestioning,
   isDebugForceConversationInTailorPipelineEnabled,
   normalizeTailorResumeInterviewResponseForCurrentTurn,
+  parseTailorResumeInterviewResponseFromModelOutput,
 } from "../lib/tailor-resume-questioning.ts";
 
 test("isDebugForceConversationInTailorPipelineEnabled reads common true values", () => {
@@ -66,7 +67,7 @@ test("advanceTailorResumeQuestioning skips immediately when no block edits are p
   assert.equal(result.questioningSummary, null);
 });
 
-test("normalizeTailorResumeInterviewResponseForCurrentTurn treats post-start skip as done", () => {
+test("normalizeTailorResumeInterviewResponseForCurrentTurn does not treat post-start skip as done", () => {
   const response = normalizeTailorResumeInterviewResponseForCurrentTurn({
     previousSummary: {
       agenda: "deployment details",
@@ -85,5 +86,50 @@ test("normalizeTailorResumeInterviewResponseForCurrentTurn treats post-start ski
     },
   });
 
+  assert.equal(response.action, "skip");
+});
+
+test("parseTailorResumeInterviewResponseFromModelOutput reads finish tool calls", () => {
+  const response = parseTailorResumeInterviewResponseFromModelOutput({
+    output: [
+      {
+        arguments: JSON.stringify({
+          agenda: "deployment details",
+          learnings: [
+            {
+              detail: "Owned LLM deployment latency work.",
+              targetSegmentIds: ["segment-1"],
+              topic: "LLM deployment",
+            },
+          ],
+          totalQuestionBudget: 2,
+        }),
+        call_id: "call-1",
+        name: "finish_tailor_resume_interview",
+        type: "function_call",
+      },
+    ],
+  });
+
   assert.equal(response.action, "done");
+  assert.equal(response.question, "");
+  assert.equal(response.debugDecision, "not_applicable");
+  assert.equal(response.learnings[0]?.targetSegmentIds[0], "segment-1");
+});
+
+test("parseTailorResumeInterviewResponseFromModelOutput rejects plain JSON text", () => {
+  assert.throws(
+    () =>
+      parseTailorResumeInterviewResponseFromModelOutput({
+        output_text: JSON.stringify({
+          action: "done",
+          agenda: "deployment details",
+          debugDecision: "not_applicable",
+          learnings: [],
+          question: "",
+          totalQuestionBudget: 1,
+        }),
+      }),
+    /tool call/i,
+  );
 });

@@ -11,6 +11,7 @@ import {
 } from "@/lib/job-application-records";
 import { getPrismaClient } from "@/lib/prisma";
 import { readTailorResumeProfileState } from "@/lib/tailor-resume-profile-state";
+import { readTailorResumeUserMarkdown } from "@/lib/tailor-resume-user-memory";
 import type { CompanyOption, ReferrerOption } from "@/lib/job-application-types";
 import {
   emptyTailorResumeProfile,
@@ -103,6 +104,17 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     }
   })();
 
+  const tailorResumeUserMarkdown = await (async () => {
+    try {
+      return await readTailorResumeUserMarkdown(session.user.id);
+    } catch {
+      return {
+        markdown: "# USER.md\n\n",
+        updatedAt: null,
+      };
+    }
+  })();
+
   const testOpenAIResponseEnabled = ["true", "1", "yes"].includes(
     process.env.TEST_OPENAI_RESPONSE?.trim().toLowerCase() ?? "",
   );
@@ -143,6 +155,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             tailorResumeDebugUiEnabled={Boolean(process.env.DEBUG_UI)}
             tailorResumeOpenAIReady={openAIReady}
             tailorResumeProfile={tailorResumeProfile}
+            tailorResumeUserMarkdown={tailorResumeUserMarkdown}
             initialReviewingTailoredResumeId={
               initialDashboardRouteState.tailoredResumeId
             }
