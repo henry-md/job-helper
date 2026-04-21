@@ -213,10 +213,76 @@ const defaultReviewDetailsPaneSize = 58;
 const defaultReviewPreviewPaneSize = 42;
 const editReasonClampLineCount = 4;
 const maxTailoredResumeDisplayNameLength = 200;
+const editRailGutterClassName = "px-2";
+const editRailMinimumEdgePeekPx = 56;
 const selectedReviewSurfaceClassName =
   "border-emerald-300/38 bg-[linear-gradient(180deg,rgba(52,211,153,0.06),rgba(16,185,129,0.02))] shadow-[0_0_0_1px_rgba(16,185,129,0.12),inset_0_1px_0_rgba(167,243,208,0.05)]";
 const inlineMoreButtonClassName =
   "inline-flex translate-y-[-0.04rem] items-center rounded-[0.45rem] border border-emerald-300/35 px-1.5 py-[1px] text-[10px] font-medium leading-[1.05rem] tracking-[0.08em] lowercase text-emerald-200";
+
+function scrollTailoredResumeEditRailIntoView(input: {
+  behavior: ScrollBehavior;
+  editButtonElements: Map<string, HTMLButtonElement>;
+  editId: string;
+  edits: TailoredResumeBlockEditRecord[];
+  railElement: HTMLDivElement | null;
+}) {
+  const editIndex = input.edits.findIndex((edit) => edit.editId === input.editId);
+  const editButton = input.editButtonElements.get(input.editId);
+  const railElement = input.railElement;
+
+  if (!editButton || !railElement) {
+    return;
+  }
+
+  if (editIndex <= 0) {
+    railElement.scrollTo({
+      behavior: input.behavior,
+      left: 0,
+    });
+    return;
+  }
+
+  const railRect = railElement.getBoundingClientRect();
+  let groupStartRect = editButton.getBoundingClientRect();
+  let groupEndRect = groupStartRect;
+  const nextEditId = input.edits[editIndex + 1]?.editId;
+  const nextEditButton = nextEditId
+    ? input.editButtonElements.get(nextEditId)
+    : null;
+
+  if (nextEditButton) {
+    groupEndRect = nextEditButton.getBoundingClientRect();
+  } else {
+    const previousEditId = input.edits[editIndex - 1]?.editId;
+    const previousEditButton = previousEditId
+      ? input.editButtonElements.get(previousEditId)
+      : null;
+
+    if (previousEditButton) {
+      groupStartRect = previousEditButton.getBoundingClientRect();
+    }
+  }
+
+  const groupWidth = groupEndRect.right - groupStartRect.left;
+  const desiredGroupLeft = Math.max(
+    editRailMinimumEdgePeekPx,
+    (railRect.width - groupWidth) / 2,
+  );
+  const maxScrollLeft = railElement.scrollWidth - railElement.clientWidth;
+  const targetScrollLeft = Math.min(
+    Math.max(
+      railElement.scrollLeft + groupStartRect.left - railRect.left - desiredGroupLeft,
+      0,
+    ),
+    maxScrollLeft,
+  );
+
+  railElement.scrollTo({
+    behavior: input.behavior,
+    left: targetScrollLeft,
+  });
+}
 
 function trimInlineReasonPreviewText(reason: string, maxLength: number) {
   if (maxLength >= reason.length) {
@@ -358,7 +424,7 @@ function TailoredResumeEditSummaryCard({
   return (
     <div className="flex items-stretch">
       <div
-        className={`relative h-full w-[min(21rem,70vw)] snap-start overflow-hidden rounded-[1rem] border transition focus-within:ring-1 focus-within:ring-inset focus-within:ring-offset-0 sm:w-[17.5rem] xl:w-[18.5rem] ${
+        className={`relative h-full w-[min(21rem,70vw)] overflow-hidden rounded-[1rem] border transition focus-within:ring-1 focus-within:ring-inset focus-within:ring-offset-0 sm:w-[17.5rem] xl:w-[18.5rem] ${
           isSelected
             ? `${selectedReviewSurfaceClassName} focus-within:ring-white/15`
             : "border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))] hover:border-white/15 hover:bg-white/5 focus-within:ring-white/20"
@@ -563,20 +629,6 @@ export default function TailoredResumeReviewModal({
   const lastPreviewRecoveryRecordIdRef = useRef<string | null>(null);
   const thesisPopoverRef = useRef<HTMLDivElement | null>(null);
 
-  function scrollEditIntoView(editId: string, behavior: ScrollBehavior) {
-    const editButton = editButtonRefs.current.get(editId);
-
-    if (!editButton) {
-      return;
-    }
-
-    editButton.scrollIntoView({
-      behavior,
-      block: "nearest",
-      inline: "start",
-    });
-  }
-
   function selectEdit(
     editId: string,
     options: {
@@ -592,7 +644,13 @@ export default function TailoredResumeReviewModal({
       editButtonRefs.current.get(editId)?.focus({ preventScroll: true });
     }
 
-    scrollEditIntoView(editId, options.behavior ?? "smooth");
+    scrollTailoredResumeEditRailIntoView({
+      behavior: options.behavior ?? "smooth",
+      editButtonElements: editButtonRefs.current,
+      editId,
+      edits: reviewEdits,
+      railElement: editRailRef.current,
+    });
   }
 
   function openAiRefinementPane() {
@@ -707,10 +765,12 @@ export default function TailoredResumeReviewModal({
       setSelectedEditId(targetEditId);
       setIsEditingLatexSegment(false);
       setInteractivePreviewFocusRequest((currentRequest) => currentRequest + 1);
-      editButtonRefs.current.get(targetEditId)?.scrollIntoView({
+      scrollTailoredResumeEditRailIntoView({
         behavior: "smooth",
-        block: "nearest",
-        inline: "start",
+        editButtonElements: editButtonRefs.current,
+        editId: targetEditId,
+        edits: reviewEdits,
+        railElement: editRailRef.current,
       });
     };
 
@@ -1610,12 +1670,14 @@ export default function TailoredResumeReviewModal({
                 />
 
                 <div
-                  className="app-scrollbar snap-x snap-proximity overflow-x-auto overflow-y-hidden pb-2 outline-none [scroll-padding-inline:0.5rem] [scrollbar-gutter:stable] touch-pan-x"
+                  className="app-scrollbar overflow-x-auto overflow-y-hidden pb-2 outline-none [scrollbar-gutter:stable] touch-pan-x"
                   aria-label="Changed edits. Use the left and right arrow keys to navigate."
                   ref={editRailRef}
                   tabIndex={-1}
                 >
-                  <div className="flex min-w-max items-stretch px-2">
+                  <div
+                    className={`flex min-w-max items-stretch ${editRailGutterClassName}`}
+                  >
                     {reviewEdits.map((edit, index) => {
                       const displayedEditState =
                         optimisticEditStateById[edit.editId] ?? edit.state;
