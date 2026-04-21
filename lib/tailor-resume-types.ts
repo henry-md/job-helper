@@ -122,12 +122,15 @@ export type TailorResumeGenerationSettingsState = {
   values: TailorResumeGenerationSettings;
 };
 
+export type TailoredResumeBlockGeneratedByStep = 3 | 4;
+
 export type TailoredResumeBlockEditRecord = {
   afterLatexCode: string;
   beforeLatexCode: string;
   command: string | null;
   customLatexCode: string | null;
   editId: string;
+  generatedByStep: TailoredResumeBlockGeneratedByStep;
   reason: string;
   state: "applied" | "rejected";
   segmentId: string;
@@ -500,6 +503,7 @@ function parseTailoredResumeBlockEditRecord(
   const command = readNullableString(value.command);
   const rawSource = value.source;
   const source = rawSource === "user" ? "user" : "model";
+  const generatedByStep = value.generatedByStep === 4 ? 4 : 3;
   const rawState = value.state;
   const state = rawState === "rejected" ? "rejected" : "applied";
 
@@ -518,6 +522,7 @@ function parseTailoredResumeBlockEditRecord(
     command,
     customLatexCode,
     editId: editId ?? `${segmentId}:${index + 1}`,
+    generatedByStep,
     reason,
     source,
     state,
@@ -547,6 +552,7 @@ function normalizeTailoredResumeBlockEditRecords(
             ? edit.afterLatexCode
             : null),
         editId: edit.editId,
+        generatedByStep: edit.generatedByStep,
         reason: edit.reason,
         state: edit.state,
         segmentId: edit.segmentId,
@@ -561,6 +567,7 @@ function normalizeTailoredResumeBlockEditRecords(
         command: edit.command,
         customLatexCode: edit.customLatexCode ?? currentEdit.customLatexCode,
         editId: edit.editId,
+        generatedByStep: edit.generatedByStep,
         reason: edit.reason,
         state: edit.state,
         segmentId: edit.segmentId,

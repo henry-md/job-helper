@@ -288,10 +288,12 @@ const defaultSystemPromptSettings = {
     "13. Special character escaping still matters in plain text content: escape }, {, #, %, &, $, _, ^, ~, and \\\\ when they are literal text rather than LaTeX structure.\n",
   tailorResumePageCountCompaction:
     "Please tighten to keep this resume to {{TARGET_PAGE_COUNT_REQUIREMENT}}. {{TARGET_PAGE_COUNT_HARD_REQUIREMENT}} " +
-    "The current tailored preview is {{CURRENT_PAGE_COUNT}} {{CURRENT_PAGE_LABEL}}, so make the smallest block-level cuts needed to get back within the limit while preserving the tailoring thesis. " +
-    "Use the rendered PDF with highlights to decide whether a candidate rewrite will actually remove a full line. Do not shorten a bullet unless the PDF suggests it really needs compaction and the rewrite is likely to reduce the visible line count, not just turn a two-line bullet into roughly one-and-a-half lines while taking the same vertical space. " +
-    "If only one line needs to be reclaimed overall, strongly prefer making one minimal change to one original block and leaving the other edited blocks effectively the same. " +
-    "For every returned block reason, remember that it fully replaces the old reason shown to the user, so restate the substantive reason for the final wording instead of just saying that it was shortened.",
+    "The current tailored preview is {{CURRENT_PAGE_COUNT}} {{CURRENT_PAGE_LABEL}}, and the renderer estimates that about {{ESTIMATED_LINE_REDUCTION}} {{ESTIMATED_LINE_REDUCTION_LABEL}} must be removed. " +
+    "Make the smallest block-level cuts needed to get back within the limit while preserving the tailoring thesis. " +
+    "Only touch blocks where your proposed replacement is likely to remove at least one full rendered line for that same block in the final original-versus-tailored review. Do not submit style-only, tone-only, wording-only, or same-line-count edits. " +
+    "The measurement tool will reject any candidate whose rendered line count does not actually drop for that block, including candidates that merely shorten text while preserving the same number of rendered lines. " +
+    "If only one line needs to be reclaimed overall, strongly prefer one minimal verified line-saving change and leave the other edited blocks effectively the same. " +
+    "For every returned block reason, remember that it fully replaces the old reason shown to the user. Lead with what changed in the context of the job description, such as the technology, responsibility, metric, or outcome being emphasized. Mention the need to shorten only as a passing sentence fragment, and never lead with claims like shortened, tightened, removed filler, or reclaimed space.",
 } satisfies SystemPromptSettings;
 
 export function createDefaultSystemPromptSettings(): SystemPromptSettings {
@@ -401,15 +403,23 @@ export function buildTailorResumePageCountCompactionPrompt(
   settings: SystemPromptSettings,
   input: {
     currentPageCount: number;
+    estimatedLineReduction?: number;
     targetPageCount: number;
   },
 ) {
   const normalizedCurrentPageCount = Math.max(1, Math.floor(input.currentPageCount));
+  const normalizedEstimatedLineReduction = Math.max(
+    1,
+    Math.floor(input.estimatedLineReduction ?? 1),
+  );
   const normalizedTargetPageCount = Math.max(1, Math.floor(input.targetPageCount));
 
   return renderSystemPromptTemplate(settings.tailorResumePageCountCompaction, {
     CURRENT_PAGE_COUNT: String(normalizedCurrentPageCount),
     CURRENT_PAGE_LABEL: normalizedCurrentPageCount === 1 ? "page" : "pages",
+    ESTIMATED_LINE_REDUCTION: String(normalizedEstimatedLineReduction),
+    ESTIMATED_LINE_REDUCTION_LABEL:
+      normalizedEstimatedLineReduction === 1 ? "rendered line" : "rendered lines",
     TARGET_PAGE_COUNT: String(normalizedTargetPageCount),
     TARGET_PAGE_COUNT_HARD_REQUIREMENT: buildPageCountHardRequirement(
       normalizedTargetPageCount,

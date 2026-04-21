@@ -181,6 +181,10 @@ test("parseTailorResumeProfile keeps saved generation settings", () => {
     "2026-04-20T12:00:00.000Z",
   );
   assert.equal(
+    profile.generationSettings.values.allowTailorResumeFollowUpQuestions,
+    false,
+  );
+  assert.equal(
     profile.generationSettings.values.preventPageCountIncrease,
     false,
   );
@@ -284,6 +288,7 @@ test("parseTailorResumeProfile keeps tailored resume metadata and workspace stat
             afterLatexCode: "\\resumeitem{Tailored bullet}",
             beforeLatexCode: "\\resumeitem{Original bullet}",
             command: "resumeitem",
+            generatedByStep: 4,
             reason: 'Highlights CI/CD work. Matches "CI/CD" in the job description.',
             segmentId: "experience.entry-1.bullet-1",
           },
@@ -354,6 +359,7 @@ test("parseTailorResumeProfile keeps tailored resume metadata and workspace stat
   );
   assert.equal(profile.tailoredResumes[0]?.edits[0]?.editId, "experience.entry-1.bullet-1:1");
   assert.equal(profile.tailoredResumes[0]?.edits[0]?.customLatexCode, null);
+  assert.equal(profile.tailoredResumes[0]?.edits[0]?.generatedByStep, 4);
   assert.equal(profile.tailoredResumes[0]?.edits[0]?.state, "applied");
   assert.equal(profile.tailoredResumes[0]?.positionTitle, "Research Engineer");
   assert.equal(profile.tailoredResumes[0]?.jobIdentifier, "Applied research");

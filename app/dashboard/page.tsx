@@ -27,6 +27,10 @@ type DashboardPageProps = {
   }>;
 };
 
+function isTruthyEnvValue(value: string | undefined) {
+  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
+}
+
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   const session = await getServerSession(authOptions);
   const params = searchParams ? await searchParams : undefined;
@@ -103,7 +107,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       return emptyTailorResumeProfile() satisfies TailorResumeProfile;
     }
   })();
-
   const tailorResumeUserMarkdown = await (async () => {
     try {
       return await readTailorResumeUserMarkdown(session.user.id);
@@ -152,7 +155,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             extractionModel={extractionModel}
             referrerOptions={databaseStatus.people}
             statusMessage={statusMessage}
-            tailorResumeDebugUiEnabled={Boolean(process.env.DEBUG_UI)}
+            tailorResumeDebugUiEnabled={isTruthyEnvValue(process.env.DEBUG_UI)}
             tailorResumeOpenAIReady={openAIReady}
             tailorResumeProfile={tailorResumeProfile}
             tailorResumeUserMarkdown={tailorResumeUserMarkdown}

@@ -1,11 +1,15 @@
 import { diffArrays } from "diff";
-import type { TailoredResumeBlockEditRecord } from "./tailor-resume-types.ts";
+import type {
+  TailoredResumeBlockEditRecord,
+  TailoredResumeBlockGeneratedByStep,
+} from "./tailor-resume-types.ts";
 import {
   readAnnotatedTailorResumeBlocks,
   stripTailorResumeSegmentIds,
 } from "./tailor-resume-segmentation.ts";
 
 type TailorResumeReviewChange = {
+  generatedByStep?: TailoredResumeBlockGeneratedByStep;
   latexCode: string;
   reason: string;
   segmentId: string;
@@ -417,6 +421,7 @@ export function buildTailoredResumeBlockEdits(input: {
         command: block.command,
         customLatexCode: null,
         editId: `${block.id}:model`,
+        generatedByStep: change.generatedByStep ?? 3,
         reason: normalizeTailoredResumeEditReason(change.reason),
         state: "applied",
         segmentId: block.id,

@@ -154,6 +154,7 @@ test("buildTailorResumePageCountCompactionPrompt injects page count tokens", () 
     createDefaultSystemPromptSettings(),
     {
       currentPageCount: 2,
+      estimatedLineReduction: 3,
       targetPageCount: 1,
     },
   );
@@ -161,8 +162,13 @@ test("buildTailorResumePageCountCompactionPrompt injects page count tokens", () 
   assert.match(prompt, /keep this resume to a single page/i);
   assert.match(prompt, /Single page is a hard requirement\./i);
   assert.match(prompt, /current tailored preview is 2 pages/i);
-  assert.match(prompt, /use the rendered PDF with highlights/i);
-  assert.match(prompt, /if only one line needs to be reclaimed overall/i);
+  assert.match(prompt, /about 3 rendered lines must be removed/i);
+  assert.match(prompt, /Only touch blocks where your proposed replacement is likely to remove/i);
+  assert.match(prompt, /same-line-count edits/i);
+  assert.match(prompt, /measurement tool will reject/i);
+  assert.match(prompt, /Lead with what changed in the context of the job description/i);
+  assert.match(prompt, /Mention the need to shorten only as a passing sentence fragment/i);
   assert.match(prompt, /fully replaces the old reason shown to the user/i);
   assert.equal(prompt.includes("{{TARGET_PAGE_COUNT_REQUIREMENT}}"), false);
+  assert.equal(prompt.includes("{{ESTIMATED_LINE_REDUCTION}}"), false);
 });
