@@ -2,7 +2,6 @@ import { compileTailorResumeLatex } from "./tailor-resume-latex.ts";
 
 const linkValidationTimeoutMs = 6_000;
 const supportedWebProtocols = new Set(["http:", "https:"]);
-const definiteHttpFailureStatusCodes = new Set([400, 404, 410, 451]);
 const indeterminateHttpStatusCodes = new Set([401, 403, 408, 429]);
 const ignoredGroupedLatexCommands = new Set([
   "hspace",
@@ -226,6 +225,23 @@ function buildLinkSummary(
   );
 }
 
+function buildFailedLinkValidationError(input: {
+  links: TailorResumeLinkValidationEntry[];
+  summary: TailorResumeLinkValidationSummary;
+}) {
+  const failedLinks = input.links.filter((link) => link.outcome === "failed");
+  const linkLabel = input.summary.totalCount === 1 ? "link" : "links";
+  const detailLines = failedLinks.map((link) => {
+    const reason = link.reason?.trim() || "The destination failed validation.";
+    return `- ${link.url}: ${reason}`;
+  });
+
+  return [
+    `Validated ${input.summary.totalCount} extracted ${linkLabel}, and ${input.summary.failedCount} failed.`,
+    ...detailLines,
+  ].join("\n");
+}
+
 function trimComparableText(value: string) {
   return value.trim().replace(/^[<(["']+/, "").replace(/[>),.\]"']+$/, "");
 }
@@ -401,8 +417,8 @@ function classifyFetchError(error: unknown): HttpProbeResult {
 
   if (code === "ENOTFOUND" || code === "ERR_INVALID_URL") {
     return {
-      outcome: "failed",
-      reason: "The destination could not be resolved.",
+      outcome: "unverified",
+      reason: "The destination could not be resolved while validating the link.",
     };
   }
 
@@ -459,14 +475,6 @@ async function probeHttpMethod(
       };
     }
 
-    if (definiteHttpFailureStatusCodes.has(response.status)) {
-      return {
-        outcome: "failed" as const,
-        reason: `The destination returned HTTP ${response.status}.`,
-        retryWithGet: false,
-      };
-    }
-
     if (indeterminateHttpStatusCodes.has(response.status)) {
       return {
         outcome: "unverified" as const,
@@ -484,15 +492,15 @@ async function probeHttpMethod(
     }
 
     return {
-      outcome: "failed" as const,
-      reason: `The destination returned HTTP ${response.status}.`,
+      outcome: "unverified" as const,
+      reason: `The destination returned HTTP ${response.status} during validation.`,
       retryWithGet: method === "HEAD",
     };
   } catch (error) {
     const classifiedError = classifyFetchError(error);
     return {
       ...classifiedError,
-      retryWithGet: method === "HEAD" && classifiedError.outcome !== "failed",
+      retryWithGet: method === "HEAD",
     };
   }
 }
@@ -651,6 +659,19 @@ export async function validateTailorResumeLatexDocument(
   try {
     const previewPdf = await compileLatex(latexCode);
     const linkValidation = await validateResumeLatexLinks(latexCode, fetchImpl);
+
+    if (linkValidation.linkSummary.failedCount > 0) {
+      return {
+        error: buildFailedLinkValidationError({
+          links: linkValidation.links,
+          summary: linkValidation.linkSummary,
+        }),
+        linkSummary: linkValidation.linkSummary,
+        links: linkValidation.links,
+        ok: false,
+        previewPdf: null,
+      };
+    }
 
     return {
       error: null,

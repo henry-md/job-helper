@@ -109,7 +109,7 @@ test("validateTailorResumeLatexDocument fails when visible link text mismatches 
   );
 });
 
-test("validateTailorResumeLatexDocument treats 404 links as failed and blocked links as unverified", async () => {
+test("validateTailorResumeLatexDocument treats unreachable http links as unverified", async () => {
   const requests: Array<{ method: string; url: string }> = [];
 
   const result = await validateTailorResumeLatexDocument(
@@ -137,20 +137,22 @@ test("validateTailorResumeLatexDocument treats 404 links as failed and blocked l
     },
   );
 
-  assert.equal(result.ok, false);
+  assert.equal(result.ok, true);
+  assert.equal(result.error, null);
+  assert.deepEqual(result.previewPdf, Buffer.from("pdf"));
   assert.deepEqual(
     result.linkSummary,
     buildLinkSummary({
-      failedCount: 1,
+      failedCount: 0,
       passedCount: 0,
       totalCount: 2,
-      unverifiedCount: 1,
+      unverifiedCount: 2,
     }),
   );
-  assert.match(result.error ?? "", /Validated 2 extracted links, and 1 failed\./);
   assert.deepEqual(requests, [
     { method: "HEAD", url: "https://missing.example/role" },
     { method: "HEAD", url: "https://blocked.example/profile" },
+    { method: "GET", url: "https://missing.example/role" },
     { method: "GET", url: "https://blocked.example/profile" },
   ]);
 });
