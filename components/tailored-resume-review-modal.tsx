@@ -76,7 +76,15 @@ function isEditableKeyboardTarget(target: EventTarget | null) {
 }
 
 type TailoredResumeAcceptedBlockChoice = "original" | "tailored";
+type TailoredResumeDiffBlockSide = "original" | "tailored";
 type TailoredResumeEditState = TailoredResumeBlockEditRecord["state"];
+
+type TailoredResumeDiffBlockScrollSyncState = {
+  expectedScrollTop: number;
+  frame: number | null;
+  ignoredSide: TailoredResumeDiffBlockSide | null;
+  releaseTimeout: number | null;
+};
 
 function normalizeComparedTailoredResumeBlock(latexCode: string | null | undefined) {
   return stripTailorResumeSegmentIds(latexCode ?? "").replace(/\n+$/, "");
@@ -297,6 +305,141 @@ function scrollTailoredResumeEditRailIntoView(input: {
     behavior: input.behavior,
     left: targetScrollLeft,
   });
+}
+
+function clampScrollValue(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(value, max));
+}
+
+function measureElementTopWithinScrollContainer(
+  element: HTMLElement,
+  scrollContainer: HTMLElement,
+) {
+  const elementRect = element.getBoundingClientRect();
+  const scrollContainerRect = scrollContainer.getBoundingClientRect();
+
+  return elementRect.top - scrollContainerRect.top + scrollContainer.scrollTop;
+}
+
+function findVisibleDiffBlockRowAnchor(input: {
+  rowElements: Map<number, HTMLDivElement>;
+  scrollContainer: HTMLDivElement;
+}) {
+  const sortedRows = [...input.rowElements.entries()].sort(
+    ([leftIndex], [rightIndex]) => leftIndex - rightIndex,
+  );
+
+  if (sortedRows.length === 0) {
+    return null;
+  }
+
+  const scrollTop = input.scrollContainer.scrollTop;
+  let fallbackAnchor: {
+    index: number;
+    relativeOffset: number;
+  } | null = null;
+
+  for (const [index, rowElement] of sortedRows) {
+    const rowTop = measureElementTopWithinScrollContainer(
+      rowElement,
+      input.scrollContainer,
+    );
+    const rowHeight = Math.max(rowElement.offsetHeight, 1);
+    const rowBottom = rowTop + rowHeight;
+
+    fallbackAnchor = {
+      index,
+      relativeOffset: 1,
+    };
+
+    if (rowBottom < scrollTop + 1) {
+      continue;
+    }
+
+    return {
+      index,
+      relativeOffset: clampScrollValue((scrollTop - rowTop) / rowHeight, 0, 1),
+    };
+  }
+
+  return fallbackAnchor;
+}
+
+function clearDiffBlockScrollSyncGuard(
+  state: TailoredResumeDiffBlockScrollSyncState,
+) {
+  if (state.frame !== null) {
+    window.cancelAnimationFrame(state.frame);
+    state.frame = null;
+  }
+
+  if (state.releaseTimeout !== null) {
+    window.clearTimeout(state.releaseTimeout);
+    state.releaseTimeout = null;
+  }
+
+  state.ignoredSide = null;
+}
+
+function syncDiffBlockScrollToAnalogousRow(input: {
+  sourceRowElements: Map<number, HTMLDivElement>;
+  sourceScrollContainer: HTMLDivElement;
+  state: TailoredResumeDiffBlockScrollSyncState;
+  targetRowElements: Map<number, HTMLDivElement>;
+  targetScrollContainer: HTMLDivElement;
+  targetSide: TailoredResumeDiffBlockSide;
+}) {
+  const sourceAnchor = findVisibleDiffBlockRowAnchor({
+    rowElements: input.sourceRowElements,
+    scrollContainer: input.sourceScrollContainer,
+  });
+
+  if (!sourceAnchor) {
+    return;
+  }
+
+  const targetRowElement = input.targetRowElements.get(sourceAnchor.index);
+
+  if (!targetRowElement) {
+    return;
+  }
+
+  const targetRowTop = measureElementTopWithinScrollContainer(
+    targetRowElement,
+    input.targetScrollContainer,
+  );
+  const targetRowHeight = Math.max(targetRowElement.offsetHeight, 1);
+  const maxTargetScrollTop = Math.max(
+    0,
+    input.targetScrollContainer.scrollHeight -
+      input.targetScrollContainer.clientHeight,
+  );
+  const nextScrollTop = clampScrollValue(
+    targetRowTop + targetRowHeight * sourceAnchor.relativeOffset,
+    0,
+    maxTargetScrollTop,
+  );
+
+  if (Math.abs(input.targetScrollContainer.scrollTop - nextScrollTop) < 1) {
+    return;
+  }
+
+  if (input.state.releaseTimeout !== null) {
+    window.clearTimeout(input.state.releaseTimeout);
+  }
+
+  input.state.ignoredSide = input.targetSide;
+  input.state.expectedScrollTop = nextScrollTop;
+  input.targetScrollContainer.scrollTop = nextScrollTop;
+  input.state.releaseTimeout = window.setTimeout(() => {
+    if (
+      input.state.ignoredSide === input.targetSide &&
+      Math.abs(input.targetScrollContainer.scrollTop - nextScrollTop) <= 2
+    ) {
+      input.state.ignoredSide = null;
+      input.state.releaseTimeout = null;
+    }
+  }, 80);
 }
 
 function trimInlineReasonPreviewText(reason: string, maxLength: number) {
@@ -641,6 +784,17 @@ export default function TailoredResumeReviewModal({
   );
   const editRailRef = useRef<HTMLDivElement | null>(null);
   const editButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const originalDiffBlockScrollRef = useRef<HTMLDivElement | null>(null);
+  const tailoredDiffBlockScrollRef = useRef<HTMLDivElement | null>(null);
+  const originalDiffBlockRowRefs = useRef(new Map<number, HTMLDivElement>());
+  const tailoredDiffBlockRowRefs = useRef(new Map<number, HTMLDivElement>());
+  const diffBlockScrollSyncStateRef =
+    useRef<TailoredResumeDiffBlockScrollSyncState>({
+      expectedScrollTop: 0,
+      frame: null,
+      ignoredSide: null,
+      releaseTimeout: null,
+    });
   const displayNameInputRef = useRef<HTMLInputElement | null>(null);
   const devInspectorCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const expandedReasonCloseButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -649,6 +803,83 @@ export default function TailoredResumeReviewModal({
   const aiRefinementTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const lastPreviewRecoveryRecordIdRef = useRef<string | null>(null);
   const thesisPopoverRef = useRef<HTMLDivElement | null>(null);
+
+  function registerDiffBlockRowElement(
+    side: TailoredResumeDiffBlockSide,
+    index: number,
+    element: HTMLDivElement | null,
+  ) {
+    const rowRefs =
+      side === "original"
+        ? originalDiffBlockRowRefs.current
+        : tailoredDiffBlockRowRefs.current;
+
+    if (element) {
+      rowRefs.set(index, element);
+      return;
+    }
+
+    rowRefs.delete(index);
+  }
+
+  function handleDiffBlockScroll(sourceSide: TailoredResumeDiffBlockSide) {
+    const state = diffBlockScrollSyncStateRef.current;
+    const sourceScrollContainer =
+      sourceSide === "original"
+        ? originalDiffBlockScrollRef.current
+        : tailoredDiffBlockScrollRef.current;
+
+    if (!sourceScrollContainer) {
+      return;
+    }
+
+    if (state.ignoredSide === sourceSide) {
+      if (Math.abs(sourceScrollContainer.scrollTop - state.expectedScrollTop) <= 2) {
+        return;
+      }
+
+      clearDiffBlockScrollSyncGuard(state);
+    }
+
+    if (state.frame !== null) {
+      window.cancelAnimationFrame(state.frame);
+    }
+
+    state.frame = window.requestAnimationFrame(() => {
+      const latestState = diffBlockScrollSyncStateRef.current;
+      const latestSourceScrollContainer =
+        sourceSide === "original"
+          ? originalDiffBlockScrollRef.current
+          : tailoredDiffBlockScrollRef.current;
+      const targetSide: TailoredResumeDiffBlockSide =
+        sourceSide === "original" ? "tailored" : "original";
+      const targetScrollContainer =
+        targetSide === "original"
+          ? originalDiffBlockScrollRef.current
+          : tailoredDiffBlockScrollRef.current;
+
+      latestState.frame = null;
+
+      if (!latestSourceScrollContainer || !targetScrollContainer) {
+        return;
+      }
+
+      syncDiffBlockScrollToAnalogousRow({
+        sourceRowElements:
+          sourceSide === "original"
+            ? originalDiffBlockRowRefs.current
+            : tailoredDiffBlockRowRefs.current,
+        sourceScrollContainer: latestSourceScrollContainer,
+        state: latestState,
+        targetRowElements:
+          targetSide === "original"
+            ? originalDiffBlockRowRefs.current
+            : tailoredDiffBlockRowRefs.current,
+        targetScrollContainer,
+        targetSide,
+      });
+    });
+  }
 
   function selectEdit(
     editId: string,
@@ -876,6 +1107,26 @@ export default function TailoredResumeReviewModal({
         : [],
     [selectedEdit],
   );
+  useEffect(() => {
+    const state = diffBlockScrollSyncStateRef.current;
+
+    clearDiffBlockScrollSyncGuard(state);
+
+    if (originalDiffBlockScrollRef.current) {
+      originalDiffBlockScrollRef.current.scrollTop = 0;
+    }
+
+    if (tailoredDiffBlockScrollRef.current) {
+      tailoredDiffBlockScrollRef.current.scrollTop = 0;
+    }
+  }, [selectedEdit?.editId]);
+  useEffect(() => {
+    const state = diffBlockScrollSyncStateRef.current;
+
+    return () => {
+      clearDiffBlockScrollSyncGuard(state);
+    };
+  }, []);
   const interactiveFocusQuery = useMemo(
     () =>
       selectedEdit
@@ -1832,21 +2083,33 @@ export default function TailoredResumeReviewModal({
                     Original block
                   </div>
                   {diffRows.length > 0 ? (
-                    <div className="app-scrollbar min-h-0 flex-1 overflow-auto overscroll-contain">
+                    <div
+                      className="app-scrollbar min-h-0 flex-1 overflow-auto overscroll-contain"
+                      data-tailor-resume-diff-scroll="original"
+                      onScroll={() => handleDiffBlockScroll("original")}
+                      ref={originalDiffBlockScrollRef}
+                    >
                       {diffRows.map((row, index) => (
-                        <DiffCell
+                        <div
+                          data-tailor-resume-diff-row={index}
                           key={`original-${index}`}
-                          lineNumber={row.originalLineNumber}
-                          segments={row.originalSegments}
-                          text={row.originalText}
-                          tone={
-                            row.type === "added"
-                              ? "context"
-                              : row.type === "modified"
-                                ? "modified"
-                                : row.type
+                          ref={(element) =>
+                            registerDiffBlockRowElement("original", index, element)
                           }
-                        />
+                        >
+                          <DiffCell
+                            lineNumber={row.originalLineNumber}
+                            segments={row.originalSegments}
+                            text={row.originalText}
+                            tone={
+                              row.type === "added"
+                                ? "context"
+                                : row.type === "modified"
+                                  ? "modified"
+                                  : row.type
+                            }
+                          />
+                        </div>
                       ))}
                     </div>
                   ) : (
@@ -1877,21 +2140,33 @@ export default function TailoredResumeReviewModal({
                     Tailored block
                   </div>
                   {diffRows.length > 0 ? (
-                    <div className="app-scrollbar min-h-0 flex-1 overflow-auto overscroll-contain">
+                    <div
+                      className="app-scrollbar min-h-0 flex-1 overflow-auto overscroll-contain"
+                      data-tailor-resume-diff-scroll="tailored"
+                      onScroll={() => handleDiffBlockScroll("tailored")}
+                      ref={tailoredDiffBlockScrollRef}
+                    >
                       {diffRows.map((row, index) => (
-                        <DiffCell
+                        <div
+                          data-tailor-resume-diff-row={index}
                           key={`modified-${index}`}
-                          lineNumber={row.modifiedLineNumber}
-                          segments={row.modifiedSegments}
-                          text={row.modifiedText}
-                          tone={
-                            row.type === "removed"
-                              ? "context"
-                              : row.type === "modified"
-                                ? "modified"
-                                : row.type
+                          ref={(element) =>
+                            registerDiffBlockRowElement("tailored", index, element)
                           }
-                        />
+                        >
+                          <DiffCell
+                            lineNumber={row.modifiedLineNumber}
+                            segments={row.modifiedSegments}
+                            text={row.modifiedText}
+                            tone={
+                              row.type === "removed"
+                                ? "context"
+                                : row.type === "modified"
+                                  ? "modified"
+                                  : row.type
+                            }
+                          />
+                        </div>
                       ))}
                     </div>
                   ) : (

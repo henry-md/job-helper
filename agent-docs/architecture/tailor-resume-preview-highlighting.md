@@ -13,6 +13,7 @@ Implementation:
 - Each changed block is rebuilt from `beforeLatexCode` vs `afterLatexCode` with `buildTailoredResumeDiffRows(...)`.
 - Added-only rows become green highlights; modified rows become amber highlights over just the added/replacement text.
 - The in-app interactive renderer is separate from the highlighted PDF. It draws browser overlays on top of the clean compiled PDF, keeps all currently active segment diffs visible at once, and treats clicking an edit card as a temporary focus event that scrolls to the block and pulses the overlay without changing the steady highlight set.
+- The review modal's original/tailored LaTeX block panes sync vertical scrolling by diff row index. The source pane's top visible row and relative offset inside that row drive the other pane, with a short programmatic-scroll guard to avoid feedback loops. This keeps analogous rows lined up without requiring model output changes.
 
 Multi-line highlight rule:
 
