@@ -131,6 +131,8 @@ test("buildTailorResumeImplementationSystemPrompt injects retry feedback", () =>
 
   assert.match(prompt, /Previous implementation feedback:/);
   assert.match(prompt, /Unknown segment returned/);
+  assert.match(prompt, /Do not change dates of experience/i);
+  assert.match(prompt, /punctuation, separators, capitalization, or link text/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 

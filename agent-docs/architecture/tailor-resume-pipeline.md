@@ -28,6 +28,7 @@ Step 3. Generate block-scoped edits
 - The implementation stage takes the accepted plan plus any user-confirmed learnings and returns exact LaTeX replacements for only the targeted segments.
 - Failures here should retry the block-edit stage rather than forcing the model to rethink the whole thesis.
 - The goal is segment-safe replacements that preserve local LaTeX structure.
+- Block replacements should not polish unrelated details such as punctuation, dates of experience, employers, titles, metrics, separators, capitalization, or links.
 
 Step 4. Condense edits to keep page size from growing
 - If the tailored preview exceeds the source resume's page count, run a compaction/refinement loop over the edited blocks only.
