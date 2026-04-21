@@ -4,7 +4,7 @@ Current product slice:
 - Public `/` page handles Google sign-in.
 - Protected `/dashboard` page shows counts/recent applications and the intake form.
 - `/dashboard` also includes a Tailor Resume tab where each signed-in user can save one resume file plus a draft job description for later tailoring work.
-- `/dashboard?tab=settings` exposes per-user AI prompt settings plus Tailor Resume generation guardrails so users can inspect and edit the live templates and page-count behavior that drive extraction and resume-generation flows.
+- `/dashboard?tab=settings` exposes per-user AI prompt settings plus Tailor Resume generation guardrails so users can inspect and edit the live templates, Step 2 follow-up-question behavior, and page-count behavior that drive extraction and resume-generation flows.
 - Important dashboard verification state is URL-addressable with `?tab=...`; currently `/dashboard?tab=tailor` opens the Tailor Resume view directly for screenshot verification, and `/dashboard?tab=tailor&tailoredResumeId=<id>` opens the saved tailored-resume review modal.
 - Uploading a resume now triggers an OpenAI extraction pass that returns LaTeX directly, then the dashboard lets the user edit that LaTeX side-by-side with the rendered PDF preview.
 - Users upload one or more screenshots, the app extracts draft fields with OpenAI, then saves screenshots + one `JobApplication`.

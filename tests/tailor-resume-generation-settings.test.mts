@@ -7,6 +7,7 @@ import {
 
 test("createDefaultTailorResumeGenerationSettings enables page-count protection", () => {
   assert.deepEqual(createDefaultTailorResumeGenerationSettings(), {
+    allowTailorResumeFollowUpQuestions: true,
     preventPageCountIncrease: true,
   });
 });
@@ -14,9 +15,23 @@ test("createDefaultTailorResumeGenerationSettings enables page-count protection"
 test("mergeTailorResumeGenerationSettings keeps explicit saved overrides", () => {
   assert.deepEqual(
     mergeTailorResumeGenerationSettings({
+      allowTailorResumeFollowUpQuestions: false,
       preventPageCountIncrease: false,
     }),
     {
+      allowTailorResumeFollowUpQuestions: false,
+      preventPageCountIncrease: false,
+    },
+  );
+});
+
+test("mergeTailorResumeGenerationSettings defaults missing follow-up toggle on", () => {
+  assert.deepEqual(
+    mergeTailorResumeGenerationSettings({
+      preventPageCountIncrease: false,
+    }),
+    {
+      allowTailorResumeFollowUpQuestions: true,
       preventPageCountIncrease: false,
     },
   );

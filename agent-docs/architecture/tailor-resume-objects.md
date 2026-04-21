@@ -96,7 +96,7 @@ Tailor Resume object model:
 - Files: `lib/tailor-resume-generation-settings.ts`, `lib/tailor-resume-types.ts`
 - Stored under `profile.generationSettings`.
 - This keeps per-user boolean generation guardrails that are not prompt text themselves.
-- The current setting is whether tailoring should automatically reject page-count growth by running a compaction follow-up pass when needed.
+- Current settings include whether Step 2 may pause to ask follow-up questions, and whether tailoring should automatically reject page-count growth by running a compaction follow-up pass when needed.
 - These values are editable from `/dashboard?tab=settings`.
 
 9. User Memory (`TailorResumeUserMemory`)
@@ -128,6 +128,7 @@ Tailoring generation:
   - an optional follow-up questioning pass that can pause the flow and ask the user a few high-value background questions before implementation
   - an implementation pass that sees only the selected blocks and translates the approved plaintext plan plus any compressed user learnings back into block-local LaTeX replacements
 - The questioning pass should stay rare. It should only ask when the answer would materially improve the tailored resume, cannot already be inferred from the current resume, and is adjacent enough to existing resume text that the experience is plausibly already there.
+- If the follow-up-question guardrail is turned off, the flow skips interactive questioning and passes `USER.md` memory as non-interactive context to planning and implementation.
 - When questioning does happen, persist only a compact summary of the learnings for the next model stage rather than forwarding the full chat transcript.
 - Existing `USER.md` memory can be copied into the compact learning summary when it answers a planned edit's factual gap; new durable facts from user answers can be written back to `USER.md` through patch operations.
 - When the page-count guardrail is enabled and the compiled tailored preview exceeds the original resume's page count, the flow runs a third conditional stage:

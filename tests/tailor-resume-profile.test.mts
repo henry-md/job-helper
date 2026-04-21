@@ -70,6 +70,10 @@ test("parseTailorResumeProfile reads the current LaTeX-only shape", () => {
     "string",
   );
   assert.equal(
+    profile.generationSettings.values.allowTailorResumeFollowUpQuestions,
+    true,
+  );
+  assert.equal(
     profile.generationSettings.values.preventPageCountIncrease,
     true,
   );
@@ -126,6 +130,10 @@ test("parseTailorResumeProfile merges saved prompt overrides onto the defaults",
     "string",
   );
   assert.equal(
+    profile.generationSettings.values.allowTailorResumeFollowUpQuestions,
+    true,
+  );
+  assert.equal(
     profile.generationSettings.values.preventPageCountIncrease,
     true,
   );
@@ -145,6 +153,10 @@ test("emptyTailorResumeProfile defaults to an empty LaTeX draft", () => {
     "string",
   );
   assert.equal(
+    profile.generationSettings.values.allowTailorResumeFollowUpQuestions,
+    true,
+  );
+  assert.equal(
     profile.generationSettings.values.preventPageCountIncrease,
     true,
   );
@@ -158,6 +170,7 @@ test("parseTailorResumeProfile keeps saved generation settings", () => {
     generationSettings: {
       updatedAt: "2026-04-20T12:00:00.000Z",
       values: {
+        allowTailorResumeFollowUpQuestions: false,
         preventPageCountIncrease: false,
       },
     },

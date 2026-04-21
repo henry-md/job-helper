@@ -16,8 +16,11 @@ Step 1. Generate plaintext generalized edits
 
 Step 2. Ask user clarifications if useful
 - This stage is optional and should keep a high threshold.
+- The settings page has a per-user generation guardrail that controls whether this stage is allowed to pause and ask the user questions. It defaults on. When turned off, generation skips interactive questions and proceeds with the saved resume plus `USER.md` memory as non-interactive context.
 - The stage receives the logged-in user's DB-backed `USER.md` memory and should use it to avoid asking repetitive questions about already-confirmed experience, non-experience, preferences, or constraints.
 - Ask one question at a time only when a grounded answer could materially improve an already-adjacent resume block.
+- Questions should concisely state the job-description signal, the resume gap, and 1-2 brief examples of strong answer shapes tailored to that job-description signal.
+- Technology questions should only cover close neighbors of resume-supported experience that also appear in the job description, such as a framework adjacent to strong JavaScript experience or C adjacent to listed C++ experience.
 - Store the questioning agenda, question budget, and learned facts mapped back to target `segmentId`s so later stages can use them surgically.
 - When the user's answer reveals durable context likely to matter later, the interview tool may submit `USER.md` markdown patch operations. Normal additions should append under a chosen heading path; restructuring should use exact-match replace/insert/delete operations. Failed exact matches are fed back to the model for a retry instead of allowing full-document replacement.
 

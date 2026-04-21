@@ -1,9 +1,11 @@
 export type TailorResumeGenerationSettings = {
+  allowTailorResumeFollowUpQuestions: boolean;
   preventPageCountIncrease: boolean;
 };
 
 export function createDefaultTailorResumeGenerationSettings(): TailorResumeGenerationSettings {
   return {
+    allowTailorResumeFollowUpQuestions: true,
     preventPageCountIncrease: true,
   };
 }
@@ -21,6 +23,10 @@ export function mergeTailorResumeGenerationSettings(
   >;
 
   return {
+    allowTailorResumeFollowUpQuestions:
+      typeof candidateSettings.allowTailorResumeFollowUpQuestions === "boolean"
+        ? candidateSettings.allowTailorResumeFollowUpQuestions
+        : fallback.allowTailorResumeFollowUpQuestions,
     preventPageCountIncrease:
       typeof candidateSettings.preventPageCountIncrease === "boolean"
         ? candidateSettings.preventPageCountIncrease

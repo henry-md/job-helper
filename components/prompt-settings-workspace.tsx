@@ -22,6 +22,8 @@ type PromptSettingsResponse = {
   userMarkdown?: TailorResumeUserMarkdownState;
 };
 
+type GenerationSettingKey = keyof TailorResumeProfile["generationSettings"]["values"];
+
 const promptFieldDefinitions = [
   {
     description:
@@ -432,14 +434,17 @@ export default function PromptSettingsWorkspace({
     }
   }
 
-  async function updatePreventPageCountIncrease(nextValue: boolean) {
+  async function updateGenerationSetting(
+    key: GenerationSettingKey,
+    nextValue: boolean,
+  ) {
     const previousGenerationSettings = generationSettings;
 
     setGenerationSettings((currentValue) => ({
       ...currentValue,
       values: {
         ...currentValue.values,
-        preventPageCountIncrease: nextValue,
+        [key]: nextValue,
       },
     }));
     setIsSavingGenerationSettings(true);
@@ -449,7 +454,7 @@ export default function PromptSettingsWorkspace({
         body: JSON.stringify({
           action: "saveGenerationSettings",
           generationSettings: {
-            preventPageCountIncrease: nextValue,
+            [key]: nextValue,
           },
         }),
         headers: {
@@ -590,8 +595,9 @@ export default function PromptSettingsWorkspace({
                 ) : null}
               </div>
               <p className="mt-2 text-sm leading-6 text-zinc-400">
-                Durable resume context used by the tailoring follow-up step to
-                avoid repetitive questions and preserve reusable user facts.
+                Durable resume context used by the tailoring follow-up step and
+                by non-interactive tailoring when questions are disabled. This
+                section starts collapsed by default to keep settings tidy.
               </p>
             </div>
             <span
@@ -652,59 +658,123 @@ export default function PromptSettingsWorkspace({
         </section>
 
         <section className="rounded-[1.35rem] border border-white/8 bg-black/20 p-4 sm:p-5">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div className="max-w-3xl">
-              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                Generation Guardrail
-              </p>
-              <h3 className="mt-2 text-base font-semibold text-zinc-100">
-                Edits should not increase page count
-              </h3>
-              <p className="mt-2 text-sm leading-6 text-zinc-400">
-                When enabled, tailoring automatically runs a highlighted
-                follow-up compaction pass if the new preview exceeds the
-                original resume&apos;s page count.
-              </p>
+          <div className="max-w-3xl">
+            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+              Generation Guardrails
+            </p>
+            <h3 className="mt-2 text-base font-semibold text-zinc-100">
+              Tailoring behavior
+            </h3>
+          </div>
+
+          <div className="mt-4 grid gap-4">
+            <div className="flex flex-col gap-4 border-b border-white/8 pb-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="max-w-3xl">
+                <h4 className="text-sm font-semibold text-zinc-100">
+                  Allow Step 2 follow-up questions
+                </h4>
+                <p className="mt-2 text-sm leading-6 text-zinc-400">
+                  When enabled, the model may pause after planning to ask one
+                  concise question. When disabled, it skips the question step and
+                  continues with USER.md plus the saved resume.
+                </p>
+              </div>
+
+              <button
+                aria-checked={
+                  generationSettings.values.allowTailorResumeFollowUpQuestions
+                }
+                className={`inline-flex min-w-[10.5rem] items-center justify-between gap-3 rounded-full border px-4 py-3 text-sm font-medium transition ${
+                  generationSettings.values.allowTailorResumeFollowUpQuestions
+                    ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-200"
+                    : "border-white/10 bg-white/[0.04] text-zinc-300"
+                } ${isSavingGenerationSettings ? "cursor-wait opacity-70" : "hover:border-white/20 hover:bg-white/[0.07]"}`}
+                disabled={isSavingGenerationSettings}
+                onClick={() =>
+                  void updateGenerationSetting(
+                    "allowTailorResumeFollowUpQuestions",
+                    !generationSettings.values.allowTailorResumeFollowUpQuestions,
+                  )
+                }
+                role="switch"
+                type="button"
+              >
+                <span className="text-left">
+                  {generationSettings.values.allowTailorResumeFollowUpQuestions
+                    ? "Enabled"
+                    : "Disabled"}
+                </span>
+                <span
+                  aria-hidden="true"
+                  className={`relative h-6 w-11 rounded-full transition ${
+                    generationSettings.values.allowTailorResumeFollowUpQuestions
+                      ? "bg-emerald-300/35"
+                      : "bg-white/12"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-1/2 h-[1.125rem] w-[1.125rem] -translate-y-1/2 rounded-full bg-white shadow-[0_4px_14px_rgba(0,0,0,0.3)] transition ${
+                      generationSettings.values.allowTailorResumeFollowUpQuestions
+                        ? "left-[1.35rem]"
+                        : "left-1"
+                    }`}
+                  />
+                </span>
+              </button>
             </div>
 
-            <button
-              aria-checked={generationSettings.values.preventPageCountIncrease}
-              className={`inline-flex min-w-[10.5rem] items-center justify-between gap-3 rounded-full border px-4 py-3 text-sm font-medium transition ${
-                generationSettings.values.preventPageCountIncrease
-                  ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-200"
-                  : "border-white/10 bg-white/[0.04] text-zinc-300"
-              } ${isSavingGenerationSettings ? "cursor-wait opacity-70" : "hover:border-white/20 hover:bg-white/[0.07]"}`}
-              disabled={isSavingGenerationSettings}
-              onClick={() =>
-                void updatePreventPageCountIncrease(
-                  !generationSettings.values.preventPageCountIncrease,
-                )
-              }
-              role="switch"
-              type="button"
-            >
-              <span className="text-left">
-                {generationSettings.values.preventPageCountIncrease
-                  ? "Enabled"
-                  : "Disabled"}
-              </span>
-              <span
-                aria-hidden="true"
-                className={`relative h-6 w-11 rounded-full transition ${
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="max-w-3xl">
+                <h4 className="text-sm font-semibold text-zinc-100">
+                  Edits should not increase page count
+                </h4>
+                <p className="mt-2 text-sm leading-6 text-zinc-400">
+                  When enabled, tailoring automatically runs a highlighted
+                  follow-up compaction pass if the new preview exceeds the
+                  original resume&apos;s page count.
+                </p>
+              </div>
+
+              <button
+                aria-checked={generationSettings.values.preventPageCountIncrease}
+                className={`inline-flex min-w-[10.5rem] items-center justify-between gap-3 rounded-full border px-4 py-3 text-sm font-medium transition ${
                   generationSettings.values.preventPageCountIncrease
-                    ? "bg-emerald-300/35"
-                    : "bg-white/12"
-                }`}
+                    ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-200"
+                    : "border-white/10 bg-white/[0.04] text-zinc-300"
+                } ${isSavingGenerationSettings ? "cursor-wait opacity-70" : "hover:border-white/20 hover:bg-white/[0.07]"}`}
+                disabled={isSavingGenerationSettings}
+                onClick={() =>
+                  void updateGenerationSetting(
+                    "preventPageCountIncrease",
+                    !generationSettings.values.preventPageCountIncrease,
+                  )
+                }
+                role="switch"
+                type="button"
               >
+                <span className="text-left">
+                  {generationSettings.values.preventPageCountIncrease
+                    ? "Enabled"
+                    : "Disabled"}
+                </span>
                 <span
-                  className={`absolute top-1/2 h-[1.125rem] w-[1.125rem] -translate-y-1/2 rounded-full bg-white shadow-[0_4px_14px_rgba(0,0,0,0.3)] transition ${
+                  aria-hidden="true"
+                  className={`relative h-6 w-11 rounded-full transition ${
                     generationSettings.values.preventPageCountIncrease
-                      ? "left-[1.35rem]"
-                      : "left-1"
+                      ? "bg-emerald-300/35"
+                      : "bg-white/12"
                   }`}
-                />
-              </span>
-            </button>
+                >
+                  <span
+                    className={`absolute top-1/2 h-[1.125rem] w-[1.125rem] -translate-y-1/2 rounded-full bg-white shadow-[0_4px_14px_rgba(0,0,0,0.3)] transition ${
+                      generationSettings.values.preventPageCountIncrease
+                        ? "left-[1.35rem]"
+                        : "left-1"
+                    }`}
+                  />
+                </span>
+              </button>
+            </div>
           </div>
         </section>
 

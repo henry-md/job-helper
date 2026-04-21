@@ -839,11 +839,18 @@ async function handleTailorResumeGeneration(
     preparation.rawProfile,
     preparation.lockedLinks,
   );
+  const allowFollowUpQuestions =
+    preparation.rawProfile.generationSettings.values
+      .allowTailorResumeFollowUpQuestions;
+  const userMarkdownForNonInteractiveRun = allowFollowUpQuestions
+    ? undefined
+    : await readTailorResumeUserMarkdown(userId);
   const planningStage = await planTailoredResume({
     annotatedLatexCode: processedBaseAnnotatedLatex.latexCode,
     jobDescription: preparation.jobDescription,
     onStepEvent: options.onStepEvent,
     promptSettings: preparation.rawProfile.promptSettings.values,
+    userMarkdown: userMarkdownForNonInteractiveRun,
   });
 
   if (!planningStage.ok) {
@@ -880,7 +887,9 @@ async function handleTailorResumeGeneration(
   let planningResult = planningStage.planningResult;
   let accumulatedModelDurationMs = planningStage.generationDurationMs;
   let userMarkdownAfterQuestioning: TailorResumeUserMarkdownState | undefined;
-  if (planningResult.changes.length > 0) {
+  let userMarkdownForImplementation = userMarkdownForNonInteractiveRun;
+
+  if (planningResult.changes.length > 0 && allowFollowUpQuestions) {
     const questioningStartedAt = Date.now();
     const userMarkdownBeforeQuestioning = await readTailorResumeUserMarkdown(userId);
     let questioningResult: Awaited<ReturnType<typeof advanceTailorResumeQuestioning>>;
@@ -934,6 +943,8 @@ async function handleTailorResumeGeneration(
     }
 
     userMarkdownAfterQuestioning = userMarkdownSaveResult.userMarkdown;
+    userMarkdownForImplementation = undefined;
+
     if (questioningResult.action === "ask") {
       await options.onStepEvent?.({
         attempt: 1,
@@ -1049,6 +1060,18 @@ async function handleTailorResumeGeneration(
       stepNumber: 2,
       summary: "No need to ask the user any follow-up questions",
     });
+  } else if (planningResult.changes.length > 0) {
+    await options.onStepEvent?.({
+      attempt: null,
+      detail:
+        "Follow-up questions are disabled in settings, so generation will continue using USER.md and the existing resume evidence.",
+      durationMs: 0,
+      retrying: false,
+      status: "skipped",
+      stepCount: 4,
+      stepNumber: 2,
+      summary: "Skipped follow-up questions by setting",
+    });
   } else {
     await options.onStepEvent?.({
       attempt: null,
@@ -1091,6 +1114,7 @@ async function handleTailorResumeGeneration(
     planningResult,
     planningSnapshot: planningStage.planningSnapshot,
     promptSettings: preparation.rawProfile.promptSettings.values,
+    userMarkdown: userMarkdownForImplementation,
   });
 
   return finalizeTailorResumeGeneration({
@@ -1105,7 +1129,7 @@ async function handleTailorResumeGeneration(
     rawProfile: preparation.rawProfile,
     tailoringResult,
     userId,
-    userMarkdown: userMarkdownAfterQuestioning,
+    userMarkdown: userMarkdownAfterQuestioning ?? userMarkdownForImplementation,
   });
 }
 
@@ -1626,6 +1650,12 @@ function readGenerationSettingsUpdates(value: unknown) {
   >;
   const updates: Partial<TailorResumeGenerationSettings> = {};
   let changeCount = 0;
+
+  if (typeof rawUpdates.allowTailorResumeFollowUpQuestions === "boolean") {
+    updates.allowTailorResumeFollowUpQuestions =
+      rawUpdates.allowTailorResumeFollowUpQuestions;
+    changeCount += 1;
+  }
 
   if (typeof rawUpdates.preventPageCountIncrease === "boolean") {
     updates.preventPageCountIncrease = rawUpdates.preventPageCountIncrease;
