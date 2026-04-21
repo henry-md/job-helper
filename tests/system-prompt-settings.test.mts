@@ -54,6 +54,16 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 
+test("buildTailorResumePlanningSystemPrompt asks for job numbers as identifiers", () => {
+  const prompt = buildTailorResumePlanningSystemPrompt(
+    createDefaultSystemPromptSettings(),
+    {},
+  );
+
+  assert.match(prompt, /jobIdentifier should prefer a visible requisition, job, posting, or reference number\/id/i);
+  assert.match(prompt, /without labels like "Job ID:"/i);
+});
+
 test("buildTailorResumeInterviewSystemPrompt injects retry feedback", () => {
   const prompt = buildTailorResumeInterviewSystemPrompt(
     createDefaultSystemPromptSettings(),

@@ -39,6 +39,7 @@ import {
 import {
   buildTailoredResumePreviewPdfUrl,
 } from "@/lib/tailored-resume-preview-url";
+import { buildTailoredResumeDownloadFilename } from "@/lib/tailored-resume-download-filename";
 import { stripTailorResumeSegmentIds } from "@/lib/tailor-resume-segmentation";
 
 function resolveSelectedEdit(
@@ -131,17 +132,6 @@ function resolveAcceptedBlockChoice(input: {
   }
 
   return null;
-}
-
-function buildTailoredResumeDownloadFilename(displayName: string) {
-  const normalizedBaseName = displayName
-    .trim()
-    .replace(/[\\/:*?"<>|]/g, "-")
-    .replace(/\s+/g, " ")
-    .replace(/-+/g, "-")
-    .replace(/[ .-]+$/g, "");
-
-  return `${normalizedBaseName || "tailored-resume"}.pdf`;
 }
 
 function DiffCell({
@@ -1735,7 +1725,7 @@ export default function TailoredResumeReviewModal({
       const downloadLink = document.createElement("a");
 
       downloadLink.href = downloadUrl;
-      downloadLink.download = buildTailoredResumeDownloadFilename(record.displayName);
+      downloadLink.download = buildTailoredResumeDownloadFilename(record);
       downloadLink.style.display = "none";
       document.body.appendChild(downloadLink);
       downloadLink.click();

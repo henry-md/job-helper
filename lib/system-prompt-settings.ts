@@ -171,7 +171,7 @@ const defaultSystemPromptSettings = {
     "Metadata rules:\n" +
     "1. companyName should be the employer if identifiable.\n" +
     "2. positionTitle should be the role title if identifiable.\n" +
-    "3. jobIdentifier should be the best short disambiguator for this job: prefer the team name, otherwise location, otherwise a brief identifying phrase.\n" +
+    "3. jobIdentifier should prefer a visible requisition, job, posting, or reference number/id when present, returning only the short id without labels like \"Job ID:\". If no job number is visible, use the best short disambiguator for this job: prefer the team name, otherwise location, otherwise a brief identifying phrase.\n" +
     "4. displayName should be the user-facing saved name, preferably \"Company - Role\".\n\n" +
     "Thesis rules:\n" +
     "1. Return thesis.jobDescriptionFocus and thesis.resumeChanges.\n" +

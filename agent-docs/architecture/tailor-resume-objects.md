@@ -55,6 +55,7 @@ Tailor Resume object model:
     - planned `segmentId` edits
     - desired plaintext rewrites per block
     - the planner thesis + metadata
+    - `jobIdentifier`, which should prefer a visible job/requisition/posting id and fall back to the usual short disambiguator when no job number is available
   - the saved OpenAI debug trace for developer inspection, including:
     - the full prompt for the stage-1 plaintext planning call
     - the full JSON output returned by the stage-1 call
