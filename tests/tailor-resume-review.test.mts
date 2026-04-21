@@ -68,6 +68,27 @@ test("buildTailoredResumeDiffRows pairs nearby removals and additions as modifie
   ]);
 });
 
+test("buildTailoredResumeDiffRows keeps shared LaTeX commands out of changed spans", () => {
+  const rows = buildTailoredResumeDiffRows(
+    String.raw`\resumeitem{conceived and led ad similarity detection service, authoring white paper and deploying \textbf{p-hashing to 359K ads across 20 clients}}`,
+    String.raw`  \resumeitem{designed and deployed a high-throughput ad similarity detection service using p-hashing, processing 359K ads across 20 clients to enable scalable similarity queries.}`,
+  );
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.type, "modified");
+  assert.deepEqual(rows[0]?.modifiedSegments?.slice(0, 2), [
+    { text: "\\resumeitem{", type: "context" },
+    { text: "designed and deployed a high-throughput", type: "added" },
+  ]);
+  assert.equal(
+    rows[0]?.modifiedSegments?.some(
+      (segment) =>
+        segment.type === "added" && segment.text.includes("\\resumeitem"),
+    ),
+    false,
+  );
+});
+
 test("buildTailoredResumeDiffRows coalesces long modified ranges into one inline highlight span", () => {
   const rows = buildTailoredResumeDiffRows(
     String.raw`\resumeitem{Created full-stack dashboard for project management with \textbf{React (Next.js) and JavaScript}, with user authentication}`,

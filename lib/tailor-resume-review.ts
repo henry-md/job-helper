@@ -76,6 +76,28 @@ function readVisibleTailoredResumeDiffContextText(value: string) {
     .trim();
 }
 
+const structuralTailoredResumeDiffBridgeCommands = new Set([
+  "\\begin",
+  "\\descline",
+  "\\end",
+  "\\entryheading",
+  "\\item",
+  "\\labelline",
+  "\\projectheading",
+  "\\resumeitem",
+  "\\resumeSection",
+]);
+
+function hasStructuralTailoredResumeDiffContext(text: string) {
+  return tokenizeTailoredResumeInlineDiff(text).some((token) => {
+    if (token === "\\\\") {
+      return true;
+    }
+
+    return structuralTailoredResumeDiffBridgeCommands.has(token);
+  });
+}
+
 function isSubstantiveTailoredResumeDiffContext(text: string) {
   const visibleText = readVisibleTailoredResumeDiffContextText(text);
 
@@ -139,7 +161,10 @@ function coalesceTailoredResumeDiffHighlightRange(
         .map((candidate) => candidate.text)
         .join("");
 
-      if (isSubstantiveTailoredResumeDiffContext(bridgeText)) {
+      if (
+        hasStructuralTailoredResumeDiffContext(bridgeText) ||
+        isSubstantiveTailoredResumeDiffContext(bridgeText)
+      ) {
         break;
       }
 
