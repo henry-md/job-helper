@@ -18,6 +18,16 @@ type TailorResumeSummary = {
 
 let isCaptureInFlight = false;
 
+async function configureSidePanelAction() {
+  try {
+    await chrome.sidePanel.setPanelBehavior({
+      openPanelOnActionClick: true,
+    });
+  } catch (error) {
+    console.error("Failed to configure the Job Helper side panel.", error);
+  }
+}
+
 function injectOverlayIntoPage(text: string, tone: OverlayTone) {
   const existingOverlay = document.getElementById("job-helper-command-banner");
   const overlay =
@@ -433,7 +443,10 @@ async function runCaptureFlow() {
   }
 }
 
+void configureSidePanelAction();
+
 chrome.runtime.onInstalled.addListener(() => {
+  void configureSidePanelAction();
   console.log("Job Helper extension installed.");
 });
 
@@ -445,7 +458,11 @@ chrome.commands.onCommand.addListener((command) => {
   void runCaptureFlow();
 });
 
-chrome.runtime.onMessage.addListener((message: unknown) => {
+chrome.runtime.onMessage.addListener((
+  message: unknown,
+  _sender: chrome.runtime.MessageSender,
+  sendResponse: (response?: unknown) => void,
+) => {
   const typedMessage =
     typeof message === "object" && message !== null
       ? (message as { type?: string })
@@ -456,4 +473,5 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
   }
 
   void runCaptureFlow();
+  sendResponse({ ok: true });
 });

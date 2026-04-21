@@ -1,8 +1,6 @@
 :root {
-  color: #f4f7fb;
-  background:
-    radial-gradient(circle at top left, rgba(244, 162, 97, 0.22), transparent 38%),
-    linear-gradient(160deg, #10212a 0%, #0b1216 48%, #05080a 100%);
+  color: #f7fafc;
+  background: #071013;
 }
 
 * {
@@ -13,20 +11,20 @@ body {
   margin: 0;
 }
 
-.popup-shell {
-  width: 380px;
-  min-height: 520px;
-  padding: 18px;
+.side-panel-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  min-height: 100vh;
+  padding: 16px;
+  background:
+    linear-gradient(145deg, rgba(38, 70, 83, 0.9) 0%, rgba(7, 16, 19, 0.96) 46%),
+    #071013;
 }
 
-.panel {
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 24px;
-  background: rgba(10, 15, 18, 0.82);
-  box-shadow:
-    0 22px 60px rgba(0, 0, 0, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  padding: 20px;
+.panel-header {
+  padding: 4px 0 2px;
 }
 
 .eyebrow {
@@ -34,29 +32,59 @@ body {
   color: #f4a261;
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.24em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
 h1 {
-  margin: 10px 0 0;
-  font-size: 30px;
-  line-height: 0.95;
+  margin: 8px 0 0;
+  font-size: 28px;
+  line-height: 1.05;
 }
 
-.lede {
-  margin: 14px 0 0;
-  color: rgba(234, 240, 246, 0.78);
-  line-height: 1.5;
+.action-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(104px, 0.6fr);
+  gap: 8px;
+}
+
+button {
+  min-height: 42px;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.76;
+}
+
+.primary-action {
+  color: #071013;
+  background: #f4a261;
+}
+
+.secondary-action,
+.link-action {
+  color: #f7fafc;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.link-action {
+  width: 100%;
+  min-height: 38px;
 }
 
 .status-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 18px;
   padding: 12px 14px;
-  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
   background: rgba(255, 255, 255, 0.05);
 }
 
@@ -84,12 +112,12 @@ h1 {
   color: rgba(244, 247, 251, 0.92);
   font-size: 14px;
   line-height: 1.4;
+  min-width: 0;
 }
 
 .snapshot-card {
-  margin-top: 18px;
   padding: 16px;
-  border-radius: 18px;
+  border-radius: 8px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.03));
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -98,7 +126,7 @@ h1 {
 .snapshot-card h2 {
   margin: 0;
   font-size: 15px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   text-transform: uppercase;
   color: rgba(244, 247, 251, 0.78);
 }
@@ -118,7 +146,7 @@ h1 {
   color: rgba(244, 162, 97, 0.85);
   font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -131,4 +159,10 @@ h1 {
 
 .wrap-anywhere {
   overflow-wrap: anywhere;
+}
+
+@media (max-width: 340px) {
+  .action-grid {
+    grid-template-columns: 1fr;
+  }
 }

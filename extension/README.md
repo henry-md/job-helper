@@ -1,6 +1,6 @@
 # Job Helper Extension
 
-Vite + React Chrome extension for this repo, with CRXJS-powered hot reload during development.
+Vite + React Chrome extension for this repo, with CRXJS-powered hot reload during development. The extension UI runs in Chrome's native Side Panel.
 
 ## Commands
 
@@ -20,7 +20,7 @@ npm run build
 
 The extension dev server is pinned to `http://localhost:5186`. If `npm run dev` is not running, Chrome will show a service-worker fetch error because the dev loader imports the background script from that local server.
 
-Popup and content-script changes hot-update automatically. Background-script and manifest changes trigger an extension reload, so source edits no longer require manually rebuilding and reloading the extension.
+Side panel and content-script changes hot-update automatically. Background-script and manifest changes trigger an extension reload, so source edits no longer require manually rebuilding and reloading the extension.
 
 ## Production build
 
@@ -28,7 +28,7 @@ Run `npm run build`, then load `/Users/Henry/Developer/job-helper/extension/dist
 
 ## Included pieces
 
-- `src/App.tsx`: popup UI rendered with React.
+- `src/App.tsx`: native side panel UI rendered with React.
 - `src/content.ts`: content script that scrapes structured page evidence and renders the in-page command banner.
 - `src/background.ts`: MV3 service worker entry that handles `Cmd+Shift+S` / `Ctrl+Shift+S`, formats the scraped page context into a job description, and calls `PATCH /api/tailor-resume` with `action: "tailor"`.
 - `manifest.config.ts`: typed Chrome extension manifest source used by CRXJS/Vite.
