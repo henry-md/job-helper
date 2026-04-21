@@ -1,0 +1,5 @@
+Tailor Resume review AI refinement:
+
+- Symptom: a follow-up AI revision could accidentally drift the review UI away from its core comparison, either by diffing against the previous model output or by leaving manual overrides in place so the refreshed preview no longer matched the latest model response.
+- Fix: treat the refinement response as a replacement of the stored model block set. Rebuild `edits` from the original source annotated LaTeX so every `beforeLatexCode` stays anchored to the source resume, every new `afterLatexCode` becomes the latest model output, and the compiled tailored preview refreshes from that new model state. When sending preview screenshots into refinement, capture the same composed preview the user sees, including the review highlight overlays, and explain the highlight color key in the model context.
+- Guardrail: the review diff should always remain original-vs-latest-model, even after iterative AI refinement. Use current preview screenshots only as additional model context, not as a new diff baseline.

@@ -84,11 +84,20 @@ Tailor Resume object model:
   - job application extraction
   - resume-to-LaTeX extraction
   - tailored-resume planning
+  - optional tailored-resume follow-up questioning between planning and implementation
   - tailored-resume block generation
   - tailored-resume block refinement / regeneration
+  - automatic page-count compaction when a tailored resume grows beyond the original resume's page count
 - The stored values are editable from `/dashboard?tab=settings`.
 - The prompt strings may include template tokens such as `{{FEEDBACK_BLOCK}}`, `{{RETRY_INSTRUCTIONS}}`, and `{{MAX_ATTEMPTS}}`; runtime code expands those tokens before sending the final instructions to OpenAI.
 - Missing keys fall back to the shipped defaults so older saved profiles remain forward-compatible when new prompt-controlled flows are added.
+
+8. Generation Settings (`TailorResumeGenerationSettingsState`)
+- Files: `lib/tailor-resume-generation-settings.ts`, `lib/tailor-resume-types.ts`
+- Stored under `profile.generationSettings`.
+- This keeps per-user boolean generation guardrails that are not prompt text themselves.
+- The current setting is whether tailoring should automatically reject page-count growth by running a compaction follow-up pass when needed.
+- These values are editable from `/dashboard?tab=settings`.
 
 Current flow:
 
@@ -105,9 +114,14 @@ Current flow:
 Tailoring generation:
 
 - Tailor Resume no longer asks one model call to decide the strategy and write final LaTeX at the same time.
-- The tailoring flow now runs in two stages:
+- The tailoring flow now runs in two required stages plus one optional middle stage:
   - a planning pass that sees whole-resume plaintext plus document-ordered plaintext blocks keyed by `segmentId`
-  - an implementation pass that sees only the selected blocks and translates the approved plaintext plan back into block-local LaTeX replacements
+  - an optional follow-up questioning pass that can pause the flow and ask the user a few high-value background questions before implementation
+  - an implementation pass that sees only the selected blocks and translates the approved plaintext plan plus any compressed user learnings back into block-local LaTeX replacements
+- The questioning pass should stay rare. It should only ask when the answer would materially improve the tailored resume, cannot already be inferred from the current resume, and is adjacent enough to existing resume text that the experience is plausibly already there.
+- When questioning does happen, persist only a compact summary of the learnings for the next model stage rather than forwarding the full chat transcript.
+- When the page-count guardrail is enabled and the compiled tailored preview exceeds the original resume's page count, the flow runs a third conditional stage:
+  - a refinement-style compaction pass that re-prompts only the existing edited blocks, sends highlighted rendered preview screenshots, and retries until the preview fits within the original page count or the attempt budget is exhausted
 - Compile retries stay scoped to the implementation pass so LaTeX escaping and block-boundary fixes do not force the model to rethink the whole editing thesis on every retry.
 
 Important rule:

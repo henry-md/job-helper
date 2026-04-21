@@ -62,8 +62,16 @@ test("parseTailorResumeProfile reads the current LaTeX-only shape", () => {
     "string",
   );
   assert.equal(
+    typeof profile.promptSettings.values.tailorResumeInterview,
+    "string",
+  );
+  assert.equal(
     typeof profile.promptSettings.values.tailorResumeRefinement,
     "string",
+  );
+  assert.equal(
+    profile.generationSettings.values.preventPageCountIncrease,
+    true,
   );
   assert.equal(profile.workspace.isBaseResumeStepComplete, false);
 });
@@ -110,8 +118,16 @@ test("parseTailorResumeProfile merges saved prompt overrides onto the defaults",
     "string",
   );
   assert.equal(
+    typeof profile.promptSettings.values.tailorResumeInterview,
+    "string",
+  );
+  assert.equal(
     typeof profile.promptSettings.values.tailorResumeRefinement,
     "string",
+  );
+  assert.equal(
+    profile.generationSettings.values.preventPageCountIncrease,
+    true,
   );
 });
 
@@ -128,9 +144,117 @@ test("emptyTailorResumeProfile defaults to an empty LaTeX draft", () => {
     typeof profile.promptSettings.values.jobApplicationExtraction,
     "string",
   );
+  assert.equal(
+    profile.generationSettings.values.preventPageCountIncrease,
+    true,
+  );
   assert.equal(profile.resume, null);
   assert.deepEqual(profile.tailoredResumes, []);
   assert.equal(profile.workspace.isBaseResumeStepComplete, false);
+});
+
+test("parseTailorResumeProfile keeps saved generation settings", () => {
+  const profile = parseTailorResumeProfile({
+    generationSettings: {
+      updatedAt: "2026-04-20T12:00:00.000Z",
+      values: {
+        preventPageCountIncrease: false,
+      },
+    },
+  });
+
+  assert.equal(
+    profile.generationSettings.updatedAt,
+    "2026-04-20T12:00:00.000Z",
+  );
+  assert.equal(
+    profile.generationSettings.values.preventPageCountIncrease,
+    false,
+  );
+});
+
+test("parseTailorResumeProfile keeps an active tailoring interview", () => {
+  const profile = parseTailorResumeProfile({
+    workspace: {
+      isBaseResumeStepComplete: true,
+      tailoringInterview: {
+        accumulatedModelDurationMs: 2450,
+        conversation: [
+          {
+            id: "assistant-1",
+            role: "assistant",
+            text: "I have up to 2 quick questions.\n\nWhat scale did this migration reach?",
+          },
+        ],
+        createdAt: "2026-04-20T10:00:00.000Z",
+        generationSourceSnapshot: {
+          latexCode: "\\documentclass{article}",
+          linkState: "[]",
+          lockedLinkState: "[]",
+          resumeStoragePath: "/uploads/resumes/user/resume.pdf",
+          resumeUpdatedAt: "2026-04-20T09:55:00.000Z",
+        },
+        id: "interview-1",
+        jobDescription: "Role text",
+        planningDebug: {
+          outputJson:
+            '{\n  "changes": [\n    {\n      "segmentId": "experience.entry-1.bullet-1",\n      "desiredPlainText": "Tailored bullet",\n      "reason": "Highlights migration ownership."\n    }\n  ]\n}',
+          prompt: "First call prompt",
+          skippedReason: null,
+        },
+        planningResult: {
+          changes: [
+            {
+              desiredPlainText: "Tailored bullet",
+              reason: "Highlights migration ownership.",
+              segmentId: "experience.entry-1.bullet-1",
+            },
+          ],
+          companyName: "OpenAI",
+          displayName: "OpenAI - Research Engineer",
+          jobIdentifier: "Applied research",
+          positionTitle: "Research Engineer",
+          questioningSummary: {
+            agenda: "the migration scope and ownership in the existing platform bullet",
+            askedQuestionCount: 1,
+            debugDecision: "would_ask_without_debug",
+            learnings: [
+              {
+                detail: "No confirmed detail yet.",
+                targetSegmentIds: ["experience.entry-1.bullet-1"],
+                topic: "migration scope",
+              },
+            ],
+            totalQuestionBudget: 2,
+          },
+          thesis: {
+            jobDescriptionFocus: "Research systems delivery",
+            resumeChanges: "Elevates the most relevant platform work.",
+          },
+        },
+        sourceAnnotatedLatexCode:
+          "% JOBHELPER_SEGMENT_ID: experience.entry-1.bullet-1\n\\resumeitem{Original bullet}",
+        updatedAt: "2026-04-20T10:01:00.000Z",
+      },
+      updatedAt: "2026-04-20T10:01:00.000Z",
+    },
+  });
+
+  assert.equal(profile.workspace.tailoringInterview?.id, "interview-1");
+  assert.equal(
+    profile.workspace.tailoringInterview?.planningResult.questioningSummary
+      ?.totalQuestionBudget,
+    2,
+  );
+  assert.equal(
+    profile.workspace.tailoringInterview?.planningResult.questioningSummary
+      ?.debugDecision,
+    "would_ask_without_debug",
+  );
+  assert.equal(
+    profile.workspace.tailoringInterview?.conversation[0]?.role,
+    "assistant",
+  );
 });
 
 test("parseTailorResumeProfile keeps tailored resume metadata and workspace state", () => {

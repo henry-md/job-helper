@@ -328,17 +328,7 @@ function buildTailorResumeInterviewQuestionText(input: {
         ? " Debug mode note: I would not normally ask this, but I’m asking because debug mode is forcing at least one follow-up question."
         : "";
 
-  if (!summary || summary.askedQuestionCount > 1) {
-    return debugSentence ? `${debugSentence.trim()}\n\n${question}` : question;
-  }
-
-  const questionCountLabel =
-    summary.totalQuestionBudget === 1 ? "1 quick question" : `up to ${String(summary.totalQuestionBudget)} quick questions`;
-  const agendaSentence = summary.agenda
-    ? ` I’m trying to clarify ${summary.agenda}.`
-    : "";
-
-  return `I have ${questionCountLabel} that could materially strengthen this tailored resume.${agendaSentence}${debugSentence}\n\n${question}`;
+  return debugSentence ? `${debugSentence.trim()}\n\n${question}` : question;
 }
 
 function readTailorResumeInterviewAttempt(

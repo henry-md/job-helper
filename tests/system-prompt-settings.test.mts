@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildTailorResumePageCountCompactionPrompt,
   buildResumeLatexSystemPrompt,
+  buildTailorResumeInterviewSystemPrompt,
   buildTailorResumeImplementationSystemPrompt,
   buildTailorResumePlanningSystemPrompt,
   buildTailorResumeRefinementSystemPrompt,
@@ -19,7 +21,9 @@ test("mergeSystemPromptSettings preserves defaults for missing keys", () => {
     "Custom planning prompt",
   );
   assert.equal(typeof mergedSettings.resumeLatexExtraction, "string");
+  assert.equal(typeof mergedSettings.tailorResumeInterview, "string");
   assert.equal(typeof mergedSettings.tailorResumeRefinement, "string");
+  assert.equal(typeof mergedSettings.tailorResumePageCountCompaction, "string");
 });
 
 test("buildResumeLatexSystemPrompt injects retry tokens", () => {
@@ -50,6 +54,49 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 
+test("buildTailorResumeInterviewSystemPrompt injects retry feedback", () => {
+  const prompt = buildTailorResumeInterviewSystemPrompt(
+    createDefaultSystemPromptSettings(),
+    {
+      feedback: "The previous interview response changed the question budget.",
+    },
+  );
+
+  assert.match(prompt, /Previous interview feedback:/);
+  assert.match(prompt, /changed the question budget/);
+  assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
+});
+
+test("buildTailorResumeInterviewSystemPrompt requires concise question framing", () => {
+  const prompt = buildTailorResumeInterviewSystemPrompt(
+    createDefaultSystemPromptSettings(),
+    {},
+  );
+
+  assert.match(prompt, /keep the user-facing question concise/i);
+  assert.match(prompt, /name the exact job-description signal/i);
+  assert.match(prompt, /say what kind of answer would improve the resume/i);
+  assert.match(prompt, /metrics, scope, ownership, tools, domain context, or outcomes/i);
+});
+
+test("buildTailorResumeInterviewSystemPrompt injects debug-force instructions", () => {
+  const prompt = buildTailorResumeInterviewSystemPrompt(
+    createDefaultSystemPromptSettings(),
+    {
+      debugForceConversation: true,
+    },
+  );
+
+  assert.match(
+    prompt,
+    /DEBUG_FORCE_CONVERSATION_IN_TAILOR_PIPELINE is enabled/i,
+  );
+  assert.match(prompt, /must ask at least one follow-up question/i);
+  assert.match(prompt, /would_ask_without_debug/);
+  assert.match(prompt, /forced_only/);
+  assert.equal(prompt.includes("{{DEBUG_FORCE_BLOCK}}"), false);
+});
+
 test("buildTailorResumeImplementationSystemPrompt injects retry feedback", () => {
   const prompt = buildTailorResumeImplementationSystemPrompt(
     createDefaultSystemPromptSettings(),
@@ -74,4 +121,22 @@ test("buildTailorResumeRefinementSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /Previous refinement feedback:/);
   assert.match(prompt, /did not compile/);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
+});
+
+test("buildTailorResumePageCountCompactionPrompt injects page count tokens", () => {
+  const prompt = buildTailorResumePageCountCompactionPrompt(
+    createDefaultSystemPromptSettings(),
+    {
+      currentPageCount: 2,
+      targetPageCount: 1,
+    },
+  );
+
+  assert.match(prompt, /keep this resume to a single page/i);
+  assert.match(prompt, /Single page is a hard requirement\./i);
+  assert.match(prompt, /current tailored preview is 2 pages/i);
+  assert.match(prompt, /use the rendered PDF with highlights/i);
+  assert.match(prompt, /if only one line needs to be reclaimed overall/i);
+  assert.match(prompt, /fully replaces the old reason shown to the user/i);
+  assert.equal(prompt.includes("{{TARGET_PAGE_COUNT_REQUIREMENT}}"), false);
 });

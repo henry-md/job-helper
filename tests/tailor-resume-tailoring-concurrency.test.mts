@@ -57,6 +57,7 @@ function buildTailoredResume(
       displayName: "OpenAI - Research Engineer",
       jobIdentifier: "Research Engineer",
       positionTitle: "Research Engineer",
+      questioningSummary: null,
       thesis: {
         jobDescriptionFocus: "Focus",
         resumeChanges: "Changes",

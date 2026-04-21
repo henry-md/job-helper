@@ -194,14 +194,18 @@ const defaultSystemPromptSettings = {
     "5. Ask one question at a time.\n" +
     "6. totalQuestionBudget must be an integer from 0 to 5. On the first turn, choose the full budget you expect to need. On later turns, preserve the existing budget.\n" +
     "7. If action is \"ask\", question must contain exactly one user-facing question.\n" +
-    "8. Prefer open-ended questions when they can efficiently surface the needed detail, but keep the question tightly scoped to the adjacent resume evidence.\n" +
-    "9. agenda should be one short sentence summarizing the specific background area you are trying to clarify. If no questions are needed, return an empty string.\n" +
-    "10. learnings must be a compact working summary for the next model stage, not a transcript dump. Only include details grounded in the user's answers or directly restated from the accepted plan.\n" +
-    "11. Every learning.targetSegmentIds entry must reference only segmentIds from the accepted plan.\n" +
-    "12. If action is \"done\", return the final compressed learnings needed for implementation.\n" +
-    "13. If no questions are worth asking on the first turn, return action \"skip\", totalQuestionBudget 0, an empty question string, and an empty learnings array.\n" +
-    "14. Never exceed five total questions.\n" +
-    "15. Set debugDecision to \"not_applicable\" unless a debug override explicitly requires otherwise.\n",
+    "8. Keep the user-facing question concise. Avoid throat-clearing like \"I have a few questions,\" \"this would strengthen the resume,\" or \"I'm trying to clarify\" inside question.\n" +
+    "9. When action is \"ask\", make the question text do three jobs in a compact way: name the exact job-description signal that prompted the question using a short exact quote when possible, say what kind of answer would improve the resume, and then ask the single question.\n" +
+    "10. The \"what kind of answer would improve the resume\" guidance should be specific, such as metrics, scope, ownership, tools, domain context, or outcomes. Do not ask the user to guess what would be useful.\n" +
+    "11. Prefer open-ended questions when they can efficiently surface the needed detail, but keep the question tightly scoped to the adjacent resume evidence.\n" +
+    "12. Keep question highly skimmable: ideally 2 short sentences total and no more than about 45 words unless a little more is truly necessary.\n" +
+    "13. agenda should be one short sentence summarizing the specific background area you are trying to clarify. If no questions are needed, return an empty string.\n" +
+    "14. learnings must be a compact working summary for the next model stage, not a transcript dump. Only include details grounded in the user's answers or directly restated from the accepted plan.\n" +
+    "15. Every learning.targetSegmentIds entry must reference only segmentIds from the accepted plan.\n" +
+    "16. If action is \"done\", return the final compressed learnings needed for implementation.\n" +
+    "17. If no questions are worth asking on the first turn, return action \"skip\", totalQuestionBudget 0, an empty question string, and an empty learnings array.\n" +
+    "18. Never exceed five total questions.\n" +
+    "19. Set debugDecision to \"not_applicable\" unless a debug override explicitly requires otherwise.\n",
   tailorResumeImplementation:
     "{{FEEDBACK_BLOCK}}Implement the approved resume edit plan as exact LaTeX block replacements. The strategic edit choices, targeted segments, and desired visible text are already decided.\n\n" +
     "You must return a strict JSON object containing only changes.\n\n" +
