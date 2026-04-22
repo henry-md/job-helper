@@ -22,6 +22,21 @@ The extension dev server is pinned to `http://localhost:5186`. If `npm run dev` 
 
 Side panel and content-script changes hot-update automatically. Background-script and manifest changes trigger an extension reload, so source edits no longer require manually rebuilding and reloading the extension.
 
+## Browser preview
+
+Run `npm run dev`, then open `http://localhost:5186/index.html`. In Vite dev
+mode, that page installs a mock Chrome extension runtime so the real side-panel
+React UI can be inspected and screenshotted without loading the unpacked
+extension.
+
+Useful states:
+
+- `http://localhost:5186/index.html` shows the signed-out default state.
+- `http://localhost:5186/index.html?auth=signed-in&run=success` shows a connected
+  account with the latest tailoring result.
+- `http://localhost:5186/index.html?snapshot=error` shows the active-tab error
+  state.
+
 ## Auth
 
 The extension uses Chrome's identity API, so the manifest needs a Google OAuth
