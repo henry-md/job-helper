@@ -3,6 +3,7 @@ import {
   buildTailoredResumeReviewUrl,
   CAPTURE_COMMAND_NAME,
   DEFAULT_DASHBOARD_URL,
+  DEFAULT_JOB_APPLICATIONS_ENDPOINT,
   DEFAULT_TAILOR_RESUME_ENDPOINT,
   EXTENSION_AUTH_GOOGLE_ENDPOINT,
   EXTENSION_AUTH_SESSION_ENDPOINT,
@@ -11,6 +12,7 @@ import {
   type JobHelperAuthSession,
   type JobHelperAuthUser,
   type JobPageContext,
+  readPersonalInfoSummary,
   readTailoredResumeSummaries,
   type TailorResumeRunRecord,
 } from "./job-helper";
@@ -588,6 +590,44 @@ async function getTailoredResumeSummaries() {
   };
 }
 
+async function getPersonalInfoSummary() {
+  const session = await ensureJobHelperSession({ interactive: false });
+  const [tailorResumeResponse, applicationsResponse] = await Promise.all([
+    fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
+      credentials: "include",
+      headers: authorizationHeaders(session),
+    }),
+    fetch(`${DEFAULT_JOB_APPLICATIONS_ENDPOINT}?limit=12`, {
+      credentials: "include",
+      headers: authorizationHeaders(session),
+    }),
+  ]);
+  const [tailorResumePayload, applicationsPayload] = await Promise.all([
+    readJsonResponse(tailorResumeResponse),
+    readJsonResponse(applicationsResponse),
+  ]);
+
+  if (!tailorResumeResponse.ok || !applicationsResponse.ok) {
+    if (tailorResumeResponse.status === 401 || applicationsResponse.status === 401) {
+      await clearStoredAuthSession();
+    }
+
+    throw new Error(
+      readResponseError(
+        !tailorResumeResponse.ok ? tailorResumePayload : applicationsPayload,
+        "Could not load your Job Helper info.",
+      ),
+    );
+  }
+
+  return {
+    personalInfo: readPersonalInfoSummary({
+      applicationsPayload,
+      tailorResumePayload,
+    }),
+  };
+}
+
 async function tailorResumeForActiveTab() {
   const activeTab = await getActiveTab();
   const tabId = activeTab.id;
@@ -787,6 +827,10 @@ chrome.runtime.onMessage.addListener((
 
   if (typedMessage?.type === "JOB_HELPER_TAILORED_RESUMES") {
     return sendAsyncResponse(sendResponse, getTailoredResumeSummaries);
+  }
+
+  if (typedMessage?.type === "JOB_HELPER_PERSONAL_INFO") {
+    return sendAsyncResponse(sendResponse, getPersonalInfoSummary);
   }
 
   if (typedMessage?.type === "JOB_HELPER_OPEN_DASHBOARD") {

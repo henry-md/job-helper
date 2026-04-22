@@ -4,13 +4,15 @@ import {
   AUTH_SESSION_STORAGE_KEY,
   buildTailoredResumeReviewUrl,
   DEFAULT_DASHBOARD_URL,
+  DEFAULT_TAILOR_RESUME_PREVIEW_ENDPOINT,
   LAST_TAILORING_STORAGE_KEY,
   type JobHelperAuthSession,
   type JobHelperAuthUser,
   type JobPageContext,
-  readTailoredResumeSummaries,
-  type TailoredResumeSummary,
+  type PersonalInfoSummary,
+  readPersonalInfoPayload,
   type TailorResumeRunRecord,
+  type TrackedApplicationSummary,
 } from "./job-helper";
 import { collectPageContextFromTab } from "./page-context";
 
@@ -30,10 +32,18 @@ type AuthState =
 
 type AuthActionState = "idle" | "running";
 
-type TailoredResumeListState =
-  | { records: []; status: "idle" | "loading" }
-  | { records: TailoredResumeSummary[]; status: "ready" }
-  | { error: string; records: []; status: "error" };
+type PanelTab = "personal" | "tailor";
+type PersonalSectionId = "applications" | "resume" | "tailoredResumes";
+
+type PersonalInfoState =
+  | { personalInfo: null; status: "idle" | "loading" }
+  | { personalInfo: PersonalInfoSummary; status: "ready" }
+  | { error: string; personalInfo: null; status: "error" };
+
+type ResumePreviewState =
+  | { objectUrl: null; status: "idle" | "loading" }
+  | { objectUrl: string; status: "ready" }
+  | { error: string; objectUrl: null; status: "error" };
 
 async function getActiveTab() {
   const [tab] = await chrome.tabs.query({
@@ -156,7 +166,27 @@ function formatTailoredResumeDate(value: string) {
   });
 }
 
+function formatApplicationStatus(value: string) {
+  return value
+    .toLowerCase()
+    .split("_")
+    .filter(Boolean)
+    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
+    .join(" ");
+}
+
+function buildOriginalResumePreviewUrl(pdfUpdatedAt: string | null) {
+  const url = new URL(DEFAULT_TAILOR_RESUME_PREVIEW_ENDPOINT);
+
+  if (pdfUpdatedAt) {
+    url.searchParams.set("updatedAt", pdfUpdatedAt);
+  }
+
+  return url.toString();
+}
+
 function App() {
+  const [activePanelTab, setActivePanelTab] = useState<PanelTab>("tailor");
   const [state, setState] = useState<PanelState>({
     status: "loading",
     snapshot: null,
@@ -165,8 +195,17 @@ function App() {
   const [authState, setAuthState] = useState<AuthState>({ status: "loading" });
   const [authActionState, setAuthActionState] =
     useState<AuthActionState>("idle");
-  const [tailoredResumeListState, setTailoredResumeListState] =
-    useState<TailoredResumeListState>({ records: [], status: "idle" });
+  const [personalInfoState, setPersonalInfoState] =
+    useState<PersonalInfoState>({ personalInfo: null, status: "idle" });
+  const [resumePreviewState, setResumePreviewState] =
+    useState<ResumePreviewState>({ objectUrl: null, status: "idle" });
+  const [collapsedPersonalSections, setCollapsedPersonalSections] = useState<
+    Record<PersonalSectionId, boolean>
+  >({
+    applications: true,
+    resume: true,
+    tailoredResumes: true,
+  });
   const [lastTailoringRun, setLastTailoringRun] =
     useState<TailorResumeRunRecord | null>(null);
 
@@ -202,31 +241,31 @@ function App() {
     }
   }, []);
 
-  const loadTailoredResumes = useCallback(async () => {
-    setTailoredResumeListState({ records: [], status: "loading" });
+  const loadPersonalInfo = useCallback(async () => {
+    setPersonalInfoState({ personalInfo: null, status: "loading" });
 
     try {
       const response = await chrome.runtime.sendMessage({
-        type: "JOB_HELPER_TAILORED_RESUMES",
+        type: "JOB_HELPER_PERSONAL_INFO",
       });
 
       if (!isRecord(response) || response.ok !== true) {
         throw new Error(
-          readErrorMessage(response, "Could not load tailored resumes."),
+          readErrorMessage(response, "Could not load your Job Helper info."),
         );
       }
 
-      setTailoredResumeListState({
-        records: readTailoredResumeSummaries(response.records),
+      setPersonalInfoState({
+        personalInfo: readPersonalInfoPayload(response),
         status: "ready",
       });
     } catch (error) {
-      setTailoredResumeListState({
+      setPersonalInfoState({
         error:
           error instanceof Error
             ? error.message
-            : "Could not load tailored resumes.",
-        records: [],
+            : "Could not load your Job Helper info.",
+        personalInfo: null,
         status: "error",
       });
     }
@@ -283,12 +322,80 @@ function App() {
 
   useEffect(() => {
     if (authState.status !== "signedIn") {
-      setTailoredResumeListState({ records: [], status: "idle" });
+      setPersonalInfoState({ personalInfo: null, status: "idle" });
+      setResumePreviewState({ objectUrl: null, status: "idle" });
       return;
     }
 
-    void loadTailoredResumes();
-  }, [authState, lastTailoringRun?.capturedAt, loadTailoredResumes]);
+    void loadPersonalInfo();
+  }, [authState, lastTailoringRun?.capturedAt, loadPersonalInfo]);
+
+  useEffect(() => {
+    const sessionToken =
+      authState.status === "signedIn" ? authState.session.sessionToken : null;
+    const pdfUpdatedAt =
+      personalInfoState.status === "ready"
+        ? personalInfoState.personalInfo.originalResume.pdfUpdatedAt
+        : null;
+
+    if (!sessionToken || !pdfUpdatedAt) {
+      setResumePreviewState({ objectUrl: null, status: "idle" });
+      return;
+    }
+
+    let isMounted = true;
+    let objectUrl: string | null = null;
+
+    async function loadOriginalResumePreview() {
+      setResumePreviewState({ objectUrl: null, status: "loading" });
+
+      try {
+        const response = await fetch(buildOriginalResumePreviewUrl(pdfUpdatedAt), {
+          credentials: "include",
+          headers: {
+            Authorization: `Bearer ${sessionToken}`,
+          },
+        });
+
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(
+            readErrorMessage(payload, "Could not load the resume preview."),
+          );
+        }
+
+        const previewBlob = await response.blob();
+        objectUrl = URL.createObjectURL(previewBlob);
+
+        if (isMounted) {
+          setResumePreviewState({ objectUrl, status: "ready" });
+        } else {
+          URL.revokeObjectURL(objectUrl);
+        }
+      } catch (error) {
+        if (isMounted) {
+          setResumePreviewState({
+            error:
+              error instanceof Error
+                ? error.message
+                : "Could not load the resume preview.",
+            objectUrl: null,
+            status: "error",
+          });
+        }
+      }
+    }
+
+    void loadOriginalResumePreview();
+
+    return () => {
+      isMounted = false;
+
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [authState, personalInfoState]);
 
   useEffect(() => {
     function handleActiveTabChange() {
@@ -392,6 +499,30 @@ function App() {
     }
   }
 
+  async function handleOpenApplicationsDashboard() {
+    setAuthActionState("running");
+
+    try {
+      await chrome.runtime.sendMessage({
+        payload: {
+          callbackUrl: `${DEFAULT_DASHBOARD_URL}?tab=new`,
+        },
+        type: "JOB_HELPER_OPEN_DASHBOARD",
+      });
+      void loadAuthStatus();
+    } catch (error) {
+      setAuthState({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Could not open applications.",
+        status: "error",
+      });
+    } finally {
+      setAuthActionState("idle");
+    }
+  }
+
   async function handleOpenTailoredResume(tailoredResumeId: string) {
     setAuthActionState("running");
 
@@ -413,6 +544,24 @@ function App() {
     } finally {
       setAuthActionState("idle");
     }
+  }
+
+  async function handleOpenTrackedApplication(
+    application: TrackedApplicationSummary,
+  ) {
+    if (application.jobUrl) {
+      await chrome.tabs.create({ url: application.jobUrl });
+      return;
+    }
+
+    await handleOpenApplicationsDashboard();
+  }
+
+  function togglePersonalSection(sectionId: PersonalSectionId) {
+    setCollapsedPersonalSections((currentSections) => ({
+      ...currentSections,
+      [sectionId]: !currentSections[sectionId],
+    }));
   }
 
   async function handleSignIn() {
@@ -453,11 +602,32 @@ function App() {
     }
   }
 
+  const personalInfo =
+    personalInfoState.status === "ready" ? personalInfoState.personalInfo : null;
+  const originalResume = personalInfo?.originalResume ?? null;
+  const isResumeCollapsed = collapsedPersonalSections.resume;
+  const isTailoredResumesCollapsed =
+    collapsedPersonalSections.tailoredResumes;
+  const isApplicationsCollapsed = collapsedPersonalSections.applications;
+
   return (
     <main className="side-panel-shell">
       <header className="panel-header">
-        <p className="eyebrow">Job Helper</p>
-        <h1>Tailor Resume</h1>
+        <a
+          aria-label="Open Job Helper dashboard"
+          className="eyebrow eyebrow-link"
+          href={DEFAULT_DASHBOARD_URL}
+          onClick={(event) => {
+            event.preventDefault();
+
+            if (authActionState !== "running") {
+              void handleOpenDashboard();
+            }
+          }}
+        >
+          Job Helper
+        </a>
+        <h1>{activePanelTab === "tailor" ? "Tailor Resume" : "Personal Info"}</h1>
       </header>
 
       <section className="auth-card">
@@ -468,9 +638,7 @@ function App() {
                 <span
                   className="auth-avatar-image"
                   style={{
-                    backgroundImage: `url(${JSON.stringify(
-                      authState.session.user.image,
-                    )})`,
+                    backgroundImage: `url(${JSON.stringify(authState.session.user.image)})`,
                   }}
                 />
               ) : (
@@ -512,163 +680,337 @@ function App() {
         )}
       </section>
 
-      <div className="action-grid">
+      <nav className="panel-tabs" aria-label="Job Helper sections">
         <button
-          className="primary-action"
-          disabled={captureState === "running" || authState.status !== "signedIn"}
+          aria-current={activePanelTab === "tailor" ? "page" : undefined}
+          className={`panel-tab ${activePanelTab === "tailor" ? "panel-tab-active" : ""}`}
           type="button"
-          onClick={handleTailorCurrentPage}
+          onClick={() => setActivePanelTab("tailor")}
         >
-          {captureState === "running" ? "Tailoring..." : "Tailor Current Page"}
+          Tailor
         </button>
-        <button className="secondary-action" type="button" onClick={loadSnapshot}>
-          Refresh Page
+        <button
+          aria-current={activePanelTab === "personal" ? "page" : undefined}
+          className={`panel-tab ${activePanelTab === "personal" ? "panel-tab-active" : ""}`}
+          type="button"
+          onClick={() => setActivePanelTab("personal")}
+        >
+          Personal
         </button>
-      </div>
+      </nav>
 
-      <button
-        className="link-action"
-        disabled={authActionState === "running"}
-        type="button"
-        onClick={handleOpenDashboard}
-      >
-        Open Dashboard
-      </button>
-
-      <section className="snapshot-card tailored-resume-card">
-        <div className="card-heading-row">
-          <h2>Tailored resumes</h2>
-          {tailoredResumeListState.status === "ready" && (
-            <span>{tailoredResumeListState.records.length}</span>
-          )}
-        </div>
-        {authState.status !== "signedIn" ? (
-          <p className="placeholder">Connect Google to load saved resumes.</p>
-        ) : tailoredResumeListState.status === "loading" ? (
-          <p className="placeholder">Loading tailored resumes...</p>
-        ) : tailoredResumeListState.status === "error" ? (
-          <p className="placeholder">{tailoredResumeListState.error}</p>
-        ) : tailoredResumeListState.records.length === 0 ? (
-          <p className="placeholder">No tailored resumes yet.</p>
-        ) : (
-          <div className="tailored-resume-list">
-            {tailoredResumeListState.records.map((tailoredResume) => (
-              <button
-                key={tailoredResume.id}
-                className="tailored-resume-row"
-                disabled={authActionState === "running"}
-                type="button"
-                onClick={() => handleOpenTailoredResume(tailoredResume.id)}
-              >
-                <span className="tailored-resume-main">
-                  <span className="tailored-resume-title">
-                    {tailoredResume.displayName}
-                  </span>
-                  <span className="tailored-resume-meta">
-                    {tailoredResume.companyName ||
-                      tailoredResume.positionTitle ||
-                      "Saved tailored resume"}
-                  </span>
-                </span>
-                <span className="tailored-resume-date">
-                  {formatTailoredResumeDate(tailoredResume.updatedAt)}
-                </span>
-              </button>
-            ))}
+      {activePanelTab === "tailor" ? (
+        <>
+          <div className="action-grid">
+            <button
+              className="primary-action"
+              disabled={captureState === "running" || authState.status !== "signedIn"}
+              type="button"
+              onClick={handleTailorCurrentPage}
+            >
+              {captureState === "running" ? "Tailoring..." : "Tailor Current Page"}
+            </button>
           </div>
-        )}
-      </section>
 
-      <div className="status-row">
-        <span className={`status-dot status-dot-${state.status}`} />
-        <span className="status-text">
-          {captureState === "running" && "Starting Tailor Resume"}
-          {captureState === "sent" &&
-            "Tailoring started. Results will appear here."}
-          {captureState === "error" && "Could not start Tailor Resume."}
-          {captureState === "error" &&
-            authState.status !== "signedIn" &&
-            " Connect Google first."}
-          {captureState === "idle" &&
-            state.status === "idle" &&
-            "Waiting for page details"}
-          {captureState === "idle" &&
-            state.status === "loading" &&
-            "Reading the active tab"}
-          {captureState === "idle" &&
-            state.status === "ready" &&
-            "Page details loaded"}
-          {captureState === "idle" && state.status === "error" && state.error}
-        </span>
-      </div>
+          <div className="status-row">
+            <span className={`status-dot status-dot-${state.status}`} />
+            <span className="status-text">
+              {captureState === "running" && "Starting Tailor Resume"}
+              {captureState === "sent" &&
+                "Tailoring started. Results will appear here."}
+              {captureState === "error" && "Could not start Tailor Resume."}
+              {captureState === "error" &&
+                authState.status !== "signedIn" &&
+                " Connect Google first."}
+              {captureState === "idle" &&
+                state.status === "idle" &&
+                "Waiting for page details"}
+              {captureState === "idle" &&
+                state.status === "loading" &&
+                "Reading the active tab"}
+              {captureState === "idle" &&
+                state.status === "ready" &&
+                "Page details loaded"}
+              {captureState === "idle" && state.status === "error" && state.error}
+            </span>
+          </div>
 
-      <section className="snapshot-card">
-        <h2>Last tailoring run</h2>
-        {lastTailoringRun ? (
-          <dl className="snapshot-grid">
-            <div>
-              <dt>Status</dt>
-              <dd>{lastTailoringRun.message}</dd>
-            </div>
-            <div>
-              <dt>Ran at</dt>
-              <dd>{new Date(lastTailoringRun.capturedAt).toLocaleString()}</dd>
-            </div>
-            <div>
-              <dt>Role</dt>
-              <dd>{lastTailoringRun.positionTitle || "No role was returned."}</dd>
-            </div>
-            <div>
-              <dt>Company</dt>
-              <dd>{lastTailoringRun.companyName || "No company was returned."}</dd>
-            </div>
-            <div>
-              <dt>Tailor Resume</dt>
-              <dd className="wrap-anywhere">{lastTailoringRun.endpoint}</dd>
-            </div>
-            <div>
-              <dt>Page</dt>
-              <dd className="wrap-anywhere">
-                {lastTailoringRun.pageUrl || "No page URL was captured."}
-              </dd>
-            </div>
-          </dl>
-        ) : (
-          <p className="placeholder">No tailoring runs yet.</p>
-        )}
-      </section>
+          <section className="snapshot-card">
+            <h2>Last tailoring run</h2>
+            {lastTailoringRun ? (
+              <dl className="snapshot-grid">
+                <div>
+                  <dt>Status</dt>
+                  <dd>{lastTailoringRun.message}</dd>
+                </div>
+                <div>
+                  <dt>Ran at</dt>
+                  <dd>{new Date(lastTailoringRun.capturedAt).toLocaleString()}</dd>
+                </div>
+                <div>
+                  <dt>Role</dt>
+                  <dd>{lastTailoringRun.positionTitle || "No role was returned."}</dd>
+                </div>
+                <div>
+                  <dt>Company</dt>
+                  <dd>{lastTailoringRun.companyName || "No company was returned."}</dd>
+                </div>
+                <div>
+                  <dt>Tailor Resume</dt>
+                  <dd className="wrap-anywhere">{lastTailoringRun.endpoint}</dd>
+                </div>
+                <div>
+                  <dt>Page</dt>
+                  <dd className="wrap-anywhere">
+                    {lastTailoringRun.pageUrl || "No page URL was captured."}
+                  </dd>
+                </div>
+              </dl>
+            ) : (
+              <p className="placeholder">No tailoring runs yet.</p>
+            )}
+          </section>
 
-      <section className="snapshot-card">
-        <h2>Active page</h2>
-        {state.status === "ready" ? (
-          <dl className="snapshot-grid">
-            <div>
-              <dt>Title</dt>
-              <dd>{state.snapshot.title || "Untitled page"}</dd>
-            </div>
-            <div>
-              <dt>URL</dt>
-              <dd className="wrap-anywhere">{state.snapshot.url}</dd>
-            </div>
-            <div>
-              <dt>Description</dt>
-              <dd>{state.snapshot.description || "No meta description found."}</dd>
-            </div>
-            <div>
-              <dt>Salary hints</dt>
-              <dd>
-                {state.snapshot.salaryMentions.length > 0
-                  ? state.snapshot.salaryMentions.join(", ")
-                  : "No salary hints detected."}
-              </dd>
-            </div>
-          </dl>
-        ) : (
-          <p className="placeholder">
-            Select a regular web page to inspect its job details here.
-          </p>
-        )}
-      </section>
+          <section className="snapshot-card">
+            <h2>Active page</h2>
+            {state.status === "ready" ? (
+              <dl className="snapshot-grid">
+                <div>
+                  <dt>Title</dt>
+                  <dd>{state.snapshot.title || "Untitled page"}</dd>
+                </div>
+                <div>
+                  <dt>URL</dt>
+                  <dd className="wrap-anywhere">{state.snapshot.url}</dd>
+                </div>
+                <div>
+                  <dt>Description</dt>
+                  <dd>{state.snapshot.description || "No meta description found."}</dd>
+                </div>
+                <div>
+                  <dt>Salary hints</dt>
+                  <dd>
+                    {state.snapshot.salaryMentions.length > 0
+                      ? state.snapshot.salaryMentions.join(", ")
+                      : "No salary hints detected."}
+                  </dd>
+                </div>
+              </dl>
+            ) : (
+              <p className="placeholder">
+                Select a regular web page to inspect its job details here.
+              </p>
+            )}
+          </section>
+        </>
+      ) : (
+        <>
+          <section className="snapshot-card tailored-resume-card collapsible-card">
+            <button
+              aria-controls="personal-tailored-resumes-content"
+              aria-expanded={!isTailoredResumesCollapsed}
+              className="collapsible-heading"
+              type="button"
+              onClick={() => togglePersonalSection("tailoredResumes")}
+            >
+              <span className="collapsible-heading-main">
+                <span
+                  aria-hidden="true"
+                  className={`collapse-chevron ${isTailoredResumesCollapsed ? "" : "collapse-chevron-open"}`}
+                />
+                <span className="collapsible-heading-title">
+                  Tailored resumes
+                </span>
+              </span>
+              {personalInfo ? (
+                <span className="collapsible-heading-badge">
+                  {personalInfo.tailoredResumes.length}
+                </span>
+              ) : null}
+            </button>
+            {!isTailoredResumesCollapsed ? (
+              <div id="personal-tailored-resumes-content">
+                {authState.status !== "signedIn" ? (
+                  <p className="placeholder">Connect Google to load saved resumes.</p>
+                ) : personalInfoState.status === "loading" ? (
+                  <p className="placeholder">Loading tailored resumes...</p>
+                ) : personalInfoState.status === "error" ? (
+                  <p className="placeholder">{personalInfoState.error}</p>
+                ) : !personalInfo || personalInfo.tailoredResumes.length === 0 ? (
+                  <p className="placeholder">No tailored resumes yet.</p>
+                ) : (
+                  <div className="tailored-resume-list">
+                    {personalInfo.tailoredResumes.map((tailoredResume) => (
+                      <button
+                        key={tailoredResume.id}
+                        className="tailored-resume-row"
+                        disabled={authActionState === "running"}
+                        type="button"
+                        onClick={() => handleOpenTailoredResume(tailoredResume.id)}
+                      >
+                        <span className="tailored-resume-main">
+                          <span className="tailored-resume-title">
+                            {tailoredResume.displayName}
+                          </span>
+                          <span className="tailored-resume-meta">
+                            {tailoredResume.companyName ||
+                              tailoredResume.positionTitle ||
+                              "Saved tailored resume"}
+                          </span>
+                        </span>
+                        <span className="tailored-resume-date">
+                          {formatTailoredResumeDate(tailoredResume.updatedAt)}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </section>
+
+          <section className="snapshot-card applications-card collapsible-card">
+            <button
+              aria-controls="personal-applications-content"
+              aria-expanded={!isApplicationsCollapsed}
+              className="collapsible-heading"
+              type="button"
+              onClick={() => togglePersonalSection("applications")}
+            >
+              <span className="collapsible-heading-main">
+                <span
+                  aria-hidden="true"
+                  className={`collapse-chevron ${isApplicationsCollapsed ? "" : "collapse-chevron-open"}`}
+                />
+                <span className="collapsible-heading-title">Tracked apps</span>
+              </span>
+              {personalInfo ? (
+                <span className="collapsible-heading-badge">
+                  {personalInfo.applicationCount}
+                </span>
+              ) : null}
+            </button>
+            {!isApplicationsCollapsed ? (
+              <div id="personal-applications-content">
+                {authState.status !== "signedIn" ? (
+                  <p className="placeholder">Connect Google to load applications.</p>
+                ) : personalInfoState.status === "loading" ? (
+                  <p className="placeholder">Loading tracked applications...</p>
+                ) : personalInfoState.status === "error" ? (
+                  <p className="placeholder">{personalInfoState.error}</p>
+                ) : !personalInfo || personalInfo.applications.length === 0 ? (
+                  <p className="placeholder">No tracked applications yet.</p>
+                ) : (
+                  <div className="application-list">
+                    {personalInfo.applications.map((application) => (
+                      <button
+                        key={application.id}
+                        className="application-row"
+                        type="button"
+                        onClick={() => void handleOpenTrackedApplication(application)}
+                      >
+                        <span className="application-main">
+                          <span className="application-title">
+                            {application.jobTitle}
+                          </span>
+                          <span className="application-meta">
+                            {application.companyName}
+                            {application.location ? ` - ${application.location}` : ""}
+                          </span>
+                        </span>
+                        <span className="application-side">
+                          <span className="application-status">
+                            {formatApplicationStatus(application.status)}
+                          </span>
+                          <span className="tailored-resume-date">
+                            {formatTailoredResumeDate(application.appliedAt)}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {personalInfo && personalInfo.applicationCount > personalInfo.applications.length ? (
+                  <button
+                    className="link-action more-action"
+                    disabled={authActionState === "running"}
+                    type="button"
+                    onClick={handleOpenApplicationsDashboard}
+                  >
+                    View all applications
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+
+          <section className="snapshot-card resume-preview-card collapsible-card">
+            <button
+              aria-controls="personal-resume-content"
+              aria-expanded={!isResumeCollapsed}
+              className="collapsible-heading"
+              type="button"
+              onClick={() => togglePersonalSection("resume")}
+            >
+              <span className="collapsible-heading-main">
+                <span
+                  aria-hidden="true"
+                  className={`collapse-chevron ${isResumeCollapsed ? "" : "collapse-chevron-open"}`}
+                />
+                <span className="collapsible-heading-title">Resume</span>
+              </span>
+            </button>
+            {!isResumeCollapsed ? (
+              <div id="personal-resume-content">
+                {authState.status !== "signedIn" ? (
+                  <p className="placeholder">Connect Google to preview your resume.</p>
+                ) : personalInfoState.status === "loading" ? (
+                  <p className="placeholder">Loading resume preview...</p>
+                ) : personalInfoState.status === "error" ? (
+                  <p className="placeholder">{personalInfoState.error}</p>
+                ) : originalResume ? (
+                  <>
+                    {originalResume.error ? (
+                      <p className="preview-error">{originalResume.error}</p>
+                    ) : null}
+                    {originalResume.pdfUpdatedAt ? (
+                      <div className="resume-preview-shell">
+                        {resumePreviewState.status === "loading" ? (
+                          <p className="placeholder">Rendering preview...</p>
+                        ) : resumePreviewState.status === "error" ? (
+                          <p className="preview-error">{resumePreviewState.error}</p>
+                        ) : resumePreviewState.status === "ready" ? (
+                          <iframe
+                            className="resume-preview-frame"
+                            src={resumePreviewState.objectUrl}
+                            title="Resume preview"
+                          />
+                        ) : (
+                          <p className="placeholder">Preview will appear here.</p>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="placeholder preview-placeholder">
+                        No rendered preview is available yet.
+                      </p>
+                    )}
+                    {originalResume.resumeUpdatedAt ? (
+                      <dl className="snapshot-grid resume-updated-grid">
+                        <div>
+                          <dt>Updated</dt>
+                          <dd>{formatTailoredResumeDate(originalResume.resumeUpdatedAt)}</dd>
+                        </div>
+                      </dl>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="placeholder">No resume data loaded yet.</p>
+                )}
+              </div>
+            ) : null}
+          </section>
+        </>
+      )}
     </main>
   );
 }

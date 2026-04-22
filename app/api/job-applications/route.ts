@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/auth";
+import { getApiSession } from "@/lib/api-auth";
 import { getPrismaClient } from "@/lib/prisma";
 import type {
   ApplicationStatusValue,
@@ -8,6 +9,7 @@ import type {
   JobApplicationExtraction,
   JobLocationType,
 } from "@/lib/job-application-types";
+import { toJobApplicationRecord } from "@/lib/job-application-records";
 import {
   normalizeCompanyName,
   normalizeSalaryRange,
@@ -82,6 +84,77 @@ function parseDraftUploadSnapshots(rawValue: FormDataEntryValue | null) {
     });
   } catch {
     return [] as DraftUploadSnapshot[];
+  }
+}
+
+function readApplicationListLimit(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const rawLimit = searchParams.get("limit");
+
+  if (!rawLimit) {
+    return 25;
+  }
+
+  const parsedLimit = Number.parseInt(rawLimit, 10);
+
+  if (!Number.isInteger(parsedLimit)) {
+    return 25;
+  }
+
+  return Math.min(Math.max(parsedLimit, 1), 100);
+}
+
+export async function GET(request: Request) {
+  const session = await getApiSession(request);
+
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  const prisma = getPrismaClient();
+  const limit = readApplicationListLimit(request);
+
+  try {
+    const [applicationCount, applications, companyCount] = await Promise.all([
+      prisma.jobApplication.count({
+        where: { userId: session.user.id },
+      }),
+      prisma.jobApplication.findMany({
+        include: {
+          company: true,
+          referrer: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+        orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+        take: limit,
+        where: { userId: session.user.id },
+      }),
+      prisma.company.count({
+        where: {
+          applications: {
+            some: {
+              userId: session.user.id,
+            },
+          },
+          userId: session.user.id,
+        },
+      }),
+    ]);
+
+    return NextResponse.json({
+      applicationCount,
+      applications: applications.map(toJobApplicationRecord),
+      companyCount,
+    });
+  } catch (error) {
+    const detail =
+      error instanceof Error ? error.message : "Failed to load applications.";
+
+    return NextResponse.json({ error: detail }, { status: 500 });
   }
 }
 

@@ -3,6 +3,8 @@ Chrome extension auth:
 - The server verifies the token audience against `GOOGLE_EXTENSION_CLIENT_ID`, reads Google userinfo, links or creates the normal `google` `Account`, and creates a standard NextAuth database `Session`.
 - Extension API calls send the returned session token as `Authorization: Bearer <token>`. Server routes that need extension access should use `getApiSession(request)` instead of calling `getServerSession(authOptions)` directly.
 - `GET /api/tailor-resume` returns the authenticated user's Tailor Resume profile, including all `profile.tailoredResumes`; extension callers should read this endpoint with the bearer session token instead of trying to read profile storage or Postgres directly.
+- `GET /api/job-applications` returns the authenticated user's tracked applications for app and extension clients; extension callers should use the same bearer token and keep display-specific summaries in extension code.
+- The extension personal-info tab fetches the original rendered resume preview from `GET /api/tailor-resume/preview` with the bearer token, then renders the returned PDF as an extension-local object URL.
 - Opening protected browser pages from the extension goes through `POST /api/extension/auth/browser-session`, which returns a short-lived encrypted handoff URL. The handoff route sets the normal NextAuth session cookie and redirects to a same-origin callback path.
 - No Prisma migration is needed for the basic bridge because it reuses the existing `User`, `Account`, and `Session` tables.
 - Google Cloud needs two OAuth clients: the existing web client for NextAuth callback redirects and a separate Chrome Extension client whose Item ID matches the loaded extension id from `chrome://extensions`.
