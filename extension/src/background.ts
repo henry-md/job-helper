@@ -14,6 +14,7 @@ import {
   readTailoredResumeSummaries,
   type TailorResumeRunRecord,
 } from "./job-helper";
+import { collectPageContextFromTab } from "./page-context";
 
 type OverlayTone = "error" | "info" | "success";
 
@@ -310,19 +311,7 @@ async function showOverlay(tabId: number, text: string, tone: OverlayTone) {
 }
 
 async function collectPageContext(tabId: number) {
-  try {
-    const response = await chrome.tabs.sendMessage(tabId, {
-      type: "JOB_HELPER_COLLECT_PAGE_CONTEXT",
-    });
-
-    if (!response?.ok) {
-      return null;
-    }
-
-    return response.pageContext as JobPageContext;
-  } catch {
-    return null;
-  }
+  return collectPageContextFromTab(tabId, "JOB_HELPER_COLLECT_PAGE_CONTEXT");
 }
 
 async function persistResult(record: TailorResumeRunRecord) {
@@ -613,10 +602,6 @@ async function tailorResumeForActiveTab() {
 
   const pageContext = await collectPageContext(tabId);
 
-  if (!pageContext) {
-    throw new Error("Could not read the current page.");
-  }
-
   const jobDescription = buildJobDescriptionFromPageContext(pageContext);
 
   if (!jobDescription) {
@@ -707,14 +692,15 @@ async function runCaptureFlow() {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to tailor the resume.";
+    const activeTab = await getActiveTab().catch(() => null);
 
     const record: TailorResumeRunRecord = {
       capturedAt: new Date().toISOString(),
       companyName: null,
       endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
       message,
-      pageTitle: null,
-      pageUrl: null,
+      pageTitle: cleanText(activeTab?.title) || null,
+      pageUrl: cleanText(activeTab?.url) || null,
       positionTitle: null,
       status: "error",
       tailoredResumeError: null,
@@ -724,9 +710,7 @@ async function runCaptureFlow() {
     await persistResult(record);
 
     try {
-      const activeTab = await getActiveTab();
-
-      if (typeof activeTab.id === "number") {
+      if (activeTab && typeof activeTab.id === "number") {
         await showOverlay(activeTab.id, message, "error");
       }
     } catch {

@@ -12,6 +12,7 @@ import {
   type TailoredResumeSummary,
   type TailorResumeRunRecord,
 } from "./job-helper";
+import { collectPageContextFromTab } from "./page-context";
 
 type PanelState =
   | { status: "idle"; snapshot: null }
@@ -55,17 +56,7 @@ async function fetchSnapshot() {
     throw new Error("The active tab does not expose an id.");
   }
 
-  const response = await chrome.tabs.sendMessage(tabId, {
-    type: "JOB_HELPER_CAPTURE_PAGE",
-  });
-
-  if (!response?.ok) {
-    throw new Error(
-      response?.error ?? "The content script did not return page details.",
-    );
-  }
-
-  return (response.pageContext ?? response.snapshot) as JobPageContext;
+  return collectPageContextFromTab(tabId, "JOB_HELPER_CAPTURE_PAGE");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
