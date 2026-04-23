@@ -48,6 +48,8 @@ type TailorResumeWorkspaceProps = {
   openAIReady: boolean;
 };
 
+type TailorResumeStepId = "base" | "job";
+
 type TailorResumeExtractionAttempt = {
   attempt: number;
   error: string | null;
@@ -109,7 +111,7 @@ type TailorResumeRunResponsePayload = {
   profile?: TailorResumeProfile;
   savedLinkUpdateCount?: number;
   savedLinkUpdates?: TailorResumeSavedLinkUpdate[];
-  tailoringStatus?: "needs_user_input";
+  tailoringStatus?: "already_tailored" | "needs_user_input";
   tailoredResumeDurationMs?: number;
   tailoredResumeError?: string | null;
   tailoredResumeId?: string;
@@ -771,6 +773,14 @@ function StatusPill({ children }: { children: ReactNode }) {
   );
 }
 
+function resolveInitialOpenTailorResumeStep(
+  profile: TailorResumeProfile,
+): TailorResumeStepId {
+  return profile.resume && profile.workspace.isBaseResumeStepComplete
+    ? "job"
+    : "base";
+}
+
 export default function TailorResumeWorkspace({
   debugUiEnabled,
   initialProfile,
@@ -780,6 +790,8 @@ export default function TailorResumeWorkspace({
   openAIReady,
 }: TailorResumeWorkspaceProps) {
   const fileInputId = useId();
+  const jobDescriptionExtensionNudgeDescriptionId = useId();
+  const jobDescriptionExtensionNudgeTitleId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const jobDescriptionSaveSequenceRef = useRef(0);
   const latexSaveSequenceRef = useRef(0);
@@ -790,6 +802,7 @@ export default function TailorResumeWorkspace({
   const pendingLatexCodeRef = useRef<string | null>(null);
   const isLatexSaveInFlightRef = useRef(false);
   const isTailorInterviewSubmitInFlightRef = useRef(false);
+  const hasShownJobDescriptionExtensionNudgeRef = useRef(false);
   const lastAutoOpenedLinkReviewRef = useRef(initialProfile.extraction.updatedAt);
   const previousPreviewPdfUrlRef = useRef(
     buildPreviewPdfUrl(initialProfile.latex.pdfUpdatedAt),
@@ -806,6 +819,10 @@ export default function TailorResumeWorkspace({
   );
   const [pendingDeletedLinkKeys, setPendingDeletedLinkKeys] = useState<string[]>([]);
   const [isLinkEditorOpen, setIsLinkEditorOpen] = useState(false);
+  const [
+    isJobDescriptionExtensionNudgeOpen,
+    setIsJobDescriptionExtensionNudgeOpen,
+  ] = useState(false);
   const [isPreviewMounted, setIsPreviewMounted] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isPreviewFrameLoading, setIsPreviewFrameLoading] = useState(false);
@@ -822,6 +839,10 @@ export default function TailorResumeWorkspace({
   const [isUpdatingBaseResumeStep, setIsUpdatingBaseResumeStep] = useState(false);
   const [isUploadingResume, setIsUploadingResume] = useState(false);
   const [isWideLayout, setIsWideLayout] = useState(false);
+  const [openTailorResumeStep, setOpenTailorResumeStep] =
+    useState<TailorResumeStepId | null>(() =>
+      resolveInitialOpenTailorResumeStep(initialProfile),
+    );
   const [activeLatexView, setActiveLatexView] = useState<"annotated" | "source">(
     "source",
   );
@@ -874,11 +895,27 @@ export default function TailorResumeWorkspace({
     );
   const previewAsImage = displayedResume?.mimeType.startsWith("image/") ?? false;
   const isBaseResumeStepComplete = profile.workspace.isBaseResumeStepComplete;
-  const isJobDescriptionLocked =
-    !isBaseResumeStepComplete || hasTailoringInterview;
   const hasUnsavedJobDescriptionChanges =
     draftJobDescription !== lastSavedJobDescriptionRef.current;
-  const editorDisabled = isUploadingResume;
+  const isBaseResumeStepOpen =
+    openTailorResumeStep === "base" && !isBaseResumeStepComplete;
+  const isJobStepOpen =
+    openTailorResumeStep === "job" && isBaseResumeStepComplete;
+  const isJobStepBlockedByBaseStep = !isBaseResumeStepComplete;
+  const hasUnfinishedJobStepWork =
+    hasUnsavedJobDescriptionChanges ||
+    hasTailoringInterview ||
+    isSavingJobDescription ||
+    isTailoringResume;
+  const isBaseResumeBlockedByJobStep =
+    isBaseResumeStepComplete &&
+    (isJobStepOpen || hasUnfinishedJobStepWork);
+  const baseResumeBlockedByJobStepMessage = hasUnfinishedJobStepWork
+    ? "Finish or discard the current job-tailoring step before editing the base resume."
+    : "Finish or collapse Step 2 before editing the base resume.";
+  const isJobDescriptionLocked =
+    isJobStepBlockedByBaseStep || hasTailoringInterview;
+  const editorDisabled = isUploadingResume || isBaseResumeBlockedByJobStep;
   const displayedLatexCode =
     debugUiEnabled && activeLatexView === "annotated"
       ? profile.annotatedLatex.code
@@ -900,6 +937,24 @@ export default function TailorResumeWorkspace({
   useEffect(() => {
     setIsPreviewMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (!isJobDescriptionExtensionNudgeOpen) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsJobDescriptionExtensionNudgeOpen(false);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isJobDescriptionExtensionNudgeOpen]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(min-width: 1280px)");
@@ -944,6 +999,7 @@ export default function TailorResumeWorkspace({
     setIsSubmittingTailorInterviewAnswer(false);
     setIsTailoringResume(false);
     setIsUpdatingBaseResumeStep(false);
+    setOpenTailorResumeStep(resolveInitialOpenTailorResumeStep(initialProfile));
     setActiveLatexView("source");
     setTailorResumeGenerationProgress(createTailorResumeProgressState());
     setDraftTailorInterviewAnswer("");
@@ -1424,6 +1480,7 @@ export default function TailorResumeWorkspace({
       setDraftLinkLocks(buildLinkLockDrafts(payload.profile.links));
       setDraftLinkUrls(buildLinkUrlDrafts(payload.profile.links));
       setIsLinkEditorOpen(hasActiveResumeLinks(payload.profile));
+      setOpenTailorResumeStep("base");
       lastSavedLatexCodeRef.current = resolvedLatexCode;
       latestDraftLatexCodeRef.current = resolvedLatexCode;
       if (!streamedAttemptEvents) {
@@ -1635,6 +1692,13 @@ export default function TailorResumeWorkspace({
       return;
     }
 
+    if (!nextValue && isBaseResumeBlockedByJobStep) {
+      toast(baseResumeBlockedByJobStepMessage, {
+        id: latexSaveToastId,
+      });
+      return;
+    }
+
     setIsUpdatingBaseResumeStep(true);
 
     try {
@@ -1657,6 +1721,7 @@ export default function TailorResumeWorkspace({
       }
 
       setProfile(payload.profile);
+      setOpenTailorResumeStep(nextValue ? "job" : "base");
 
       if (nextValue) {
         toast.success("Step 1 marked complete. You can tailor for a job below.");
@@ -1672,8 +1737,39 @@ export default function TailorResumeWorkspace({
     }
   }
 
+  function toggleBaseResumeStep() {
+    if (!resume) {
+      return;
+    }
+
+    if (isBaseResumeStepComplete) {
+      void setBaseResumeStepComplete(false);
+      return;
+    }
+
+    setOpenTailorResumeStep((currentStep) =>
+      currentStep === "base" ? null : "base",
+    );
+  }
+
+  function toggleJobDescriptionStep() {
+    if (isJobStepBlockedByBaseStep) {
+      return;
+    }
+
+    setOpenTailorResumeStep((currentStep) =>
+      currentStep === "job" ? null : "job",
+    );
+  }
+
   function handleJobDescriptionChange(event: ChangeEvent<HTMLTextAreaElement>) {
     const nextValue = event.target.value;
+
+    if (!hasShownJobDescriptionExtensionNudgeRef.current) {
+      hasShownJobDescriptionExtensionNudgeRef.current = true;
+      setIsJobDescriptionExtensionNudgeOpen(true);
+    }
+
     setDraftJobDescription(nextValue);
 
     if (nextValue === lastSavedJobDescriptionRef.current) {
@@ -1778,7 +1874,9 @@ export default function TailorResumeWorkspace({
     }
 
     if (!draftJobDescription.trim()) {
-      toast.error("Paste a job description before tailoring the resume.");
+      toast.error(
+        "Use the Chrome extension from the job post, or paste a job description as a fallback.",
+      );
       return;
     }
 
@@ -1851,7 +1949,14 @@ export default function TailorResumeWorkspace({
       const nextTailoredResumeId =
         payload.tailoredResumeId ?? payload.profile.tailoredResumes[0]?.id ?? null;
 
-      if (payload.tailoredResumeError) {
+      if (payload.tailoringStatus === "already_tailored") {
+        toast.success(
+          "You already tailored a resume for this job. Opening the saved review.",
+          {
+            id: tailorResumeRunToastId,
+          },
+        );
+      } else if (payload.tailoredResumeError) {
         toast.error(
           formattedTailoringDuration
             ? `Saved a tailored draft in ${formattedTailoringDuration}, but it still needs review: ${payload.tailoredResumeError}. Opening review.`
@@ -1989,7 +2094,14 @@ export default function TailorResumeWorkspace({
       const nextTailoredResumeId =
         payload.tailoredResumeId ?? payload.profile.tailoredResumes[0]?.id ?? null;
 
-      if (payload.tailoredResumeError) {
+      if (payload.tailoringStatus === "already_tailored") {
+        toast.success(
+          "You already tailored a resume for this job. Opening the saved review.",
+          {
+            id: tailorResumeRunToastId,
+          },
+        );
+      } else if (payload.tailoredResumeError) {
         toast.error(
           formattedTailoringDuration
             ? `Saved a tailored draft in ${formattedTailoringDuration}, but it still needs review: ${payload.tailoredResumeError}. Opening review.`
@@ -2242,7 +2354,7 @@ export default function TailorResumeWorkspace({
       <input
         accept="application/pdf,image/png,image/jpeg,image/webp"
         className="sr-only"
-        disabled={!openAIReady || isUploadingResume}
+        disabled={!openAIReady || isUploadingResume || isBaseResumeBlockedByJobStep}
         id={fileInputId}
         onChange={handleResumeChange}
         ref={fileInputRef}
@@ -2272,13 +2384,15 @@ export default function TailorResumeWorkspace({
                   ? "Updating..."
                   : isBaseResumeStepComplete
                     ? "Completed"
+                    : !isBaseResumeStepOpen
+                      ? "Collapsed"
                     : isSavingLatex
                       ? "Saving edits..."
                       : latexState === "saved"
                         ? "Ready"
                         : "In progress"}
               </StatusPill>
-              {hasEditableOrPendingLinks ? (
+              {isBaseResumeStepOpen && hasEditableOrPendingLinks ? (
                 <button
                   aria-label={`Review links. ${visibleLinkCount} link${visibleLinkCount === 1 ? "" : "s"} currently listed.`}
                   className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-[0.2em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
@@ -2292,74 +2406,67 @@ export default function TailorResumeWorkspace({
                 </button>
               ) : null}
 
-              <button
-                className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-[0.2em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
-                onClick={() => setIsPreviewOpen(true)}
-                type="button"
-              >
-                View source
-              </button>
+              {isBaseResumeStepOpen ? (
+                <>
+                  <button
+                    className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-[0.2em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                    onClick={() => setIsPreviewOpen(true)}
+                    type="button"
+                  >
+                    View source
+                  </button>
 
-              <label
-                className={`inline-flex items-center rounded-full px-3 py-2 text-[11px] uppercase tracking-[0.2em] transition ${
-                  !openAIReady || isUploadingResume
-                    ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
-                    : "cursor-pointer border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
-                }`}
-                htmlFor={fileInputId}
-              >
-                {isUploadingResume ? "Saving..." : "Re-upload"}
-              </label>
+                  <label
+                    className={`inline-flex items-center rounded-full px-3 py-2 text-[11px] uppercase tracking-[0.2em] transition ${
+                      !openAIReady || isUploadingResume || isBaseResumeBlockedByJobStep
+                        ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
+                        : "cursor-pointer border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
+                    }`}
+                    htmlFor={
+                      !openAIReady || isUploadingResume || isBaseResumeBlockedByJobStep
+                        ? undefined
+                        : fileInputId
+                    }
+                  >
+                    {isUploadingResume ? "Saving..." : "Re-upload"}
+                  </label>
+                </>
+              ) : null}
 
               <button
                 className={`rounded-full px-3 py-2 text-[11px] uppercase tracking-[0.2em] transition ${
-                  isUpdatingBaseResumeStep || hasTailoringInterview
+                  isUpdatingBaseResumeStep ||
+                  (isBaseResumeStepComplete && isBaseResumeBlockedByJobStep)
                     ? "cursor-wait border border-white/10 bg-white/5 text-zinc-500"
-                    : isBaseResumeStepComplete
+                    : isBaseResumeStepComplete || !isBaseResumeStepOpen
                       ? "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
                       : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
                 }`}
-                disabled={isUpdatingBaseResumeStep || hasTailoringInterview}
+                disabled={
+                  isUpdatingBaseResumeStep ||
+                  (isBaseResumeStepComplete && isBaseResumeBlockedByJobStep)
+                }
                 onClick={() =>
-                  void setBaseResumeStepComplete(!isBaseResumeStepComplete)
+                  isBaseResumeStepOpen
+                    ? void setBaseResumeStepComplete(true)
+                    : toggleBaseResumeStep()
                 }
                 type="button"
               >
                 {isUpdatingBaseResumeStep
                   ? "Updating..."
-                  : hasTailoringInterview
-                    ? "Questions pending"
+                  : isBaseResumeStepComplete && isBaseResumeBlockedByJobStep
+                    ? "Step 2 active"
                   : isBaseResumeStepComplete
                     ? "Edit again"
+                  : !isBaseResumeStepOpen
+                    ? "Open step"
                     : "Mark complete"}
               </button>
             </div>
           </div>
 
-          {isBaseResumeStepComplete ? (
-            <div className="border-t border-white/8 px-4 pb-4 pt-4 sm:px-5 sm:pb-5">
-              <div className="rounded-[1.25rem] border border-white/10 bg-black/20 p-4">
-                <p className="text-sm font-medium text-zinc-100">
-                  Base resume locked in for tailoring.
-                </p>
-                <p className="mt-2 text-sm leading-6 text-zinc-400">
-                  Reopen this step any time if you want to keep editing the
-                  LaTeX, review links, or replace the uploaded source file.
-                </p>
-                <div className="mt-3 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                  <span>{resume.originalFilename}</span>
-                  {debugUiEnabled ? (
-                    <span>{profile.annotatedLatex.segmentCount} annotated segments</span>
-                  ) : null}
-                  <span>
-                    {profile.latex.status === "ready"
-                      ? "Preview ready"
-                      : "Preview needs review"}
-                  </span>
-                </div>
-              </div>
-            </div>
-          ) : (
+          {isBaseResumeStepOpen ? (
             <div className="px-3 pb-3 sm:px-4 sm:pb-4">
               {isWideLayout ? (
                 <section className="min-h-[560px] pt-1">
@@ -2394,6 +2501,34 @@ export default function TailorResumeWorkspace({
                   {previewPanelContent}
                 </section>
               )}
+            </div>
+          ) : (
+            <div className="border-t border-white/8 px-4 pb-4 pt-4 sm:px-5 sm:pb-5">
+              <div className="rounded-[1.25rem] border border-white/10 bg-black/20 p-4">
+                <p className="text-sm font-medium text-zinc-100">
+                  {isBaseResumeStepComplete
+                    ? "Base resume locked in for tailoring."
+                    : "Step 1 is collapsed."}
+                </p>
+                <p className="mt-2 text-sm leading-6 text-zinc-400">
+                  {isBaseResumeBlockedByJobStep
+                    ? baseResumeBlockedByJobStepMessage
+                    : isBaseResumeStepComplete
+                      ? "Open this step again only when you need to revise the base resume."
+                      : "Open this step to finish reviewing the base resume before moving on."}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                  <span>{resume.originalFilename}</span>
+                  {debugUiEnabled ? (
+                    <span>{profile.annotatedLatex.segmentCount} annotated segments</span>
+                  ) : null}
+                  <span>
+                    {profile.latex.status === "ready"
+                      ? "Preview ready"
+                      : "Preview needs review"}
+                  </span>
+                </div>
+              </div>
             </div>
           )}
         </section>
@@ -2439,22 +2574,28 @@ export default function TailorResumeWorkspace({
 
       {resume ? (
         <>
-          <section className="glass-panel soft-ring flex min-h-[260px] flex-col rounded-[1.5rem] p-4 sm:p-5">
+          <section
+            className={`glass-panel soft-ring flex flex-col rounded-[1.5rem] p-4 sm:p-5 ${
+              isJobStepOpen ? "min-h-[260px]" : ""
+            }`}
+          >
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
                   Step 2
                 </p>
                 <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-                  Paste the job description
+                  Tailor from the Chrome extension
                 </h2>
                 <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">
-                  Submitting this creates a separate tailored resume with saved
-                  company, role, and job-specific identifier metadata.
+                  The extension captures the job URL with the posting, which lets
+                  Job Helper recognize when a saved tailored resume already
+                  exists for the same role. Pasting text here is a fallback.
                 </p>
                 {!isBaseResumeStepComplete ? (
                   <p className="mt-3 rounded-[1rem] border border-white/10 bg-black/20 px-3 py-2 text-sm leading-6 text-zinc-400">
-                    Mark step 1 complete to unlock job descriptions and resume tailoring.
+                    Mark step 1 complete before tailoring from the extension or
+                    using the paste fallback.
                   </p>
                 ) : null}
               </div>
@@ -2462,7 +2603,9 @@ export default function TailorResumeWorkspace({
               <div className="flex flex-wrap items-center gap-2">
                 <StatusPill>
                   {!isBaseResumeStepComplete
-                    ? "Step 1 required"
+                    ? "Step 1 unfinished"
+                    : !isJobStepOpen
+                    ? "Collapsed"
                     : hasTailoringInterview
                     ? "Questions pending"
                     : isSavingJobDescription
@@ -2473,86 +2616,112 @@ export default function TailorResumeWorkspace({
                         ? "Unsaved changes"
                         : "Draft idle"}
                 </StatusPill>
-                <button
-                  className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
-                    !isBaseResumeStepComplete ||
-                    hasTailoringInterview ||
-                    isSavingJobDescription ||
-                    !hasUnsavedJobDescriptionChanges
-                      ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
-                      : "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
-                  }`}
-                  disabled={
-                    !isBaseResumeStepComplete ||
-                    hasTailoringInterview ||
-                    isSavingJobDescription ||
-                    !hasUnsavedJobDescriptionChanges
-                  }
-                  onClick={() => void saveJobDescription()}
-                  type="button"
-                >
-                  {isSavingJobDescription ? "Saving..." : "Save description"}
-                </button>
-                <button
-                  className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
-                    !openAIReady ||
-                    isTailoringResume ||
-                    (!hasTailoringInterview && isJobDescriptionLocked) ||
-                    (!hasTailoringInterview &&
-                      draftJobDescription.trim().length === 0)
-                      ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
-                      : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
-                  }`}
-                  disabled={
-                    !openAIReady ||
-                    isTailoringResume ||
-                    (!hasTailoringInterview && isJobDescriptionLocked) ||
-                    (!hasTailoringInterview &&
-                      draftJobDescription.trim().length === 0)
-                  }
-                  onClick={() => void tailorResume()}
-                  type="button"
-                >
-                  {isTailoringResume
-                    ? "Creating..."
-                    : hasTailoringInterview
-                    ? "Resume questions"
-                    : "Create tailored resume"}
-                </button>
-                {hasTailoringInterview ? (
+                {isJobStepBlockedByBaseStep ? null : (
                   <button
-                    className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
-                      isCancellingTailorInterview
-                        ? "cursor-wait border border-white/10 bg-white/5 text-zinc-500"
-                        : "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
-                    }`}
-                    disabled={isCancellingTailorInterview}
-                    onClick={() => void cancelTailorResumeInterview()}
+                    className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                    onClick={toggleJobDescriptionStep}
                     type="button"
                   >
-                    {isCancellingTailorInterview ? "Discarding..." : "Discard"}
+                    {isJobStepOpen ? "Collapse" : "Open step"}
                   </button>
+                )}
+                {isJobStepOpen ? (
+                  <>
+                    <button
+                      className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
+                        !isBaseResumeStepComplete ||
+                        hasTailoringInterview ||
+                        isSavingJobDescription ||
+                        !hasUnsavedJobDescriptionChanges
+                          ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
+                          : "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
+                      }`}
+                      disabled={
+                        !isBaseResumeStepComplete ||
+                        hasTailoringInterview ||
+                        isSavingJobDescription ||
+                        !hasUnsavedJobDescriptionChanges
+                      }
+                      onClick={() => void saveJobDescription()}
+                      type="button"
+                    >
+                      {isSavingJobDescription ? "Saving..." : "Save description"}
+                    </button>
+                    <button
+                      className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
+                        !openAIReady ||
+                        isTailoringResume ||
+                        (!hasTailoringInterview && isJobDescriptionLocked) ||
+                        (!hasTailoringInterview &&
+                          draftJobDescription.trim().length === 0)
+                          ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
+                          : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
+                      }`}
+                      disabled={
+                        !openAIReady ||
+                        isTailoringResume ||
+                        (!hasTailoringInterview && isJobDescriptionLocked) ||
+                        (!hasTailoringInterview &&
+                          draftJobDescription.trim().length === 0)
+                      }
+                      onClick={() => void tailorResume()}
+                      type="button"
+                    >
+                      {isTailoringResume
+                        ? "Creating..."
+                        : hasTailoringInterview
+                        ? "Resume questions"
+                        : "Create tailored resume"}
+                    </button>
+                    {hasTailoringInterview ? (
+                      <button
+                        className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
+                          isCancellingTailorInterview
+                            ? "cursor-wait border border-white/10 bg-white/5 text-zinc-500"
+                            : "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
+                        }`}
+                        disabled={isCancellingTailorInterview}
+                        onClick={() => void cancelTailorResumeInterview()}
+                        type="button"
+                      >
+                        {isCancellingTailorInterview ? "Discarding..." : "Discard"}
+                      </button>
+                    ) : null}
+                  </>
                 ) : null}
               </div>
             </div>
 
-            <textarea
-              className={`mt-5 min-h-[180px] w-full flex-1 resize-none rounded-[1.25rem] border px-4 py-4 text-sm leading-6 outline-none transition placeholder:text-zinc-500 ${
-                isJobDescriptionLocked
-                  ? "cursor-not-allowed border-white/8 bg-black/10 text-zinc-500"
-                  : "border-white/10 bg-black/20 text-zinc-100 focus:border-emerald-300/45"
-              }`}
-              disabled={isJobDescriptionLocked}
-              onChange={handleJobDescriptionChange}
-              placeholder={
-                !isBaseResumeStepComplete
-                  ? "Complete step 1 to unlock the job description field."
-                  : hasTailoringInterview
-                  ? "Resume or discard the follow-up questions before editing the description."
-                  : "Paste job-description snippets here from as many sources as you need, then save or create the tailored resume."
-              }
-              value={draftJobDescription}
-            />
+            {isJobStepOpen ? (
+              <textarea
+                className={`mt-5 min-h-[180px] w-full flex-1 resize-none rounded-[1.25rem] border px-4 py-4 text-sm leading-6 outline-none transition placeholder:text-zinc-500 ${
+                  isJobDescriptionLocked
+                    ? "cursor-not-allowed border-white/8 bg-black/10 text-zinc-500"
+                    : "border-white/10 bg-black/20 text-zinc-100 focus:border-emerald-300/45"
+                }`}
+                disabled={isJobDescriptionLocked}
+                onChange={handleJobDescriptionChange}
+                placeholder={
+                  hasTailoringInterview
+                    ? "Resume or discard the follow-up questions before editing the description."
+                    : "Fallback only: paste job-description snippets here if the Chrome extension cannot read the job page."
+                }
+                value={draftJobDescription}
+              />
+            ) : (
+              <div className="mt-5 rounded-[1.25rem] border border-white/10 bg-black/20 p-4">
+                <p className="text-sm font-medium text-zinc-100">
+                  {isJobStepBlockedByBaseStep
+                    ? "Step 2 is waiting for Step 1."
+                    : "Step 2 is collapsed."}
+                </p>
+                <p className="mt-2 text-sm leading-6 text-zinc-400">
+                  {isJobStepBlockedByBaseStep
+                    ? "Finish reviewing the base resume before moving on to job-specific tailoring."
+                    : "Open this step when you are ready to tailor from the extension or use the paste fallback."}
+                </p>
+              </div>
+            )}
           </section>
         </>
       ) : null}
@@ -2563,6 +2732,72 @@ export default function TailorResumeWorkspace({
         onClose={closeTailorResumeProgress}
         steps={tailorResumeGenerationProgress.steps}
       />
+
+      {isPreviewMounted && isJobDescriptionExtensionNudgeOpen
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[205] flex items-center justify-center bg-black/82 px-4 py-6 backdrop-blur-sm sm:px-6"
+              onClick={(event) => {
+                if (event.target === event.currentTarget) {
+                  setIsJobDescriptionExtensionNudgeOpen(false);
+                }
+              }}
+            >
+              <section
+                aria-describedby={jobDescriptionExtensionNudgeDescriptionId}
+                aria-modal="true"
+                aria-labelledby={jobDescriptionExtensionNudgeTitleId}
+                className="glass-panel soft-ring w-full max-w-lg overflow-hidden rounded-[1.5rem] border border-white/10 bg-zinc-950/96 shadow-[0_30px_120px_rgba(0,0,0,0.58)] ring-1 ring-white/10 backdrop-blur-xl"
+                role="dialog"
+              >
+                <div className="border-b border-white/10 px-5 pb-4 pt-5 sm:px-6 sm:pb-5 sm:pt-6">
+                  <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+                    Tailor resume
+                  </p>
+                  <h2
+                    className="mt-2 text-xl font-semibold tracking-tight text-zinc-50"
+                    id={jobDescriptionExtensionNudgeTitleId}
+                  >
+                    The Chrome extension is better for this
+                  </h2>
+                  <p
+                    className="mt-3 text-sm leading-6 text-zinc-400"
+                    id={jobDescriptionExtensionNudgeDescriptionId}
+                  >
+                    We encourage using the Chrome extension because it can parse
+                    the page better than Cmd A and Cmd V, and it is faster.
+                  </p>
+                </div>
+
+                <div className="px-5 py-5 sm:px-6">
+                  <div className="rounded-[1rem] border border-emerald-300/18 bg-emerald-400/10 px-4 py-3 text-sm leading-6 text-emerald-50/88">
+                    Pasting here still works as a fallback, but the extension
+                    usually captures cleaner job details and the job URL in one
+                    pass.
+                  </div>
+
+                  <div className="mt-5 flex flex-wrap justify-end gap-2">
+                    <button
+                      className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                      onClick={() => setIsJobDescriptionExtensionNudgeOpen(false)}
+                      type="button"
+                    >
+                      Keep editing
+                    </button>
+                    <button
+                      className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-300 transition hover:border-emerald-300/35 hover:bg-emerald-400/15"
+                      onClick={() => setIsJobDescriptionExtensionNudgeOpen(false)}
+                      type="button"
+                    >
+                      Got it
+                    </button>
+                  </div>
+                </div>
+              </section>
+            </div>,
+            document.body,
+          )
+        : null}
 
       {isPreviewMounted && isTailorInterviewOpen && tailoringInterview
         ? createPortal(
