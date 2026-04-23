@@ -297,6 +297,7 @@ test("parseTailorResumeProfile keeps tailored resume metadata and workspace stat
         id: "tailored-1",
         jobDescription: "Job description text",
         jobIdentifier: "Applied research",
+        jobUrl: "https://jobs.example.com/openai/research-engineer",
         latexCode: "\\documentclass{article}",
         openAiDebug: {
           implementation: {
@@ -363,6 +364,10 @@ test("parseTailorResumeProfile keeps tailored resume metadata and workspace stat
   assert.equal(profile.tailoredResumes[0]?.edits[0]?.state, "applied");
   assert.equal(profile.tailoredResumes[0]?.positionTitle, "Research Engineer");
   assert.equal(profile.tailoredResumes[0]?.jobIdentifier, "Applied research");
+  assert.equal(
+    profile.tailoredResumes[0]?.jobUrl,
+    "https://jobs.example.com/openai/research-engineer",
+  );
   assert.equal(
     profile.tailoredResumes[0]?.planningResult.changes[0]?.desiredPlainText,
     "Tailored bullet",

@@ -37,6 +37,7 @@ function buildTailoredResume(
     id: overrides.id ?? "tailored-1",
     jobDescription: overrides.jobDescription ?? "Original description",
     jobIdentifier: overrides.jobIdentifier ?? "Research Engineer",
+    jobUrl: overrides.jobUrl ?? "https://jobs.example.com/research-engineer",
     latexCode: overrides.latexCode ?? "\\documentclass{article}",
     openAiDebug: overrides.openAiDebug ?? {
       implementation: {

@@ -35,6 +35,10 @@ import {
   stripTailorResumeSegmentIds,
 } from "@/lib/tailor-resume-segmentation";
 import {
+  findTailoredResumeByJobUrl,
+  resolveTailorResumeJobUrl,
+} from "@/lib/tailor-resume-job-url";
+import {
   buildTailorResumeGenerationSourceSnapshot,
   hasTailorResumeGenerationSourceChanged,
   mergeTailorResumeFailedGeneration,
@@ -414,6 +418,7 @@ type TailorResumeGenerationPreparation =
   | {
       kind: "ready";
       jobDescription: string;
+      jobUrl: string | null;
       lockedLinks: TailorResumeLockedLinkRecord[];
       rawProfile: TailorResumeProfile;
     };
@@ -435,6 +440,7 @@ async function finalizeTailorResumeGeneration(input: {
   generationSourceAnnotatedLatex: string;
   generationSourceSnapshot: ReturnType<typeof buildTailorResumeGenerationSourceSnapshot>;
   jobDescription: string;
+  jobUrl: string | null;
   lockedLinks: TailorResumeLockedLinkRecord[];
   normalizedBaseLatex: ReturnType<typeof normalizeAnnotatedLatexState>;
   onStepEvent?: (
@@ -693,6 +699,7 @@ async function finalizeTailorResumeGeneration(input: {
         id: tailoredResumeId,
         jobDescription: input.jobDescription,
         jobIdentifier: tailoringResult.jobIdentifier,
+        jobUrl: input.jobUrl,
         latexCode: tailoringResult.latexCode,
         openAiDebug: tailoringResult.openAiDebug,
         pdfUpdatedAt: tailoringResult.previewPdf ? tailoredResumeUpdatedAt : null,
@@ -787,12 +794,26 @@ async function handleTailorResumeGeneration(
       typeof body.jobDescription === "string"
         ? body.jobDescription
         : profile.jobDescription;
+    const jobUrlResult = resolveTailorResumeJobUrl({
+      explicitJobUrl: "jobUrl" in body ? body.jobUrl : null,
+      jobDescription,
+    });
 
     if (!profile.latex.code.trim()) {
       return {
         kind: "response",
         response: NextResponse.json(
           { error: "Upload or save a base resume before tailoring it." },
+          { status: 400 },
+        ),
+      };
+    }
+
+    if (!jobUrlResult.ok) {
+      return {
+        kind: "response",
+        response: NextResponse.json(
+          { error: jobUrlResult.error },
           { status: 400 },
         ),
       };
@@ -808,9 +829,28 @@ async function handleTailorResumeGeneration(
       };
     }
 
+    const existingTailoredResume = findTailoredResumeByJobUrl(
+      profile.tailoredResumes,
+      jobUrlResult.jobUrl,
+    );
+
+    if (existingTailoredResume) {
+      return {
+        kind: "response",
+        response: NextResponse.json({
+          profile,
+          tailoredResumeDurationMs: 0,
+          tailoredResumeError: existingTailoredResume.error,
+          tailoredResumeId: existingTailoredResume.id,
+          tailoringStatus: "already_tailored" as const,
+        }),
+      };
+    }
+
     return {
       kind: "ready",
       jobDescription,
+      jobUrl: jobUrlResult.jobUrl,
       lockedLinks,
       rawProfile,
     };
@@ -975,6 +1015,7 @@ async function handleTailorResumeGeneration(
         generationSourceSnapshot,
         id: randomUUID(),
         jobDescription: preparation.jobDescription,
+        jobUrl: preparation.jobUrl,
         planningDebug: planningStage.planningDebug,
         planningResult,
         sourceAnnotatedLatexCode: generationSourceAnnotatedLatex,
@@ -1120,6 +1161,7 @@ async function handleTailorResumeGeneration(
     generationSourceAnnotatedLatex,
     generationSourceSnapshot,
     jobDescription: preparation.jobDescription,
+    jobUrl: preparation.jobUrl,
     lockedLinks: preparation.lockedLinks,
     normalizedBaseLatex,
     onStepEvent: options.onStepEvent,
@@ -1428,6 +1470,7 @@ async function handleAdvanceTailorResumeInterview(
     generationSourceAnnotatedLatex,
     generationSourceSnapshot: preparation.tailoringInterview.generationSourceSnapshot,
     jobDescription: preparation.tailoringInterview.jobDescription,
+    jobUrl: preparation.tailoringInterview.jobUrl,
     lockedLinks: preparation.lockedLinks,
     normalizedBaseLatex,
     onStepEvent: options.onStepEvent,

@@ -192,6 +192,7 @@ export type TailorResumePendingInterview = {
   generationSourceSnapshot: TailorResumeGenerationSourceSnapshot;
   id: string;
   jobDescription: string;
+  jobUrl: string | null;
   planningDebug: TailoredResumeOpenAiDebugStage;
   planningResult: TailoredResumePlanningResult;
   sourceAnnotatedLatexCode: string;
@@ -208,6 +209,7 @@ export type TailoredResumeRecord = {
   id: string;
   jobDescription: string;
   jobIdentifier: string;
+  jobUrl: string | null;
   latexCode: string;
   openAiDebug: TailoredResumeOpenAiDebugTrace;
   pdfUpdatedAt: string | null;
@@ -930,6 +932,7 @@ function parseTailorResumePendingInterview(
   const createdAt = readNullableString(value.createdAt);
   const updatedAt = readNullableString(value.updatedAt);
   const jobDescription = readNullableString(value.jobDescription);
+  const jobUrl = readNullableString(value.jobUrl);
   const sourceAnnotatedLatexCode = readNullableString(value.sourceAnnotatedLatexCode);
   const planningDebug = parseTailoredResumeOpenAiDebugStage(value.planningDebug);
   const planningResult = parseTailoredResumePlanningResult(value.planningResult);
@@ -966,6 +969,7 @@ function parseTailorResumePendingInterview(
     generationSourceSnapshot,
     id,
     jobDescription,
+    jobUrl,
     planningDebug,
     planningResult,
     sourceAnnotatedLatexCode,
@@ -981,6 +985,7 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
   const id = readNullableString(value.id);
   const displayName = readNullableString(value.displayName);
   const jobDescription = readNullableString(value.jobDescription);
+  const jobUrl = readNullableString(value.jobUrl);
   const latexCode = readNullableString(value.latexCode);
   const annotatedLatexCode = readNullableString(value.annotatedLatexCode);
   const createdAt = readNullableString(value.createdAt);
@@ -1041,6 +1046,7 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
     id,
     jobDescription,
     jobIdentifier,
+    jobUrl,
     latexCode,
     openAiDebug,
     pdfUpdatedAt,

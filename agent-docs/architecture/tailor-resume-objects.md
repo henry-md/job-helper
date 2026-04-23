@@ -56,6 +56,7 @@ Tailor Resume object model:
     - desired plaintext rewrites per block
     - the planner thesis + metadata
     - `jobIdentifier`, which should prefer a visible job/requisition/posting id and fall back to the usual short disambiguator when no job number is available
+  - `jobUrl`, when the run came from a captured job page or a description with a URL header; URL matching lets the API return an existing tailored resume instead of generating a duplicate for the same posting
   - the saved OpenAI debug trace for developer inspection, including:
     - the full prompt for the stage-1 plaintext planning call
     - the full JSON output returned by the stage-1 call
@@ -135,6 +136,7 @@ Tailoring generation:
 - When the page-count guardrail is enabled and the compiled tailored preview exceeds the original resume's page count, the flow runs a third conditional stage:
   - a refinement-style compaction pass that re-prompts only the existing edited blocks, sends highlighted rendered preview screenshots, and retries until the preview fits within the original page count or the attempt budget is exhausted
 - Compile retries stay scoped to the implementation pass so LaTeX escaping and block-boundary fixes do not force the model to rethink the whole editing thesis on every retry.
+- Extension-originated tailoring should pass the captured job URL separately from the job-description text. If a saved tailored resume already has the same normalized URL, the API returns that record with `tailoringStatus: "already_tailored"` so extension UI can show the saved preview/download path without launching a fresh generation.
 
 Important rule:
 
