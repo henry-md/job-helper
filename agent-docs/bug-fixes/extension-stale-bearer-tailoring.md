@@ -1,0 +1,4 @@
+- Symptom: the Chrome extension could show a connected Google account, then Tailor Current Page saved a last-run error of `Unauthorized.` or otherwise failed before tailoring started.
+- Root cause: the extension trusted a locally fresh-looking session token without checking that the backing database session still existed. Ambient browser cookies could also mask stale bearer tokens during auth checks if API auth read cookies first.
+- Fix: authenticated API helpers should treat an explicit bearer token as authoritative before cookie auth. Extension background flows should validate the stored Job Helper session before API work and re-run the Google extension sign-in flow when interactive work can recover.
+- Guardrail: side-panel "connected" state must mean the bearer token can authenticate server API calls, not only that Chrome storage contains a non-expired-looking token.

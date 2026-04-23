@@ -33,29 +33,9 @@ export function readBearerToken(request: Request) {
   return token;
 }
 
-export async function getApiSession(request: Request): Promise<ApiSession | null> {
-  const webSession = await getServerSession(authOptions);
-
-  if (webSession?.user?.id) {
-    return {
-      expires: null,
-      sessionToken: null,
-      source: "web",
-      user: {
-        email: webSession.user.email ?? null,
-        id: webSession.user.id,
-        image: webSession.user.image ?? null,
-        name: webSession.user.name ?? null,
-      },
-    };
-  }
-
-  const sessionToken = readBearerToken(request);
-
-  if (!sessionToken) {
-    return null;
-  }
-
+async function getBearerApiSession(
+  sessionToken: string,
+): Promise<ApiSession | null> {
   const prisma = getPrismaClient();
   const session = await prisma.session.findUnique({
     include: {
@@ -88,4 +68,30 @@ export async function getApiSession(request: Request): Promise<ApiSession | null
     source: "extension",
     user: session.user,
   };
+}
+
+export async function getApiSession(request: Request): Promise<ApiSession | null> {
+  const sessionToken = readBearerToken(request);
+
+  if (sessionToken) {
+    return getBearerApiSession(sessionToken);
+  }
+
+  const webSession = await getServerSession(authOptions);
+
+  if (webSession?.user?.id) {
+    return {
+      expires: null,
+      sessionToken: null,
+      source: "web",
+      user: {
+        email: webSession.user.email ?? null,
+        id: webSession.user.id,
+        image: webSession.user.image ?? null,
+        name: webSession.user.name ?? null,
+      },
+    };
+  }
+
+  return null;
 }
