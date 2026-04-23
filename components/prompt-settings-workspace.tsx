@@ -27,7 +27,7 @@ type GenerationSettingKey = keyof TailorResumeProfile["generationSettings"]["val
 const promptFieldDefinitions = [
   {
     description:
-      "Screenshots and browser evidence into structured application fields.",
+      "Screenshots into structured application fields.",
     helper: "Runtime tokens: none.",
     key: "jobApplicationExtraction",
     minHeightClassName: "min-h-[220px]",

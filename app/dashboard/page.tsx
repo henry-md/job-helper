@@ -21,7 +21,6 @@ import {
 type DashboardPageProps = {
   searchParams?: Promise<{
     error?: string;
-    ingested?: string;
     tab?: string;
     tailoredResumeId?: string;
   }>;
@@ -125,17 +124,12 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     testOpenAIResponseEnabled || Boolean(process.env.OPENAI_API_KEY);
   const extractionModel = process.env.OPENAI_JOB_EXTRACTION_MODEL ?? "gpt-5-mini";
   const uploadDisabled = !databaseStatus.ok || !openAIReady;
-  const statusMessage = params?.ingested
+  const statusMessage = params?.error
     ? {
-        tone: "success" as const,
-        text: "Saved a new application from the uploaded screenshot.",
+        tone: "error" as const,
+        text: params.error,
       }
-    : params?.error
-      ? {
-          tone: "error" as const,
-          text: params.error,
-        }
-      : null;
+    : null;
   const initialDashboardRouteState = parseDashboardRouteState({
     tab: params?.tab,
     tailoredResumeId: params?.tailoredResumeId,

@@ -9,7 +9,6 @@ import type {
   EmploymentTypeValue,
   FieldConfidence,
   JobApplicationDraft,
-  JobPageContext,
   JobLocationType,
   JobApplicationExtraction,
 } from "@/lib/job-application-types";
@@ -498,67 +497,12 @@ function buildExistingDraftContext(existingDraft?: JobApplicationDraft | null) {
   return JSON.stringify(Object.fromEntries(populatedEntries), null, 2);
 }
 
-function trimContextText(value: string | null | undefined, maxLength: number) {
-  const trimmedValue = value?.trim();
-
-  if (!trimmedValue) {
-    return null;
-  }
-
-  if (trimmedValue.length <= maxLength) {
-    return trimmedValue;
-  }
-
-  return `${trimmedValue.slice(0, maxLength)}…`;
-}
-
-function buildPageContextSummary(pageContext?: JobPageContext | null) {
-  if (!pageContext) {
-    return null;
-  }
-
-  const compactContext = {
-    url: trimContextText(pageContext.url, 400),
-    title: trimContextText(pageContext.title, 300),
-    description: trimContextText(pageContext.description, 500),
-    canonicalUrl: trimContextText(pageContext.canonicalUrl, 400),
-    siteName: trimContextText(pageContext.siteName, 200),
-    selectionText: trimContextText(pageContext.selectionText, 2_000),
-    rawText: trimContextText(pageContext.rawText, 18_000),
-    headings: pageContext.headings.slice(0, 12),
-    topTextBlocks: pageContext.topTextBlocks.slice(0, 10),
-    titleCandidates: pageContext.titleCandidates.slice(0, 8),
-    companyCandidates: pageContext.companyCandidates.slice(0, 8),
-    locationCandidates: pageContext.locationCandidates.slice(0, 8),
-    salaryMentions: pageContext.salaryMentions.slice(0, 8),
-    employmentTypeCandidates: pageContext.employmentTypeCandidates.slice(0, 8),
-    jsonLdJobPostings: pageContext.jsonLdJobPostings.slice(0, 4),
-  };
-
-  const hasContent = Object.values(compactContext).some((value) => {
-    if (Array.isArray(value)) {
-      return value.length > 0;
-    }
-
-    return Boolean(value);
-  });
-
-  if (!hasContent) {
-    return null;
-  }
-
-  return JSON.stringify(compactContext, null, 2);
-}
-
-export async function extractJobApplicationFromEvidence(input: {
+export async function extractJobApplicationFromScreenshot(input: {
+  dataUrl: string;
   existingDraft?: JobApplicationDraft | null;
-  pageContext?: JobPageContext | null;
+  filename: string;
+  mimeType: string;
   promptSettings?: SystemPromptSettings;
-  screenshots?: Array<{
-    dataUrl: string;
-    filename: string;
-    mimeType: string;
-  }>;
 }) {
   const model = process.env.OPENAI_JOB_EXTRACTION_MODEL ?? "gpt-5-mini";
 
@@ -572,14 +516,7 @@ export async function extractJobApplicationFromEvidence(input: {
     };
   }
 
-  const screenshots = input.screenshots ?? [];
   const existingDraftContext = buildExistingDraftContext(input.existingDraft);
-  const pageContextSummary = buildPageContextSummary(input.pageContext);
-
-  if (screenshots.length === 0 && !pageContextSummary) {
-    throw new Error("Provide at least one screenshot or page context to extract.");
-  }
-
   const client = getOpenAIClient();
   const response = await client.responses.create({
     model,
@@ -592,20 +529,8 @@ export async function extractJobApplicationFromEvidence(input: {
         content: [
           {
             type: "input_text",
-            text:
-              screenshots.length > 0
-                ? `Extract the job title, company name, job URL, applied date, location, salary range, employment type, team or department, recruiter or contact, referrer name, onsite days per week, status, notes, and job description from these job-posting screenshots and page signals. There are ${screenshots.length} screenshot${screenshots.length === 1 ? "" : "s"} attached.`
-                : "Extract the job title, company name, job URL, applied date, location, salary range, employment type, team or department, recruiter or contact, referrer name, onsite days per week, status, notes, and job description from these job-posting page signals.",
+            text: "Extract the job title, company name, job URL, applied date, location, salary range, employment type, team or department, recruiter or contact, referrer name, onsite days per week, status, notes, and job description from this job-posting screenshot.",
           },
-          ...(pageContextSummary
-            ? [
-                {
-                  type: "input_text" as const,
-                  text:
-                    `Browser page context captured by the Chrome extension:\n${pageContextSummary}\n\nUse this as structured evidence. The rawText field is flattened page text and may include some navigation or duplicate content, so prefer clearer candidates, headings, and JSON-LD job-posting hints when they are available.`,
-                },
-              ]
-            : []),
           ...(existingDraftContext
             ? [
                 {
@@ -615,17 +540,15 @@ export async function extractJobApplicationFromEvidence(input: {
                 },
               ]
             : []),
-          ...screenshots.flatMap((screenshot) => [
-            {
-              type: "input_text" as const,
-              text: `Screenshot evidence: ${screenshot.filename} (${screenshot.mimeType}).`,
-            },
-            {
-              type: "input_image" as const,
-              image_url: screenshot.dataUrl,
-              detail: "high" as const,
-            },
-          ]),
+          {
+            type: "input_text",
+            text: `Screenshot evidence: ${input.filename} (${input.mimeType}).`,
+          },
+          {
+            type: "input_image",
+            image_url: input.dataUrl,
+            detail: "high",
+          },
         ],
       },
     ],
@@ -651,24 +574,4 @@ export async function extractJobApplicationFromEvidence(input: {
     model: (response as { model?: string }).model ?? model,
     rawText: outputText,
   };
-}
-
-export async function extractJobApplicationFromScreenshot(input: {
-  dataUrl: string;
-  existingDraft?: JobApplicationDraft | null;
-  filename: string;
-  mimeType: string;
-  promptSettings?: SystemPromptSettings;
-}) {
-  return extractJobApplicationFromEvidence({
-    existingDraft: input.existingDraft,
-    promptSettings: input.promptSettings,
-    screenshots: [
-      {
-        dataUrl: input.dataUrl,
-        filename: input.filename,
-        mimeType: input.mimeType,
-      },
-    ],
-  });
 }
