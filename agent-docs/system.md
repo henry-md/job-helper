@@ -8,8 +8,8 @@ Current product slice:
 - Important dashboard verification state is URL-addressable with `?tab=...`; currently `/dashboard?tab=tailor` opens the Tailor Resume view directly for screenshot verification, and `/dashboard?tab=tailor&tailoredResumeId=<id>` opens the saved tailored-resume review modal.
 - Uploading a resume now triggers an OpenAI extraction pass that returns LaTeX directly, then the dashboard lets the user edit that LaTeX side-by-side with the rendered PDF preview.
 - Users upload one or more screenshots, the app extracts draft fields with OpenAI, then saves screenshots + one `JobApplication`.
-- Automation capture clients can also ingest evidence through `POST /api/job-applications/ingest`, which accepts screenshots, structured page context, raw text, or a mix.
 - The Chrome extension runs its React UI in Chrome's native Side Panel. Its Tailor Resume flow signs in with Chrome's Google identity API, exchanges that for a database-backed Job Helper session, scrapes the active job page from the side panel button or hotkey, then calls `PATCH /api/tailor-resume` with `action: "tailor"`.
+- The extension side panel also exposes a URL-scoped streamed chat. The extension captures the current page context and renders chunks, while the app API owns chat history persistence, resume/USER.md context loading, prompt construction, and the OpenAI call.
 
 Core dependencies:
 - Next.js 16 App Router, React 19, TypeScript.

@@ -21,6 +21,8 @@ model User {
   screenshots             JobApplicationScreenshot[]
   tailorResumeLockedLinks TailorResumeLockedLink[]
   tailorResumeUserMemory  TailorResumeUserMemory?
+  tailorResumeChatThreads TailorResumeChatThread[]
+  tailorResumeChatMessages TailorResumeChatMessage[]
   latexBuildFailures      LatexBuildFailure[]
 }
 
@@ -61,6 +63,41 @@ model TailorResumeUserMemory {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([updatedAt(sort: Desc)])
+}
+
+enum TailorResumeChatRole {
+  USER
+  ASSISTANT
+}
+
+model TailorResumeChatThread {
+  id        String                    @id @default(cuid())
+  userId    String
+  url       String                    @db.Text
+  urlHash   String
+  pageTitle String?
+  createdAt DateTime                  @default(now())
+  updatedAt DateTime                  @updatedAt
+  messages  TailorResumeChatMessage[]
+  user      User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, urlHash])
+  @@index([userId, updatedAt(sort: Desc)])
+}
+
+model TailorResumeChatMessage {
+  id        String                @id @default(cuid())
+  userId    String
+  threadId  String
+  role      TailorResumeChatRole
+  content   String                @db.Text
+  model     String?
+  createdAt DateTime              @default(now())
+  thread    TailorResumeChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 model Account {
