@@ -1,6 +1,6 @@
 import {
   AUTH_SESSION_STORAGE_KEY,
-  buildTailoredResumeReviewUrl,
+  buildJobDescriptionFromPageContext,
   CAPTURE_COMMAND_NAME,
   DEFAULT_DASHBOARD_URL,
   DEFAULT_JOB_APPLICATIONS_ENDPOINT,
@@ -11,9 +11,10 @@ import {
   LAST_TAILORING_STORAGE_KEY,
   type JobHelperAuthSession,
   type JobHelperAuthUser,
-  type JobPageContext,
   readPersonalInfoSummary,
+  readJobUrlFromPageContext,
   readTailoredResumeSummaries,
+  readTailorResumeProfileSummary,
   type TailorResumeRunRecord,
 } from "./job-helper";
 import { collectPageContextFromTab } from "./page-context";
@@ -105,160 +106,22 @@ function cleanText(value: string | null | undefined) {
   return (value ?? "").replace(/\s+/g, " ").trim();
 }
 
-function uniqueStrings(values: string[], limit: number) {
-  const seen = new Set<string>();
-  const result: string[] = [];
-
-  for (const value of values) {
-    const normalizedValue = cleanText(value);
-
-    if (!normalizedValue) {
-      continue;
-    }
-
-    const dedupeKey = normalizedValue.toLowerCase();
-
-    if (seen.has(dedupeKey)) {
-      continue;
-    }
-
-    seen.add(dedupeKey);
-    result.push(normalizedValue);
-
-    if (result.length >= limit) {
-      break;
-    }
-  }
-
-  return result;
-}
-
-function buildSummaryLine(label: string, values: string[], limit = 6) {
-  const normalizedValues = uniqueStrings(values, limit);
-
-  if (normalizedValues.length === 0) {
-    return null;
-  }
-
-  return `${label}: ${normalizedValues.join(", ")}`;
-}
-
-function formatStructuredPosting(
-  posting: JobPageContext["jsonLdJobPostings"][number],
-  index: number,
-) {
-  const lines = [
-    posting.title ? `Title: ${posting.title}` : null,
-    posting.hiringOrganization
-      ? `Company: ${posting.hiringOrganization}`
-      : null,
-    buildSummaryLine("Employment type", posting.employmentType),
-    buildSummaryLine("Locations", posting.locations),
-    buildSummaryLine("Compensation", posting.baseSalary),
-    posting.datePosted ? `Date posted: ${posting.datePosted}` : null,
-    posting.validThrough ? `Valid through: ${posting.validThrough}` : null,
-    posting.identifier ? `Identifier: ${posting.identifier}` : null,
-    posting.directApply === true
-      ? "Direct apply: yes"
-      : posting.directApply === false
-        ? "Direct apply: no"
-        : null,
-    posting.description ? `Description:\n${posting.description}` : null,
-  ].filter((line): line is string => Boolean(line));
-
-  if (lines.length === 0) {
-    return null;
-  }
-
-  return [`Structured job posting ${index + 1}:`, ...lines].join("\n");
-}
-
-function buildJobDescriptionFromPageContext(pageContext: JobPageContext) {
-  const sections: string[] = [];
-  const summaryLines = [
-    pageContext.url ? `URL: ${pageContext.url}` : null,
-    pageContext.canonicalUrl &&
-    pageContext.canonicalUrl !== pageContext.url
-      ? `Canonical URL: ${pageContext.canonicalUrl}`
-      : null,
-    pageContext.title ? `Page title: ${pageContext.title}` : null,
-    pageContext.siteName ? `Site name: ${pageContext.siteName}` : null,
-    pageContext.description
-      ? `Meta description: ${pageContext.description}`
-      : null,
-    buildSummaryLine("Role title hints", pageContext.titleCandidates),
-    buildSummaryLine("Company hints", pageContext.companyCandidates),
-    buildSummaryLine("Location hints", pageContext.locationCandidates),
-    buildSummaryLine(
-      "Employment type hints",
-      pageContext.employmentTypeCandidates,
-    ),
-    buildSummaryLine("Salary hints", pageContext.salaryMentions),
-    buildSummaryLine("Visible headings", pageContext.headings, 12),
-  ].filter((line): line is string => Boolean(line));
-
-  if (summaryLines.length > 0) {
-    sections.push(["Job page summary:", ...summaryLines].join("\n"));
-  }
-
-  if (pageContext.selectionText) {
-    sections.push(`Selected text from the page:\n${pageContext.selectionText}`);
-  }
-
-  const structuredPostings = pageContext.jsonLdJobPostings
-    .map(formatStructuredPosting)
-    .filter((section): section is string => Boolean(section));
-
-  if (structuredPostings.length > 0) {
-    sections.push(structuredPostings.join("\n\n"));
-  }
-
-  const topTextBlocks = uniqueStrings(pageContext.topTextBlocks, 5);
-
-  if (topTextBlocks.length > 0) {
-    sections.push(
-      [
-        "Main page text:",
-        ...topTextBlocks.map(
-          (block, index) => `Section ${index + 1}:\n${block}`,
-        ),
-      ].join("\n\n"),
-    );
-  }
-
-  if (pageContext.rawText) {
-    sections.push(`Full flattened page text:\n${pageContext.rawText}`);
-  }
-
-  return sections.join("\n\n").trim();
-}
-
 function readLatestTailoredResume(payload: Record<string, unknown>) {
-  const profile =
-    typeof payload.profile === "object" && payload.profile !== null
-      ? (payload.profile as { tailoredResumes?: unknown })
-      : null;
-  const tailoredResumes = Array.isArray(profile?.tailoredResumes)
-    ? profile.tailoredResumes
-    : [];
-  const latestTailoredResume = tailoredResumes[0];
+  const tailoredResumeId = readPayloadString(payload, "tailoredResumeId");
+  const tailoredResumes = readTailoredResumeSummaries(payload);
+  const tailoredResume = tailoredResumeId
+    ? tailoredResumes.find((record) => record.id === tailoredResumeId)
+    : tailoredResumes[0];
 
-  if (
-    typeof latestTailoredResume !== "object" ||
-    latestTailoredResume === null
-  ) {
+  if (!tailoredResume) {
     return null;
   }
-
-  const summary = latestTailoredResume as Record<string, unknown>;
 
   return {
-    companyName:
-      typeof summary.companyName === "string" ? summary.companyName : null,
-    id: typeof summary.id === "string" ? summary.id : null,
-    positionTitle:
-      typeof summary.positionTitle === "string" ? summary.positionTitle : null,
-    status: typeof summary.status === "string" ? summary.status : null,
+    companyName: tailoredResume.companyName,
+    id: tailoredResume.id,
+    positionTitle: tailoredResume.positionTitle,
+    status: tailoredResume.status,
   } satisfies TailorResumeSummary;
 }
 
@@ -271,10 +134,10 @@ function buildSuccessMessage(record: TailorResumeRunRecord) {
       : positionTitle || companyName || "this role";
 
   if (record.tailoredResumeError) {
-    return `Saved a tailored draft for ${jobLabel}. Opening review`;
+    return `Saved a tailored draft for ${jobLabel}. Review it in the side panel`;
   }
 
-  return `Tailored resume for ${jobLabel}. Opening review`;
+  return `Tailored resume for ${jobLabel}. Preview is in the side panel`;
 }
 
 async function getActiveTab() {
@@ -508,7 +371,11 @@ async function ensureJobHelperSession(input: { interactive: boolean }) {
   const storedSession = await readStoredAuthSession();
 
   if (storedSession && isAuthSessionFresh(storedSession)) {
-    return storedSession;
+    const validatedSession = await validateStoredAuthSession(storedSession);
+
+    if (validatedSession) {
+      return validatedSession;
+    }
   }
 
   await clearStoredAuthSession();
@@ -560,11 +427,71 @@ async function buildBrowserSessionUrl(
   return payload.url;
 }
 
-async function openJobHelperCallbackUrl(callbackUrl: string) {
-  const session = await ensureJobHelperSession({ interactive: true });
-  const url = await buildBrowserSessionUrl(session, callbackUrl);
+async function openUrlInCurrentWindow(url: string) {
+  let windowId: number | null = null;
 
-  await chrome.tabs.create({ url });
+  try {
+    const [activeTab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    windowId =
+      typeof activeTab?.windowId === "number" ? activeTab.windowId : null;
+  } catch {
+    windowId = null;
+  }
+
+  await chrome.tabs.create({
+    active: true,
+    ...(windowId === null ? {} : { windowId }),
+    url,
+  });
+}
+
+async function openSidePanelForTab(tab: chrome.tabs.Tab) {
+  try {
+    const windowId = typeof tab.windowId === "number" ? tab.windowId : undefined;
+
+    if (typeof windowId === "number") {
+      await chrome.sidePanel.open({ windowId });
+    }
+  } catch (error) {
+    console.warn("Could not open the Job Helper side panel.", error);
+  }
+}
+
+function normalizeDashboardCallbackUrl(callbackUrl: string) {
+  try {
+    const dashboardUrl = new URL(DEFAULT_DASHBOARD_URL);
+    const url =
+      callbackUrl.startsWith("/") && !callbackUrl.startsWith("//")
+        ? new URL(callbackUrl, dashboardUrl.origin)
+        : new URL(callbackUrl);
+
+    if (url.origin !== dashboardUrl.origin) {
+      return dashboardUrl.toString();
+    }
+
+    return url.toString();
+  } catch {
+    return DEFAULT_DASHBOARD_URL;
+  }
+}
+
+async function openJobHelperCallbackUrl(callbackUrl: string) {
+  let url = normalizeDashboardCallbackUrl(callbackUrl);
+
+  try {
+    const session = await ensureJobHelperSession({ interactive: false });
+    url = await buildBrowserSessionUrl(session, url);
+  } catch (error) {
+    console.warn(
+      "Opening Job Helper without an extension browser-session handoff.",
+      error,
+    );
+  }
+
+  await openUrlInCurrentWindow(url);
 }
 
 async function getTailoredResumeSummaries() {
@@ -628,8 +555,7 @@ async function getPersonalInfoSummary() {
   };
 }
 
-async function tailorResumeForActiveTab() {
-  const activeTab = await getActiveTab();
+async function tailorResumeForTab(activeTab: chrome.tabs.Tab) {
   const tabId = activeTab.id;
 
   if (typeof tabId !== "number") {
@@ -641,8 +567,8 @@ async function tailorResumeForActiveTab() {
   await showOverlay(tabId, "Job Helper is reading this job post", "info");
 
   const pageContext = await collectPageContext(tabId);
-
   const jobDescription = buildJobDescriptionFromPageContext(pageContext);
+  const jobUrl = readJobUrlFromPageContext(pageContext);
 
   if (!jobDescription) {
     throw new Error("Could not find job description text on this page.");
@@ -655,6 +581,7 @@ async function tailorResumeForActiveTab() {
     body: JSON.stringify({
       action: "tailor",
       jobDescription,
+      jobUrl,
     }),
     credentials: "include",
     headers: {
@@ -680,12 +607,35 @@ async function tailorResumeForActiveTab() {
     throw new Error("Tailor Resume did not return a saved result.");
   }
 
+  const profileSummary = readTailorResumeProfileSummary(payload.profile);
+  const activeInterview = profileSummary?.tailoringInterview ?? null;
+
+  if (payload.tailoringStatus === "needs_user_input" || activeInterview) {
+    const record: TailorResumeRunRecord = {
+      capturedAt: new Date().toISOString(),
+      companyName: activeInterview?.companyName ?? null,
+      endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
+      message: "Resume questions are waiting in the side panel.",
+      pageTitle: pageContext.title || null,
+      pageUrl: pageContext.url || null,
+      positionTitle: activeInterview?.positionTitle ?? null,
+      status: "needs_input",
+      tailoredResumeError: null,
+      tailoredResumeId: null,
+    };
+
+    await persistResult(record);
+    await showOverlay(tabId, record.message, "info");
+    await openSidePanelForTab(activeTab);
+    return;
+  }
+
   const latestTailoredResume = readLatestTailoredResume(payload);
+  const alreadyTailored = payload.tailoringStatus === "already_tailored";
   const tailoredResumeError =
     typeof payload.tailoredResumeError === "string"
       ? payload.tailoredResumeError
       : null;
-  const reviewUrl = buildTailoredResumeReviewUrl(latestTailoredResume?.id ?? null);
   const record: TailorResumeRunRecord = {
     capturedAt: new Date().toISOString(),
     companyName: latestTailoredResume?.companyName ?? null,
@@ -702,7 +652,9 @@ async function tailorResumeForActiveTab() {
     tailoredResumeId: latestTailoredResume?.id ?? null,
   };
 
-  record.message = buildSuccessMessage(record);
+  record.message = alreadyTailored
+    ? "Already tailored this job. Showing the saved resume in the side panel."
+    : buildSuccessMessage(record);
 
   await persistResult(record);
   await showOverlay(
@@ -712,27 +664,42 @@ async function tailorResumeForActiveTab() {
   );
 
   if (latestTailoredResume?.id) {
-    const browserReviewUrl = await buildBrowserSessionUrl(authSession, reviewUrl);
-
-    await chrome.tabs.create({
-      url: browserReviewUrl,
-    });
+    await openSidePanelForTab(activeTab);
   }
 }
 
-async function runCaptureFlow() {
+async function runCaptureFlow(input: {
+  openSidePanel?: boolean;
+  tab?: chrome.tabs.Tab;
+} = {}) {
+  let activeTab = input.tab ?? null;
+
   if (isCaptureInFlight) {
+    if (input.openSidePanel) {
+      activeTab = activeTab ?? (await getActiveTab().catch(() => null));
+
+      if (activeTab) {
+        await openSidePanelForTab(activeTab);
+      }
+    }
+
     return;
   }
 
   isCaptureInFlight = true;
 
   try {
-    await tailorResumeForActiveTab();
+    activeTab = activeTab ?? (await getActiveTab());
+
+    if (input.openSidePanel) {
+      await openSidePanelForTab(activeTab);
+    }
+
+    await tailorResumeForTab(activeTab);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to tailor the resume.";
-    const activeTab = await getActiveTab().catch(() => null);
+    activeTab = activeTab ?? (await getActiveTab().catch(() => null));
 
     const record: TailorResumeRunRecord = {
       capturedAt: new Date().toISOString(),
@@ -773,7 +740,7 @@ chrome.commands.onCommand.addListener((command) => {
     return;
   }
 
-  void runCaptureFlow();
+  void runCaptureFlow({ openSidePanel: true });
 });
 
 function sendAsyncResponse(
@@ -796,7 +763,7 @@ function sendAsyncResponse(
 
 chrome.runtime.onMessage.addListener((
   message: unknown,
-  _sender: chrome.runtime.MessageSender,
+  sender: chrome.runtime.MessageSender,
   sendResponse: (response?: unknown) => void,
 ) => {
   const typedMessage =
@@ -805,7 +772,10 @@ chrome.runtime.onMessage.addListener((
       : null;
 
   if (typedMessage?.type === "JOB_HELPER_TRIGGER_CAPTURE") {
-    void runCaptureFlow();
+    void runCaptureFlow({
+      openSidePanel: true,
+      tab: sender.tab,
+    });
     sendResponse({ ok: true });
     return;
   }

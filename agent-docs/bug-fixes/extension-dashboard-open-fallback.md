@@ -1,0 +1,4 @@
+- Symptom: the extension side panel's dashboard buttons could appear to do nothing when the browser-session handoff failed before `chrome.tabs.create` ran.
+- Root cause: dashboard opening depended on a fresh extension handoff token, and extension API auth resolved a normal browser cookie before the bearer token. If a web cookie was present, the handoff route could reject the request even though the extension had a usable session.
+- Fix: extension API auth now gives an explicit bearer token precedence over ambient browser cookies. The side panel still tries the authenticated handoff, but falls back to opening the configured dashboard URL directly in the current Chrome window so the button always navigates to the `.env` app origin.
+- Guardrail: extension navigation buttons should validate background responses and should not make tab creation depend on optional auth handoff setup.

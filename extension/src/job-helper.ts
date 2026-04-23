@@ -23,6 +23,8 @@ export const DEFAULT_JOB_APPLICATIONS_ENDPOINT =
   `${DEFAULT_APP_BASE_URL}/api/job-applications`;
 export const DEFAULT_TAILOR_RESUME_ENDPOINT =
   `${DEFAULT_APP_BASE_URL}/api/tailor-resume`;
+export const DEFAULT_TAILOR_RESUME_CHAT_ENDPOINT =
+  `${DEFAULT_TAILOR_RESUME_ENDPOINT}/chat`;
 export const DEFAULT_TAILOR_RESUME_PREVIEW_ENDPOINT =
   `${DEFAULT_TAILOR_RESUME_ENDPOINT}/preview`;
 export const EXTENSION_AUTH_GOOGLE_ENDPOINT =
@@ -88,7 +90,7 @@ export type TailorResumeRunRecord = {
   pageTitle: string | null;
   pageUrl: string | null;
   positionTitle: string | null;
-  status: "error" | "success";
+  status: "error" | "needs_input" | "success";
   tailoredResumeError: string | null;
   tailoredResumeId: string | null;
 };
@@ -97,6 +99,7 @@ export type TailoredResumeSummary = {
   companyName: string | null;
   displayName: string;
   id: string;
+  jobUrl: string | null;
   positionTitle: string | null;
   status: string | null;
   updatedAt: string;
@@ -127,6 +130,34 @@ export type PersonalInfoSummary = {
   companyCount: number;
   originalResume: OriginalResumeSummary;
   tailoredResumes: TailoredResumeSummary[];
+  tailoringInterview: TailorResumePendingInterviewSummary | null;
+};
+
+export type TailorResumeConversationMessage = {
+  id: string;
+  role: "assistant" | "user";
+  text: string;
+};
+
+export type TailorResumeQuestioningSummary = {
+  agenda: string;
+  askedQuestionCount: number;
+  learningsCount: number;
+  totalQuestionBudget: number;
+};
+
+export type TailorResumePendingInterviewSummary = {
+  companyName: string | null;
+  conversation: TailorResumeConversationMessage[];
+  id: string;
+  positionTitle: string | null;
+  questioningSummary: TailorResumeQuestioningSummary | null;
+  updatedAt: string;
+};
+
+export type TailorResumeProfileSummary = {
+  tailoredResumes: TailoredResumeSummary[];
+  tailoringInterview: TailorResumePendingInterviewSummary | null;
 };
 
 export type JobHelperAuthUser = {
@@ -159,6 +190,142 @@ function readNullableString(value: unknown) {
   return stringValue || null;
 }
 
+function cleanText(value: string | null | undefined) {
+  return (value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function uniqueStrings(values: string[], limit: number) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const normalizedValue = cleanText(value);
+
+    if (!normalizedValue) {
+      continue;
+    }
+
+    const dedupeKey = normalizedValue.toLowerCase();
+
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    result.push(normalizedValue);
+
+    if (result.length >= limit) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+function buildSummaryLine(label: string, values: string[], limit = 6) {
+  const normalizedValues = uniqueStrings(values, limit);
+
+  if (normalizedValues.length === 0) {
+    return null;
+  }
+
+  return `${label}: ${normalizedValues.join(", ")}`;
+}
+
+function formatStructuredPosting(
+  posting: JobPageContext["jsonLdJobPostings"][number],
+  index: number,
+) {
+  const lines = [
+    posting.title ? `Title: ${posting.title}` : null,
+    posting.hiringOrganization
+      ? `Company: ${posting.hiringOrganization}`
+      : null,
+    buildSummaryLine("Employment type", posting.employmentType),
+    buildSummaryLine("Locations", posting.locations),
+    buildSummaryLine("Compensation", posting.baseSalary),
+    posting.datePosted ? `Date posted: ${posting.datePosted}` : null,
+    posting.validThrough ? `Valid through: ${posting.validThrough}` : null,
+    posting.identifier ? `Identifier: ${posting.identifier}` : null,
+    posting.directApply === true
+      ? "Direct apply: yes"
+      : posting.directApply === false
+        ? "Direct apply: no"
+        : null,
+    posting.description ? `Description:\n${posting.description}` : null,
+  ].filter((line): line is string => Boolean(line));
+
+  if (lines.length === 0) {
+    return null;
+  }
+
+  return [`Structured job posting ${index + 1}:`, ...lines].join("\n");
+}
+
+export function buildJobDescriptionFromPageContext(pageContext: JobPageContext) {
+  const sections: string[] = [];
+  const summaryLines = [
+    pageContext.url ? `URL: ${pageContext.url}` : null,
+    pageContext.canonicalUrl &&
+    pageContext.canonicalUrl !== pageContext.url
+      ? `Canonical URL: ${pageContext.canonicalUrl}`
+      : null,
+    pageContext.title ? `Page title: ${pageContext.title}` : null,
+    pageContext.siteName ? `Site name: ${pageContext.siteName}` : null,
+    pageContext.description
+      ? `Meta description: ${pageContext.description}`
+      : null,
+    buildSummaryLine("Role title hints", pageContext.titleCandidates),
+    buildSummaryLine("Company hints", pageContext.companyCandidates),
+    buildSummaryLine("Location hints", pageContext.locationCandidates),
+    buildSummaryLine(
+      "Employment type hints",
+      pageContext.employmentTypeCandidates,
+    ),
+    buildSummaryLine("Salary hints", pageContext.salaryMentions),
+    buildSummaryLine("Visible headings", pageContext.headings, 12),
+  ].filter((line): line is string => Boolean(line));
+
+  if (summaryLines.length > 0) {
+    sections.push(["Job page summary:", ...summaryLines].join("\n"));
+  }
+
+  if (pageContext.selectionText) {
+    sections.push(`Selected text from the page:\n${pageContext.selectionText}`);
+  }
+
+  const structuredPostings = pageContext.jsonLdJobPostings
+    .map(formatStructuredPosting)
+    .filter((section): section is string => Boolean(section));
+
+  if (structuredPostings.length > 0) {
+    sections.push(structuredPostings.join("\n\n"));
+  }
+
+  const topTextBlocks = uniqueStrings(pageContext.topTextBlocks, 5);
+
+  if (topTextBlocks.length > 0) {
+    sections.push(
+      [
+        "Main page text:",
+        ...topTextBlocks.map(
+          (block, index) => `Section ${index + 1}:\n${block}`,
+        ),
+      ].join("\n\n"),
+    );
+  }
+
+  if (pageContext.rawText) {
+    sections.push(`Full flattened page text:\n${pageContext.rawText}`);
+  }
+
+  return sections.join("\n\n").trim();
+}
+
+export function readJobUrlFromPageContext(pageContext: JobPageContext) {
+  return pageContext.canonicalUrl.trim() || pageContext.url.trim() || null;
+}
+
 export function readTailoredResumeSummary(
   value: unknown,
 ): TailoredResumeSummary | null {
@@ -178,6 +345,7 @@ export function readTailoredResumeSummary(
     companyName: readString(value.companyName) || null,
     displayName,
     id,
+    jobUrl: readNullableString(value.jobUrl),
     positionTitle: readString(value.positionTitle) || null,
     status: readString(value.status) || null,
     updatedAt,
@@ -202,6 +370,104 @@ export function readTailoredResumeSummaries(value: unknown) {
     );
 }
 
+function readTailorResumeConversationMessage(
+  value: unknown,
+): TailorResumeConversationMessage | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = readString(value.id);
+  const text = readString(value.text);
+  const role =
+    value.role === "assistant" || value.role === "user" ? value.role : null;
+
+  if (!id || !text || !role) {
+    return null;
+  }
+
+  return {
+    id,
+    role,
+    text,
+  };
+}
+
+function readTailorResumeQuestioningSummary(
+  value: unknown,
+): TailorResumeQuestioningSummary | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const askedQuestionCount = readNumber(value.askedQuestionCount);
+  const totalQuestionBudget = readNumber(value.totalQuestionBudget);
+
+  return {
+    agenda: readString(value.agenda),
+    askedQuestionCount:
+      askedQuestionCount > 0 ? Math.floor(askedQuestionCount) : 1,
+    learningsCount: Array.isArray(value.learnings) ? value.learnings.length : 0,
+    totalQuestionBudget:
+      totalQuestionBudget > 0 ? Math.floor(totalQuestionBudget) : 1,
+  };
+}
+
+export function readTailorResumePendingInterviewSummary(
+  value: unknown,
+): TailorResumePendingInterviewSummary | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = readString(value.id);
+  const updatedAt = readString(value.updatedAt);
+  const conversation = Array.isArray(value.conversation)
+    ? value.conversation
+        .map(readTailorResumeConversationMessage)
+        .filter((message): message is TailorResumeConversationMessage =>
+          Boolean(message),
+        )
+    : [];
+
+  if (!id || !updatedAt || conversation.length === 0) {
+    return null;
+  }
+
+  const planningResult = isRecord(value.planningResult)
+    ? value.planningResult
+    : {};
+
+  return {
+    companyName: readNullableString(planningResult.companyName),
+    conversation,
+    id,
+    positionTitle: readNullableString(planningResult.positionTitle),
+    questioningSummary: readTailorResumeQuestioningSummary(
+      planningResult.questioningSummary,
+    ),
+    updatedAt,
+  };
+}
+
+export function readTailorResumeProfileSummary(
+  value: unknown,
+): TailorResumeProfileSummary | null {
+  const profile = isRecord(value) && isRecord(value.profile) ? value.profile : value;
+
+  if (!isRecord(profile)) {
+    return null;
+  }
+
+  const workspace = isRecord(profile.workspace) ? profile.workspace : {};
+
+  return {
+    tailoredResumes: readTailoredResumeSummaries(profile.tailoredResumes),
+    tailoringInterview: readTailorResumePendingInterviewSummary(
+      workspace.tailoringInterview,
+    ),
+  };
+}
 
 function readTrackedApplicationSummary(
   value: unknown,
@@ -283,13 +549,17 @@ export function readPersonalInfoSummary(input: {
   const applicationsPayload = isRecord(input.applicationsPayload)
     ? input.applicationsPayload
     : {};
+  const tailorResumeProfile = readTailorResumeProfileSummary(
+    input.tailorResumePayload,
+  );
 
   return {
     applicationCount: readNumber(applicationsPayload.applicationCount),
     applications: readTrackedApplicationSummaries(applicationsPayload),
     companyCount: readNumber(applicationsPayload.companyCount),
     originalResume: readOriginalResumeSummary(input.tailorResumePayload),
-    tailoredResumes: readTailoredResumeSummaries(input.tailorResumePayload),
+    tailoredResumes: tailorResumeProfile?.tailoredResumes ?? [],
+    tailoringInterview: tailorResumeProfile?.tailoringInterview ?? null,
   };
 }
 
@@ -305,5 +575,8 @@ export function readPersonalInfoPayload(value: unknown): PersonalInfoSummary {
     companyCount: readNumber(payloadRecord.companyCount),
     originalResume: readOriginalResumeSummary(payloadRecord.originalResume),
     tailoredResumes: readTailoredResumeSummaries(payloadRecord.tailoredResumes),
+    tailoringInterview: readTailorResumePendingInterviewSummary(
+      payloadRecord.tailoringInterview,
+    ),
   };
 }

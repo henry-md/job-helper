@@ -37,6 +37,13 @@ Useful states:
 - `http://localhost:5186/index.html?snapshot=error` shows the active-tab error
   state.
 
+## Shortcut
+
+The extension registers `Cmd+Shift+S` on macOS and `Ctrl+Shift+S` elsewhere to
+open the side panel and tailor the active job page. Chrome may require manually
+assigning or confirming the shortcut at `chrome://extensions/shortcuts` if the
+key binding conflicts with another extension or browser command.
+
 ## Auth
 
 The extension uses Chrome's identity API, so the manifest needs a Google OAuth
@@ -104,5 +111,5 @@ Run `npm run build`, then load `/Users/Henry/Developer/job-helper/extension/dist
 
 - `src/App.tsx`: native side panel UI rendered with React.
 - `src/content.ts`: content script that scrapes structured page evidence and renders the in-page command banner.
-- `src/background.ts`: MV3 service worker entry that handles `Cmd+Shift+S` / `Ctrl+Shift+S`, formats the scraped page context into a job description, and calls `PATCH /api/tailor-resume` with `action: "tailor"`.
+- `src/background.ts`: MV3 service worker entry that handles `Cmd+Shift+S` / `Ctrl+Shift+S`, opens the side panel when Chrome allows it, formats the scraped page context into a job description, and calls `PATCH /api/tailor-resume` with `action: "tailor"`.
 - `manifest.config.ts`: typed Chrome extension manifest source used by CRXJS/Vite.

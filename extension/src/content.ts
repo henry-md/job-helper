@@ -345,6 +345,9 @@ window.addEventListener(
       return;
     }
 
+    event.preventDefault();
+    event.stopImmediatePropagation();
+
     const now = Date.now();
 
     if (now - lastShortcutAt < 750) {

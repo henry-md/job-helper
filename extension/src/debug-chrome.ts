@@ -121,6 +121,7 @@ function createMockTailoredResumes() {
       companyName: "Microsoft",
       displayName: "Microsoft - Software Engineer",
       id: "debug-tailored-resume",
+      jobUrl: "https://careers.microsoft.com/jobs/debug-tailored-resume",
       positionTitle: "Software Engineer",
       status: "ready",
       updatedAt: new Date("2026-04-21T23:17:00.000Z").toISOString(),
