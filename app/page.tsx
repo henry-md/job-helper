@@ -85,7 +85,7 @@ export default async function Home({ searchParams }: HomePageProps) {
         <div className="public-home-copy relative z-10 flex min-h-0 flex-col justify-center gap-3 lg:px-2">
           <div className="space-y-2 sm:space-y-3">
             <p className="hidden text-[0.72rem] uppercase tracking-[0.34em] text-zinc-500 sm:block">
-              No one-shot rewriting
+              Job Helper :)
             </p>
             <PublicHeroTitle
               className="public-home-title max-w-sm text-[clamp(1.72rem,8vw,2.56rem)] leading-[0.92] font-semibold tracking-tight text-zinc-50 sm:max-w-xl sm:text-[clamp(2.45rem,7.4vw,4.9rem)] sm:leading-[0.9]"
