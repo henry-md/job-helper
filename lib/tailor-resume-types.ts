@@ -85,6 +85,12 @@ export type TailorResumeConversationMessage = {
   id: string;
   role: "assistant" | "user";
   text: string;
+  toolCalls: TailorResumeConversationToolCall[];
+};
+
+export type TailorResumeConversationToolCall = {
+  argumentsText: string;
+  name: string;
 };
 
 export type TailoredResumeQuestionLearning = {
@@ -103,7 +109,6 @@ export type TailoredResumeQuestioningSummary = {
   askedQuestionCount: number;
   debugDecision: TailorResumeInterviewDebugDecision | null;
   learnings: TailoredResumeQuestionLearning[];
-  totalQuestionBudget: number;
 };
 
 export type TailorResumeWorkspaceState = {
@@ -187,6 +192,8 @@ export type TailoredResumeOpenAiDebugTrace = {
 
 export type TailorResumePendingInterview = {
   accumulatedModelDurationMs: number;
+  applicationId: string | null;
+  completionRequestedAt: string | null;
   conversation: TailorResumeConversationMessage[];
   createdAt: string;
   generationSourceSnapshot: TailorResumeGenerationSourceSnapshot;
@@ -196,6 +203,7 @@ export type TailorResumePendingInterview = {
   planningDebug: TailoredResumeOpenAiDebugStage;
   planningResult: TailoredResumePlanningResult;
   sourceAnnotatedLatexCode: string;
+  tailorResumeRunId: string | null;
   updatedAt: string;
 };
 
@@ -695,15 +703,12 @@ function parseTailoredResumeQuestioningSummary(
         ? null
         : "__invalid__";
   const rawAskedQuestionCount = value.askedQuestionCount;
-  const rawTotalQuestionBudget = value.totalQuestionBudget;
 
   if (
     !Array.isArray(value.learnings) ||
     debugDecision === "__invalid__" ||
     typeof rawAskedQuestionCount !== "number" ||
-    !Number.isFinite(rawAskedQuestionCount) ||
-    typeof rawTotalQuestionBudget !== "number" ||
-    !Number.isFinite(rawTotalQuestionBudget)
+    !Number.isFinite(rawAskedQuestionCount)
   ) {
     return null;
   }
@@ -722,7 +727,6 @@ function parseTailoredResumeQuestioningSummary(
     askedQuestionCount: Math.max(0, Math.floor(rawAskedQuestionCount)),
     debugDecision,
     learnings,
-    totalQuestionBudget: Math.max(0, Math.floor(rawTotalQuestionBudget)),
   };
 }
 
@@ -907,7 +911,40 @@ function parseTailorResumeConversationMessage(
     id,
     role,
     text,
+    toolCalls: parseTailorResumeConversationToolCalls(value.toolCalls),
   };
+}
+
+function parseTailorResumeConversationToolCall(
+  value: unknown,
+): TailorResumeConversationToolCall | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const name = readNullableString(value.name)?.trim() ?? "";
+  const argumentsText =
+    typeof value.argumentsText === "string" ? value.argumentsText : null;
+
+  if (!name || argumentsText === null) {
+    return null;
+  }
+
+  return {
+    argumentsText,
+    name,
+  };
+}
+
+function parseTailorResumeConversationToolCalls(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailorResumeConversationToolCall[];
+  }
+
+  return value.flatMap((toolCall) => {
+    const parsedToolCall = parseTailorResumeConversationToolCall(toolCall);
+    return parsedToolCall ? [parsedToolCall] : [];
+  });
 }
 
 function parseTailorResumeConversationMessages(value: unknown) {
@@ -964,6 +1001,8 @@ function parseTailorResumePendingInterview(
 
   return {
     accumulatedModelDurationMs,
+    applicationId: readNullableString(value.applicationId),
+    completionRequestedAt: readNullableString(value.completionRequestedAt),
     conversation,
     createdAt,
     generationSourceSnapshot,
@@ -973,6 +1012,7 @@ function parseTailorResumePendingInterview(
     planningDebug,
     planningResult,
     sourceAnnotatedLatexCode,
+    tailorResumeRunId: readNullableString(value.tailorResumeRunId),
     updatedAt,
   };
 }

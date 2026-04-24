@@ -21,7 +21,7 @@ Step 2. Ask user clarifications if useful
 - Ask one question at a time only when a grounded answer could materially improve an already-adjacent resume block.
 - Questions should concisely state the job-description signal, the resume gap, and 1-2 brief examples of strong answer shapes tailored to that job-description signal.
 - Technology questions should only cover close neighbors of resume-supported experience that also appear in the job description, such as a framework adjacent to strong JavaScript experience or C adjacent to listed C++ experience.
-- Store the questioning agenda, question budget, and learned facts mapped back to target `segmentId`s so later stages can use them surgically.
+- Store the questioning agenda, the number of questions already asked, and learned facts mapped back to target `segmentId`s so later stages can use them surgically.
 - When the user's answer reveals durable context likely to matter later, the interview tool may submit `USER.md` markdown patch operations. Normal additions should append under a chosen heading path; restructuring should use exact-match replace/insert/delete operations. Failed exact matches are fed back to the model for a retry instead of allowing full-document replacement.
 
 Step 3. Generate block-scoped edits

@@ -1483,7 +1483,7 @@ export default function TailoredResumeReviewModal({
     }
 
     element.scrollTop = element.scrollHeight;
-  }, [aiRefinementMessages, isAiRefinementOpen]);
+  }, [aiRefinementMessages, draftAiRefinementPrompt, isAiRefinementOpen]);
 
   async function updateSelectedEditState(nextState: "applied" | "rejected") {
     if (!record || !selectedEdit) {

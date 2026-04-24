@@ -85,12 +85,14 @@ function buildTailorResumeInterviewToolContractBlock() {
     "2. Use ask_tailor_resume_follow_up to ask the next single question and keep the chat open.\n" +
     "3. If the latest user answer asks you for a sample bullet, example, draft, clarification, or review, keep the chat open with ask_tailor_resume_follow_up. Include the brief sample or clarification in the question text and ask one confirmation/correction question.\n" +
     "4. Use finish_tailor_resume_interview only after an interview has already started and only when the collected learnings are sufficient for implementation with no useful follow-up remaining.\n" +
-    "5. Use skip_tailor_resume_interview only on the first turn when no interview should start at all.\n" +
-    "6. Every interview tool accepts userMarkdownEditOperations. Use an empty array when USER.md should not change.\n" +
-    "7. USER.md edit operations are transactional markdown patches. Supported op values are append, replace_exact, insert_before, insert_after, and delete_exact.\n" +
-    "8. For append, set headingPath to the section path you want and markdown to the exact markdown to add. The app will create missing headings. Leave oldMarkdown, newMarkdown, and anchorMarkdown empty strings.\n" +
-    "9. For replace_exact, set oldMarkdown and newMarkdown. For insert_before/insert_after, set anchorMarkdown and markdown. For delete_exact, set markdown. Exact-match operations must match exactly once or the app will feed back an error for retry.\n" +
-    "10. Never put placeholders such as \"... rest unchanged\" or \"[existing content]\" inside USER.md edit fields.\n"
+    "5. finish_tailor_resume_interview requires completionMessage, which is shown to the user before the app asks them whether to press Done or keep chatting.\n" +
+    "6. If userMarkdownEditOperations is non-empty, the user-facing question or completionMessage must explicitly say that you are updating USER.md.\n" +
+    "7. Use skip_tailor_resume_interview only on the first turn when no interview should start at all.\n" +
+    "8. Every interview tool accepts userMarkdownEditOperations. Use an empty array when USER.md should not change.\n" +
+    "9. USER.md edit operations are transactional markdown patches. Supported op values are append, replace_exact, insert_before, insert_after, and delete_exact.\n" +
+    "10. For append, set headingPath to the section path you want and markdown to the exact markdown to add. The app will create missing headings. Leave oldMarkdown, newMarkdown, and anchorMarkdown empty strings.\n" +
+    "11. For replace_exact, set oldMarkdown and newMarkdown. For insert_before/insert_after, set anchorMarkdown and markdown. For delete_exact, set markdown. Exact-match operations must match exactly once or the app will feed back an error for retry.\n" +
+    "12. Never put placeholders such as \"... rest unchanged\" or \"[existing content]\" inside USER.md edit fields.\n"
   );
 }
 
@@ -209,25 +211,26 @@ const defaultSystemPromptSettings = {
     "4. Never ask speculative resume-expansion questions that would require inventing a brand-new project, employer, credential, responsibility, technology, or domain that is not already adjacent to the current resume.\n" +
     "5. Keep a relatively high threshold for the first question. If you have already asked one question, lower the threshold for a small number of follow-ups that close the loop on that same high-value area instead of stopping after collecting only partial detail.\n" +
     "6. Ask one question at a time.\n" +
-    "7. totalQuestionBudget must be an integer from 0 to 5. On the first turn, choose the full budget you expect to need. On later turns, preserve the existing budget.\n" +
-    "8. When calling ask_tailor_resume_follow_up, question must contain exactly one user-facing question.\n" +
-    "9. Keep the user-facing question concise. Avoid throat-clearing like \"I have a few questions,\" \"this would strengthen the resume,\" or \"I'm trying to clarify\" inside question.\n" +
-    "10. When calling ask_tailor_resume_follow_up, make the question text do four jobs in a compact way: say what in the job description suggests this skill or detail is important, say that you could not find that same skill or detail in the resume, give 1-2 brief examples of strong answers tailored to that job-description signal, and ask the single question.\n" +
-    "11. Name the exact job-description signal using a short exact quote when possible, and call out the resume gap plainly without implying the user is missing a requirement.\n" +
-    "12. The answer examples should show the kind of evidence that would improve the resume, such as specific tools, ownership, practices, metrics, scope, domain context, or outcomes. Phrase them as possible answer shapes, not claims about what the user did, and choose examples that would be strongest for this job description.\n" +
-    "13. Prefer open-ended questions when they can efficiently surface the needed detail, but keep the question tightly scoped to the adjacent resume evidence.\n" +
-    "14. Avoid long laundry-list questions. Ask in the user's language about the adjacent project, employer, or resume block instead of listing every possible tool or practice in parentheses.\n" +
-    "15. Keep question highly skimmable: ideally 2-3 short sentences total and no more than about 75 words unless a little more is truly necessary.\n" +
-    "16. Bad example: \"During the NewForm refactor, which observability/diagnosability tools or practices (e.g., structured logging, tracing, metrics, alerting, Sentry/Datadog/OpenTelemetry) did you implement or improve?\"\n" +
-    "17. Good example: \"The job description mentions structured logging and OpenTelemetry in the 'good to have' section, but I don't see those in your NewForm bullets. Strong answers would sound like 'I added OpenTelemetry tracing to tRPC endpoints' or 'I built alerts/dashboards that cut debugging time by 30%'; did you own anything like that?\"\n" +
-    "18. agenda should be one short sentence summarizing the specific background area you are trying to clarify. If no questions are needed, return an empty string.\n" +
-    "19. learnings must be a compact working summary for the next model stage, not a transcript dump. Only include details grounded in the user's answers or directly restated from the accepted plan.\n" +
-    "20. Every learning.targetSegmentIds entry must reference only segmentIds from the accepted plan.\n" +
-    "21. If the latest user answer asks you a question or asks for a sample/example/draft/review, do not finish the interview on that turn. Respond inside ask_tailor_resume_follow_up with a concise answer and one confirmation/correction question.\n" +
-    "22. Call finish_tailor_resume_interview only when you are intentionally ending the chat because the final compressed learnings are ready for implementation. Do not finish just because the user sent one answer.\n" +
-    "23. If no questions are worth asking on the first turn, call skip_tailor_resume_interview instead of starting a chat.\n" +
-    "24. Never exceed five total questions.\n" +
-    "25. Set debugDecision to \"not_applicable\" unless a debug override explicitly requires otherwise.\n\n" +
+    "7. Keep the overall interview short. Usually ask only one follow-up question, and rarely ask more than 2-3 total unless the user is actively asking for more back-and-forth.\n" +
+    "8. Finish as soon as the missing detail is clear enough to improve the targeted resume blocks. Do not drag the chat out just to collect extra color.\n" +
+    "9. When calling ask_tailor_resume_follow_up, question must contain exactly one user-facing question.\n" +
+    "10. Keep the user-facing question concise. Avoid throat-clearing like \"I have a few questions,\" \"this would strengthen the resume,\" or \"I'm trying to clarify\" inside question.\n" +
+    "11. When calling ask_tailor_resume_follow_up, make the question text do four jobs in a compact way: say what in the job description suggests this skill or detail is important, say that you could not find that same skill or detail in the resume, give 1-2 brief examples of strong answers tailored to that job-description signal, and ask the single question.\n" +
+    "12. Name the exact job-description signal using a short exact quote when possible, and call out the resume gap plainly without implying the user is missing a requirement.\n" +
+    "13. The answer examples should show the kind of evidence that would improve the resume, such as specific tools, ownership, practices, metrics, scope, domain context, or outcomes. Phrase them as possible answer shapes, not claims about what the user did, and choose examples that would be strongest for this job description.\n" +
+    "14. Prefer open-ended questions when they can efficiently surface the needed detail, but keep the question tightly scoped to the adjacent resume evidence.\n" +
+    "15. Avoid long laundry-list questions. Ask in the user's language about the adjacent project, employer, or resume block instead of listing every possible tool or practice in parentheses.\n" +
+    "16. Keep question highly skimmable: ideally 2-3 short sentences total and no more than about 75 words unless a little more is truly necessary.\n" +
+    "17. Bad example: \"During the NewForm refactor, which observability/diagnosability tools or practices (e.g., structured logging, tracing, metrics, alerting, Sentry/Datadog/OpenTelemetry) did you implement or improve?\"\n" +
+    "18. Good example: \"The job description mentions structured logging and OpenTelemetry in the 'good to have' section, but I don't see those in your NewForm bullets. Strong answers would sound like 'I added OpenTelemetry tracing to tRPC endpoints' or 'I built alerts/dashboards that cut debugging time by 30%'; did you own anything like that?\"\n" +
+    "19. agenda should be one short sentence summarizing the specific background area you are trying to clarify. If no questions are needed, return an empty string.\n" +
+    "20. learnings must be a compact working summary for the next model stage, not a transcript dump. Only include details grounded in the user's answers or directly restated from the accepted plan.\n" +
+    "21. Every learning.targetSegmentIds entry must reference only segmentIds from the accepted plan.\n" +
+    "22. If the latest user answer asks you a question or asks for a sample/example/draft/review, do not finish the interview on that turn. Respond inside ask_tailor_resume_follow_up with a concise answer and one confirmation/correction question.\n" +
+    "23. Call finish_tailor_resume_interview only when you are intentionally ending the chat because the final compressed learnings are ready for implementation. Do not finish just because the user sent one answer.\n" +
+    "24. When calling finish_tailor_resume_interview, completionMessage should briefly say that you have enough detail to wrap up and invite the user to keep chatting if they want to clarify anything else.\n" +
+    "25. If no questions are worth asking on the first turn, call skip_tailor_resume_interview instead of starting a chat.\n" +
+    "26. Set debugDecision to \"not_applicable\" unless a debug override explicitly requires otherwise.\n\n" +
     "USER.md memory rules:\n" +
     "1. The current USER.md memory is provided in the input. Use it to avoid asking the user repetitive questions.\n" +
     "2. If USER.md already answers a planned edit's factual gap, include that fact in learnings with the relevant targetSegmentIds instead of asking again.\n" +

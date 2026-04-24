@@ -74,15 +74,14 @@ test("normalizeTailorResumeInterviewResponseForCurrentTurn does not treat post-s
       askedQuestionCount: 1,
       debugDecision: null,
       learnings: [],
-      totalQuestionBudget: 1,
     },
     response: {
       action: "skip",
       agenda: "deployment details",
+      completionMessage: "",
       debugDecision: "not_applicable",
       learnings: [],
       question: "",
-      totalQuestionBudget: 1,
     },
   });
 
@@ -95,6 +94,8 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads finish tool calls"
       {
         arguments: JSON.stringify({
           agenda: "deployment details",
+          completionMessage:
+            "I have enough detail to wrap up, and I am updating USER.md with that context.",
           learnings: [
             {
               detail: "Owned LLM deployment latency work.",
@@ -102,7 +103,6 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads finish tool calls"
               topic: "LLM deployment",
             },
           ],
-          totalQuestionBudget: 2,
         }),
         call_id: "call-1",
         name: "finish_tailor_resume_interview",
@@ -111,10 +111,14 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads finish tool calls"
     ],
   });
 
-  assert.equal(response.action, "done");
-  assert.equal(response.question, "");
-  assert.equal(response.debugDecision, "not_applicable");
-  assert.equal(response.learnings[0]?.targetSegmentIds[0], "segment-1");
+  assert.equal(response.response.action, "done");
+  assert.equal(response.response.question, "");
+  assert.equal(response.response.debugDecision, "not_applicable");
+  assert.equal(
+    response.response.learnings[0]?.targetSegmentIds[0],
+    "segment-1",
+  );
+  assert.equal(response.toolCalls[0]?.name, "finish_tailor_resume_interview");
 });
 
 test("parseTailorResumeInterviewResponseFromModelOutput rejects plain JSON text", () => {
@@ -127,7 +131,6 @@ test("parseTailorResumeInterviewResponseFromModelOutput rejects plain JSON text"
           debugDecision: "not_applicable",
           learnings: [],
           question: "",
-          totalQuestionBudget: 1,
         }),
       }),
     /tool call/i,
