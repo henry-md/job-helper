@@ -149,7 +149,7 @@ function TailorResumePreview() {
       <div className="public-tailor-heading flex items-start justify-between gap-3 px-1">
         <div>
           <p className="text-[0.58rem] uppercase tracking-[0.28em] text-zinc-500 sm:text-[0.64rem]">
-            Actual pipeline
+            {/* Actual pipeline */} &nbsp;
           </p>
           <p className="mt-0.5 text-[0.92rem] font-semibold text-zinc-50 sm:hidden">
             Tailor pipeline
