@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { authOptions } from "@/auth";
 import { getApiSession } from "@/lib/api-auth";
 import { getPrismaClient } from "@/lib/prisma";
+import { buildNormalizedJobUrlHash } from "@/lib/job-url-hash";
 import type {
   ApplicationStatusValue,
   EmploymentTypeValue,
@@ -386,6 +387,7 @@ export async function POST(request: Request) {
         onsiteDaysPerWeek: persistedOnsiteDaysPerWeek,
         referrerId: referrerRecord?.id ?? null,
         jobUrl: normalizedJobUrl,
+        jobUrlHash: buildNormalizedJobUrlHash(normalizedJobUrl),
         salaryRange: normalizedSalary.text,
         salaryMinimum: normalizedSalary.minimum,
         salaryMaximum: normalizedSalary.maximum,
