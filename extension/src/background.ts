@@ -1,10 +1,12 @@
 import {
   AUTH_SESSION_STORAGE_KEY,
   buildJobDescriptionFromPageContext,
+  buildTailorResumeApplicationContext,
   CAPTURE_COMMAND_NAME,
   DEFAULT_DASHBOARD_URL,
   DEFAULT_JOB_APPLICATIONS_ENDPOINT,
   DEFAULT_TAILOR_RESUME_ENDPOINT,
+  EXISTING_TAILORING_STORAGE_KEY,
   EXTENSION_AUTH_GOOGLE_ENDPOINT,
   EXTENSION_AUTH_SESSION_ENDPOINT,
   EXTENSION_BROWSER_SESSION_ENDPOINT,
@@ -14,10 +16,16 @@ import {
   readPersonalInfoSummary,
   readJobUrlFromPageContext,
   readTailoredResumeSummaries,
+  readTailorResumeExistingTailoringState,
+  type TailorResumeGenerationStepSummary,
   readTailorResumeProfileSummary,
   type TailorResumeRunRecord,
 } from "./job-helper";
 import { collectPageContextFromTab } from "./page-context";
+import {
+  isNdjsonResponse,
+  readTailorResumeGenerationStream,
+} from "./tailor-resume-stream";
 
 type OverlayTone = "error" | "info" | "success";
 
@@ -140,6 +148,65 @@ function buildSuccessMessage(record: TailorResumeRunRecord) {
   return `Tailored resume for ${jobLabel}. Preview is in the side panel`;
 }
 
+function buildLiveTailorResumeStatusMessage(
+  step: TailorResumeGenerationStepSummary | null,
+) {
+  if (!step) {
+    return "Tailoring your resume for this job...";
+  }
+
+  const attemptLabel = step.attempt ? ` (attempt ${step.attempt})` : "";
+  const retryLabel = step.retrying ? ", retrying" : "";
+
+  return `Stage ${step.stepNumber}/${step.stepCount}: ${step.summary}${attemptLabel}${retryLabel}`;
+}
+
+function buildRunningTailoringRunRecord(input: {
+  capturedAt: string;
+  message?: string;
+  step?: TailorResumeGenerationStepSummary | null;
+  tab: chrome.tabs.Tab | null;
+}) {
+  return {
+    capturedAt: input.capturedAt,
+    companyName: null,
+    endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
+    generationStep: input.step ?? null,
+    message:
+      input.message ?? buildLiveTailorResumeStatusMessage(input.step ?? null),
+    pageTitle: cleanText(input.tab?.title) || null,
+    pageUrl: cleanText(input.tab?.url) || null,
+    positionTitle: null,
+    status: "running",
+    tailoredResumeError: null,
+    tailoredResumeId: null,
+  } satisfies TailorResumeRunRecord;
+}
+
+function buildExistingTailoringMessage(payload: Record<string, unknown>) {
+  const existingTailoring = readTailorResumeExistingTailoringState(payload);
+
+  if (!existingTailoring) {
+    return null;
+  }
+
+  if (existingTailoring.kind === "completed") {
+    return `Already tailored ${existingTailoring.displayName}. Choose whether to keep or overwrite it in the side panel.`;
+  }
+
+  if (existingTailoring.kind === "pending_interview") {
+    const roleLabel =
+      existingTailoring.positionTitle || existingTailoring.companyName || "this role";
+    return `A Tailor Resume run for ${roleLabel} is waiting on stage 2/4. Choose whether to cancel or overwrite it in the side panel.`;
+  }
+
+  const stageLabel = existingTailoring.lastStep
+    ? `stage ${existingTailoring.lastStep.stepNumber}/${existingTailoring.lastStep.stepCount}: ${existingTailoring.lastStep.summary}`
+    : "the first tailoring stage";
+
+  return `A Tailor Resume run is already loading at ${stageLabel}. Choose whether to cancel or overwrite it in the side panel.`;
+}
+
 async function getActiveTab() {
   const [tab] = await chrome.tabs.query({
     active: true,
@@ -183,6 +250,39 @@ async function persistResult(record: TailorResumeRunRecord) {
   await chrome.storage.local.set({
     [LAST_TAILORING_STORAGE_KEY]: record,
   });
+}
+
+async function patchTailorResume(
+  body: Record<string, unknown>,
+  authSession: JobHelperAuthSession,
+  options: {
+    onStepEvent?: (stepEvent: TailorResumeGenerationStepSummary) => void;
+  } = {},
+) {
+  const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(authSession),
+      "Content-Type": "application/json",
+      "x-tailor-resume-stream": "1",
+    },
+  });
+
+  if (isNdjsonResponse(response)) {
+    return readTailorResumeGenerationStream(response, {
+      onStepEvent: options.onStepEvent,
+    });
+  }
+
+  const payload = await readJsonResponse(response);
+
+  return {
+    ok: response.ok,
+    payload,
+    status: response.status,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -555,7 +655,7 @@ async function getPersonalInfoSummary() {
   };
 }
 
-async function tailorResumeForTab(activeTab: chrome.tabs.Tab) {
+async function tailorResumeForTab(activeTab: chrome.tabs.Tab, capturedAt: string) {
   const tabId = activeTab.id;
 
   if (typeof tabId !== "number") {
@@ -563,8 +663,6 @@ async function tailorResumeForTab(activeTab: chrome.tabs.Tab) {
   }
 
   const authSession = await ensureJobHelperSession({ interactive: true });
-
-  await showOverlay(tabId, "Job Helper is reading this job post", "info");
 
   const pageContext = await collectPageContext(tabId);
   const jobDescription = buildJobDescriptionFromPageContext(pageContext);
@@ -574,26 +672,65 @@ async function tailorResumeForTab(activeTab: chrome.tabs.Tab) {
     throw new Error("Could not find job description text on this page.");
   }
 
-  await showOverlay(tabId, "Tailoring your resume for this job...", "info");
-
-  const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
-    method: "PATCH",
-    body: JSON.stringify({
+  const result = await patchTailorResume(
+    {
       action: "tailor",
+      applicationContext: buildTailorResumeApplicationContext(pageContext),
       jobDescription,
       jobUrl,
-    }),
-    credentials: "include",
-    headers: {
-      ...authorizationHeaders(authSession),
-      "Content-Type": "application/json",
     },
-  });
-  const payload = (await response.json()) as Record<string, unknown>;
+    authSession,
+    {
+      onStepEvent: (stepEvent) => {
+        void persistResult(
+          buildRunningTailoringRunRecord({
+            capturedAt,
+            step: stepEvent,
+            tab: activeTab,
+          }),
+        );
+      },
+    },
+  );
+  const payload = result.payload;
 
-  if (!response.ok) {
-    if (response.status === 401) {
+  if (!result.ok) {
+    if (result.status === 401) {
       await clearStoredAuthSession();
+    }
+
+    const existingTailoring = readTailorResumeExistingTailoringState(payload);
+    const existingTailoringMessage = existingTailoring
+      ? buildExistingTailoringMessage(payload)
+      : null;
+
+    if (existingTailoringMessage) {
+      const record: TailorResumeRunRecord = {
+        capturedAt,
+        companyName: null,
+        endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
+        generationStep: null,
+        message: existingTailoringMessage,
+        pageTitle: pageContext.title || null,
+        pageUrl: pageContext.url || null,
+        positionTitle: null,
+        status: "error",
+        tailoredResumeError: null,
+        tailoredResumeId: null,
+      };
+
+      await persistResult(record);
+      await chrome.storage.local.set({
+        [EXISTING_TAILORING_STORAGE_KEY]: {
+          existingTailoring,
+          jobDescription,
+          jobUrl,
+          pageContext,
+        },
+      });
+      await showOverlay(tabId, existingTailoringMessage, "info");
+      await openSidePanelForTab(activeTab);
+      return;
     }
 
     throw new Error(
@@ -612,9 +749,10 @@ async function tailorResumeForTab(activeTab: chrome.tabs.Tab) {
 
   if (payload.tailoringStatus === "needs_user_input" || activeInterview) {
     const record: TailorResumeRunRecord = {
-      capturedAt: new Date().toISOString(),
+      capturedAt,
       companyName: activeInterview?.companyName ?? null,
       endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
+      generationStep: null,
       message: "Resume questions are waiting in the side panel.",
       pageTitle: pageContext.title || null,
       pageUrl: pageContext.url || null,
@@ -637,9 +775,10 @@ async function tailorResumeForTab(activeTab: chrome.tabs.Tab) {
       ? payload.tailoredResumeError
       : null;
   const record: TailorResumeRunRecord = {
-    capturedAt: new Date().toISOString(),
+    capturedAt,
     companyName: latestTailoredResume?.companyName ?? null,
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
+    generationStep: null,
     message: "",
     pageTitle: pageContext.title || null,
     pageUrl: pageContext.url || null,
@@ -673,6 +812,7 @@ async function runCaptureFlow(input: {
   tab?: chrome.tabs.Tab;
 } = {}) {
   let activeTab = input.tab ?? null;
+  let capturedAt = new Date().toISOString();
 
   if (isCaptureInFlight) {
     if (input.openSidePanel) {
@@ -690,21 +830,35 @@ async function runCaptureFlow(input: {
 
   try {
     activeTab = activeTab ?? (await getActiveTab());
+    capturedAt = new Date().toISOString();
+
+    await chrome.storage.local.remove(EXISTING_TAILORING_STORAGE_KEY);
+    await persistResult(
+      buildRunningTailoringRunRecord({
+        capturedAt,
+        tab: activeTab,
+      }),
+    );
+
+    if (typeof activeTab.id === "number") {
+      await showOverlay(activeTab.id, "Tailoring your resume for this job...", "info");
+    }
 
     if (input.openSidePanel) {
       await openSidePanelForTab(activeTab);
     }
 
-    await tailorResumeForTab(activeTab);
+    await tailorResumeForTab(activeTab, capturedAt);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to tailor the resume.";
     activeTab = activeTab ?? (await getActiveTab().catch(() => null));
 
     const record: TailorResumeRunRecord = {
-      capturedAt: new Date().toISOString(),
+      capturedAt,
       companyName: null,
       endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
+      generationStep: null,
       message,
       pageTitle: cleanText(activeTab?.title) || null,
       pageUrl: cleanText(activeTab?.url) || null,

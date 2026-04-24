@@ -941,6 +941,18 @@ export async function planTailoredResume(input: {
       inputMessages: planInput,
       instructions: planInstructions,
     });
+    await emitTailorResumeGenerationStep(input.onStepEvent, {
+      attempt,
+      detail:
+        attempt === 1
+          ? "Starting the planning pass to decide which resume blocks should change."
+          : "Retrying the planning pass after the previous attempt failed validation.",
+      durationMs: Math.max(0, Date.now() - startedAt),
+      retrying: attempt > 1,
+      status: "running",
+      stepNumber: 1,
+      summary: "Generating plaintext edit outline",
+    });
     const response = await client.responses.create({
       input: planInput,
       instructions: planInstructions,
@@ -1211,6 +1223,18 @@ export async function implementTailoredResumePlan(input: {
     implementationPrompt = serializeTailoredResumePrompt({
       inputMessages: implementationInput,
       instructions: implementationInstructions,
+    });
+    await emitTailorResumeGenerationStep(input.onStepEvent, {
+      attempt,
+      detail:
+        attempt === 1
+          ? "Starting block-scoped LaTeX generation from the accepted plan."
+          : "Retrying block-scoped LaTeX generation after the previous attempt failed.",
+      durationMs: Math.max(0, Date.now() - startedAt),
+      retrying: attempt > 1,
+      status: "running",
+      stepNumber: 3,
+      summary: "Generating block-scoped edits",
     });
     const response = await client.responses.create({
       input: implementationInput,
