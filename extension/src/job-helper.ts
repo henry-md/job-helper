@@ -35,6 +35,8 @@ export const EXTENSION_BROWSER_SESSION_ENDPOINT =
   `${DEFAULT_APP_BASE_URL}/api/extension/auth/browser-session`;
 export const AUTH_SESSION_STORAGE_KEY = "jobHelperAuthSession";
 export const LAST_TAILORING_STORAGE_KEY = "jobHelperLastTailoringRun";
+export const EXISTING_TAILORING_STORAGE_KEY =
+  "jobHelperExistingTailoringPrompt";
 
 export function buildTailoredResumeReviewUrl(
   tailoredResumeId: string | null | undefined,
@@ -82,15 +84,24 @@ export type JobPageContext = {
   url: string;
 };
 
+export type TailorResumeApplicationContext = {
+  companyName: string | null;
+  employmentType: string | null;
+  jobTitle: string | null;
+  location: string | null;
+  pageTitle: string | null;
+};
+
 export type TailorResumeRunRecord = {
   capturedAt: string;
   endpoint: string;
   companyName: string | null;
+  generationStep?: TailorResumeGenerationStepSummary | null;
   message: string;
   pageTitle: string | null;
   pageUrl: string | null;
   positionTitle: string | null;
-  status: "error" | "needs_input" | "success";
+  status: "error" | "needs_input" | "running" | "success";
   tailoredResumeError: string | null;
   tailoredResumeId: string | null;
 };
@@ -137,23 +148,72 @@ export type TailorResumeConversationMessage = {
   id: string;
   role: "assistant" | "user";
   text: string;
+  toolCalls: TailorResumeConversationToolCall[];
+};
+
+export type TailorResumeConversationToolCall = {
+  argumentsText: string;
+  name: string;
 };
 
 export type TailorResumeQuestioningSummary = {
   agenda: string;
   askedQuestionCount: number;
   learningsCount: number;
-  totalQuestionBudget: number;
 };
 
 export type TailorResumePendingInterviewSummary = {
   companyName: string | null;
+  completionRequestedAt: string | null;
   conversation: TailorResumeConversationMessage[];
   id: string;
   positionTitle: string | null;
   questioningSummary: TailorResumeQuestioningSummary | null;
   updatedAt: string;
 };
+
+export type TailorResumeGenerationStepSummary = {
+  attempt: number | null;
+  detail: string | null;
+  retrying: boolean;
+  status: "failed" | "running" | "skipped" | "succeeded";
+  stepCount: number;
+  stepNumber: number;
+  summary: string;
+};
+
+export type TailorResumeExistingTailoringState =
+  | {
+      createdAt: string;
+      id: string;
+      jobDescription: string;
+      jobUrl: string | null;
+      kind: "active_generation";
+      lastStep: TailorResumeGenerationStepSummary | null;
+      updatedAt: string;
+    }
+  | {
+      companyName: string | null;
+      id: string;
+      jobDescription: string;
+      jobUrl: string | null;
+      kind: "pending_interview";
+      positionTitle: string | null;
+      questionCount: number | null;
+      updatedAt: string;
+    }
+  | {
+      companyName: string | null;
+      displayName: string;
+      error: string | null;
+      id: string;
+      jobUrl: string | null;
+      kind: "completed";
+      positionTitle: string | null;
+      status: string;
+      tailoredResumeId: string;
+      updatedAt: string;
+    };
 
 export type TailorResumeProfileSummary = {
   tailoredResumes: TailoredResumeSummary[];
@@ -230,6 +290,102 @@ function buildSummaryLine(label: string, values: string[], limit = 6) {
   }
 
   return `${label}: ${normalizedValues.join(", ")}`;
+}
+
+function firstCleanText(values: Array<string | null | undefined>) {
+  for (const value of values) {
+    const normalizedValue = cleanText(value);
+
+    if (normalizedValue) {
+      return normalizedValue;
+    }
+  }
+
+  return null;
+}
+
+function normalizeApplicationLocation(value: string | null) {
+  const normalizedValue = value?.toLowerCase() ?? "";
+
+  if (normalizedValue.includes("hybrid")) {
+    return "hybrid";
+  }
+
+  if (normalizedValue.includes("remote")) {
+    return "remote";
+  }
+
+  if (
+    normalizedValue.includes("on-site") ||
+    normalizedValue.includes("onsite") ||
+    normalizedValue.includes("in-office") ||
+    normalizedValue.includes("office")
+  ) {
+    return "onsite";
+  }
+
+  return null;
+}
+
+function normalizeApplicationEmploymentType(value: string | null) {
+  const normalizedValue = value
+    ?.toLowerCase()
+    .replace(/[-\s]+/g, "_")
+    .trim();
+
+  if (!normalizedValue) {
+    return null;
+  }
+
+  if (normalizedValue.includes("full_time") || normalizedValue.includes("fulltime")) {
+    return "full_time";
+  }
+
+  if (normalizedValue.includes("part_time") || normalizedValue.includes("parttime")) {
+    return "part_time";
+  }
+
+  if (normalizedValue.includes("contract")) {
+    return "contract";
+  }
+
+  if (normalizedValue.includes("intern")) {
+    return "internship";
+  }
+
+  return null;
+}
+
+export function buildTailorResumeApplicationContext(
+  pageContext: JobPageContext,
+): TailorResumeApplicationContext {
+  const primaryStructuredPosting = pageContext.jsonLdJobPostings[0] ?? null;
+
+  return {
+    companyName: firstCleanText([
+      primaryStructuredPosting?.hiringOrganization,
+      ...pageContext.companyCandidates,
+      pageContext.siteName,
+    ]),
+    employmentType: normalizeApplicationEmploymentType(
+      firstCleanText([
+        ...(primaryStructuredPosting?.employmentType ?? []),
+        ...pageContext.employmentTypeCandidates,
+      ]),
+    ),
+    jobTitle: firstCleanText([
+      primaryStructuredPosting?.title,
+      ...pageContext.titleCandidates,
+      pageContext.title,
+    ]),
+    location: normalizeApplicationLocation(
+      firstCleanText([
+        ...(primaryStructuredPosting?.locations ?? []),
+        ...pageContext.locationCandidates,
+      ]),
+    ),
+    pageTitle: cleanText(pageContext.title) || null,
+  };
 }
 
 function formatStructuredPosting(
@@ -390,7 +546,39 @@ function readTailorResumeConversationMessage(
     id,
     role,
     text,
+    toolCalls: readTailorResumeConversationToolCalls(value.toolCalls),
   };
+}
+
+function readTailorResumeConversationToolCall(
+  value: unknown,
+): TailorResumeConversationToolCall | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const name = readString(value.name);
+
+  if (!name || typeof value.argumentsText !== "string") {
+    return null;
+  }
+
+  return {
+    argumentsText: value.argumentsText,
+    name,
+  };
+}
+
+function readTailorResumeConversationToolCalls(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailorResumeConversationToolCall[];
+  }
+
+  return value
+    .map(readTailorResumeConversationToolCall)
+    .filter((toolCall): toolCall is TailorResumeConversationToolCall =>
+      Boolean(toolCall),
+    );
 }
 
 function readTailorResumeQuestioningSummary(
@@ -401,16 +589,144 @@ function readTailorResumeQuestioningSummary(
   }
 
   const askedQuestionCount = readNumber(value.askedQuestionCount);
-  const totalQuestionBudget = readNumber(value.totalQuestionBudget);
 
   return {
     agenda: readString(value.agenda),
     askedQuestionCount:
       askedQuestionCount > 0 ? Math.floor(askedQuestionCount) : 1,
     learningsCount: Array.isArray(value.learnings) ? value.learnings.length : 0,
-    totalQuestionBudget:
-      totalQuestionBudget > 0 ? Math.floor(totalQuestionBudget) : 1,
   };
+}
+
+export function readTailorResumeGenerationStepSummary(
+  value: unknown,
+): TailorResumeGenerationStepSummary | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const stepNumber = readNumber(value.stepNumber);
+  const stepCount = readNumber(value.stepCount);
+  const rawStatus = value.status;
+  const status =
+    rawStatus === "failed" ||
+    rawStatus === "running" ||
+    rawStatus === "skipped" ||
+    rawStatus === "succeeded"
+      ? rawStatus
+      : null;
+  const summary = readString(value.summary);
+
+  if (!stepNumber || !stepCount || !status || !summary) {
+    return null;
+  }
+
+  const attempt = readNumber(value.attempt);
+
+  return {
+    attempt: attempt > 0 ? Math.floor(attempt) : null,
+    detail: readNullableString(value.detail),
+    retrying: value.retrying === true,
+    status,
+    stepCount: Math.max(1, Math.floor(stepCount)),
+    stepNumber: Math.max(1, Math.floor(stepNumber)),
+    summary,
+  };
+}
+
+function readExistingTailoringQuestionCount(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const asked = readNumber(value.asked);
+
+  return asked > 0 ? Math.floor(asked) : null;
+}
+
+export function readTailorResumeExistingTailoringState(
+  value: unknown,
+): TailorResumeExistingTailoringState | null {
+  const existingTailoring =
+    isRecord(value) && isRecord(value.existingTailoring)
+      ? value.existingTailoring
+      : value;
+
+  if (!isRecord(existingTailoring)) {
+    return null;
+  }
+
+  const id = readString(existingTailoring.id);
+  const kind = readString(existingTailoring.kind);
+  const updatedAt = readString(existingTailoring.updatedAt);
+
+  if (!id || !updatedAt) {
+    return null;
+  }
+
+  if (kind === "active_generation") {
+    const createdAt = readString(existingTailoring.createdAt);
+    const jobDescription = readString(existingTailoring.jobDescription);
+
+    if (!createdAt) {
+      return null;
+    }
+
+    return {
+      createdAt,
+      id,
+      jobDescription,
+      jobUrl: readNullableString(existingTailoring.jobUrl),
+      kind,
+      lastStep: readTailorResumeGenerationStepSummary(
+        existingTailoring.lastStep,
+      ),
+      updatedAt,
+    };
+  }
+
+  if (kind === "pending_interview") {
+    return {
+      companyName: readNullableString(existingTailoring.companyName),
+      id,
+      jobDescription: readString(existingTailoring.jobDescription),
+      jobUrl: readNullableString(existingTailoring.jobUrl),
+      kind,
+      positionTitle: readNullableString(existingTailoring.positionTitle),
+      questionCount: readExistingTailoringQuestionCount(
+        existingTailoring.questionCount,
+      ),
+      updatedAt,
+    };
+  }
+
+  if (kind === "completed") {
+    const displayName = readString(existingTailoring.displayName);
+    const tailoredResumeId = readString(existingTailoring.tailoredResumeId);
+
+    if (!displayName || !tailoredResumeId) {
+      return null;
+    }
+
+    return {
+      companyName: readNullableString(existingTailoring.companyName),
+      displayName,
+      error: readNullableString(existingTailoring.error),
+      id,
+      jobUrl: readNullableString(existingTailoring.jobUrl),
+      kind,
+      positionTitle: readNullableString(existingTailoring.positionTitle),
+      status: readString(existingTailoring.status) || "ready",
+      tailoredResumeId,
+      updatedAt,
+    };
+  }
+
+  return null;
 }
 
 export function readTailorResumePendingInterviewSummary(
@@ -440,6 +756,7 @@ export function readTailorResumePendingInterviewSummary(
 
   return {
     companyName: readNullableString(planningResult.companyName),
+    completionRequestedAt: readNullableString(value.completionRequestedAt),
     conversation,
     id,
     positionTitle: readNullableString(planningResult.positionTitle),

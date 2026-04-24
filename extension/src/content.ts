@@ -355,7 +355,7 @@ window.addEventListener(
     }
 
     lastShortcutAt = now;
-    showOverlay("Job Helper is reading this job post", "info");
+    showOverlay("Tailoring your resume for this job...", "info");
     void chrome.runtime.sendMessage({
       type: "JOB_HELPER_TRIGGER_CAPTURE",
     });

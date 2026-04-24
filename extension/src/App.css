@@ -366,7 +366,7 @@ button:disabled {
 .status-row {
   display: flex;
   min-height: 46px;
-  align-items: center;
+  align-items: flex-start;
   gap: 11px;
   padding: 11px 14px;
   border-radius: 18px;
@@ -393,11 +393,24 @@ button:disabled {
   background: var(--danger);
 }
 
-.status-text {
+.status-copy {
   min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.status-text {
   color: var(--muted-strong);
   font-size: 14px;
   line-height: 1.4;
+}
+
+.status-detail {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .snapshot-card {
@@ -424,6 +437,13 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.snapshot-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .card-heading-row {
   display: flex;
   align-items: center;
@@ -446,6 +466,39 @@ button:disabled {
 .interview-card {
   display: grid;
   gap: 13px;
+}
+
+.existing-tailoring-card {
+  display: grid;
+  gap: 12px;
+}
+
+.existing-tailoring-title,
+.existing-tailoring-state {
+  margin: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.existing-tailoring-title {
+  color: var(--foreground);
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.existing-tailoring-state {
+  color: var(--muted-strong);
+  font-size: 13px;
+}
+
+.existing-tailoring-grid {
+  margin-top: 0;
+}
+
+.existing-tailoring-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
 }
 
 .interview-agenda,
@@ -494,6 +547,61 @@ button:disabled {
   background: rgba(255, 255, 255, 0.06);
 }
 
+.toolcall-details {
+  margin-top: 10px;
+  border: 1px solid rgba(244, 244, 245, 0.1);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+
+.toolcall-details summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.toolcall-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.toolcall-details-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
+.toolcall-entry {
+  border: 1px solid rgba(244, 244, 245, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 10px;
+}
+
+.toolcall-name {
+  margin: 0;
+  color: #a7f3d0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.toolcall-entry pre {
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: var(--foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .interview-input {
   width: 100%;
   min-height: 116px;
@@ -521,6 +629,60 @@ button:disabled {
 .interview-actions {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+}
+
+.interview-progress {
+  margin: -2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.tailor-interview-finish-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(4, 6, 14, 0.8);
+  backdrop-filter: blur(16px);
+}
+
+.tailor-interview-finish-dialog {
+  width: min(100%, 360px);
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid rgba(244, 244, 245, 0.1);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(24, 24, 27, 0.98), rgba(9, 9, 11, 0.98));
+  box-shadow: 0 28px 72px rgba(0, 0, 0, 0.45);
+}
+
+.tailor-interview-finish-dialog h2,
+.tailor-interview-finish-copy {
+  margin: 0;
+}
+
+.tailor-interview-finish-dialog h2 {
+  color: var(--foreground);
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.tailor-interview-finish-copy {
+  color: var(--muted-strong);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.tailor-interview-finish-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
 }
 
@@ -978,6 +1140,16 @@ button:disabled {
   background: rgba(255, 255, 255, 0.055);
 }
 
+.icon-action svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
 .icon-action:hover:not(:disabled),
 .chat-send-action:hover:not(:disabled) {
   color: var(--foreground);
@@ -989,6 +1161,17 @@ button:disabled {
 .chat-send-action:disabled {
   color: var(--subtle);
   background: rgba(255, 255, 255, 0.04);
+}
+
+.tailoring-run-clear-action {
+  margin: -7px -5px -7px 0;
+  color: var(--muted);
+}
+
+.tailoring-run-clear-action:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: rgba(251, 113, 133, 0.26);
+  background: rgba(251, 113, 133, 0.1);
 }
 
 .chat-tip {
