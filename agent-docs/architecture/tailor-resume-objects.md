@@ -43,7 +43,10 @@ Tailor Resume object model:
 
 5. Tailored Resume Record (`TailoredResumeRecord`)
 - Files: `lib/tailor-resume-types.ts`, `app/api/tailor-resume/route.ts`
-- Each saved tailored resume keeps:
+- The full review/edit artifact is still stored in the Tailor Resume profile because the review UI reads this LaTeX-heavy shape directly.
+- Extension-originated tailoring also creates a DB `TailoredResume` row that links the saved profile record to the tracked `JobApplication`.
+- The DB row stores lightweight searchable/linkable metadata: profile record id, application id, job URL/hash, display name, company, role, status, and error.
+- Each saved profile tailored resume keeps:
   - the tailored LaTeX / annotated LaTeX snapshot
   - one block-level edit record per changed `segmentId`
   - each block edit record stores three distinct LaTeX states:
@@ -79,7 +82,20 @@ Tailor Resume object model:
 - Successful compiles overwrite `.job-helper-data/tailor-resumes/<userId>/preview.pdf`.
 - Failed edits keep the previous successful preview when one already exists.
 
-7. Prompt Settings (`TailorResumePromptSettingsState`)
+7. Tailor Resume Run (`TailorResumeRun`)
+- Files: `prisma/schema.prisma`, `app/api/tailor-resume/route.ts`
+- Extension-originated tailoring creates or reuses a `JobApplication` for the normalized job URL before model generation begins.
+- A `TailorResumeRun` row tracks the generation state for that application:
+  - `RUNNING` while the pipeline is actively generating
+  - `NEEDS_INPUT` while the follow-up interview is waiting on the user
+  - `SUCCEEDED` after a saved tailored resume row is linked
+  - `FAILED` for generation or validation failure
+  - `CANCELLED` when the user cancels/overwrites an active run
+- Run rows carry the latest step number/count/status/summary/detail/attempt/retry state so duplicate-tailoring checks can tell the user exactly what the existing run is doing.
+- The pending interview stored in the file-backed profile includes the DB `applicationId` and `tailorResumeRunId` so continuing an interview updates the same run row.
+- Duplicate checks for extension tailoring should prefer DB state for the normalized job URL/application: active run first, completed linked tailored resume second.
+
+8. Prompt Settings (`TailorResumePromptSettingsState`)
 - Files: `lib/system-prompt-settings.ts`, `lib/tailor-resume-types.ts`
 - Stored under `profile.promptSettings`.
 - This keeps the per-user system-prompt templates that power:
@@ -94,14 +110,14 @@ Tailor Resume object model:
 - The prompt strings may include template tokens such as `{{FEEDBACK_BLOCK}}`, `{{RETRY_INSTRUCTIONS}}`, and `{{MAX_ATTEMPTS}}`; runtime code expands those tokens before sending the final instructions to OpenAI.
 - Missing keys fall back to the shipped defaults so older saved profiles remain forward-compatible when new prompt-controlled flows are added.
 
-8. Generation Settings (`TailorResumeGenerationSettingsState`)
+9. Generation Settings (`TailorResumeGenerationSettingsState`)
 - Files: `lib/tailor-resume-generation-settings.ts`, `lib/tailor-resume-types.ts`
 - Stored under `profile.generationSettings`.
 - This keeps per-user boolean generation guardrails that are not prompt text themselves.
 - Current settings include whether Step 2 may pause to ask follow-up questions, and whether tailoring should automatically reject page-count growth by running a compaction follow-up pass when needed.
 - These values are editable from `/dashboard?tab=settings`.
 
-9. User Memory (`TailorResumeUserMemory`)
+10. User Memory (`TailorResumeUserMemory`)
 - Files: `prisma/schema.prisma`, `lib/tailor-resume-user-memory.ts`
 - Stored in Prisma as a DB-backed Markdown document for the logged-in user, exposed as `USER.md` in settings.
 - The Step 2 tailoring interview receives this Markdown so it can avoid repeating questions the user has already answered.
@@ -136,7 +152,7 @@ Tailoring generation:
 - When the page-count guardrail is enabled and the compiled tailored preview exceeds the original resume's page count, the flow runs a third conditional stage:
   - a refinement-style compaction pass that re-prompts only the existing edited blocks, sends highlighted rendered preview screenshots, and retries until the preview fits within the original page count or the attempt budget is exhausted
 - Compile retries stay scoped to the implementation pass so LaTeX escaping and block-boundary fixes do not force the model to rethink the whole editing thesis on every retry.
-- Extension-originated tailoring should pass the captured job URL separately from the job-description text. If a saved tailored resume already has the same normalized URL, the API returns that record with `tailoringStatus: "already_tailored"` so extension UI can show the saved preview/download path without launching a fresh generation.
+- Extension-originated tailoring should pass the captured job URL separately from the job-description text and create/reuse a tracked `JobApplication` for the normalized URL before generation starts. The API should store live run state in `TailorResumeRun`; if the same application already has an active run or a linked tailored resume, return a conflict payload so the extension can ask whether to cancel/keep or overwrite.
 
 Important rule:
 

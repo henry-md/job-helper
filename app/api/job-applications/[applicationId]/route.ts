@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/auth";
 import { getPrismaClient } from "@/lib/prisma";
+import { buildNormalizedJobUrlHash } from "@/lib/job-url-hash";
 import type {
   ApplicationStatusValue,
   EmploymentTypeValue,
@@ -237,6 +238,7 @@ export async function PATCH(
         onsiteDaysPerWeek: persistedOnsiteDaysPerWeek,
         referrerId: referrerRecord?.id ?? null,
         jobUrl: jobUrl || null,
+        jobUrlHash: buildNormalizedJobUrlHash(jobUrl || null),
         salaryRange: normalizedSalary.text,
         salaryMinimum: normalizedSalary.minimum,
         salaryMaximum: normalizedSalary.maximum,

@@ -5,6 +5,7 @@ import {
   normalizeTailorResumeJobUrl,
   readTailorResumeJobUrlFromDescription,
 } from "../lib/tailor-resume-job-url.ts";
+import { buildNormalizedJobUrlHash } from "../lib/job-url-hash.ts";
 import type { TailoredResumeRecord } from "../lib/tailor-resume-types.ts";
 
 function buildTailoredResume(
@@ -98,5 +99,14 @@ test("findTailoredResumeByJobUrl matches normalized saved job URLs", () => {
       "https://jobs.example.com/roles/123/?a=1&b=2#details",
     )?.id,
     "matching",
+  );
+});
+
+test("buildNormalizedJobUrlHash hashes the normalized job URL", () => {
+  assert.equal(
+    buildNormalizedJobUrlHash(
+      "HTTPS://Jobs.Example.com/roles/123/?b=2&utm_source=email&a=1#apply",
+    ),
+    buildNormalizedJobUrlHash("https://jobs.example.com/roles/123?a=1&b=2"),
   );
 });

@@ -23,6 +23,8 @@ model User {
   tailorResumeUserMemory  TailorResumeUserMemory?
   tailorResumeChatThreads TailorResumeChatThread[]
   tailorResumeChatMessages TailorResumeChatMessage[]
+  tailorResumeRuns        TailorResumeRun[]
+  tailoredResumes         TailoredResume[]
   latexBuildFailures      LatexBuildFailure[]
 }
 
@@ -152,6 +154,14 @@ enum ExtractionStatus {
   FAILED
 }
 
+enum TailorResumeRunStatus {
+  RUNNING
+  NEEDS_INPUT
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
 model Company {
   id             String           @id @default(cuid())
   userId         String
@@ -229,17 +239,73 @@ model JobApplication {
   notes            String?
   hasReferral      Boolean                  @default(false)
   jobDescription   String?
+  jobUrlHash       String?
   appliedAt        DateTime
   createdAt        DateTime                 @default(now())
   updatedAt        DateTime                 @updatedAt
   company          Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   referrer         Person?                  @relation("JobApplicationReferrer", fields: [referrerId], references: [id], onDelete: SetNull)
   screenshots      JobApplicationScreenshot[]
+  tailorResumeRuns TailorResumeRun[]
+  tailoredResumes  TailoredResume[]
   user             User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([userId, jobUrlHash])
   @@index([userId, status])
   @@index([userId, createdAt(sort: Desc)])
   @@index([companyId, createdAt(sort: Desc)])
   @@index([status])
   @@index([referrerId])
+}
+
+model TailorResumeRun {
+  id               String                @id @default(cuid())
+  userId           String
+  applicationId    String
+  tailoredResumeId String?
+  status           TailorResumeRunStatus @default(RUNNING)
+  jobUrl           String?
+  jobUrlHash       String?
+  jobDescription   String                @db.Text
+  stepNumber       Int?
+  stepCount        Int?
+  stepStatus       String?
+  stepSummary      String?
+  stepDetail       String?               @db.Text
+  stepAttempt      Int?
+  stepRetrying     Boolean               @default(false)
+  error            String?               @db.Text
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  application      JobApplication        @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  tailoredResume   TailoredResume?       @relation(fields: [tailoredResumeId], references: [id], onDelete: SetNull)
+  user             User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId, updatedAt(sort: Desc)])
+  @@index([userId, status, updatedAt(sort: Desc)])
+  @@index([userId, jobUrlHash, updatedAt(sort: Desc)])
+}
+
+model TailoredResume {
+  id              String           @id @default(cuid())
+  userId          String
+  applicationId   String?
+  profileRecordId String
+  jobUrl          String?
+  jobUrlHash      String?
+  displayName     String
+  companyName     String?
+  positionTitle   String?
+  status          String
+  error           String?          @db.Text
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  application     JobApplication?  @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  runs            TailorResumeRun[]
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, profileRecordId])
+  @@index([applicationId, updatedAt(sort: Desc)])
+  @@index([userId, updatedAt(sort: Desc)])
+  @@index([userId, jobUrlHash, updatedAt(sort: Desc)])
 }
