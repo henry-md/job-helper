@@ -1,0 +1,4 @@
+- Symptom: the Tailor Resume “We'd like to end this chat” confirmation could reopen immediately after the user chose `Keep chatting`, which made the follow-up UI feel trapped in a modal loop.
+- Root cause: the client auto-opened the finish modal whenever it saw a pending finish request, but it did not remember that the user had already dismissed that exact request key.
+- Fix: when the user dismisses the finish modal, cache that specific finish-request key and suppress auto-reopening until a genuinely new finish request arrives or the interview clears.
+- Guardrail: finish-confirmation prompts should auto-open once per server-issued finish request, not once per rerender or per repeated hydration of the same interview state.

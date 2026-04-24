@@ -68,12 +68,12 @@ test("buildTailorResumeInterviewSystemPrompt injects retry feedback", () => {
   const prompt = buildTailorResumeInterviewSystemPrompt(
     createDefaultSystemPromptSettings(),
     {
-      feedback: "The previous interview response changed the question budget.",
+      feedback: "The previous interview response asked too many low-value follow-up questions.",
     },
   );
 
   assert.match(prompt, /Previous interview feedback:/);
-  assert.match(prompt, /changed the question budget/);
+  assert.match(prompt, /asked too many low-value follow-up questions/);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 
@@ -88,6 +88,9 @@ test("buildTailorResumeInterviewSystemPrompt requires concise question framing",
   assert.match(prompt, /could not find that same skill or detail in the resume/i);
   assert.match(prompt, /give 1-2 brief examples of strong answers/i);
   assert.match(prompt, /tailored to that job-description signal/i);
+  assert.match(prompt, /keep the overall interview short/i);
+  assert.match(prompt, /usually ask only one follow-up question/i);
+  assert.match(prompt, /rarely ask more than 2-3 total/i);
   assert.match(prompt, /specific tools, ownership, practices, metrics, scope, domain context, or outcomes/i);
   assert.match(prompt, /possible answer shapes, not claims about what the user did/i);
   assert.match(prompt, /ask_tailor_resume_follow_up/i);
@@ -101,6 +104,7 @@ test("buildTailorResumeInterviewSystemPrompt requires concise question framing",
   assert.match(prompt, /job description mentions structured logging and OpenTelemetry/i);
   assert.match(prompt, /I added OpenTelemetry tracing to tRPC endpoints/i);
   assert.match(prompt, /I built alerts\/dashboards that cut debugging time by 30%/i);
+  assert.equal(prompt.includes("totalQuestionBudget"), false);
 });
 
 test("buildTailorResumeInterviewSystemPrompt injects debug-force instructions", () => {

@@ -773,6 +773,39 @@ function StatusPill({ children }: { children: ReactNode }) {
   );
 }
 
+function TailorResumeToolCallDetails({
+  toolCalls,
+}: {
+  toolCalls: TailorResumeConversationMessage["toolCalls"];
+}) {
+  if (toolCalls.length === 0) {
+    return null;
+  }
+
+  return (
+    <details className="mt-3 rounded-[0.95rem] border border-white/10 bg-black/20 p-3 text-xs text-zinc-300">
+      <summary className="cursor-pointer list-none text-[11px] uppercase tracking-[0.18em] text-zinc-400">
+        See toolcalls ({toolCalls.length})
+      </summary>
+      <div className="mt-3 space-y-3">
+        {toolCalls.map((toolCall, index) => (
+          <div
+            className="rounded-[0.85rem] border border-white/10 bg-black/25 p-3"
+            key={`${toolCall.name}:${String(index)}`}
+          >
+            <p className="font-mono text-[11px] text-emerald-200">
+              {toolCall.name}
+            </p>
+            <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-zinc-300">
+              {toolCall.argumentsText}
+            </pre>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 function resolveInitialOpenTailorResumeStep(
   profile: TailorResumeProfile,
 ): TailorResumeStepId {
@@ -792,6 +825,8 @@ export default function TailorResumeWorkspace({
   const fileInputId = useId();
   const jobDescriptionExtensionNudgeDescriptionId = useId();
   const jobDescriptionExtensionNudgeTitleId = useId();
+  const tailorInterviewFinishDescriptionId = useId();
+  const tailorInterviewFinishTitleId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const jobDescriptionSaveSequenceRef = useRef(0);
   const latexSaveSequenceRef = useRef(0);
@@ -804,6 +839,9 @@ export default function TailorResumeWorkspace({
   const isTailorInterviewSubmitInFlightRef = useRef(false);
   const hasShownJobDescriptionExtensionNudgeRef = useRef(false);
   const lastAutoOpenedLinkReviewRef = useRef(initialProfile.extraction.updatedAt);
+  const lastSeenTailorInterviewFinishRequestRef = useRef<string | null>(null);
+  const dismissedTailorInterviewFinishRequestRef = useRef<string | null>(null);
+  const tailorInterviewMessagesEndRef = useRef<HTMLDivElement | null>(null);
   const previousPreviewPdfUrlRef = useRef(
     buildPreviewPdfUrl(initialProfile.latex.pdfUpdatedAt),
   );
@@ -830,10 +868,14 @@ export default function TailorResumeWorkspace({
   const [isSavingLatex, setIsSavingLatex] = useState(false);
   const [isSavingLinks, setIsSavingLinks] = useState(false);
   const [isTailorInterviewOpen, setIsTailorInterviewOpen] = useState(false);
+  const [isTailorInterviewFinishPromptOpen, setIsTailorInterviewFinishPromptOpen] =
+    useState(false);
   const [isTailorResumeProgressOpen, setIsTailorResumeProgressOpen] = useState(false);
   const [isCancellingTailorInterview, setIsCancellingTailorInterview] =
     useState(false);
   const [isSubmittingTailorInterviewAnswer, setIsSubmittingTailorInterviewAnswer] =
+    useState(false);
+  const [isFinishingTailorInterview, setIsFinishingTailorInterview] =
     useState(false);
   const [isTailoringResume, setIsTailoringResume] = useState(false);
   const [isUpdatingBaseResumeStep, setIsUpdatingBaseResumeStep] = useState(false);
@@ -867,6 +909,13 @@ export default function TailorResumeWorkspace({
   const tailoringInterviewSummary =
     tailoringInterview?.planningResult.questioningSummary ?? null;
   const hasTailoringInterview = tailoringInterview !== null;
+  const isTailorInterviewAwaitingCompletion = Boolean(
+    tailoringInterview?.completionRequestedAt,
+  );
+  const tailorInterviewFinishRequestKey =
+    tailoringInterview?.completionRequestedAt
+      ? `${tailoringInterview.id}:${tailoringInterview.completionRequestedAt}`
+      : null;
   const displayedTailoringInterviewConversation = tailoringInterview
     ? pendingTailorInterviewAnswerMessage &&
         tailoringInterview.conversation.at(-1)?.id !==
@@ -877,6 +926,10 @@ export default function TailorResumeWorkspace({
         ]
       : tailoringInterview.conversation
     : [];
+  const displayedTailoringInterviewMessageCount =
+    displayedTailoringInterviewConversation.length;
+  const lastDisplayedTailoringInterviewMessageId =
+    displayedTailoringInterviewConversation.at(-1)?.id ?? null;
   const displayedResume = pendingResume ?? resume;
   const pendingDeletedLinkKeySet = new Set(pendingDeletedLinkKeys);
   const editableLinks = profile.links.filter(
@@ -894,6 +947,10 @@ export default function TailorResumeWorkspace({
       hasLinkLockChanged(link, draftLinkLocks[link.key]),
     );
   const previewAsImage = displayedResume?.mimeType.startsWith("image/") ?? false;
+  const isTailorInterviewBusy =
+    isCancellingTailorInterview ||
+    isSubmittingTailorInterviewAnswer ||
+    isFinishingTailorInterview;
   const isBaseResumeStepComplete = profile.workspace.isBaseResumeStepComplete;
   const hasUnsavedJobDescriptionChanges =
     draftJobDescription !== lastSavedJobDescriptionRef.current;
@@ -1142,7 +1199,7 @@ export default function TailorResumeWorkspace({
     toast(
       <TailorResumeProgressToast
         ariaLabel="Open resume follow-up questions"
-        label="Resume questions pending..."
+        label="Resume chat needs your attention..."
         onOpen={openTailorResumeInterview}
       />,
       {
@@ -1180,6 +1237,16 @@ export default function TailorResumeWorkspace({
     [],
   );
 
+  function dismissTailorInterviewFinishPrompt() {
+    if (tailorInterviewFinishRequestKey) {
+      dismissedTailorInterviewFinishRequestRef.current =
+        tailorInterviewFinishRequestKey;
+    }
+
+    setIsTailorInterviewFinishPromptOpen(false);
+    setIsTailorInterviewOpen(true);
+  }
+
   useEffect(() => {
     if (!hasTailoringInterview) {
       return;
@@ -1187,6 +1254,29 @@ export default function TailorResumeWorkspace({
 
     showTailorResumeInterviewToast();
   }, [hasTailoringInterview, showTailorResumeInterviewToast, tailoringInterview?.id]);
+
+  useEffect(() => {
+    if (!tailorInterviewFinishRequestKey) {
+      dismissedTailorInterviewFinishRequestRef.current = null;
+      setIsTailorInterviewFinishPromptOpen(false);
+      return;
+    }
+
+    if (
+      dismissedTailorInterviewFinishRequestRef.current ===
+      tailorInterviewFinishRequestKey
+    ) {
+      return;
+    }
+
+    if (lastSeenTailorInterviewFinishRequestRef.current === tailorInterviewFinishRequestKey) {
+      return;
+    }
+
+    lastSeenTailorInterviewFinishRequestRef.current = tailorInterviewFinishRequestKey;
+    setIsTailorInterviewOpen(true);
+    setIsTailorInterviewFinishPromptOpen(true);
+  }, [tailorInterviewFinishRequestKey]);
 
   const flushPendingLatexSave = useCallback(async () => {
     if (isLatexSaveInFlightRef.current) {
@@ -1417,6 +1507,20 @@ export default function TailorResumeWorkspace({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [isTailorInterviewOpen]);
+
+  useEffect(() => {
+    if (!isTailorInterviewOpen || !tailoringInterview?.id) {
+      return;
+    }
+
+    tailorInterviewMessagesEndRef.current?.scrollIntoView({ block: "end" });
+  }, [
+    displayedTailoringInterviewMessageCount,
+    draftTailorInterviewAnswer,
+    isTailorInterviewOpen,
+    lastDisplayedTailoringInterviewMessageId,
+    tailoringInterview?.id,
+  ]);
 
   async function uploadResume(file: File) {
     const validationError = validateResumeFile(file);
@@ -2019,11 +2123,13 @@ export default function TailorResumeWorkspace({
       id: `pending-tailor-interview-answer-${Date.now()}`,
       role: "user",
       text: trimmedAnswer,
+      toolCalls: [],
     };
 
     isTailorInterviewSubmitInFlightRef.current = true;
     setPendingTailorInterviewAnswerMessage(optimisticAnswerMessage);
     setDraftTailorInterviewAnswer("");
+    dismissTailorInterviewFinishPrompt();
     setIsTailorInterviewOpen(false);
     setIsSubmittingTailorInterviewAnswer(true);
     const tailoringStartedAt = performance.now();
@@ -2150,6 +2256,135 @@ export default function TailorResumeWorkspace({
     }
   }
 
+  async function finishTailorResumeInterview() {
+    if (
+      !tailoringInterview ||
+      !tailoringInterview.completionRequestedAt ||
+      isFinishingTailorInterview ||
+      isCancellingTailorInterview ||
+      isSubmittingTailorInterviewAnswer
+    ) {
+      return;
+    }
+
+    setIsTailorInterviewFinishPromptOpen(false);
+    setIsTailorInterviewOpen(false);
+    setIsFinishingTailorInterview(true);
+    const tailoringStartedAt = performance.now();
+    startTailorResumeProgress({
+      activeStepNumber: 2,
+      completedStepNumbers: [1],
+      detail:
+        "Wrapping up the follow-up chat before we finish the remaining resume stages.",
+    });
+
+    try {
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({
+          action: "completeTailorResumeInterview",
+          interviewId: tailoringInterview.id,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+          "x-tailor-resume-stream": "1",
+        },
+        method: "PATCH",
+      });
+      const streamedResult = isNdjsonResponse(response)
+        ? await readTailorResumeGenerationStream(response, {
+            onStepEvent: handleTailorResumeStepEvent,
+          })
+        : {
+            ok: response.ok,
+            payload: (await response.json()) as TailorResumeRunResponsePayload,
+            status: response.status,
+          };
+      const payload = streamedResult.payload;
+
+      if (payload.userMarkdown) {
+        onUserMarkdownChange?.(payload.userMarkdown);
+      }
+
+      if (!streamedResult.ok || !payload.profile) {
+        throw new Error(
+          payload.error ?? "Unable to finish the tailoring follow-up questions.",
+        );
+      }
+
+      setPendingTailorInterviewAnswerMessage(null);
+      setProfile(payload.profile);
+      lastSavedJobDescriptionRef.current = payload.profile.jobDescription;
+      onTailoredResumesChange?.(payload.profile.tailoredResumes);
+      closeTailorResumeProgress();
+      showSavedLinkUpdateToast(
+        payload.savedLinkUpdateCount,
+        payload.savedLinkUpdates,
+      );
+      const formattedTailoringDuration = formatElapsedDuration(
+        resolveElapsedDurationMs(
+          payload.tailoredResumeDurationMs,
+          tailoringStartedAt,
+        ),
+      );
+      const nextTailoredResumeId =
+        payload.tailoredResumeId ?? payload.profile.tailoredResumes[0]?.id ?? null;
+
+      if (payload.tailoringStatus === "already_tailored") {
+        toast.success(
+          "You already tailored a resume for this job. Opening the saved review.",
+          {
+            id: tailorResumeRunToastId,
+          },
+        );
+      } else if (payload.tailoredResumeError) {
+        toast.error(
+          formattedTailoringDuration
+            ? `Saved a tailored draft in ${formattedTailoringDuration}, but it still needs review: ${payload.tailoredResumeError}. Opening review.`
+            : `Saved a tailored draft, but it still needs review: ${payload.tailoredResumeError}. Opening review.`,
+          {
+            id: tailorResumeRunToastId,
+          },
+        );
+      } else {
+        toast.success(
+          formattedTailoringDuration
+            ? `Saved a job-specific tailored resume in ${formattedTailoringDuration}. Opening review.`
+            : "Saved a job-specific tailored resume. Opening review.",
+          {
+            id: tailorResumeRunToastId,
+          },
+        );
+      }
+
+      if (nextTailoredResumeId) {
+        onReviewTailoredResume?.(nextTailoredResumeId);
+      }
+    } catch (error) {
+      const formattedTailoringDuration = formatElapsedDuration(
+        Math.max(0, performance.now() - tailoringStartedAt),
+      );
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Unable to finish the tailoring follow-up questions.";
+      setIsTailorInterviewOpen(true);
+      if (tailoringInterview.completionRequestedAt) {
+        setIsTailorInterviewFinishPromptOpen(true);
+      }
+      closeTailorResumeProgress();
+      toast.error(
+        formattedTailoringDuration
+          ? `${errorMessage} (${formattedTailoringDuration})`
+          : errorMessage,
+        {
+          id: tailorResumeRunToastId,
+        },
+      );
+    } finally {
+      setIsFinishingTailorInterview(false);
+    }
+  }
+
   function handleTailorInterviewAnswerKeyDown(
     event: ReactKeyboardEvent<HTMLTextAreaElement>,
   ) {
@@ -2157,8 +2392,7 @@ export default function TailorResumeWorkspace({
       event.repeat ||
       event.nativeEvent.isComposing ||
       event.key !== "Enter" ||
-      event.shiftKey ||
-      (!event.metaKey && !event.ctrlKey)
+      event.shiftKey
     ) {
       return;
     }
@@ -2197,6 +2431,7 @@ export default function TailorResumeWorkspace({
       }
 
       setProfile(payload.profile);
+      setIsTailorInterviewFinishPromptOpen(false);
       setIsTailorInterviewOpen(false);
       setDraftTailorInterviewAnswer("");
       toast.success("Discarded the tailoring follow-up questions.", {
@@ -2607,7 +2842,9 @@ export default function TailorResumeWorkspace({
                     : !isJobStepOpen
                     ? "Collapsed"
                     : hasTailoringInterview
-                    ? "Questions pending"
+                    ? isTailorInterviewAwaitingCompletion
+                      ? "Ready to finish"
+                      : "Questions pending"
                     : isSavingJobDescription
                     ? "Saving..."
                     : jobDescriptionState === "saved"
@@ -2670,7 +2907,9 @@ export default function TailorResumeWorkspace({
                       {isTailoringResume
                         ? "Creating..."
                         : hasTailoringInterview
-                        ? "Resume questions"
+                        ? isTailorInterviewAwaitingCompletion
+                          ? "Finish or clarify"
+                          : "Resume questions"
                         : "Create tailored resume"}
                     </button>
                     {hasTailoringInterview ? (
@@ -2856,10 +3095,6 @@ export default function TailorResumeWorkspace({
                           Question{" "}
                           {String(
                             tailoringInterviewSummary?.askedQuestionCount ?? 1,
-                          )}{" "}
-                          of up to{" "}
-                          {String(
-                            tailoringInterviewSummary?.totalQuestionBudget ?? 1,
                           )}
                         </StatusPill>
                         <StatusPill>
@@ -2884,42 +3119,43 @@ export default function TailorResumeWorkspace({
                         key={message.id}
                       >
                         <p className="whitespace-pre-wrap">{message.text}</p>
+                        <TailorResumeToolCallDetails toolCalls={message.toolCalls} />
                       </div>
                     ))}
+                    <div ref={tailorInterviewMessagesEndRef} />
                   </div>
 
                   <div className="border-t border-white/10 px-5 py-5 sm:px-6">
                     <textarea
                       className="min-h-[8.5rem] w-full rounded-[1.1rem] border border-white/10 bg-black/25 px-3 py-3 text-sm leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-300/35 focus:ring-2 focus:ring-emerald-300/18"
-                      disabled={
-                        isSubmittingTailorInterviewAnswer ||
-                        isCancellingTailorInterview
-                      }
+                      disabled={isTailorInterviewBusy}
                       onKeyDown={handleTailorInterviewAnswerKeyDown}
                       onChange={(event) =>
                         setDraftTailorInterviewAnswer(event.target.value)
                       }
-                      placeholder="Answer the current question here..."
+                      placeholder={
+                        isTailorInterviewAwaitingCompletion
+                          ? "Anything else you want to clarify before we finish?"
+                          : "Answer the current question here..."
+                      }
                       value={draftTailorInterviewAnswer}
                     />
 
                     <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                       <p className="text-xs leading-5 text-zinc-500">
-                        The follow-up stays compact and only the compressed
-                        learnings are passed into the next resume-writing step.
+                        {isTailorInterviewAwaitingCompletion
+                          ? "The assistant thinks it has enough context. You can press Done or send one more clarification before the resume-writing step starts."
+                          : "The follow-up stays compact and only the compressed learnings are passed into the next resume-writing step."}
                       </p>
 
                       <div className="flex flex-wrap gap-2">
                         <button
                           className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
-                            isCancellingTailorInterview
+                            isTailorInterviewBusy
                               ? "cursor-wait border border-white/10 bg-white/5 text-zinc-500"
                               : "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
                           }`}
-                          disabled={
-                            isCancellingTailorInterview ||
-                            isSubmittingTailorInterviewAnswer
-                          }
+                          disabled={isTailorInterviewBusy}
                           onClick={() => void cancelTailorResumeInterview()}
                           type="button"
                         >
@@ -2927,14 +3163,13 @@ export default function TailorResumeWorkspace({
                         </button>
                         <button
                           className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
-                            isSubmittingTailorInterviewAnswer ||
+                            isTailorInterviewBusy ||
                             draftTailorInterviewAnswer.trim().length === 0
                               ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
                               : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
                           }`}
                           disabled={
-                            isSubmittingTailorInterviewAnswer ||
-                            isCancellingTailorInterview ||
+                            isTailorInterviewBusy ||
                             draftTailorInterviewAnswer.trim().length === 0
                           }
                           onClick={() => void submitTailorResumeInterviewAnswer()}
@@ -2942,13 +3177,90 @@ export default function TailorResumeWorkspace({
                         >
                           {isSubmittingTailorInterviewAnswer
                             ? "Thinking..."
-                            : "Send answer"}
+                            : isTailorInterviewAwaitingCompletion
+                              ? "Send clarification"
+                              : "Send answer"}
                         </button>
                       </div>
                     </div>
                   </div>
                 </section>
               </div>
+            </div>,
+            document.body,
+          )
+        : null}
+
+      {isPreviewMounted &&
+      isTailorInterviewFinishPromptOpen &&
+      tailoringInterview &&
+      tailoringInterview.completionRequestedAt
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[200] flex items-center justify-center bg-black/86 px-4 py-6 backdrop-blur-sm sm:px-6"
+              onClick={(event) => {
+                if (event.target === event.currentTarget) {
+                  dismissTailorInterviewFinishPrompt();
+                }
+              }}
+            >
+              <section
+                aria-describedby={tailorInterviewFinishDescriptionId}
+                aria-modal="true"
+                aria-labelledby={tailorInterviewFinishTitleId}
+                className="glass-panel soft-ring w-full max-w-lg overflow-hidden rounded-[1.5rem] border border-white/10 bg-zinc-950/96 shadow-[0_30px_120px_rgba(0,0,0,0.58)] ring-1 ring-white/10 backdrop-blur-xl"
+                role="dialog"
+              >
+                <div className="border-b border-white/10 px-5 pb-4 pt-5 sm:px-6 sm:pb-5 sm:pt-6">
+                  <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+                    Tailor Resume Follow-Up
+                  </p>
+                  <h2
+                    className="mt-2 text-xl font-semibold tracking-tight text-zinc-50"
+                    id={tailorInterviewFinishTitleId}
+                  >
+                    We&apos;d like to end this chat
+                  </h2>
+                  <p
+                    className="mt-3 text-sm leading-6 text-zinc-400"
+                    id={tailorInterviewFinishDescriptionId}
+                  >
+                    The assistant thinks it has enough detail to finish the tailored
+                    resume. Press Done to continue, or keep chatting if you want to
+                    clarify anything else first.
+                  </p>
+                </div>
+
+                <div className="px-5 py-5 sm:px-6">
+                  <div className="rounded-[1rem] border border-emerald-300/18 bg-emerald-400/10 px-4 py-3 text-sm leading-6 text-emerald-50/88">
+                    Choosing Done will close the follow-up chat and resume the
+                    remaining tailoring steps.
+                  </div>
+
+                  <div className="mt-5 flex flex-wrap justify-end gap-2">
+                    <button
+                      className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
+                      disabled={isFinishingTailorInterview}
+                      onClick={dismissTailorInterviewFinishPrompt}
+                      type="button"
+                    >
+                      Keep chatting
+                    </button>
+                    <button
+                      className={`rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] transition ${
+                        isFinishingTailorInterview
+                          ? "cursor-wait border border-white/10 bg-white/5 text-zinc-500"
+                          : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
+                      }`}
+                      disabled={isFinishingTailorInterview}
+                      onClick={() => void finishTailorResumeInterview()}
+                      type="button"
+                    >
+                      {isFinishingTailorInterview ? "Finishing..." : "Done"}
+                    </button>
+                  </div>
+                </div>
+              </section>
             </div>,
             document.body,
           )

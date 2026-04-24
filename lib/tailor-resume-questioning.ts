@@ -5,6 +5,7 @@ import {
   type SystemPromptSettings,
 } from "./system-prompt-settings.ts";
 import type {
+  TailorResumeConversationToolCall,
   TailorResumeConversationMessage,
   TailorResumeInterviewDebugDecision,
   TailoredResumePlanningResult,
@@ -88,11 +89,6 @@ const askTailorResumeFollowUpToolParameters = {
       items: tailorResumeInterviewLearningSchema,
     },
     question: { type: "string" },
-    totalQuestionBudget: {
-      type: "integer",
-      minimum: 1,
-      maximum: 5,
-    },
     userMarkdownEditOperations: {
       type: "array",
       items: tailorResumeUserMarkdownEditOperationSchema,
@@ -103,7 +99,6 @@ const askTailorResumeFollowUpToolParameters = {
     "debugDecision",
     "learnings",
     "question",
-    "totalQuestionBudget",
     "userMarkdownEditOperations",
   ],
 } as const;
@@ -113,14 +108,10 @@ const finishTailorResumeInterviewToolParameters = {
   additionalProperties: false,
   properties: {
     agenda: { type: "string" },
+    completionMessage: { type: "string" },
     learnings: {
       type: "array",
       items: tailorResumeInterviewLearningSchema,
-    },
-    totalQuestionBudget: {
-      type: "integer",
-      minimum: 1,
-      maximum: 5,
     },
     userMarkdownEditOperations: {
       type: "array",
@@ -129,8 +120,8 @@ const finishTailorResumeInterviewToolParameters = {
   },
   required: [
     "agenda",
+    "completionMessage",
     "learnings",
-    "totalQuestionBudget",
     "userMarkdownEditOperations",
   ],
 } as const;
@@ -178,10 +169,10 @@ const tailorResumeInterviewTools = [
 type TailorResumeInterviewResponse = {
   action: "ask" | "done" | "skip";
   agenda: string;
+  completionMessage: string;
   debugDecision: TailorResumeInterviewDebugDecision;
   learnings: TailoredResumeQuestionLearning[];
   question: string;
-  totalQuestionBudget: number;
   userMarkdownEditOperations: TailorResumeUserMarkdownPatchOperation[];
 };
 
@@ -198,10 +189,19 @@ export type AdvanceTailorResumeQuestioningResult =
       generationDurationMs: number;
       question: string;
       questioningSummary: TailoredResumeQuestioningSummary;
+      toolCalls: TailorResumeConversationToolCall[];
       userMarkdownPatchResult: TailorResumeUserMarkdownPatchResult | null;
     }
   | {
-      action: "done" | "skip";
+      action: "done";
+      completionMessage: string;
+      generationDurationMs: number;
+      questioningSummary: TailoredResumeQuestioningSummary | null;
+      toolCalls: TailorResumeConversationToolCall[];
+      userMarkdownPatchResult: TailorResumeUserMarkdownPatchResult | null;
+    }
+  | {
+      action: "skip";
       generationDurationMs: number;
       questioningSummary: TailoredResumeQuestioningSummary | null;
       userMarkdownPatchResult: TailorResumeUserMarkdownPatchResult | null;
@@ -226,6 +226,11 @@ type TailoredResumeFunctionToolCall = {
   arguments: string;
   callId: string | null;
   name: string;
+};
+
+type ParsedTailorResumeInterviewModelOutput = {
+  response: TailorResumeInterviewResponse;
+  toolCalls: TailorResumeConversationToolCall[];
 };
 
 function getOpenAIClient() {
@@ -379,6 +384,10 @@ function parseTailorResumeInterviewResponse(
       ? value.action
       : null;
   const agenda = "agenda" in value ? readTrimmedString(value.agenda) : "";
+  const completionMessage =
+    "completionMessage" in value
+      ? readTrimmedString(value.completionMessage)
+      : "";
   const debugDecision =
     "debugDecision" in value &&
     (value.debugDecision === "forced_only" ||
@@ -387,12 +396,6 @@ function parseTailorResumeInterviewResponse(
       ? value.debugDecision
       : null;
   const question = "question" in value ? readTrimmedString(value.question) : "";
-  const totalQuestionBudget =
-    "totalQuestionBudget" in value &&
-    typeof value.totalQuestionBudget === "number" &&
-    Number.isFinite(value.totalQuestionBudget)
-      ? Math.max(0, Math.floor(value.totalQuestionBudget))
-      : null;
   const rawLearnings = "learnings" in value ? value.learnings : null;
   const userMarkdownEditOperations = parseTailorResumeUserMarkdownEditOperations(
     "userMarkdownEditOperations" in value
@@ -400,22 +403,17 @@ function parseTailorResumeInterviewResponse(
       : undefined,
   );
 
-  if (
-    !action ||
-    !debugDecision ||
-    totalQuestionBudget === null ||
-    !Array.isArray(rawLearnings)
-  ) {
+  if (!action || !debugDecision || !Array.isArray(rawLearnings)) {
     throw new Error("The model returned an incomplete interview response.");
   }
 
   return {
     action,
     agenda,
+    completionMessage,
     debugDecision,
     learnings: rawLearnings.map(parseTailoredResumeQuestionLearning),
     question,
-    totalQuestionBudget,
     userMarkdownEditOperations,
   };
 }
@@ -453,9 +451,26 @@ function readFunctionToolCalls(
   });
 }
 
+function serializeTailorResumeConversationToolCall(
+  toolCall: TailoredResumeFunctionToolCall,
+): TailorResumeConversationToolCall {
+  let argumentsText = toolCall.arguments;
+
+  try {
+    argumentsText = JSON.stringify(JSON.parse(toolCall.arguments), null, 2);
+  } catch {
+    // Keep the raw arguments when the model returned non-JSON tool data.
+  }
+
+  return {
+    argumentsText,
+    name: toolCall.name,
+  };
+}
+
 export function parseTailorResumeInterviewResponseFromModelOutput(
   response: TailoredResumeResponse,
-): TailorResumeInterviewResponse {
+): ParsedTailorResumeInterviewModelOutput {
   const toolCalls = readFunctionToolCalls(response);
 
   if (toolCalls.length !== 1) {
@@ -470,21 +485,34 @@ export function parseTailorResumeInterviewResponseFromModelOutput(
 
   const toolCall = toolCalls[0]!;
   const argumentsJson = parseToolCallArguments(toolCall);
+  const conversationToolCalls = [
+    serializeTailorResumeConversationToolCall(toolCall),
+  ];
 
   if (toolCall.name === "ask_tailor_resume_follow_up") {
-    return parseTailorResumeInterviewResponse({
-      ...(argumentsJson && typeof argumentsJson === "object" ? argumentsJson : {}),
-      action: "ask",
-    });
+    return {
+      response: parseTailorResumeInterviewResponse({
+        ...(argumentsJson && typeof argumentsJson === "object"
+          ? argumentsJson
+          : {}),
+        action: "ask",
+      }),
+      toolCalls: conversationToolCalls,
+    };
   }
 
   if (toolCall.name === "finish_tailor_resume_interview") {
-    return parseTailorResumeInterviewResponse({
-      ...(argumentsJson && typeof argumentsJson === "object" ? argumentsJson : {}),
-      action: "done",
-      debugDecision: "not_applicable",
-      question: "",
-    });
+    return {
+      response: parseTailorResumeInterviewResponse({
+        ...(argumentsJson && typeof argumentsJson === "object"
+          ? argumentsJson
+          : {}),
+        action: "done",
+        debugDecision: "not_applicable",
+        question: "",
+      }),
+      toolCalls: conversationToolCalls,
+    };
   }
 
   if (toolCall.name === "skip_tailor_resume_interview") {
@@ -498,13 +526,16 @@ export function parseTailorResumeInterviewResponseFromModelOutput(
         : [];
 
     return {
-      action: "skip",
-      agenda: "",
-      debugDecision: "not_applicable",
-      learnings: [],
-      question: "",
-      totalQuestionBudget: 0,
-      userMarkdownEditOperations,
+      response: {
+        action: "skip",
+        agenda: "",
+        completionMessage: "",
+        debugDecision: "not_applicable",
+        learnings: [],
+        question: "",
+        userMarkdownEditOperations,
+      },
+      toolCalls: conversationToolCalls,
     };
   }
 
@@ -571,7 +602,6 @@ function serializeQuestioningSummary(
     `agenda: ${summary.agenda || "[none]"}`,
     `askedQuestionCount: ${String(summary.askedQuestionCount)}`,
     `debugDecision: ${summary.debugDecision ?? "[none]"}`,
-    `totalQuestionBudget: ${String(summary.totalQuestionBudget)}`,
     "current learnings:",
     learningsText,
   ].join("\n");
@@ -672,6 +702,16 @@ function latestUserMessageRequestsAssistantReply(
   );
 }
 
+function mentionsUserMarkdown(text: string) {
+  return /\buser\.md\b/i.test(text);
+}
+
+function readUserFacingInterviewText(response: TailorResumeInterviewResponse) {
+  return response.action === "done"
+    ? response.completionMessage
+    : response.question;
+}
+
 function validateTailorResumeInterviewResponse(input: {
   conversation: TailorResumeConversationMessage[];
   debugForceConversation: boolean;
@@ -700,14 +740,6 @@ function validateTailorResumeInterviewResponse(input: {
   }
 
   if (input.previousSummary) {
-    if (
-      input.response.totalQuestionBudget !==
-      input.previousSummary.totalQuestionBudget
-    ) {
-      throw new Error(
-        "The model changed the interview question budget after the conversation had already started.",
-      );
-    }
   } else if (input.response.action === "done") {
     throw new Error(
       "The model called finish_tailor_resume_interview before the interview started. Use skip_tailor_resume_interview when no first question is needed.",
@@ -731,18 +763,16 @@ function validateTailorResumeInterviewResponse(input: {
       );
     }
 
-    if (input.response.totalQuestionBudget !== 0) {
-      throw new Error(
-        'Action "skip" must use totalQuestionBudget 0.',
-      );
-    }
-
     if (input.response.question) {
       throw new Error('Action "skip" must not return a question.');
     }
 
     if (input.response.debugDecision !== "not_applicable") {
       throw new Error('Action "skip" must use debugDecision "not_applicable".');
+    }
+
+    if (input.response.userMarkdownEditOperations.length > 0) {
+      throw new Error('Action "skip" must not edit USER.md.');
     }
 
     return;
@@ -752,12 +782,16 @@ function validateTailorResumeInterviewResponse(input: {
     throw new Error("The model returned an interview response without an agenda.");
   }
 
-  if (input.response.totalQuestionBudget < 1 || input.response.totalQuestionBudget > 5) {
-    throw new Error("The model returned an invalid interview question budget.");
-  }
-
   if (input.response.action === "ask" && !input.response.question) {
     throw new Error('Action "ask" must return a question.');
+  }
+
+  if (input.response.action === "ask" && input.response.completionMessage) {
+    throw new Error('Action "ask" must not return completionMessage.');
+  }
+
+  if (input.response.action === "done" && !input.response.completionMessage) {
+    throw new Error('Action "done" must return completionMessage.');
   }
 
   if (input.response.action === "done" && input.response.question) {
@@ -794,13 +828,12 @@ function validateTailorResumeInterviewResponse(input: {
     );
   }
 
-  const previousQuestionCount = input.previousSummary?.askedQuestionCount ?? 0;
-  const nextQuestionCount =
-    input.response.action === "ask" ? previousQuestionCount + 1 : previousQuestionCount;
-
-  if (nextQuestionCount > input.response.totalQuestionBudget) {
+  if (
+    input.response.userMarkdownEditOperations.length > 0 &&
+    !mentionsUserMarkdown(readUserFacingInterviewText(input.response))
+  ) {
     throw new Error(
-      "The model exceeded the declared interview question budget.",
+      "When USER.md is edited, the user-facing message must explicitly mention USER.md.",
     );
   }
 }
@@ -886,12 +919,16 @@ export async function advanceTailorResumeQuestioning(input: {
     });
 
     let parsedResponse: TailorResumeInterviewResponse;
+    let parsedToolCalls: TailorResumeConversationToolCall[] = [];
 
     try {
+      const parsedModelOutput =
+        parseTailorResumeInterviewResponseFromModelOutput(response);
       parsedResponse = normalizeTailorResumeInterviewResponseForCurrentTurn({
         previousSummary,
-        response: parseTailorResumeInterviewResponseFromModelOutput(response),
+        response: parsedModelOutput.response,
       });
+      parsedToolCalls = parsedModelOutput.toolCalls;
       validateTailorResumeInterviewResponse({
         conversation: input.conversation,
         debugForceConversation,
@@ -905,7 +942,7 @@ export async function advanceTailorResumeQuestioning(input: {
           ? error.message
           : "The model returned an invalid interview response.";
       feedback =
-        `${lastError}\nCall exactly one valid interview tool. Keep the question budget stable once the interview has started, ask only one question at a time, keep learnings compact, and only call finish_tailor_resume_interview when you intentionally want the chat to end.`;
+        `${lastError}\nCall exactly one valid interview tool. Keep the interview short and focused, ask only one question at a time, keep learnings compact, and only call finish_tailor_resume_interview when you intentionally want the chat to end.`;
       continue;
     }
 
@@ -946,8 +983,6 @@ export async function advanceTailorResumeQuestioning(input: {
             : parsedResponse.debugDecision
           : previousSummary?.debugDecision ?? null,
       learnings: parsedResponse.learnings,
-      totalQuestionBudget:
-        previousSummary?.totalQuestionBudget ?? parsedResponse.totalQuestionBudget,
     };
 
     if (parsedResponse.action === "ask") {
@@ -956,14 +991,17 @@ export async function advanceTailorResumeQuestioning(input: {
         generationDurationMs: Math.max(0, Date.now() - startedAt),
         question: parsedResponse.question,
         questioningSummary,
+        toolCalls: parsedToolCalls,
         userMarkdownPatchResult,
       };
     }
 
     return {
       action: "done",
+      completionMessage: parsedResponse.completionMessage,
       generationDurationMs: Math.max(0, Date.now() - startedAt),
       questioningSummary,
+      toolCalls: parsedToolCalls,
       userMarkdownPatchResult,
     };
   }

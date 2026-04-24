@@ -196,6 +196,7 @@ test("parseTailorResumeProfile keeps an active tailoring interview", () => {
       isBaseResumeStepComplete: true,
       tailoringInterview: {
         accumulatedModelDurationMs: 2450,
+        applicationId: "application-1",
         conversation: [
           {
             id: "assistant-1",
@@ -242,7 +243,6 @@ test("parseTailorResumeProfile keeps an active tailoring interview", () => {
                 topic: "migration scope",
               },
             ],
-            totalQuestionBudget: 2,
           },
           thesis: {
             jobDescriptionFocus: "Research systems delivery",
@@ -251,6 +251,7 @@ test("parseTailorResumeProfile keeps an active tailoring interview", () => {
         },
         sourceAnnotatedLatexCode:
           "% JOBHELPER_SEGMENT_ID: experience.entry-1.bullet-1\n\\resumeitem{Original bullet}",
+        tailorResumeRunId: "tailor-run-1",
         updatedAt: "2026-04-20T10:01:00.000Z",
       },
       updatedAt: "2026-04-20T10:01:00.000Z",
@@ -260,8 +261,8 @@ test("parseTailorResumeProfile keeps an active tailoring interview", () => {
   assert.equal(profile.workspace.tailoringInterview?.id, "interview-1");
   assert.equal(
     profile.workspace.tailoringInterview?.planningResult.questioningSummary
-      ?.totalQuestionBudget,
-    2,
+      ?.askedQuestionCount,
+    1,
   );
   assert.equal(
     profile.workspace.tailoringInterview?.planningResult.questioningSummary
@@ -271,6 +272,11 @@ test("parseTailorResumeProfile keeps an active tailoring interview", () => {
   assert.equal(
     profile.workspace.tailoringInterview?.conversation[0]?.role,
     "assistant",
+  );
+  assert.equal(profile.workspace.tailoringInterview?.applicationId, "application-1");
+  assert.equal(
+    profile.workspace.tailoringInterview?.tailorResumeRunId,
+    "tailor-run-1",
   );
 });
 
