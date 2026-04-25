@@ -22,7 +22,9 @@ body,
 }
 
 html[data-job-helper-chrome-debug="true"] {
-  background: #22172c;
+  background:
+    radial-gradient(circle at top, rgba(244, 244, 245, 0.08), transparent 28rem),
+    linear-gradient(180deg, #18181b 0%, #09090b 55%, #050507 100%);
 }
 
 html[data-job-helper-chrome-debug="true"] body {
@@ -30,7 +32,9 @@ html[data-job-helper-chrome-debug="true"] body {
   justify-content: center;
   min-height: 100vh;
   padding: 0;
-  background: #22172c;
+  background:
+    radial-gradient(circle at top, rgba(244, 244, 245, 0.08), transparent 28rem),
+    linear-gradient(180deg, #18181b 0%, #09090b 55%, #050507 100%);
 }
 
 html[data-job-helper-chrome-debug="true"] #root {
