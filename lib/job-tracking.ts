@@ -3,22 +3,16 @@ import { randomUUID } from "node:crypto";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileBufferToDataUrl } from "@/lib/file-data-url";
+import {
+  jobApplicationScreenshotMimeTypes,
+  validateJobApplicationScreenshotFile,
+} from "@/lib/job-application-form";
 
-const supportedMimeTypes = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/jpg",
-  "image/webp",
-]);
 const supportedResumeMimeTypes = new Set([
   "application/pdf",
-  "image/png",
-  "image/jpeg",
-  "image/jpg",
-  "image/webp",
+  ...jobApplicationScreenshotMimeTypes,
 ]);
 
-const maxScreenshotBytes = 8 * 1024 * 1024;
 const maxResumeBytes = 10 * 1024 * 1024;
 
 function sanitizeBaseName(value: string) {
@@ -53,16 +47,10 @@ function extensionForFile(file: File) {
 }
 
 export function assertSupportedImageFile(file: File) {
-  if (!supportedMimeTypes.has(file.type)) {
-    throw new Error("Upload a PNG, JPG, or WebP screenshot.");
-  }
+  const validationError = validateJobApplicationScreenshotFile(file);
 
-  if (file.size === 0) {
-    throw new Error("The uploaded file is empty.");
-  }
-
-  if (file.size > maxScreenshotBytes) {
-    throw new Error("Upload a screenshot smaller than 8 MB.");
+  if (validationError) {
+    throw new Error(validationError);
   }
 }
 

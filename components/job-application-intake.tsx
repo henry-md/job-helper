@@ -16,6 +16,11 @@ import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import ApplicationWindow from "@/components/application-window";
+import {
+  createEmptyJobApplicationDraft,
+  jobApplicationScreenshotAccept,
+  validateJobApplicationScreenshotFile,
+} from "@/lib/job-application-form";
 import type {
   CompanyOption,
   JobApplicationDraft,
@@ -43,33 +48,6 @@ type DraftUpload = {
   status: "extracting" | "failed" | "queued" | "ready";
 };
 
-const emptyDraft: JobApplicationDraft = {
-  appliedAt: "",
-  companyName: "",
-  jobDescription: "",
-  jobTitle: "",
-  jobUrl: "",
-  location: "",
-  notes: "",
-  onsiteDaysPerWeek: "",
-  referrerId: "",
-  referrerName: "",
-  recruiterContact: "",
-  salaryRange: "",
-  status: "APPLIED",
-  teamOrDepartment: "",
-  employmentType: "",
-};
-
-const acceptedMimeTypes = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/jpg",
-  "image/webp",
-]);
-
-const maxScreenshotBytes = 8 * 1024 * 1024;
-
 function pickImageFilesFromItems(items?: DataTransferItemList | null) {
   if (!items) {
     return [] as File[];
@@ -84,7 +62,7 @@ function pickImageFilesFromItems(items?: DataTransferItemList | null) {
 
     const file = item.getAsFile();
 
-    if (file && acceptedMimeTypes.has(file.type)) {
+    if (file && !validateJobApplicationScreenshotFile(file)) {
       files.push(file);
     }
   }
@@ -102,7 +80,9 @@ function pickImageFiles(
     return imageFilesFromItems;
   }
 
-  return Array.from(files ?? []).filter((file) => acceptedMimeTypes.has(file.type));
+  return Array.from(files ?? []).filter(
+    (file) => !validateJobApplicationScreenshotFile(file),
+  );
 }
 
 function pickImageFile(items?: DataTransferItemList | null) {
@@ -110,19 +90,7 @@ function pickImageFile(items?: DataTransferItemList | null) {
 }
 
 function validateImageFile(file: File) {
-  if (!acceptedMimeTypes.has(file.type)) {
-    return "Use a PNG, JPG, or WebP screenshot.";
-  }
-
-  if (file.size === 0) {
-    return "The screenshot is empty.";
-  }
-
-  if (file.size > maxScreenshotBytes) {
-    return "Keep the screenshot under 8 MB.";
-  }
-
-  return null;
+  return validateJobApplicationScreenshotFile(file);
 }
 
 function mergeTextField(currentValue: string, nextValue: string | null) {
@@ -230,7 +198,9 @@ export default function JobApplicationIntake({
   const editorShellRef = useRef<HTMLDivElement>(null);
   const applicationPanelRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [draft, setDraft] = useState<JobApplicationDraft>(emptyDraft);
+  const [draft, setDraft] = useState<JobApplicationDraft>(
+    createEmptyJobApplicationDraft,
+  );
   const draftRef = useRef(draft);
   const [draftUploads, setDraftUploads] = useState<DraftUpload[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -642,7 +612,7 @@ export default function JobApplicationIntake({
         throw new Error(payload.error ?? "Failed to save the application.");
       }
 
-      setDraft(emptyDraft);
+      setDraft(createEmptyJobApplicationDraft());
       revokeUploadPreviews(draftUploads);
       setDraftUploads([]);
       setPreviewUploadId(null);
@@ -665,7 +635,7 @@ export default function JobApplicationIntake({
 
   function resetDraft() {
     revokeUploadPreviews(draftUploads);
-    setDraft(emptyDraft);
+    setDraft(createEmptyJobApplicationDraft());
     setDraftUploads([]);
     setPreviewUploadId(null);
     setIsMoreOpen(false);
@@ -703,7 +673,7 @@ export default function JobApplicationIntake({
         >
           <input
             ref={fileInputRef}
-            accept="image/png,image/jpeg,image/webp"
+            accept={jobApplicationScreenshotAccept}
             className="sr-only"
             disabled={isUploadLocked}
             id={inputId}

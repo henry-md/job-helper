@@ -2,18 +2,15 @@ import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/auth";
 import { getApiSession } from "@/lib/api-auth";
+import { normalizeJobApplicationWriteInput } from "@/lib/job-application-form";
 import { getPrismaClient } from "@/lib/prisma";
 import { buildNormalizedJobUrlHash } from "@/lib/job-url-hash";
 import type {
-  ApplicationStatusValue,
-  EmploymentTypeValue,
   JobApplicationExtraction,
-  JobLocationType,
 } from "@/lib/job-application-types";
 import { toJobApplicationRecord } from "@/lib/job-application-records";
 import {
   normalizeCompanyName,
-  normalizeSalaryRange,
   resolveAppliedAt,
 } from "@/lib/job-tracking-shared";
 import {
@@ -27,26 +24,6 @@ type DraftUploadSnapshot = {
   model: string | null;
   status: "extracting" | "failed" | "ready";
 };
-
-const allowedLocationTypes = new Set<JobLocationType>([
-  "remote",
-  "onsite",
-  "hybrid",
-]);
-const allowedApplicationStatuses = new Set<ApplicationStatusValue>([
-  "SAVED",
-  "APPLIED",
-  "INTERVIEW",
-  "OFFER",
-  "REJECTED",
-  "WITHDRAWN",
-]);
-const allowedEmploymentTypes = new Set<EmploymentTypeValue>([
-  "full_time",
-  "part_time",
-  "contract",
-  "internship",
-]);
 
 function parseDraftUploadSnapshots(rawValue: FormDataEntryValue | null) {
   if (typeof rawValue !== "string" || rawValue.trim().length === 0) {
@@ -201,140 +178,48 @@ export async function POST(request: Request) {
   const recruiterContact = formData.get("recruiterContact");
   const notes = formData.get("notes");
   const status = formData.get("status");
+  const normalizedInput = normalizeJobApplicationWriteInput({
+    appliedAt,
+    companyName,
+    employmentType,
+    jobDescription,
+    jobTitle,
+    jobUrl,
+    location,
+    notes,
+    onsiteDaysPerWeek,
+    recruiterContact,
+    referrerId,
+    salaryRange,
+    status,
+    teamOrDepartment,
+  });
 
-  if (typeof jobTitle !== "string" || jobTitle.trim().length === 0) {
-    return NextResponse.json(
-      { error: "Add a job title before saving." },
-      { status: 400 },
-    );
+  if (!normalizedInput.ok) {
+    return NextResponse.json({ error: normalizedInput.error }, { status: 400 });
   }
 
-  if (typeof companyName !== "string" || companyName.trim().length === 0) {
-    return NextResponse.json(
-      { error: "Add a company name before saving." },
-      { status: 400 },
-    );
-  }
-
-  if (
-    typeof appliedAt === "string" &&
-    appliedAt.trim().length > 0 &&
-    !/^\d{4}-\d{2}-\d{2}$/.test(appliedAt.trim())
-  ) {
-    return NextResponse.json(
-      { error: "Use YYYY-MM-DD for the applied date." },
-      { status: 400 },
-    );
-  }
-
-  const normalizedLocation =
-    typeof location === "string" && location.trim().length > 0
-      ? location.trim().toLowerCase()
-      : null;
-
-  if (
-    normalizedLocation !== null &&
-    !allowedLocationTypes.has(normalizedLocation as JobLocationType)
-  ) {
-    return NextResponse.json(
-      { error: "Location must be remote, onsite, or hybrid." },
-      { status: 400 },
-    );
-  }
-
-  const normalizedOnsiteDaysPerWeek =
-    typeof onsiteDaysPerWeek === "string" && onsiteDaysPerWeek.trim().length > 0
-      ? Number.parseInt(onsiteDaysPerWeek.trim(), 10)
-      : null;
-
-  if (
-    normalizedOnsiteDaysPerWeek !== null &&
-    (!Number.isInteger(normalizedOnsiteDaysPerWeek) ||
-      normalizedOnsiteDaysPerWeek < 1 ||
-      normalizedOnsiteDaysPerWeek > 7)
-  ) {
-    return NextResponse.json(
-      { error: "Onsite days per week must be a whole number between 1 and 7." },
-      { status: 400 },
-    );
-  }
-
-  const persistedOnsiteDaysPerWeek =
-    normalizedLocation === "onsite" || normalizedLocation === "hybrid"
-      ? normalizedOnsiteDaysPerWeek
-      : null;
-
-  const normalizedJobUrl =
-    typeof jobUrl === "string" && jobUrl.trim().length > 0
-      ? jobUrl.trim()
-      : null;
-
-  if (normalizedJobUrl !== null) {
-    try {
-      const parsedUrl = new URL(normalizedJobUrl);
-
-      if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-        throw new Error("Unsupported protocol.");
-      }
-    } catch {
-      return NextResponse.json(
-        { error: "Job URL must be a valid http or https URL." },
-        { status: 400 },
-      );
-    }
-  }
-
-  const normalizedSalary = normalizeSalaryRange(
-    typeof salaryRange === "string" ? salaryRange : null,
-  );
-  const normalizedTeamOrDepartment =
-    typeof teamOrDepartment === "string" && teamOrDepartment.trim().length > 0
-      ? teamOrDepartment.trim()
-      : null;
-  const normalizedRecruiterContact =
-    typeof recruiterContact === "string" && recruiterContact.trim().length > 0
-      ? recruiterContact.trim()
-      : null;
-  const normalizedNotes =
-    typeof notes === "string" && notes.trim().length > 0
-      ? notes.trim()
-      : null;
-  const normalizedStatus =
-    typeof status === "string" && status.trim().length > 0
-      ? status.trim().toUpperCase()
-      : "APPLIED";
-
-  if (!allowedApplicationStatuses.has(normalizedStatus as ApplicationStatusValue)) {
-    return NextResponse.json(
-      { error: "Status must be one of the supported application states." },
-      { status: 400 },
-    );
-  }
-
-  const normalizedEmploymentType =
-    typeof employmentType === "string" && employmentType.trim().length > 0
-      ? employmentType.trim().toLowerCase()
-      : null;
-
-  if (
-    normalizedEmploymentType !== null &&
-    !allowedEmploymentTypes.has(normalizedEmploymentType as EmploymentTypeValue)
-  ) {
-    return NextResponse.json(
-      { error: "Employment type must be full_time, part_time, contract, or internship." },
-      { status: 400 },
-    );
-  }
+  const {
+    appliedAt: normalizedAppliedAt,
+    companyName: normalizedCompanyName,
+    employmentType: normalizedEmploymentType,
+    jobDescription: normalizedJobDescription,
+    jobTitle: normalizedJobTitle,
+    jobUrl: normalizedJobUrl,
+    location: normalizedLocation,
+    normalizedSalary,
+    notes: normalizedNotes,
+    persistedOnsiteDaysPerWeek,
+    recruiterContact: normalizedRecruiterContact,
+    referrerId: normalizedReferrerId,
+    status: normalizedStatus,
+    teamOrDepartment: normalizedTeamOrDepartment,
+  } = normalizedInput.value;
 
   const draftSnapshots = parseDraftUploadSnapshots(formData.get("draftUploadSnapshots"));
   const prisma = getPrismaClient();
 
   try {
-    const normalizedReferrerId =
-      typeof referrerId === "string" && referrerId.trim().length > 0
-        ? referrerId.trim()
-        : null;
-
     let referrerRecord: { id: string; recruiterContact: string | null } | null = null;
 
     if (normalizedReferrerId) {
@@ -364,16 +249,16 @@ export async function POST(request: Request) {
       where: {
         userId_normalizedName: {
           userId: session.user.id,
-          normalizedName: normalizeCompanyName(companyName),
+          normalizedName: normalizeCompanyName(normalizedCompanyName),
         },
       },
       create: {
         userId: session.user.id,
-        name: companyName.trim(),
-        normalizedName: normalizeCompanyName(companyName),
+        name: normalizedCompanyName,
+        normalizedName: normalizeCompanyName(normalizedCompanyName),
       },
       update: {
-        name: companyName.trim(),
+        name: normalizedCompanyName,
       },
     });
 
@@ -381,8 +266,8 @@ export async function POST(request: Request) {
       data: {
         userId: session.user.id,
         companyId: company.id,
-        title: jobTitle.trim(),
-        status: normalizedStatus as ApplicationStatusValue,
+        title: normalizedJobTitle,
+        status: normalizedStatus,
         location: normalizedLocation,
         onsiteDaysPerWeek: persistedOnsiteDaysPerWeek,
         referrerId: referrerRecord?.id ?? null,
@@ -396,13 +281,8 @@ export async function POST(request: Request) {
         recruiterContact: referrerRecord?.recruiterContact ?? normalizedRecruiterContact,
         notes: normalizedNotes,
         hasReferral: Boolean(referrerRecord),
-        jobDescription:
-          typeof jobDescription === "string" && jobDescription.trim().length > 0
-            ? jobDescription.trim()
-            : null,
-        appliedAt: resolveAppliedAt(
-          typeof appliedAt === "string" ? appliedAt.trim() : null,
-        ),
+        jobDescription: normalizedJobDescription,
+        appliedAt: resolveAppliedAt(normalizedAppliedAt),
       },
       include: {
         company: true,

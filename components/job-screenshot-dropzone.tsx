@@ -10,6 +10,11 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
+import {
+  jobApplicationScreenshotAccept,
+  jobApplicationScreenshotMimeTypes,
+  validateJobApplicationScreenshotFile,
+} from "@/lib/job-application-form";
 
 type JobScreenshotDropzoneProps = {
   disabled?: boolean;
@@ -21,14 +26,7 @@ type JobScreenshotDropzoneProps = {
 
 type UploadSource = "Dropped" | "Pasted" | "Selected";
 
-const acceptedMimeTypes = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/jpg",
-  "image/webp",
-]);
-
-const maxScreenshotBytes = 8 * 1024 * 1024;
+const acceptedMimeTypes = new Set<string>(jobApplicationScreenshotMimeTypes);
 
 function formatBytes(value: number) {
   return new Intl.NumberFormat("en-US", {
@@ -65,19 +63,7 @@ function pickImageFile(items?: DataTransferItemList | null) {
 }
 
 function validateImageFile(file: File) {
-  if (!acceptedMimeTypes.has(file.type)) {
-    return "Use a PNG, JPG, or WebP screenshot.";
-  }
-
-  if (file.size === 0) {
-    return "The screenshot is empty.";
-  }
-
-  if (file.size > maxScreenshotBytes) {
-    return "Keep the screenshot under 8 MB.";
-  }
-
-  return null;
+  return validateJobApplicationScreenshotFile(file);
 }
 
 export default function JobScreenshotDropzone({
@@ -244,7 +230,7 @@ export default function JobScreenshotDropzone({
       >
         <input
           ref={inputRef}
-          accept="image/png,image/jpeg,image/webp"
+          accept={jobApplicationScreenshotAccept}
           className="sr-only"
           disabled={disabled}
           id={inputId}
