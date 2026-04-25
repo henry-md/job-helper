@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type OpenAI from "openai";
 import { tailorResumeLatexExample } from "../lib/tailor-resume-latex-example.ts";
 import { measureTailorResumeLayout } from "../lib/tailor-resume-layout-measurement.ts";
 import { measureTailorResumeLineReductionCandidates } from "../lib/tailor-resume-line-reduction-candidates.ts";
+import { compactTailoredResumePageCount } from "../lib/tailor-resume-page-count-compaction.ts";
+import { buildTailoredResumeBlockEdits } from "../lib/tailor-resume-review.ts";
 import {
   normalizeTailorResumeLatex,
   readAnnotatedTailorResumeBlocks,
+  stripTailorResumeSegmentIds,
 } from "../lib/tailor-resume-segmentation.ts";
 import { applyTailorResumeBlockChanges } from "../lib/tailor-resume-tailoring.ts";
 
@@ -63,7 +67,89 @@ async function buildLineReductionFixture() {
   };
 }
 
-test("line reduction gate rejects candidates that do not beat the original rendered line count", async () => {
+async function buildCompactionOverflowFixture() {
+  const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
+  const sourceLayout = await measureTailorResumeLayout({
+    annotatedLatexCode: normalized.annotatedLatex,
+  });
+  const bulletBlocks = readAnnotatedTailorResumeBlocks(normalized.annotatedLatex).filter(
+    (block) => block.id.includes(".bullet-"),
+  );
+
+  assert.ok(
+    bulletBlocks.length >= 4,
+    "Expected at least four editable bullet blocks for the overflow fixture.",
+  );
+
+  const giantSentence =
+    "Built role-aligned platform delivery narratives across engineering, reliability, onboarding, experimentation, observability, incident response, and developer workflow improvements for distributed teams ";
+  const step3Changes = bulletBlocks.slice(0, 4).map((block, index) => ({
+    generatedByStep: 3 as const,
+    latexCode:
+      String.raw`\resumeitem{` +
+      `${giantSentence.repeat(index === 0 ? 8 : 12)}` +
+      `while preserving the original project scope and quantitative anchors for the tailored resume.}`,
+    reason: `Long Step 3 expansion ${index + 1}.`,
+    segmentId: block.id,
+  }));
+  const current = applyTailorResumeBlockChanges({
+    annotatedLatexCode: normalized.annotatedLatex,
+    changes: step3Changes,
+  });
+  const currentLayout = await measureTailorResumeLayout({
+    annotatedLatexCode: current.annotatedLatex,
+  });
+
+  assert.ok(
+    currentLayout.pageCount > 1,
+    `Expected the overflow fixture to exceed one page, but it rendered to ${String(currentLayout.pageCount)}.`,
+  );
+
+  const candidate = {
+    latexCode:
+      String.raw`\resumeitem{Led TikTok refactor enabling \textbf{\$50K+/mo in ad spend} across the software suite.}`,
+    reason:
+      "Keeps the TikTok monetization metric central for the role, while trimming the block.",
+    segmentId: step3Changes[0]!.segmentId,
+  };
+  const measurementResult = await measureTailorResumeLineReductionCandidates({
+    candidates: [candidate],
+    currentAnnotatedLatexCode: current.annotatedLatex,
+    currentLayout,
+    editableSegmentIds: new Set(step3Changes.map((change) => change.segmentId)),
+    sourceLayout,
+  });
+
+  assert.equal(measurementResult.accepted.length, 1);
+
+  const candidateLayout = await measureTailorResumeLayout({
+    annotatedLatexCode: applyTailorResumeBlockChanges({
+      annotatedLatexCode: current.annotatedLatex,
+      changes: [candidate],
+    }).annotatedLatex,
+  });
+
+  assert.ok(
+    candidateLayout.pageCount > 1,
+    `Expected the single verified compaction candidate to still leave overflow, but it rendered to ${String(candidateLayout.pageCount)}.`,
+  );
+
+  return {
+    annotatedLatexCode: current.annotatedLatex,
+    candidate,
+    currentLayout,
+    edits: buildTailoredResumeBlockEdits({
+      annotatedLatexCode: normalized.annotatedLatex,
+      changes: step3Changes,
+    }),
+    initialPageCount: currentLayout.pageCount,
+    latexCode: stripTailorResumeSegmentIds(current.annotatedLatex),
+    previewPdf: currentLayout.pdfBuffer,
+    sourceAnnotatedLatexCode: normalized.annotatedLatex,
+  };
+}
+
+test("line reduction gate accepts candidates that reduce the current rendered line count even when they only tie the original block", async () => {
   const fixture = await buildLineReductionFixture();
   const result = await measureTailorResumeLineReductionCandidates({
     candidates: [
@@ -81,14 +167,14 @@ test("line reduction gate rejects candidates that do not beat the original rende
     sourceLayout: fixture.sourceLayout,
   });
 
-  assert.equal(result.accepted.length, 0);
-  assert.equal(result.rejected.length, 1);
-  assert.equal(
-    result.rejected[0]?.rejectionReason,
-    "candidate_did_not_reduce_original_rendered_line_count",
+  assert.equal(result.accepted.length, 1);
+  assert.equal(result.rejected.length, 0);
+  assert.equal(result.accepted[0]?.candidateLineCount, 2);
+  assert.equal(result.accepted[0]?.originalLineCount, 2);
+  assert.ok(
+    (result.accepted[0]?.previousLineCount ?? 0) >
+      (result.accepted[0]?.candidateLineCount ?? Number.POSITIVE_INFINITY),
   );
-  assert.equal(result.rejected[0]?.candidateLineCount, 2);
-  assert.equal(result.rejected[0]?.originalLineCount, 2);
 });
 
 test("line reduction gate accepts candidates with a user-visible rendered line reduction", async () => {
@@ -117,4 +203,135 @@ test("line reduction gate accepts candidates with a user-visible rendered line r
     (result.accepted[0]?.previousLineCount ?? 0) >
       (result.accepted[0]?.candidateLineCount ?? Number.POSITIVE_INFINITY),
   );
+});
+
+test("page-count compaction keeps verified line-saving edits even when the exact page count still misses the target", async () => {
+  const fixture = await buildCompactionOverflowFixture();
+  const toolNamesSeen: string[][] = [];
+  let responseIndex = 0;
+  const candidateArguments = JSON.stringify({
+    candidates: [fixture.candidate],
+  });
+  const fakeClient = {
+    responses: {
+      create: async (parameters: {
+        input: unknown;
+        previous_response_id?: string;
+        tools: Array<{ name?: string }>;
+      }) => {
+        toolNamesSeen.push(parameters.tools.map((tool) => tool.name ?? ""));
+
+        switch (responseIndex++) {
+          case 0:
+            return {
+              id: "resp-1",
+              model: "test-openai-response",
+              output: [
+                {
+                  arguments: candidateArguments,
+                  call_id: "call-1",
+                  name: "measure_resume_line_reductions",
+                  type: "function_call",
+                },
+              ],
+            };
+          case 1:
+            assert.equal(parameters.previous_response_id, "resp-1");
+            return {
+              id: "resp-2",
+              model: "test-openai-response",
+              output: [
+                {
+                  arguments: candidateArguments,
+                  call_id: "call-2",
+                  name: "verify_resume_page_count",
+                  type: "function_call",
+                },
+              ],
+            };
+          case 2:
+            assert.equal(parameters.previous_response_id, "resp-2");
+            return {
+              id: "resp-3",
+              model: "test-openai-response",
+              output: [
+                {
+                  arguments: JSON.stringify({
+                    candidates: [fixture.candidate],
+                    verificationSummary:
+                      "Measured a real line reduction and checked the exact rendered page count.",
+                  }),
+                  call_id: "call-3",
+                  name: "submit_verified_line_reductions",
+                  type: "function_call",
+                },
+              ],
+            };
+          default:
+            throw new Error("Unexpected extra compaction tool round.");
+        }
+      },
+    },
+  } as unknown as OpenAI;
+  const previousRetryBudget =
+    process.env.RETRY_ATTEMPTS_TO_GENERATE_PAGE_COUNT_COMPACTION;
+
+  process.env.RETRY_ATTEMPTS_TO_GENERATE_PAGE_COUNT_COMPACTION = "1";
+
+  try {
+    const result = await compactTailoredResumePageCount({
+      annotatedLatexCode: fixture.annotatedLatexCode,
+      client: fakeClient,
+      edits: fixture.edits,
+      initialPageCount: fixture.initialPageCount,
+      latexCode: fixture.latexCode,
+      model: "test-openai-response",
+      previewPdf: fixture.previewPdf,
+      sourceAnnotatedLatexCode: fixture.sourceAnnotatedLatexCode,
+      targetPageCount: 1,
+      thesis: null,
+    });
+
+    assert.match(result.validationError ?? "", /still rendered to/i);
+    assert.ok(result.pageCount > 1);
+    assert.ok(result.previewPdf.length > 0);
+    const compactedEdit = result.edits.find(
+      (edit) => edit.segmentId === fixture.candidate.segmentId,
+    );
+    assert.ok(compactedEdit);
+    assert.equal(compactedEdit?.generatedByStep, 4);
+    assert.equal(
+      compactedEdit?.afterLatexCode.includes(
+        String.raw`\resumeitem{Led TikTok refactor enabling \textbf{\$50K+/mo in ad spend} across the software suite.}`,
+      ),
+      true,
+    );
+    assert.deepEqual(
+      toolNamesSeen,
+      [
+        [
+          "measure_resume_line_reductions",
+          "verify_resume_page_count",
+          "submit_verified_line_reductions",
+        ],
+        [
+          "measure_resume_line_reductions",
+          "verify_resume_page_count",
+          "submit_verified_line_reductions",
+        ],
+        [
+          "measure_resume_line_reductions",
+          "verify_resume_page_count",
+          "submit_verified_line_reductions",
+        ],
+      ],
+    );
+  } finally {
+    if (previousRetryBudget === undefined) {
+      delete process.env.RETRY_ATTEMPTS_TO_GENERATE_PAGE_COUNT_COMPACTION;
+    } else {
+      process.env.RETRY_ATTEMPTS_TO_GENERATE_PAGE_COUNT_COMPACTION =
+        previousRetryBudget;
+    }
+  }
 });

@@ -143,17 +143,6 @@ async function measureCandidateBatch(input: {
       } satisfies TailorResumeLineReductionMeasurement;
     }
 
-    if (originalLineCount !== null && candidateLineCount >= originalLineCount) {
-      return {
-        candidate,
-        candidateLineCount,
-        originalLineCount,
-        previousLineCount,
-        rejectionReason:
-          "candidate_did_not_reduce_original_rendered_line_count",
-      } satisfies TailorResumeLineReductionMeasurement;
-    }
-
     return {
       candidate,
       candidateLineCount,

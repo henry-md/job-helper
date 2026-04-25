@@ -170,10 +170,13 @@ test("buildTailorResumePageCountCompactionPrompt injects page count tokens", () 
   assert.match(prompt, /current tailored preview is 2 pages/i);
   assert.match(prompt, /about 3 rendered lines must be removed/i);
   assert.match(prompt, /Use the measurement tool as a scratchpad before your final submission/i);
+  assert.match(prompt, /exact page-count verification tool/i);
+  assert.match(prompt, /actual rendered page count under the same final acceptance logic/i);
   assert.match(prompt, /Only touch blocks where your proposed replacement is likely to remove/i);
   assert.match(prompt, /same-line-count edits/i);
   assert.match(prompt, /measurement tool will reject/i);
   assert.match(prompt, /already-one-line blocks as last-resort cuts/i);
+  assert.match(prompt, /do not call the job done until the exact page-count verification is at or below the target/i);
   assert.match(prompt, /Lead with what changed in the context of the job description/i);
   assert.match(prompt, /Mention the need to shorten only as a passing sentence fragment/i);
   assert.match(prompt, /fully replaces the old reason shown to the user/i);

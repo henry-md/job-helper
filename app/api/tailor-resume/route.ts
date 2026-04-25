@@ -1364,7 +1364,7 @@ async function finalizeTailorResumeGeneration(input: {
             latexCode: compactionResult.latexCode,
             model: compactionResult.model,
             previewPdf: compactionResult.previewPdf,
-            validationError: null,
+            validationError: compactionResult.validationError,
           };
         } catch (error) {
           tailoringResult = applyTailorResumePageCountFailure(

@@ -43,6 +43,7 @@ export type TailorResumePageCountCompactionResult = {
   model: string;
   pageCount: number;
   previewPdf: Buffer;
+  validationError: string | null;
 };
 
 type TailorResumeCompactionResponse = {
@@ -89,24 +90,40 @@ type TailorResumeCompactionAttemptHistoryEntry = {
   detail: string;
   estimatedLinesToRecover: number;
   measurementResult: TailorResumeLineReductionToolResult | null;
+  pageCountVerification: TailorResumePageCountVerificationToolResult | null;
 };
 
 type TailorResumeCompactionSelfCheckResult =
   | {
       candidates: TailorResumeLineReductionCandidate[];
       measurementResult: TailorResumeLineReductionToolResult | null;
+      pageCountVerification: TailorResumePageCountVerificationToolResult | null;
       model: string;
       ok: true;
     }
   | {
       error: string;
       measurementResult: TailorResumeLineReductionToolResult | null;
+      pageCountVerification: TailorResumePageCountVerificationToolResult | null;
       model: string;
       ok: false;
     };
 
+type TailorResumePageCountVerificationToolResult = {
+  canSubmitFinalCandidates: boolean;
+  currentPageCount: number;
+  fitsTargetPageCount: boolean;
+  nextAction: string;
+  pageCountDelta: number | null;
+  targetPageCount: number;
+  validationError: string | null;
+  verifiedCandidateCount: number;
+  verifiedPageCount: number | null;
+};
+
 const tailorResumeLineReductionToolName = "measure_resume_line_reductions";
-const maxCompactionSelfCheckRounds = 4;
+const tailorResumePageCountVerificationToolName = "verify_resume_page_count";
+const maxCompactionSelfCheckRounds = 6;
 const maxCompactionHistoryAttemptsForPrompt = 3;
 const maxCompactionMeasurementsPerAttemptForPrompt = 6;
 
@@ -141,11 +158,40 @@ const tailorResumeLineReductionTool = {
 const tailorResumeLineReductionSubmissionToolName =
   "submit_verified_line_reductions";
 
+const tailorResumePageCountVerificationTool = {
+  type: "function",
+  name: tailorResumePageCountVerificationToolName,
+  description:
+    "Compile the full resume with a measured candidate set applied and report the exact rendered PDF page count using the same final page-count check as acceptance.",
+  strict: true,
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      candidates: {
+        type: "array",
+        minItems: 1,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            latexCode: { type: "string" },
+            reason: { type: "string" },
+            segmentId: { type: "string" },
+          },
+          required: ["segmentId", "latexCode", "reason"],
+        },
+      },
+    },
+    required: ["candidates"],
+  },
+} as const;
+
 const tailorResumeLineReductionSubmissionTool = {
   type: "function",
   name: tailorResumeLineReductionSubmissionToolName,
   description:
-    "Submit the final Step 4 candidates after you have used the measurement tool to verify that they reduce rendered lines.",
+    "Submit the Step 4 candidates for this pass after you have used the measurement tool and the exact page-count verification tool on that same candidate set.",
   strict: true,
   parameters: {
     type: "object",
@@ -173,6 +219,7 @@ const tailorResumeLineReductionSubmissionTool = {
 
 const knownCompactionToolNames = new Set([
   tailorResumeLineReductionToolName,
+  tailorResumePageCountVerificationToolName,
   tailorResumeLineReductionSubmissionToolName,
 ]);
 
@@ -292,8 +339,6 @@ function describeLineReductionRejectionReason(reason: string | null) {
       return "The candidate block's rendered line count was unavailable after measurement.";
     case "candidate_did_not_reduce_rendered_line_count":
       return "The candidate still rendered to the same number of lines as the current replacement.";
-    case "candidate_did_not_reduce_original_rendered_line_count":
-      return "The candidate did not beat the original block's rendered line count.";
     default:
       return reason.replace(/_/g, " ");
   }
@@ -343,10 +388,13 @@ function buildLineReductionToolOutput(input: {
       })),
       acceptedRenderedLineReduction,
       canSubmitFinalCandidates: input.result.accepted.length > 0,
-      estimatedLinesStillNeeded: input.estimatedLinesToRecover,
+      estimatedLinesStillNeeded: Math.max(
+        0,
+        input.estimatedLinesToRecover - acceptedRenderedLineReduction,
+      ),
       nextAction:
         input.result.accepted.length > 0
-          ? `Call ${tailorResumeLineReductionSubmissionToolName} with only the accepted candidates you actually want to apply, or measure a revised set if you want a different tradeoff.`
+          ? `Call ${tailorResumePageCountVerificationToolName} with only the accepted candidates you actually want to apply, or measure a revised set if you want a different tradeoff.`
           : `Revise the candidates and call ${tailorResumeLineReductionToolName} again. Do not submit final candidates until at least one measurement is accepted.`,
       rejected: input.result.rejected.map((measurement) => ({
         candidateLineCount: measurement.candidateLineCount,
@@ -360,6 +408,28 @@ function buildLineReductionToolOutput(input: {
         rejectionReason: measurement.rejectionReason,
         segmentId: measurement.candidate.segmentId,
       })),
+    },
+    null,
+    2,
+  );
+}
+
+function buildPageCountVerificationToolOutput(
+  result: TailorResumePageCountVerificationToolResult,
+) {
+  return JSON.stringify(result, null, 2);
+}
+
+function buildCompactionSubmissionToolOutput(input: {
+  accepted: boolean;
+  message: string;
+  nextAction: string;
+}) {
+  return JSON.stringify(
+    {
+      accepted: input.accepted,
+      message: input.message,
+      nextAction: input.nextAction,
     },
     null,
     2,
@@ -451,6 +521,177 @@ function parseLineReductionCandidates(
       },
     ];
   });
+}
+
+function buildCompactionCandidateKey(
+  candidate: Pick<TailorResumeLineReductionCandidate, "latexCode" | "segmentId">,
+) {
+  return JSON.stringify({
+    latexCode: candidate.latexCode,
+    segmentId: candidate.segmentId,
+  });
+}
+
+function buildCompactionCandidateSignature(
+  candidates: Array<
+    Pick<TailorResumeLineReductionCandidate, "latexCode" | "segmentId">
+  >,
+) {
+  return JSON.stringify(
+    candidates
+      .map((candidate) => ({
+        latexCode: candidate.latexCode,
+        segmentId: candidate.segmentId,
+      }))
+      .sort((left, right) => {
+        const segmentCompare = left.segmentId.localeCompare(right.segmentId);
+
+        if (segmentCompare !== 0) {
+          return segmentCompare;
+        }
+
+        return left.latexCode.localeCompare(right.latexCode);
+      }),
+  );
+}
+
+function applyCompactionCandidatesToAnnotatedLatex(input: {
+  annotatedLatexCode: string;
+  candidates: TailorResumeLineReductionCandidate[];
+}) {
+  return applyTailorResumeBlockChanges({
+    annotatedLatexCode: input.annotatedLatexCode,
+    changes: input.candidates.map((candidate) => ({
+      latexCode: candidate.latexCode,
+      reason: candidate.reason,
+      segmentId: candidate.segmentId,
+    })),
+  }).annotatedLatex;
+}
+
+function serializeCompactionCandidatesForPrompt(
+  candidates: TailorResumeLineReductionCandidate[],
+) {
+  if (candidates.length === 0) {
+    return "[none]";
+  }
+
+  return candidates
+    .map((candidate) => {
+      return [
+        `- segmentId: ${candidate.segmentId}`,
+        `  latex: ${truncateForPrompt(candidate.latexCode, 220)}`,
+      ].join("\n");
+    })
+    .join("\n");
+}
+
+async function verifyTailorResumePageCountCandidates(input: {
+  candidates: TailorResumeLineReductionCandidate[];
+  currentAnnotatedLatexCode: string;
+  currentPageCount: number;
+  latestMeasurementResult: TailorResumeLineReductionToolResult | null;
+  targetPageCount: number;
+}): Promise<TailorResumePageCountVerificationToolResult> {
+  if (!input.latestMeasurementResult) {
+    return {
+      canSubmitFinalCandidates: false,
+      currentPageCount: input.currentPageCount,
+      fitsTargetPageCount: false,
+      nextAction:
+        `Call ${tailorResumeLineReductionToolName} first so the exact same candidates are measured for rendered-line reductions before page-count verification.`,
+      pageCountDelta: null,
+      targetPageCount: input.targetPageCount,
+      validationError:
+        `Call ${tailorResumeLineReductionToolName} before ${tailorResumePageCountVerificationToolName}.`,
+      verifiedCandidateCount: 0,
+      verifiedPageCount: null,
+    };
+  }
+
+  const acceptedCandidateKeys = new Set(
+    input.latestMeasurementResult.accepted.map((measurement) =>
+      buildCompactionCandidateKey(measurement.candidate),
+    ),
+  );
+  const invalidCandidates = input.candidates.filter(
+    (candidate) =>
+      !acceptedCandidateKeys.has(buildCompactionCandidateKey(candidate)),
+  );
+
+  if (invalidCandidates.length > 0) {
+    return {
+      canSubmitFinalCandidates: false,
+      currentPageCount: input.currentPageCount,
+      fitsTargetPageCount: false,
+      nextAction:
+        `Only verify candidates that were accepted by the latest ${tailorResumeLineReductionToolName} call. Re-measure if you changed any candidate latex.`,
+      pageCountDelta: null,
+      targetPageCount: input.targetPageCount,
+      validationError:
+        "Page-count verification only accepts candidates that survived the latest rendered-line measurement pass.\n" +
+        serializeCompactionCandidatesForPrompt(invalidCandidates),
+      verifiedCandidateCount: 0,
+      verifiedPageCount: null,
+    };
+  }
+
+  try {
+    const candidateAnnotatedLatexCode = applyCompactionCandidatesToAnnotatedLatex({
+      annotatedLatexCode: input.currentAnnotatedLatexCode,
+      candidates: input.candidates,
+    });
+    const candidateLatexCode = stripTailorResumeSegmentIds(candidateAnnotatedLatexCode);
+    const validation = await validateTailorResumeLatexDocument(candidateLatexCode);
+
+    if (!validation.ok) {
+      return {
+        canSubmitFinalCandidates: false,
+        currentPageCount: input.currentPageCount,
+        fitsTargetPageCount: false,
+        nextAction:
+          `Fix the compile or link error, then call ${tailorResumeLineReductionToolName} again before another exact page-count check.`,
+        pageCountDelta: null,
+        targetPageCount: input.targetPageCount,
+        validationError: validation.error,
+        verifiedCandidateCount: input.candidates.length,
+        verifiedPageCount: null,
+      };
+    }
+
+    const verifiedPageCount = await countPdfPages(validation.previewPdf);
+    const fitsTargetPageCount = verifiedPageCount <= input.targetPageCount;
+
+    return {
+      canSubmitFinalCandidates: true,
+      currentPageCount: input.currentPageCount,
+      fitsTargetPageCount,
+      nextAction: fitsTargetPageCount
+        ? `The exact page check now fits within ${buildPageCountLimitLabel(input.targetPageCount)}. Call ${tailorResumeLineReductionSubmissionToolName} with this same candidate set.`
+        : `The exact page check still renders to ${buildPageCountLimitLabel(verifiedPageCount)}. Measure a more aggressive set now, or call ${tailorResumeLineReductionSubmissionToolName} to bank these verified line-saving candidates for the next pass.`,
+      pageCountDelta: input.currentPageCount - verifiedPageCount,
+      targetPageCount: input.targetPageCount,
+      validationError: null,
+      verifiedCandidateCount: input.candidates.length,
+      verifiedPageCount,
+    };
+  } catch (error) {
+    return {
+      canSubmitFinalCandidates: false,
+      currentPageCount: input.currentPageCount,
+      fitsTargetPageCount: false,
+      nextAction:
+        `Revise the candidates, then call ${tailorResumeLineReductionToolName} again before another exact page-count check.`,
+      pageCountDelta: null,
+      targetPageCount: input.targetPageCount,
+      validationError:
+        error instanceof Error
+          ? error.message
+          : "Unable to verify the exact rendered page count.",
+      verifiedCandidateCount: input.candidates.length,
+      verifiedPageCount: null,
+    };
+  }
 }
 
 function readCurrentEditLatex(edit: TailoredResumeBlockEditRecord) {
@@ -608,7 +849,7 @@ function serializeEditableBlocks(input: {
       `  current replacement rendered lines: ${entry.currentLineCount ?? "[unavailable]"}`,
       `  line delta vs original: ${entry.lineDelta === null ? "[unavailable]" : entry.lineDelta}`,
       `  current generated-by step: ${entry.edit.generatedByStep}`,
-      "  acceptance rule: a Step 4 candidate must render to fewer lines than both the current replacement and the original block when those counts are available",
+      "  acceptance rule: a Step 4 candidate must render to fewer lines than the current replacement for that block",
       `  current reason: ${entry.edit.reason}`,
       "  original latex block:",
       entry.edit.beforeLatexCode,
@@ -665,6 +906,22 @@ function serializeCompactionAttemptHistory(
         ...(measurementLines.length > 0
           ? measurementLines
           : ["- [no reusable measurement result captured]"]),
+        ...(entry.pageCountVerification
+          ? [
+              "Exact page-count verification:",
+              `- verified candidate count: ${entry.pageCountVerification.verifiedCandidateCount}`,
+              `- current page count before verification: ${entry.pageCountVerification.currentPageCount}`,
+              `- verified page count after candidates: ${entry.pageCountVerification.verifiedPageCount ?? "[unavailable]"}`,
+              `- target page count: ${entry.pageCountVerification.targetPageCount}`,
+              `- page delta: ${entry.pageCountVerification.pageCountDelta ?? "[unavailable]"}`,
+              `- fits target: ${entry.pageCountVerification.fitsTargetPageCount ? "yes" : "no"}`,
+              `- verification detail: ${
+                entry.pageCountVerification.validationError
+                  ? truncateForPrompt(entry.pageCountVerification.validationError, 220)
+                  : "ok"
+              }`,
+            ]
+          : []),
       ].join("\n");
     }),
   ].join("\n\n");
@@ -675,14 +932,16 @@ function buildCompactionInstructions() {
     "You are Step 4 of a staged resume-tailoring pipeline.",
     "Your only job is to find real rendered-line reductions in the existing model-edited blocks.",
     `Before any final submission, you must call ${tailorResumeLineReductionToolName} to self-check your edits against rendered line counts.`,
-    `You may call ${tailorResumeLineReductionToolName} multiple times until you find a candidate set that actually works.`,
-    `Only after reading the measurement result should you call ${tailorResumeLineReductionSubmissionToolName}.`,
-    `When you call ${tailorResumeLineReductionSubmissionToolName}, include only candidates that survived your latest measurement pass.`,
+    `After choosing a measured candidate set, you must call ${tailorResumePageCountVerificationToolName} on that same candidate set so you can read the exact rendered page count before deciding what to do next.`,
+    `You may call ${tailorResumeLineReductionToolName} and ${tailorResumePageCountVerificationToolName} multiple times until you find a candidate set that actually works or you decide to bank the verified line savings for the next pass.`,
+    `Only after reading the exact page-count verification result should you call ${tailorResumeLineReductionSubmissionToolName}.`,
+    `When you call ${tailorResumeLineReductionSubmissionToolName}, include only candidates from your latest ${tailorResumePageCountVerificationToolName} call.`,
     "Do not resubmit the same losing shape after the tool already showed it stayed on the same rendered line count unless you materially changed the LaTeX.",
     "Prefer high-yield blocks that currently span multiple rendered lines. Treat already-one-line blocks as last resort unless deleting one is truly necessary.",
-    "Only include a block in the tool call when you believe the replacement will reduce that exact block by at least one rendered PDF line versus the current model replacement and versus the original resume block shown to the user.",
+    "Only include a block in the tool call when you believe the replacement will reduce that exact block by at least one rendered PDF line versus the current saved replacement for that block.",
     "Do not polish, rephrase, or touch a block unless the replacement is likely to create a user-visible rendered-line reduction for that same block.",
     "Use the current replacement LaTeX block shape. Keep the edit inside the same segment and preserve factual accuracy.",
+    `If ${tailorResumePageCountVerificationToolName} shows the resume is still above the target, you may still submit those verified line-saving candidates so the next server-side retry starts from a smaller draft.`,
     "Every candidate reason replaces the old saved reason. Lead with what changed for the job-description fit, and mention shortening only as a passing fragment when necessary.",
   ].join("\n");
 }
@@ -772,6 +1031,9 @@ async function collectVerifiedCompactionCandidates(input: {
   workingEdits: TailoredResumeBlockEditRecord[];
 }): Promise<TailorResumeCompactionSelfCheckResult> {
   let latestMeasurementResult: TailorResumeLineReductionToolResult | null = null;
+  let latestPageCountVerification: TailorResumePageCountVerificationToolResult | null =
+    null;
+  let latestVerifiedCandidateSignature: string | null = null;
   let latestModel = input.model;
   let measuredAtLeastOnce = false;
   let previousResponseId: string | undefined;
@@ -798,6 +1060,7 @@ async function collectVerifiedCompactionCandidates(input: {
         tool_choice: "required",
         tools: [
           tailorResumeLineReductionTool,
+          tailorResumePageCountVerificationTool,
           tailorResumeLineReductionSubmissionTool,
         ],
       }),
@@ -815,31 +1078,19 @@ async function collectVerifiedCompactionCandidates(input: {
           ? `The model did not call a Step 4 compaction tool. It returned: ${outputText}`
           : "The model did not call a Step 4 compaction tool.",
         measurementResult: latestMeasurementResult,
+        pageCountVerification: latestPageCountVerification,
         model: latestModel,
         ok: false,
       };
     }
 
     if (toolCall.name === tailorResumeLineReductionSubmissionToolName) {
-      if (!measuredAtLeastOnce) {
-        return {
-          error:
-            `The model tried to submit final Step 4 candidates before calling ${tailorResumeLineReductionToolName}.`,
-          measurementResult: latestMeasurementResult,
-          model: latestModel,
-          ok: false,
-        };
-      }
+      let submittedCandidates: TailorResumeLineReductionCandidate[];
 
       try {
-        return {
-          candidates: parseCompactionSubmissionCandidates(
-            JSON.parse(toolCall.arguments),
-          ),
-          measurementResult: latestMeasurementResult,
-          model: latestModel,
-          ok: true,
-        };
+        submittedCandidates = parseCompactionSubmissionCandidates(
+          JSON.parse(toolCall.arguments),
+        );
       } catch (error) {
         return {
           error:
@@ -847,13 +1098,133 @@ async function collectVerifiedCompactionCandidates(input: {
               ? error.message
               : "The model returned an invalid final compaction submission.",
           measurementResult: latestMeasurementResult,
+          pageCountVerification: latestPageCountVerification,
           model: latestModel,
           ok: false,
         };
       }
+
+      if (!measuredAtLeastOnce) {
+        responseInput = [
+          {
+            call_id: toolCall.call_id,
+            output: buildCompactionSubmissionToolOutput({
+              accepted: false,
+              message:
+                `Call ${tailorResumeLineReductionToolName} before submitting Step 4 candidates.`,
+              nextAction:
+                `Start by calling ${tailorResumeLineReductionToolName} so the candidates are measured for rendered-line reduction first.`,
+            }),
+            type: "function_call_output",
+          },
+        ];
+        continue;
+      }
+
+      if (!latestPageCountVerification || !latestVerifiedCandidateSignature) {
+        responseInput = [
+          {
+            call_id: toolCall.call_id,
+            output: buildCompactionSubmissionToolOutput({
+              accepted: false,
+              message:
+                `Call ${tailorResumePageCountVerificationToolName} on this same candidate set before submitting it.`,
+              nextAction:
+                `Use ${tailorResumePageCountVerificationToolName} so you can read the exact rendered page count for the candidates you want to bank.`,
+            }),
+            type: "function_call_output",
+          },
+        ];
+        continue;
+      }
+
+      const submittedCandidateSignature = buildCompactionCandidateSignature(
+        submittedCandidates,
+      );
+
+      if (submittedCandidateSignature !== latestVerifiedCandidateSignature) {
+        responseInput = [
+          {
+            call_id: toolCall.call_id,
+            output: buildCompactionSubmissionToolOutput({
+              accepted: false,
+              message:
+                `The submitted candidate set does not match your latest ${tailorResumePageCountVerificationToolName} call.`,
+              nextAction:
+                `Call ${tailorResumePageCountVerificationToolName} again on the exact candidates you want to submit.`,
+            }),
+            type: "function_call_output",
+          },
+        ];
+        continue;
+      }
+
+      if (!latestPageCountVerification.canSubmitFinalCandidates) {
+        responseInput = [
+          {
+            call_id: toolCall.call_id,
+            output: buildCompactionSubmissionToolOutput({
+              accepted: false,
+              message:
+                latestPageCountVerification.validationError ??
+                "The latest exact page-count verification did not succeed.",
+              nextAction: latestPageCountVerification.nextAction,
+            }),
+            type: "function_call_output",
+          },
+        ];
+        continue;
+      }
+
+      return {
+        candidates: submittedCandidates,
+        measurementResult: latestMeasurementResult,
+        pageCountVerification: latestPageCountVerification,
+        model: latestModel,
+        ok: true,
+      };
     }
 
     let candidates: TailorResumeLineReductionCandidate[];
+
+    if (toolCall.name === tailorResumePageCountVerificationToolName) {
+      try {
+        candidates = parseCompactionSubmissionCandidates(JSON.parse(toolCall.arguments));
+      } catch (error) {
+        return {
+          error:
+            error instanceof Error
+              ? error.message
+              : "The model returned an invalid exact page-count verification tool call.",
+          measurementResult: latestMeasurementResult,
+          pageCountVerification: latestPageCountVerification,
+          model: latestModel,
+          ok: false,
+        };
+      }
+
+      latestPageCountVerification = await verifyTailorResumePageCountCandidates({
+        candidates,
+        currentAnnotatedLatexCode: input.currentAnnotatedLatexCode,
+        currentPageCount: input.currentPageCount,
+        latestMeasurementResult,
+        targetPageCount: input.targetPageCount,
+      });
+      latestVerifiedCandidateSignature =
+        latestPageCountVerification.canSubmitFinalCandidates
+          ? buildCompactionCandidateSignature(candidates)
+          : null;
+      responseInput = [
+        {
+          call_id: toolCall.call_id,
+          output: buildPageCountVerificationToolOutput(
+            latestPageCountVerification,
+          ),
+          type: "function_call_output",
+        },
+      ];
+      continue;
+    }
 
     try {
       candidates = parseLineReductionCandidates(JSON.parse(toolCall.arguments));
@@ -864,6 +1235,7 @@ async function collectVerifiedCompactionCandidates(input: {
             ? error.message
             : "The model returned an invalid line-measurement tool call.",
         measurementResult: latestMeasurementResult,
+        pageCountVerification: latestPageCountVerification,
         model: latestModel,
         ok: false,
       };
@@ -876,6 +1248,8 @@ async function collectVerifiedCompactionCandidates(input: {
       editableSegmentIds: input.editableSegmentIds,
       sourceLayout: input.sourceLayout,
     });
+    latestPageCountVerification = null;
+    latestVerifiedCandidateSignature = null;
     measuredAtLeastOnce = true;
     responseInput = [
       {
@@ -893,6 +1267,7 @@ async function collectVerifiedCompactionCandidates(input: {
     error:
       `The model did not submit verified compaction candidates after ${maxCompactionSelfCheckRounds} Step 4 tool rounds.`,
     measurementResult: latestMeasurementResult,
+    pageCountVerification: latestPageCountVerification,
     model: latestModel,
     ok: false,
   };
@@ -924,9 +1299,11 @@ async function validateFinalCompactedLatex(input: {
 
 export async function compactTailoredResumePageCount(input: {
   annotatedLatexCode: string;
+  client?: OpenAI;
   edits: TailoredResumeBlockEditRecord[];
   initialPageCount: number;
   latexCode: string;
+  model?: string;
   onStepEvent?: (
     event: TailorResumeGenerationStepEvent,
   ) => void | Promise<void>;
@@ -944,9 +1321,10 @@ export async function compactTailoredResumePageCount(input: {
       edits: input.edits,
       generationDurationMs: 0,
       latexCode: input.latexCode,
-      model: process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini",
+      model: input.model ?? process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini",
       pageCount: input.initialPageCount,
       previewPdf: input.previewPdf,
+      validationError: null,
     } satisfies TailorResumePageCountCompactionResult;
   }
 
@@ -964,7 +1342,16 @@ export async function compactTailoredResumePageCount(input: {
       stepNumber: 4,
       summary: "Keeping the tailored resume within the original page count",
     });
-    throw new Error(errorMessage);
+    return {
+      annotatedLatexCode: input.annotatedLatexCode,
+      edits: input.edits,
+      generationDurationMs: 0,
+      latexCode: input.latexCode,
+      model: input.model ?? process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini",
+      pageCount: input.initialPageCount,
+      previewPdf: input.previewPdf,
+      validationError: errorMessage,
+    } satisfies TailorResumePageCountCompactionResult;
   }
 
   const startedAt = Date.now();
@@ -973,8 +1360,8 @@ export async function compactTailoredResumePageCount(input: {
     1,
     getRetryAttemptsToGeneratePageCountCompaction(),
   );
-  const model = process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
-  const client = getOpenAIClient();
+  const model = input.model ?? process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
+  const client = input.client ?? getOpenAIClient();
   const editableSegmentIds = new Set(input.edits.map((edit) => edit.segmentId));
   let workingEdits = input.edits.map((edit) => ({ ...edit }));
   let currentAnnotatedLatexCode = buildAnnotatedLatexFromEdits({
@@ -1029,7 +1416,24 @@ export async function compactTailoredResumePageCount(input: {
       stepNumber: 4,
       summary: "Keeping the tailored resume within the original page count",
     });
-    throw new Error(lastError);
+    return {
+      annotatedLatexCode: currentAnnotatedLatexCode,
+      edits: buildTailoredResumeBlockEdits({
+        annotatedLatexCode: input.sourceAnnotatedLatexCode,
+        changes: workingEdits.map((edit) => ({
+          generatedByStep: edit.generatedByStep,
+          latexCode: readCurrentEditLatex(edit),
+          reason: edit.reason,
+          segmentId: edit.segmentId,
+        })),
+      }),
+      generationDurationMs: Math.max(0, Date.now() - startedAt),
+      latexCode: currentLatexCode,
+      model: lastModel,
+      pageCount: currentPageCount,
+      previewPdf: currentPreviewPdf,
+      validationError: lastError,
+    } satisfies TailorResumePageCountCompactionResult;
   }
 
   for (let attempt = 1; attempt <= maxCompactionAttempts; attempt += 1) {
@@ -1063,6 +1467,7 @@ export async function compactTailoredResumePageCount(input: {
         detail: lastError,
         estimatedLinesToRecover,
         measurementResult: selfCheckResult.measurementResult,
+        pageCountVerification: selfCheckResult.pageCountVerification,
       });
       const retryAttempt =
         attempt < maxCompactionAttempts ? attempt + 1 : attempt;
@@ -1095,6 +1500,7 @@ export async function compactTailoredResumePageCount(input: {
         detail: lastError,
         estimatedLinesToRecover,
         measurementResult,
+        pageCountVerification: selfCheckResult.pageCountVerification,
       });
       const retryAttempt =
         attempt < maxCompactionAttempts ? attempt + 1 : attempt;
@@ -1120,22 +1526,21 @@ export async function compactTailoredResumePageCount(input: {
         sum + (measurement.previousLineCount - measurement.candidateLineCount),
       0,
     );
-    workingEdits = updateWorkingEdits({
+    const nextWorkingEdits = updateWorkingEdits({
       acceptedCandidates,
       workingEdits,
     });
-    currentAnnotatedLatexCode = buildAnnotatedLatexFromEdits({
-      edits: workingEdits,
+    const nextAnnotatedLatexCode = buildAnnotatedLatexFromEdits({
+      edits: nextWorkingEdits,
       sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode,
     });
-    currentLatexCode = stripTailorResumeSegmentIds(currentAnnotatedLatexCode);
+    const nextLatexCode = stripTailorResumeSegmentIds(nextAnnotatedLatexCode);
+    let nextLayout: TailorResumeLayoutMeasurement;
 
     try {
-      currentLayout = await measureTailorResumeLayout({
-        annotatedLatexCode: currentAnnotatedLatexCode,
+      nextLayout = await measureTailorResumeLayout({
+        annotatedLatexCode: nextAnnotatedLatexCode,
       });
-      currentPreviewPdf = currentLayout.pdfBuffer;
-      currentPageCount = currentLayout.pageCount;
     } catch (error) {
       lastError =
         error instanceof Error
@@ -1146,6 +1551,7 @@ export async function compactTailoredResumePageCount(input: {
         detail: lastError,
         estimatedLinesToRecover,
         measurementResult,
+        pageCountVerification: selfCheckResult.pageCountVerification,
       });
       const retryAttempt =
         attempt < maxCompactionAttempts ? attempt + 1 : attempt;
@@ -1162,11 +1568,48 @@ export async function compactTailoredResumePageCount(input: {
       continue;
     }
 
+    workingEdits = nextWorkingEdits;
+    currentAnnotatedLatexCode = nextAnnotatedLatexCode;
+    currentLatexCode = nextLatexCode;
+    currentLayout = nextLayout;
+    currentPreviewPdf = currentLayout.pdfBuffer;
+    currentPageCount = currentLayout.pageCount;
+
     if (currentPageCount <= targetPageCount) {
-      const finalValidation = await validateFinalCompactedLatex({
-        latexCode: currentLatexCode,
-        targetPageCount,
-      });
+      let finalValidation: Awaited<ReturnType<typeof validateFinalCompactedLatex>>;
+
+      try {
+        finalValidation = await validateFinalCompactedLatex({
+          latexCode: currentLatexCode,
+          targetPageCount,
+        });
+      } catch (error) {
+        lastError =
+          error instanceof Error
+            ? error.message
+            : "Unable to validate the compacted resume.";
+        attemptHistory.push({
+          attempt,
+          detail: lastError,
+          estimatedLinesToRecover,
+          measurementResult,
+          pageCountVerification: selfCheckResult.pageCountVerification,
+        });
+        const retryAttempt =
+          attempt < maxCompactionAttempts ? attempt + 1 : attempt;
+
+        await input.onStepEvent?.({
+          attempt: retryAttempt,
+          detail: lastError,
+          durationMs: Math.max(0, Date.now() - startedAt),
+          retrying: attempt < maxCompactionAttempts,
+          status: attempt < maxCompactionAttempts ? "running" : "failed",
+          stepCount: 4,
+          stepNumber: 4,
+          summary: "Keeping the tailored resume within the original page count",
+        });
+        continue;
+      }
 
       await input.onStepEvent?.({
         attempt,
@@ -1198,6 +1641,7 @@ export async function compactTailoredResumePageCount(input: {
         model: lastModel,
         pageCount: finalValidation.pageCount,
         previewPdf: finalValidation.previewPdf,
+        validationError: null,
       } satisfies TailorResumePageCountCompactionResult;
     }
 
@@ -1210,6 +1654,7 @@ export async function compactTailoredResumePageCount(input: {
       detail: lastError,
       estimatedLinesToRecover,
       measurementResult,
+      pageCountVerification: selfCheckResult.pageCountVerification,
     });
     const retryAttempt =
       attempt < maxCompactionAttempts ? attempt + 1 : attempt;
@@ -1226,5 +1671,22 @@ export async function compactTailoredResumePageCount(input: {
     });
   }
 
-  throw new Error(lastError);
+  return {
+    annotatedLatexCode: currentAnnotatedLatexCode,
+    edits: buildTailoredResumeBlockEdits({
+      annotatedLatexCode: input.sourceAnnotatedLatexCode,
+      changes: workingEdits.map((edit) => ({
+        generatedByStep: edit.generatedByStep,
+        latexCode: readCurrentEditLatex(edit),
+        reason: edit.reason,
+        segmentId: edit.segmentId,
+      })),
+    }),
+    generationDurationMs: Math.max(0, Date.now() - startedAt),
+    latexCode: currentLatexCode,
+    model: lastModel,
+    pageCount: currentPageCount,
+    previewPdf: currentPreviewPdf,
+    validationError: lastError,
+  } satisfies TailorResumePageCountCompactionResult;
 }

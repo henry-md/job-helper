@@ -294,11 +294,13 @@ const defaultSystemPromptSettings = {
     "Please tighten to keep this resume to {{TARGET_PAGE_COUNT_REQUIREMENT}}. {{TARGET_PAGE_COUNT_HARD_REQUIREMENT}} " +
     "The current tailored preview is {{CURRENT_PAGE_COUNT}} {{CURRENT_PAGE_LABEL}}, and the renderer estimates that about {{ESTIMATED_LINE_REDUCTION}} {{ESTIMATED_LINE_REDUCTION_LABEL}} must be removed. " +
     "Make the smallest block-level cuts needed to get back within the limit while preserving the tailoring thesis. " +
-    "Use the measurement tool as a scratchpad before your final submission: test candidate replacements there first, read the rendered-line result, and only submit candidates after that tool confirms a real line drop. " +
-    "Only touch blocks where your proposed replacement is likely to remove at least one full rendered line for that same block in the final original-versus-tailored review. Do not submit style-only, tone-only, wording-only, or same-line-count edits. " +
+    "Use the measurement tool as a scratchpad before your final submission: test candidate replacements there first, read the rendered-line result, and only move forward with candidates after that tool confirms a real line drop. " +
+    "Then use the exact page-count verification tool on that same candidate set before you decide the pass is done, so you can read the actual rendered page count under the same final acceptance logic. " +
+    "Only touch blocks where your proposed replacement is likely to remove at least one full rendered line versus the current saved version of that same block. Do not submit style-only, tone-only, wording-only, or same-line-count edits. " +
     "The measurement tool will reject any candidate whose rendered line count does not actually drop for that block, including candidates that merely shorten text while preserving the same number of rendered lines. " +
     "Prioritize blocks that currently render across multiple lines; treat already-one-line blocks as last-resort cuts unless deleting one is truly necessary. " +
     "If only one line needs to be reclaimed overall, strongly prefer one minimal verified line-saving change and leave the other edited blocks effectively the same. " +
+    "If the exact page-count verification still shows the resume above the target, you may still submit those verified line-saving candidates so the next pass starts from a smaller draft, but do not call the job done until the exact page-count verification is at or below the target. " +
     "For every returned block reason, remember that it fully replaces the old reason shown to the user. Lead with what changed in the context of the job description, such as the technology, responsibility, metric, or outcome being emphasized. Mention the need to shorten only as a passing sentence fragment, and never lead with claims like shortened, tightened, removed filler, or reclaimed space.",
 } satisfies SystemPromptSettings;
 
