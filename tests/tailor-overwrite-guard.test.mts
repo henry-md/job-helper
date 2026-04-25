@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolvePotentialTailorOverwrite } from "../extension/src/tailor-overwrite-guard.ts";
+import {
+  resolveCompletedTailoringForPage,
+  resolvePotentialTailorOverwrite,
+} from "../extension/src/tailor-overwrite-guard.ts";
 
 function buildPageIdentity(
   overrides: Partial<{
@@ -76,7 +79,7 @@ function buildTailoredResumeSummary(
 
 test("prefers the active tailoring when it matches the current page", () => {
   const result = resolvePotentialTailorOverwrite({
-    activeTailoring: buildActiveTailoring(),
+    activeTailorings: [buildActiveTailoring()],
     pageIdentity: buildPageIdentity(),
     tailoredResumes: [buildTailoredResumeSummary()],
   });
@@ -87,7 +90,7 @@ test("prefers the active tailoring when it matches the current page", () => {
 
 test("returns a completed overwrite prompt when a saved tailored resume matches", () => {
   const result = resolvePotentialTailorOverwrite({
-    activeTailoring: null,
+    activeTailorings: [],
     pageIdentity: buildPageIdentity(),
     tailoredResumes: [buildTailoredResumeSummary()],
   });
@@ -107,12 +110,35 @@ test("returns a completed overwrite prompt when a saved tailored resume matches"
   });
 });
 
+test("returns the saved completed tailoring for the current page", () => {
+  const result = resolveCompletedTailoringForPage({
+    activeTailorings: [],
+    pageIdentity: buildPageIdentity(),
+    tailoredResumes: [buildTailoredResumeSummary()],
+  });
+
+  assert.equal(result?.kind, "completed");
+  assert.equal(result?.tailoredResumeId, "tailored-123");
+});
+
+test("does not surface a completed page fallback while a matching run is active", () => {
+  const result = resolveCompletedTailoringForPage({
+    activeTailorings: [buildActiveTailoring()],
+    pageIdentity: buildPageIdentity(),
+    tailoredResumes: [buildTailoredResumeSummary()],
+  });
+
+  assert.equal(result, null);
+});
+
 test("ignores unrelated active runs and saved resumes", () => {
   const result = resolvePotentialTailorOverwrite({
-    activeTailoring: buildActiveTailoring({
-      id: "run-other",
-      jobUrl: "https://jobs.example.com/roles/999",
-    }),
+    activeTailorings: [
+      buildActiveTailoring({
+        id: "run-other",
+        jobUrl: "https://jobs.example.com/roles/999",
+      }),
+    ],
     pageIdentity: buildPageIdentity(),
     tailoredResumes: [
       buildTailoredResumeSummary({
@@ -123,4 +149,21 @@ test("ignores unrelated active runs and saved resumes", () => {
   });
 
   assert.equal(result, null);
+});
+
+test("matches the current page even when other jobs are running in parallel", () => {
+  const result = resolvePotentialTailorOverwrite({
+    activeTailorings: [
+      buildActiveTailoring({
+        id: "run-other",
+        jobUrl: "https://jobs.example.com/roles/999",
+      }),
+      buildActiveTailoring(),
+    ],
+    pageIdentity: buildPageIdentity(),
+    tailoredResumes: [],
+  });
+
+  assert.equal(result?.kind, "active_generation");
+  assert.equal(result?.id, "run-123");
 });

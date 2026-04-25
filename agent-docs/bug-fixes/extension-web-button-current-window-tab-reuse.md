@@ -1,0 +1,4 @@
+- Symptom: the Chrome extension's `Web` action could keep opening duplicate Job Helper tabs instead of reusing the matching page that was already open in the current browser window.
+- Root cause: the extension's dashboard/open-web flow always created a new tab, and the generic job-tab URL matcher was not safe to reuse because it strips query params that matter for dashboard and tailored-resume review URLs.
+- Fix: the background worker now checks the current window's tabs for an exact normalized callback URL match, activates that tab when found, and only creates a new tab when no exact match exists.
+- Guardrail: use exact URL matching for app/dashboard destinations where query params change the visible state, and reserve query-stripping comparators for job-posting pages where tracking params should collapse to the same posting.

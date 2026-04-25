@@ -1,0 +1,4 @@
+- Symptom: the extension's active Tailor Resume card could swap its `Company - Title` heading for whatever page was in the current browser tab, especially after switching tabs during a long-running generation.
+- Root cause: active-generation payloads exposed step state and job URL, but not the stable run identity. When the side panel rehydrated from API state, it sometimes had to fall back to the current tab's scraped metadata.
+- Fix: include `companyName` and `positionTitle` on active-generation `existingTailoring` responses, persist those fields back into the extension's run record, and only use current-tab metadata as a last resort before any stored run identity exists.
+- Guardrail: a Tailor Resume run heading should come from run-scoped/application-scoped metadata, never from whichever tab happens to be active later.

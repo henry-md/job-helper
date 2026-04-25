@@ -278,6 +278,153 @@ test("parseTailorResumeProfile keeps an active tailoring interview", () => {
     profile.workspace.tailoringInterview?.tailorResumeRunId,
     "tailor-run-1",
   );
+  assert.equal(profile.workspace.tailoringInterviews.length, 1);
+  assert.equal(profile.workspace.tailoringInterviews[0]?.id, "interview-1");
+});
+
+test("parseTailorResumeProfile keeps parallel tailoring interviews and preserves the first alias", () => {
+  const profile = parseTailorResumeProfile({
+    workspace: {
+      isBaseResumeStepComplete: true,
+      tailoringInterviews: [
+        {
+          accumulatedModelDurationMs: 2450,
+          applicationId: "application-1",
+          completionRequestedAt: null,
+          conversation: [],
+          createdAt: "2026-04-20T10:00:00.000Z",
+          generationSourceSnapshot: {
+            latexCode: "\\documentclass{article}",
+            linkState: "[]",
+            lockedLinkState: "[]",
+            resumeStoragePath: "/uploads/resumes/user/resume.pdf",
+            resumeUpdatedAt: "2026-04-20T09:55:00.000Z",
+          },
+          id: "interview-1",
+          jobDescription: "Role text",
+          jobUrl: "https://jobs.example.com/roles/1",
+          planningDebug: {
+            outputJson: null,
+            prompt: "First call prompt",
+            skippedReason: null,
+          },
+          planningResult: {
+            changes: [],
+            companyName: "OpenAI",
+            displayName: "OpenAI - Research Engineer",
+            jobIdentifier: "Applied research",
+            positionTitle: "Research Engineer",
+            questioningSummary: null,
+            thesis: {
+              jobDescriptionFocus: "Research systems delivery",
+              resumeChanges: "Elevates the most relevant platform work.",
+            },
+          },
+          sourceAnnotatedLatexCode:
+            "% JOBHELPER_SEGMENT_ID: experience.entry-1.bullet-1\n\\resumeitem{Original bullet}",
+          tailorResumeRunId: "tailor-run-1",
+          updatedAt: "2026-04-20T10:01:00.000Z",
+        },
+        {
+          accumulatedModelDurationMs: 1500,
+          applicationId: "application-2",
+          completionRequestedAt: "2026-04-20T11:05:00.000Z",
+          conversation: [],
+          createdAt: "2026-04-20T11:00:00.000Z",
+          generationSourceSnapshot: {
+            latexCode: "\\documentclass{article}",
+            linkState: "[]",
+            lockedLinkState: "[]",
+            resumeStoragePath: "/uploads/resumes/user/resume.pdf",
+            resumeUpdatedAt: "2026-04-20T10:55:00.000Z",
+          },
+          id: "interview-2",
+          jobDescription: "Another role",
+          jobUrl: "https://jobs.example.com/roles/2",
+          planningDebug: {
+            outputJson: null,
+            prompt: "Second call prompt",
+            skippedReason: null,
+          },
+          planningResult: {
+            changes: [],
+            companyName: "Anthropic",
+            displayName: "Anthropic - Product Engineer",
+            jobIdentifier: "Product systems",
+            positionTitle: "Product Engineer",
+            questioningSummary: null,
+            thesis: {
+              jobDescriptionFocus: "Product engineering execution",
+              resumeChanges: "Highlights product ownership and iteration speed.",
+            },
+          },
+          sourceAnnotatedLatexCode:
+            "% JOBHELPER_SEGMENT_ID: experience.entry-2.bullet-1\n\\resumeitem{Original bullet}",
+          tailorResumeRunId: "tailor-run-2",
+          updatedAt: "2026-04-20T11:01:00.000Z",
+        },
+      ],
+      updatedAt: "2026-04-20T11:01:00.000Z",
+    },
+  });
+
+  assert.equal(profile.workspace.tailoringInterviews.length, 2);
+  assert.equal(profile.workspace.tailoringInterviews[0]?.id, "interview-1");
+  assert.equal(profile.workspace.tailoringInterviews[1]?.id, "interview-2");
+  assert.equal(profile.workspace.tailoringInterview?.id, "interview-1");
+});
+
+test("parseTailorResumeProfile upgrades a legacy singular tailoring interview into the array", () => {
+  const profile = parseTailorResumeProfile({
+    workspace: {
+      isBaseResumeStepComplete: true,
+      tailoringInterview: {
+        accumulatedModelDurationMs: 2450,
+        applicationId: "application-1",
+        completionRequestedAt: null,
+        conversation: [],
+        createdAt: "2026-04-20T10:00:00.000Z",
+        generationSourceSnapshot: {
+          latexCode: "\\documentclass{article}",
+          linkState: "[]",
+          lockedLinkState: "[]",
+          resumeStoragePath: "/uploads/resumes/user/resume.pdf",
+          resumeUpdatedAt: "2026-04-20T09:55:00.000Z",
+        },
+        id: "interview-1",
+        jobDescription: "Role text",
+        jobUrl: "https://jobs.example.com/roles/1",
+        planningDebug: {
+          outputJson: null,
+          prompt: "First call prompt",
+          skippedReason: null,
+        },
+        planningResult: {
+          changes: [],
+          companyName: "OpenAI",
+          displayName: "OpenAI - Research Engineer",
+          jobIdentifier: "Applied research",
+          positionTitle: "Research Engineer",
+          questioningSummary: null,
+          thesis: {
+            jobDescriptionFocus: "Research systems delivery",
+            resumeChanges: "Elevates the most relevant platform work.",
+          },
+        },
+        sourceAnnotatedLatexCode:
+          "% JOBHELPER_SEGMENT_ID: experience.entry-1.bullet-1\n\\resumeitem{Original bullet}",
+        tailorResumeRunId: "tailor-run-1",
+        updatedAt: "2026-04-20T10:01:00.000Z",
+      },
+      updatedAt: "2026-04-20T10:01:00.000Z",
+    },
+  });
+
+  assert.equal(profile.workspace.tailoringInterview?.id, "interview-1");
+  assert.deepEqual(
+    profile.workspace.tailoringInterviews.map((interview) => interview.id),
+    ["interview-1"],
+  );
 });
 
 test("parseTailorResumeProfile keeps tailored resume metadata and workspace state", () => {

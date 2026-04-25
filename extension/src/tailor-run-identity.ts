@@ -54,11 +54,14 @@ export function buildTailorRunIdentityDisplay(input: {
   const companyName = cleanIdentityText(input.companyName);
   const positionTitle = cleanIdentityText(input.positionTitle);
 
-  if (!companyName || !positionTitle) {
+  if (!companyName && !positionTitle) {
     return null;
   }
 
-  const label = `${companyName} \u2014 ${positionTitle}`;
+  const label =
+    companyName && positionTitle
+      ? `${companyName} \u2014 ${positionTitle}`
+      : companyName || positionTitle || "";
 
   return {
     label,

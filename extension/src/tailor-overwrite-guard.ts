@@ -32,7 +32,7 @@ function normalizeComparableUrl(value: string | null | undefined) {
   }
 }
 
-function matchesPageIdentity(input: {
+export function matchesTailorOverwritePageIdentity(input: {
   jobUrl: string | null;
   pageIdentity: TailorOverwritePageIdentity;
 }) {
@@ -70,23 +70,25 @@ function buildCompletedExistingTailoringState(
 }
 
 export function resolvePotentialTailorOverwrite(input: {
-  activeTailoring: TailorResumeExistingTailoringState | null;
+  activeTailorings: TailorResumeExistingTailoringState[];
   pageIdentity: TailorOverwritePageIdentity;
   tailoredResumes: TailoredResumeSummary[];
 }) {
-  if (
-    input.activeTailoring &&
-    matchesPageIdentity({
-      jobUrl: input.activeTailoring.jobUrl,
-      pageIdentity: input.pageIdentity,
-    })
-  ) {
-    return input.activeTailoring;
+  const matchingActiveTailoring =
+    input.activeTailorings.find((activeTailoring) =>
+      matchesTailorOverwritePageIdentity({
+        jobUrl: activeTailoring.jobUrl,
+        pageIdentity: input.pageIdentity,
+      }),
+    ) ?? null;
+
+  if (matchingActiveTailoring) {
+    return matchingActiveTailoring;
   }
 
   const matchingTailoredResume =
     input.tailoredResumes.find((tailoredResume) =>
-      matchesPageIdentity({
+      matchesTailorOverwritePageIdentity({
         jobUrl: tailoredResume.jobUrl,
         pageIdentity: input.pageIdentity,
       }),
@@ -95,4 +97,28 @@ export function resolvePotentialTailorOverwrite(input: {
   return matchingTailoredResume
     ? buildCompletedExistingTailoringState(matchingTailoredResume)
     : null;
+}
+
+export function resolveCompletedTailoringForPage(input: {
+  activeTailorings: TailorResumeExistingTailoringState[];
+  pageIdentity: TailorOverwritePageIdentity;
+  tailoredResumes: TailoredResumeSummary[];
+}) {
+  const matchedTailoring = resolvePotentialTailorOverwrite(input);
+
+  return matchedTailoring?.kind === "completed" ? matchedTailoring : null;
+}
+
+export function resolveActiveTailoringForPage(input: {
+  activeTailorings: TailorResumeExistingTailoringState[];
+  pageIdentity: TailorOverwritePageIdentity;
+}) {
+  return (
+    input.activeTailorings.find((activeTailoring) =>
+      matchesTailorOverwritePageIdentity({
+        jobUrl: activeTailoring.jobUrl,
+        pageIdentity: input.pageIdentity,
+      }),
+    ) ?? null
+  );
 }

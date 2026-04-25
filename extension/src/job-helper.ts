@@ -41,6 +41,10 @@ export const EXISTING_TAILORING_STORAGE_KEY =
   "jobHelperExistingTailoringPrompt";
 export const PREPARING_TAILORING_STORAGE_KEY =
   "jobHelperPreparingTailoringStart";
+export const TAILORING_RUNS_STORAGE_KEY = "jobHelperTailoringRuns";
+export const TAILORING_PROMPTS_STORAGE_KEY = "jobHelperTailoringPrompts";
+export const TAILORING_PREPARATIONS_STORAGE_KEY =
+  "jobHelperTailoringPreparations";
 
 export function buildTailoredResumeReviewUrl(
   tailoredResumeId: string | null | undefined,
@@ -172,12 +176,14 @@ export type OriginalResumeSummary = {
 
 export type PersonalInfoSummary = {
   activeTailoring: TailorResumeExistingTailoringState | null;
+  activeTailorings: TailorResumeExistingTailoringState[];
   applicationCount: number;
   applications: TrackedApplicationSummary[];
   companyCount: number;
   originalResume: OriginalResumeSummary;
   tailoredResumes: TailoredResumeSummary[];
   tailoringInterview: TailorResumePendingInterviewSummary | null;
+  tailoringInterviews: TailorResumePendingInterviewSummary[];
 };
 
 export type TailorResumeConversationMessage = {
@@ -199,13 +205,16 @@ export type TailorResumeQuestioningSummary = {
 };
 
 export type TailorResumePendingInterviewSummary = {
+  applicationId: string | null;
   companyName: string | null;
   completionRequestedAt: string | null;
   conversation: TailorResumeConversationMessage[];
   id: string;
   jobIdentifier: string | null;
+  jobUrl: string | null;
   positionTitle: string | null;
   questioningSummary: TailorResumeQuestioningSummary | null;
+  tailorResumeRunId: string | null;
   updatedAt: string;
 };
 
@@ -221,6 +230,7 @@ export type TailorResumeGenerationStepSummary = {
 
 export type TailorResumeExistingTailoringState =
   | {
+      companyName: string | null;
       createdAt: string;
       id: string;
       jobDescription: string;
@@ -228,6 +238,7 @@ export type TailorResumeExistingTailoringState =
       jobUrl: string | null;
       kind: "active_generation";
       lastStep: TailorResumeGenerationStepSummary | null;
+      positionTitle: string | null;
       updatedAt: string;
     }
   | {
@@ -258,6 +269,7 @@ export type TailorResumeExistingTailoringState =
 export type TailorResumeProfileSummary = {
   tailoredResumes: TailoredResumeSummary[];
   tailoringInterview: TailorResumePendingInterviewSummary | null;
+  tailoringInterviews: TailorResumePendingInterviewSummary[];
 };
 
 export type JobHelperAuthUser = {
@@ -766,6 +778,7 @@ export function readTailorResumeExistingTailoringState(
     }
 
     return {
+      companyName: readNullableString(existingTailoring.companyName),
       createdAt,
       id,
       jobDescription,
@@ -775,6 +788,7 @@ export function readTailorResumeExistingTailoringState(
       lastStep: readTailorResumeGenerationStepSummary(
         existingTailoring.lastStep,
       ),
+      positionTitle: readNullableString(existingTailoring.positionTitle),
       updatedAt,
     };
   }
@@ -821,6 +835,32 @@ export function readTailorResumeExistingTailoringState(
   return null;
 }
 
+export function readTailorResumeExistingTailoringStates(value: unknown) {
+  const activeTailorings = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.activeTailorings)
+      ? value.activeTailorings
+      : isRecord(value) && Array.isArray(value.existingTailorings)
+        ? value.existingTailorings
+        : [];
+
+  const parsedActiveTailorings = activeTailorings
+    .map(readTailorResumeExistingTailoringState)
+    .filter(
+      (
+        activeTailoring,
+      ): activeTailoring is TailorResumeExistingTailoringState =>
+        Boolean(activeTailoring),
+    );
+
+  if (parsedActiveTailorings.length > 0) {
+    return parsedActiveTailorings;
+  }
+
+  const singleActiveTailoring = readTailorResumeExistingTailoringState(value);
+  return singleActiveTailoring ? [singleActiveTailoring] : [];
+}
+
 export function readTailorResumePendingInterviewSummary(
   value: unknown,
 ): TailorResumePendingInterviewSummary | null {
@@ -847,17 +887,44 @@ export function readTailorResumePendingInterviewSummary(
     : {};
 
   return {
+    applicationId: readNullableString(value.applicationId),
     companyName: readNullableString(planningResult.companyName),
     completionRequestedAt: readNullableString(value.completionRequestedAt),
     conversation,
     id,
     jobIdentifier: readNullableString(planningResult.jobIdentifier),
+    jobUrl: readNullableString(value.jobUrl),
     positionTitle: readNullableString(planningResult.positionTitle),
     questioningSummary: readTailorResumeQuestioningSummary(
       planningResult.questioningSummary,
     ),
+    tailorResumeRunId: readNullableString(value.tailorResumeRunId),
     updatedAt,
   };
+}
+
+export function readTailorResumePendingInterviewSummaries(value: unknown) {
+  const tailoringInterviews = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.tailoringInterviews)
+      ? value.tailoringInterviews
+      : [];
+
+  const parsedTailoringInterviews = tailoringInterviews
+    .map(readTailorResumePendingInterviewSummary)
+    .filter(
+      (
+        tailoringInterview,
+      ): tailoringInterview is TailorResumePendingInterviewSummary =>
+        Boolean(tailoringInterview),
+    );
+
+  if (parsedTailoringInterviews.length > 0) {
+    return parsedTailoringInterviews;
+  }
+
+  const singleTailoringInterview = readTailorResumePendingInterviewSummary(value);
+  return singleTailoringInterview ? [singleTailoringInterview] : [];
 }
 
 export function readTailorResumeProfileSummary(
@@ -870,12 +937,12 @@ export function readTailorResumeProfileSummary(
   }
 
   const workspace = isRecord(profile.workspace) ? profile.workspace : {};
+  const tailoringInterviews = readTailorResumePendingInterviewSummaries(workspace);
 
   return {
     tailoredResumes: readTailoredResumeSummaries(profile.tailoredResumes),
-    tailoringInterview: readTailorResumePendingInterviewSummary(
-      workspace.tailoringInterview,
-    ),
+    tailoringInterview: tailoringInterviews[0] ?? null,
+    tailoringInterviews,
   };
 }
 
@@ -962,17 +1029,20 @@ export function readPersonalInfoSummary(input: {
   const tailorResumeProfile = readTailorResumeProfileSummary(
     input.tailorResumePayload,
   );
+  const activeTailorings = readTailorResumeExistingTailoringStates(
+    input.tailorResumePayload,
+  );
 
   return {
-    activeTailoring: readTailorResumeExistingTailoringState(
-      input.tailorResumePayload,
-    ),
+    activeTailoring: activeTailorings[0] ?? null,
+    activeTailorings,
     applicationCount: readNumber(applicationsPayload.applicationCount),
     applications: readTrackedApplicationSummaries(applicationsPayload),
     companyCount: readNumber(applicationsPayload.companyCount),
     originalResume: readOriginalResumeSummary(input.tailorResumePayload),
     tailoredResumes: tailorResumeProfile?.tailoredResumes ?? [],
     tailoringInterview: tailorResumeProfile?.tailoringInterview ?? null,
+    tailoringInterviews: tailorResumeProfile?.tailoringInterviews ?? [],
   };
 }
 
@@ -981,18 +1051,29 @@ export function readPersonalInfoPayload(value: unknown): PersonalInfoSummary {
     ? value.personalInfo
     : value;
   const payloadRecord = isRecord(payload) ? payload : {};
+  const activeTailorings = readTailorResumeExistingTailoringStates(payloadRecord);
+  const tailoringInterviews = readTailorResumePendingInterviewSummaries(
+    payloadRecord.tailoringInterviews,
+  );
+  const fallbackTailoringInterview = readTailorResumePendingInterviewSummary(
+    payloadRecord.tailoringInterview,
+  );
+  const normalizedTailoringInterviews =
+    tailoringInterviews.length > 0
+      ? tailoringInterviews
+      : fallbackTailoringInterview
+        ? [fallbackTailoringInterview]
+        : [];
 
   return {
-    activeTailoring: readTailorResumeExistingTailoringState(
-      payloadRecord.activeTailoring,
-    ),
+    activeTailoring: activeTailorings[0] ?? null,
+    activeTailorings,
     applicationCount: readNumber(payloadRecord.applicationCount),
     applications: readTrackedApplicationSummaries(payloadRecord.applications),
     companyCount: readNumber(payloadRecord.companyCount),
     originalResume: readOriginalResumeSummary(payloadRecord.originalResume),
     tailoredResumes: readTailoredResumeSummaries(payloadRecord.tailoredResumes),
-    tailoringInterview: readTailorResumePendingInterviewSummary(
-      payloadRecord.tailoringInterview,
-    ),
+    tailoringInterview: normalizedTailoringInterviews[0] ?? null,
+    tailoringInterviews: normalizedTailoringInterviews,
   };
 }

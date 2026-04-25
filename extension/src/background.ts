@@ -15,6 +15,9 @@ import {
   LAST_TAILORING_STORAGE_KEY,
   normalizeComparableUrl,
   PREPARING_TAILORING_STORAGE_KEY,
+  TAILORING_PREPARATIONS_STORAGE_KEY,
+  TAILORING_PROMPTS_STORAGE_KEY,
+  TAILORING_RUNS_STORAGE_KEY,
   type JobHelperAuthSession,
   type JobHelperAuthUser,
   type JobPageContext,
@@ -22,6 +25,7 @@ import {
   readJobUrlFromPageContext,
   readTailoredResumeSummaries,
   readTailorResumeExistingTailoringState,
+  readTailorResumeExistingTailoringStates,
   type TailorResumeGenerationStepSummary,
   readTailorResumeProfileSummary,
   type TailorResumeRunRecord,
@@ -31,8 +35,17 @@ import {
   isNdjsonResponse,
   readTailorResumeGenerationStream,
 } from "./tailor-resume-stream";
+import { findMatchingCurrentWindowTabForUrl } from "./browser-tab-targeting";
 import { buildCompletedTailoringMessage } from "./tailor-run-copy";
 import { resolvePotentialTailorOverwrite } from "./tailor-overwrite-guard";
+import {
+  buildTailorRunRegistryKey,
+  readTailorRunRegistryKeyFromPageContext,
+  readTailorRunRegistryKeyFromTab,
+} from "./tailor-run-registry";
+import {
+  buildTailorResumeLiveStatusMessage as buildLiveTailorResumeStatusMessage,
+} from "../../lib/tailor-resume-step-display.ts";
 
 type OverlayTone = "error" | "info" | "success" | "warning";
 
@@ -53,8 +66,12 @@ type AuthStatus =
   | { session: JobHelperAuthSession; status: "signedIn" }
   | { status: "signedOut" };
 
-let isCaptureInFlight = false;
-let activeTailorResumeAbortController: AbortController | null = null;
+type TailorRunStorageRegistry<T> = Record<string, T>;
+
+const activeTailorResumeAbortControllers = new Map<
+  string,
+  AbortController
+>();
 
 async function configureSidePanelAction() {
   try {
@@ -159,19 +176,6 @@ function buildSuccessMessage(record: TailorResumeRunRecord) {
   });
 }
 
-function buildLiveTailorResumeStatusMessage(
-  step: TailorResumeGenerationStepSummary | null,
-) {
-  if (!step) {
-    return "Tailoring your resume for this job...";
-  }
-
-  const attemptLabel = step.attempt ? ` (attempt ${step.attempt})` : "";
-  const retryLabel = step.retrying ? ", retrying" : "";
-
-  return `Stage ${step.stepNumber}/${step.stepCount}: ${step.summary}${attemptLabel}${retryLabel}`;
-}
-
 function buildRunningTailoringRunRecord(input: {
   capturedAt: string;
   message?: string;
@@ -179,9 +183,13 @@ function buildRunningTailoringRunRecord(input: {
   step?: TailorResumeGenerationStepSummary | null;
   tab: chrome.tabs.Tab | null;
 }) {
+  const pageApplicationContext = input.pageContext
+    ? buildTailorResumeApplicationContext(input.pageContext)
+    : null;
+
   return {
     capturedAt: input.capturedAt,
-    companyName: null,
+    companyName: pageApplicationContext?.companyName ?? null,
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
     generationStep: input.step ?? null,
     jobIdentifier: null,
@@ -189,7 +197,7 @@ function buildRunningTailoringRunRecord(input: {
       input.message ?? buildLiveTailorResumeStatusMessage(input.step ?? null),
     pageTitle: input.pageContext?.title || cleanText(input.tab?.title) || null,
     pageUrl: input.pageContext?.url || cleanText(input.tab?.url) || null,
-    positionTitle: null,
+    positionTitle: pageApplicationContext?.jobTitle ?? null,
     status: "running",
     tailoredResumeError: null,
     tailoredResumeId: null,
@@ -259,23 +267,96 @@ async function collectPageContext(tabId: number) {
   return collectPageContextFromTab(tabId, "JOB_HELPER_COLLECT_PAGE_CONTEXT");
 }
 
-async function persistResult(record: TailorResumeRunRecord) {
-  await chrome.storage.local.set({
-    [LAST_TAILORING_STORAGE_KEY]: record,
-  });
+async function readStorageRegistry(
+  key: string,
+): Promise<TailorRunStorageRegistry<unknown>> {
+  const result = await chrome.storage.local.get(key);
+  const registry = result[key];
+  return isRecord(registry) ? { ...registry } : {};
 }
 
-async function persistTailorPreparationState(
-  preparationState: ReturnType<typeof buildTailorResumePreparationState> | null,
+async function setStorageRegistryEntry<T>(
+  key: string,
+  entryKey: string,
+  value: T | null,
 ) {
-  if (preparationState) {
-    await chrome.storage.local.set({
-      [PREPARING_TAILORING_STORAGE_KEY]: preparationState,
-    });
+  const registry = await readStorageRegistry(key);
+
+  if (value) {
+    registry[entryKey] = value;
+  } else {
+    delete registry[entryKey];
+  }
+
+  if (Object.keys(registry).length === 0) {
+    await chrome.storage.local.remove(key);
     return;
   }
 
-  await chrome.storage.local.remove(PREPARING_TAILORING_STORAGE_KEY);
+  await chrome.storage.local.set({
+    [key]: registry,
+  });
+}
+
+async function clearLegacyTailorRunStorageKeys() {
+  await chrome.storage.local.remove([
+    EXISTING_TAILORING_STORAGE_KEY,
+    LAST_TAILORING_STORAGE_KEY,
+    PREPARING_TAILORING_STORAGE_KEY,
+  ]);
+}
+
+async function persistResult(
+  pageKey: string,
+  record: TailorResumeRunRecord | null,
+) {
+  await setStorageRegistryEntry(TAILORING_RUNS_STORAGE_KEY, pageKey, record);
+  await clearLegacyTailorRunStorageKeys();
+}
+
+async function persistTailorPreparationState(
+  pageKey: string,
+  preparationState: ReturnType<typeof buildTailorResumePreparationState> | null,
+) {
+  await setStorageRegistryEntry(
+    TAILORING_PREPARATIONS_STORAGE_KEY,
+    pageKey,
+    preparationState,
+  );
+  await clearLegacyTailorRunStorageKeys();
+}
+
+async function persistExistingTailoringPrompt(
+  pageKey: string,
+  prompt:
+    | {
+        existingTailoring: ReturnType<typeof readTailorResumeExistingTailoringState>;
+        jobDescription: string;
+        jobUrl: string | null;
+        pageContext: JobPageContext;
+      }
+    | null,
+) {
+  await setStorageRegistryEntry(TAILORING_PROMPTS_STORAGE_KEY, pageKey, prompt);
+  await clearLegacyTailorRunStorageKeys();
+}
+
+async function clearTailorStateForKey(pageKey: string | null) {
+  if (pageKey) {
+    await Promise.all([
+      setStorageRegistryEntry(TAILORING_RUNS_STORAGE_KEY, pageKey, null),
+      setStorageRegistryEntry(TAILORING_PREPARATIONS_STORAGE_KEY, pageKey, null),
+      setStorageRegistryEntry(TAILORING_PROMPTS_STORAGE_KEY, pageKey, null),
+    ]);
+  } else {
+    await chrome.storage.local.remove([
+      TAILORING_RUNS_STORAGE_KEY,
+      TAILORING_PREPARATIONS_STORAGE_KEY,
+      TAILORING_PROMPTS_STORAGE_KEY,
+    ]);
+  }
+
+  await clearLegacyTailorRunStorageKeys();
 }
 
 function isAbortError(error: unknown) {
@@ -324,16 +405,42 @@ async function patchTailorResume(
   };
 }
 
-async function cancelCurrentTailoring() {
-  const abortController = activeTailorResumeAbortController;
-  activeTailorResumeAbortController = null;
+async function cancelCurrentTailoring(input: {
+  existingTailoringId?: string | null;
+  jobUrl?: string | null;
+  pageKey?: string | null;
+} = {}) {
+  const pageKey =
+    input.pageKey ??
+    buildTailorRunRegistryKey(input.jobUrl) ??
+    null;
+  const abortController = pageKey
+    ? activeTailorResumeAbortControllers.get(pageKey) ?? null
+    : null;
+
+  if (pageKey) {
+    activeTailorResumeAbortControllers.delete(pageKey);
+  }
+
   abortController?.abort();
 
   try {
     const authSession = await ensureJobHelperSession({ interactive: false });
+    const action =
+      input.existingTailoringId?.trim()
+        ? "cancelExistingTailoring"
+        : input.jobUrl?.trim()
+          ? "cancelTailoringByJobUrl"
+          : "cancelCurrentTailoring";
     const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
       method: "PATCH",
-      body: JSON.stringify({ action: "cancelCurrentTailoring" }),
+      body: JSON.stringify({
+        action,
+        ...(input.existingTailoringId?.trim()
+          ? { existingTailoringId: input.existingTailoringId.trim() }
+          : {}),
+        ...(input.jobUrl?.trim() ? { jobUrl: input.jobUrl.trim() } : {}),
+      }),
       credentials: "include",
       headers: {
         ...authorizationHeaders(authSession),
@@ -352,11 +459,7 @@ async function cancelCurrentTailoring() {
       );
     }
   } finally {
-    await chrome.storage.local.remove([
-      EXISTING_TAILORING_STORAGE_KEY,
-      LAST_TAILORING_STORAGE_KEY,
-      PREPARING_TAILORING_STORAGE_KEY,
-    ]);
+    await clearTailorStateForKey(pageKey);
   }
 
   const activeTab = await getActiveTab().catch(() => null);
@@ -379,6 +482,10 @@ function readPayloadString(payload: unknown, key: string) {
 
   const value = payload[key];
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readPayloadBoolean(payload: unknown, key: string) {
+  return isRecord(payload) && payload[key] === true;
 }
 
 function readAuthUser(value: unknown): JobHelperAuthUser | null {
@@ -862,7 +969,28 @@ function normalizeDashboardCallbackUrl(callbackUrl: string) {
 }
 
 async function openJobHelperCallbackUrl(callbackUrl: string) {
-  let url = normalizeDashboardCallbackUrl(callbackUrl);
+  const normalizedCallbackUrl = normalizeDashboardCallbackUrl(callbackUrl);
+  const currentWindowTabs = await chrome.tabs
+    .query({ currentWindow: true })
+    .catch(() => [] as chrome.tabs.Tab[]);
+  const existingTab = findMatchingCurrentWindowTabForUrl(
+    currentWindowTabs,
+    normalizedCallbackUrl,
+  );
+
+  if (typeof existingTab?.id === "number") {
+    const activatedTab = await chrome.tabs.update(existingTab.id, {
+      active: true,
+    });
+
+    if (typeof activatedTab?.windowId === "number") {
+      await chrome.windows.update(activatedTab.windowId, { focused: true });
+    }
+
+    return;
+  }
+
+  let url = normalizedCallbackUrl;
 
   try {
     const session = await ensureJobHelperSession({ interactive: false });
@@ -956,7 +1084,7 @@ async function loadTailorResumeOverwriteSummary(session: JobHelperAuthSession) {
   }
 
   return {
-    activeTailoring: readTailorResumeExistingTailoringState(payload),
+    activeTailorings: readTailorResumeExistingTailoringStates(payload),
     tailoredResumes: readTailoredResumeSummaries(payload),
   };
 }
@@ -969,6 +1097,7 @@ async function tailorResumeForTab(input: {
   jobDescription: string;
   jobUrl: string | null;
   overwriteExisting?: boolean;
+  pageKey: string;
   pageContext: JobPageContext;
 }) {
   const {
@@ -979,6 +1108,7 @@ async function tailorResumeForTab(input: {
     jobDescription,
     jobUrl,
     overwriteExisting,
+    pageKey,
     pageContext,
   } = input;
   const readyTab = await waitForTabToFinishLoading(activeTab);
@@ -1001,11 +1131,12 @@ async function tailorResumeForTab(input: {
     authSession,
     {
       onStepEvent: (stepEvent) => {
-        if (activeTailorResumeAbortController !== abortController) {
+        if (activeTailorResumeAbortControllers.get(pageKey) !== abortController) {
           return;
         }
 
         void persistResult(
+          pageKey,
           buildRunningTailoringRunRecord({
             capturedAt,
             pageContext,
@@ -1045,14 +1176,12 @@ async function tailorResumeForTab(input: {
         tailoredResumeId: null,
       };
 
-      await persistResult(record);
-      await chrome.storage.local.set({
-        [EXISTING_TAILORING_STORAGE_KEY]: {
-          existingTailoring,
-          jobDescription,
-          jobUrl,
-          pageContext,
-        },
+      await persistResult(pageKey, record);
+      await persistExistingTailoringPrompt(pageKey, {
+        existingTailoring,
+        jobDescription,
+        jobUrl,
+        pageContext,
       });
       await showOverlay(tabId, existingTailoringMessage, "info");
       await openSidePanelForTab(activeTab);
@@ -1089,9 +1218,8 @@ async function tailorResumeForTab(input: {
       tailoredResumeId: null,
     };
 
-    await persistResult(record);
+    await persistResult(pageKey, record);
     await showOverlay(tabId, record.message, "info");
-    await openSidePanelForTab(activeTab);
     return;
   }
 
@@ -1123,7 +1251,7 @@ async function tailorResumeForTab(input: {
     ? "Already tailored this job. Showing the saved resume in the side panel."
     : buildSuccessMessage(record);
 
-  await persistResult(record);
+  await persistResult(pageKey, record);
   await showOverlay(
     tabId,
     record.message,
@@ -1146,35 +1274,36 @@ async function runCaptureFlow(input: {
 } = {}) {
   let activeTab = input.tab ?? null;
   let capturedAt = new Date().toISOString();
+  let initialPageKey: string | null = null;
+  let pageKey: string | null = null;
   const preparingMessage = buildTailorResumePreparationMessage(
     input.overwriteExisting === true,
   );
 
-  if (isCaptureInFlight) {
-    if (input.openSidePanel) {
-      activeTab = activeTab ?? (await getActiveTab().catch(() => null));
-
-      if (activeTab) {
-        await openSidePanelForTab(activeTab);
-      }
-    }
-
-    return;
-  }
-
-  isCaptureInFlight = true;
-
   try {
     activeTab = activeTab ?? (await getActiveTab());
+    initialPageKey =
+      readTailorRunRegistryKeyFromTab(activeTab) ??
+      `tab:${activeTab.id ?? Date.now()}`;
+
+    if (activeTailorResumeAbortControllers.has(initialPageKey)) {
+      if (input.openSidePanel && activeTab) {
+        await openSidePanelForTab(activeTab);
+      }
+
+      return;
+    }
+
     capturedAt = new Date().toISOString();
     const abortController = new AbortController();
-    activeTailorResumeAbortController = abortController;
+    activeTailorResumeAbortControllers.set(initialPageKey, abortController);
 
     if (typeof activeTab.id === "number") {
       await showOverlay(activeTab.id, preparingMessage, "info");
     }
 
     await persistTailorPreparationState(
+      initialPageKey,
       buildTailorResumePreparationState({
         capturedAt,
         message: preparingMessage,
@@ -1198,6 +1327,26 @@ async function runCaptureFlow(input: {
     const pageContext = await collectPageContext(tabId);
     const jobDescription = buildJobDescriptionFromPageContext(pageContext);
     const jobUrl = readJobUrlFromPageContext(pageContext);
+    pageKey =
+      readTailorRunRegistryKeyFromPageContext(pageContext) ?? initialPageKey;
+
+    if (pageKey !== initialPageKey) {
+      activeTailorResumeAbortControllers.delete(initialPageKey);
+      activeTailorResumeAbortControllers.set(pageKey, abortController);
+      await Promise.all([
+        persistTailorPreparationState(initialPageKey, null),
+        persistExistingTailoringPrompt(initialPageKey, null),
+        persistResult(initialPageKey, null),
+      ]);
+      await persistTailorPreparationState(
+        pageKey,
+        buildTailorResumePreparationState({
+          capturedAt,
+          message: preparingMessage,
+          pageContext,
+        }),
+      );
+    }
 
     if (!jobDescription) {
       throw new Error("Could not find job description text on this page.");
@@ -1218,7 +1367,7 @@ async function runCaptureFlow(input: {
 
     if (!input.overwriteExisting) {
       const existingTailoring = resolvePotentialTailorOverwrite({
-        activeTailoring: overwriteSummary?.activeTailoring ?? null,
+        activeTailorings: overwriteSummary?.activeTailorings ?? [],
         pageIdentity: {
           canonicalUrl: pageContext.canonicalUrl,
           jobUrl,
@@ -1245,15 +1394,13 @@ async function runCaptureFlow(input: {
           tailoredResumeId: null,
         };
 
-        await persistTailorPreparationState(null);
-        await persistResult(record);
-        await chrome.storage.local.set({
-          [EXISTING_TAILORING_STORAGE_KEY]: {
-            existingTailoring,
-            jobDescription,
-            jobUrl,
-            pageContext,
-          },
+        await persistTailorPreparationState(pageKey, null);
+        await persistResult(pageKey, record);
+        await persistExistingTailoringPrompt(pageKey, {
+          existingTailoring,
+          jobDescription,
+          jobUrl,
+          pageContext,
         });
         await showOverlay(tabId, existingTailoringMessage, "info");
         await openSidePanelForTab(readyTab);
@@ -1261,9 +1408,10 @@ async function runCaptureFlow(input: {
       }
     }
 
-    await persistTailorPreparationState(null);
-    await chrome.storage.local.remove(EXISTING_TAILORING_STORAGE_KEY);
+    await persistTailorPreparationState(pageKey, null);
+    await persistExistingTailoringPrompt(pageKey, null);
     await persistResult(
+      pageKey,
       buildRunningTailoringRunRecord({
         capturedAt,
         pageContext,
@@ -1281,6 +1429,7 @@ async function runCaptureFlow(input: {
       jobDescription,
       jobUrl,
       overwriteExisting: input.overwriteExisting,
+      pageKey,
       pageContext,
     });
   } catch (error) {
@@ -1288,11 +1437,14 @@ async function runCaptureFlow(input: {
       return;
     }
 
-    await persistTailorPreparationState(null);
-
     const message =
       error instanceof Error ? error.message : "Failed to tailor the resume.";
     activeTab = activeTab ?? (await getActiveTab().catch(() => null));
+    const targetPageKey = pageKey ?? initialPageKey;
+
+    if (targetPageKey) {
+      await persistTailorPreparationState(targetPageKey, null);
+    }
 
     const record: TailorResumeRunRecord = {
       capturedAt,
@@ -1309,7 +1461,9 @@ async function runCaptureFlow(input: {
       tailoredResumeId: null,
     };
 
-    await persistResult(record);
+    if (targetPageKey) {
+      await persistResult(targetPageKey, record);
+    }
 
     try {
       if (activeTab && typeof activeTab.id === "number") {
@@ -1319,9 +1473,17 @@ async function runCaptureFlow(input: {
       // Ignore follow-up UI failures after persisting the error.
     }
   } finally {
-    await persistTailorPreparationState(null);
-    activeTailorResumeAbortController = null;
-    isCaptureInFlight = false;
+    const targetPageKey = pageKey ?? initialPageKey;
+
+    if (targetPageKey) {
+      await persistTailorPreparationState(targetPageKey, null);
+      activeTailorResumeAbortControllers.delete(targetPageKey);
+    }
+
+    if (initialPageKey && targetPageKey !== initialPageKey) {
+      activeTailorResumeAbortControllers.delete(initialPageKey);
+      await persistTailorPreparationState(initialPageKey, null);
+    }
   }
 }
 
@@ -1371,6 +1533,10 @@ chrome.runtime.onMessage.addListener((
   if (typedMessage?.type === "JOB_HELPER_TRIGGER_CAPTURE") {
     void runCaptureFlow({
       openSidePanel: true,
+      overwriteExisting: readPayloadBoolean(
+        typedMessage.payload,
+        "overwriteExisting",
+      ),
       tab: sender.tab,
     });
     sendResponse({ ok: true });
@@ -1401,7 +1567,16 @@ chrome.runtime.onMessage.addListener((
   }
 
   if (typedMessage?.type === "JOB_HELPER_CANCEL_CURRENT_TAILORING") {
-    return sendAsyncResponse(sendResponse, cancelCurrentTailoring);
+    return sendAsyncResponse(sendResponse, async () =>
+      cancelCurrentTailoring({
+        existingTailoringId: readPayloadString(
+          typedMessage.payload,
+          "existingTailoringId",
+        ),
+        jobUrl: readPayloadString(typedMessage.payload, "jobUrl"),
+        pageKey: readPayloadString(typedMessage.payload, "pageKey"),
+      }),
+    );
   }
 
   if (typedMessage?.type === "JOB_HELPER_OPEN_DASHBOARD") {

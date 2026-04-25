@@ -18,20 +18,26 @@ test("buildTailorRunIdentityDisplay prefers structured company and role labels",
   );
 });
 
-test("buildTailorRunIdentityDisplay requires both company and role", () => {
-  assert.equal(
+test("buildTailorRunIdentityDisplay falls back to a single available label", () => {
+  assert.deepEqual(
     buildTailorRunIdentityDisplay({
       companyName: "Microsoft",
       positionTitle: null,
     }),
-    null,
+    {
+      label: "Microsoft",
+      title: "Microsoft",
+    },
   );
-  assert.equal(
+  assert.deepEqual(
     buildTailorRunIdentityDisplay({
       companyName: null,
       positionTitle: "Software Engineer",
     }),
-    null,
+    {
+      label: "Software Engineer",
+      title: "Software Engineer",
+    },
   );
 });
 
