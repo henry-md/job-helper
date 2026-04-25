@@ -1,3 +1,8 @@
+export const tailorResumeGenerationSettingKeys = [
+  "allowTailorResumeFollowUpQuestions",
+  "preventPageCountIncrease",
+] as const;
+
 export type TailorResumeGenerationSettings = {
   allowTailorResumeFollowUpQuestions: boolean;
   preventPageCountIncrease: boolean;
@@ -19,17 +24,15 @@ export function mergeTailorResumeGenerationSettings(
   }
 
   const candidateSettings = value as Partial<
-    Record<keyof TailorResumeGenerationSettings, unknown>
+    Record<(typeof tailorResumeGenerationSettingKeys)[number], unknown>
   >;
+  const nextSettings = { ...fallback };
 
-  return {
-    allowTailorResumeFollowUpQuestions:
-      typeof candidateSettings.allowTailorResumeFollowUpQuestions === "boolean"
-        ? candidateSettings.allowTailorResumeFollowUpQuestions
-        : fallback.allowTailorResumeFollowUpQuestions,
-    preventPageCountIncrease:
-      typeof candidateSettings.preventPageCountIncrease === "boolean"
-        ? candidateSettings.preventPageCountIncrease
-        : fallback.preventPageCountIncrease,
-  };
+  for (const key of tailorResumeGenerationSettingKeys) {
+    if (typeof candidateSettings[key] === "boolean") {
+      nextSettings[key] = candidateSettings[key];
+    }
+  }
+
+  return nextSettings;
 }

@@ -113,6 +113,7 @@ export type TailoredResumeQuestioningSummary = {
 
 export type TailorResumeWorkspaceState = {
   tailoringInterview: TailorResumePendingInterview | null;
+  tailoringInterviews: TailorResumePendingInterview[];
   isBaseResumeStepComplete: boolean;
   updatedAt: string | null;
 };
@@ -284,6 +285,7 @@ export function emptyTailorResumeAnnotatedLatexState(): TailorResumeAnnotatedLat
 export function emptyTailorResumeWorkspaceState(): TailorResumeWorkspaceState {
   return {
     tailoringInterview: null,
+    tailoringInterviews: [],
     isBaseResumeStepComplete: false,
     updatedAt: null,
   };
@@ -458,8 +460,22 @@ function parseTailorResumeWorkspaceState(value: unknown): TailorResumeWorkspaceS
     return emptyTailorResumeWorkspaceState();
   }
 
+  const tailoringInterviews = parseTailorResumePendingInterviews(
+    value.tailoringInterviews,
+  );
+  const legacyTailoringInterview = parseTailorResumePendingInterview(
+    value.tailoringInterview,
+  );
+  const normalizedTailoringInterviews =
+    tailoringInterviews.length > 0
+      ? tailoringInterviews
+      : legacyTailoringInterview
+        ? [legacyTailoringInterview]
+        : [];
+
   return {
-    tailoringInterview: parseTailorResumePendingInterview(value.tailoringInterview),
+    tailoringInterview: normalizedTailoringInterviews[0] ?? null,
+    tailoringInterviews: normalizedTailoringInterviews,
     isBaseResumeStepComplete: value.isBaseResumeStepComplete === true,
     updatedAt: readNullableString(value.updatedAt),
   };
@@ -1015,6 +1031,17 @@ function parseTailorResumePendingInterview(
     tailorResumeRunId: readNullableString(value.tailorResumeRunId),
     updatedAt,
   };
+}
+
+function parseTailorResumePendingInterviews(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailorResumePendingInterview[];
+  }
+
+  return value.flatMap((entry) => {
+    const parsedInterview = parseTailorResumePendingInterview(entry);
+    return parsedInterview ? [parsedInterview] : [];
+  });
 }
 
 function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null {
