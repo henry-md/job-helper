@@ -4,11 +4,21 @@ Required final checks:
 - After any feature update, bug fix, or other implementation task, run `npm run build` before considering the work done.
 - If a required check is blocked by an unrelated pre-existing failure, surface that clearly.
 
+Local dev server hygiene:
+- If you start or take over a local dev server or other long-running verification process, stop it before ending your response unless the user explicitly asked you to leave it running, and mention the released port or command when relevant.
+
 Databases:
 You are ONLY allowed to make db migrations with `npx prisma migrate dev --name <migration_name>`, and regenerate the client with `npx prisma generate`, and absolutely nothing else. If that doesn't work, you are not even allowed to run it again (unless given extra-top-secret permission)! You must give me your suggestion for what to run. NEVER, EVER, under ANY CIRCUMSTANCES can you run things like `db push`, `migrate deploy`, `db pull`, or anything else without explicitly asking the user pretty-please. This is punishable by death. 
 
 Commits:
 Never commit anything. Let the user do git add, etc, unless explicitly asked.
+
+Git and workspace safety:
+- Default to working on the currently checked out `main` branch in this repo.
+- Do not create or switch branches unless the user gives explicit permission for that branch action.
+- Do not create linked worktrees or alternate checkouts unless the user gives explicit permission for that worktree action.
+- If a task involves staging, committing, or pushing after an earlier conversation about splitting work, do not infer permission to branch or create worktrees from that alone. Stay on `main` unless the user explicitly says otherwise.
+- If the user's wording about branches is ambiguous, stop and ask a direct follow-up instead of guessing. Use exact branch names in the question and in the answer.
 
 Prisma:
 - The schema lives in `prisma/schema.prisma`.
