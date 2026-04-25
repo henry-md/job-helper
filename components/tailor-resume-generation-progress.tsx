@@ -10,6 +10,7 @@ import {
   RefreshCcw,
   XCircle,
 } from "lucide-react";
+import { formatTailorResumeProgressStatusLabel } from "@/lib/tailor-resume-step-display";
 import { cn } from "@/lib/utils";
 
 export type TailorResumeGenerationProgressStepStatus =
@@ -161,6 +162,21 @@ function getNotificationPresentation(
   };
 }
 
+function readStepMetaLabel(step: TailorResumeGenerationProgressStep) {
+  if (step.status === "retrying") {
+    return formatTailorResumeProgressStatusLabel({
+      attempt: step.attempt,
+      status: step.status,
+    });
+  }
+
+  if (step.attempt && step.attempt > 1) {
+    return `Attempt ${step.attempt}`;
+  }
+
+  return null;
+}
+
 export function TailorResumeProgressToast({
   ariaLabel = "Open resume generation progress",
   label = "Generating resume...",
@@ -268,6 +284,7 @@ export function TailorResumeProgressModal({
               {steps.map((step, index) => {
                 const badge = getStatusBadge(step);
                 const BadgeIcon = badge.icon;
+                const metaLabel = readStepMetaLabel(step);
                 return (
                   <div
                     className="flex flex-col gap-3 xl:flex-1 xl:flex-row xl:items-center"
@@ -298,9 +315,9 @@ export function TailorResumeProgressModal({
                         {step.label}
                       </h3>
 
-                      {step.attempt && step.attempt > 1 ? (
+                      {metaLabel ? (
                         <p className="mt-4 text-[11px] uppercase tracking-[0.18em] text-current opacity-70">
-                          Attempt {step.attempt}
+                          {metaLabel}
                         </p>
                       ) : null}
                     </article>

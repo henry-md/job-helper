@@ -25,8 +25,26 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import {
+  isNdjsonResponse,
+  readTailorResumeGenerationStream,
+  readTailorResumeUploadStream,
+} from "@/lib/tailor-resume-client-stream";
+import type {
+  TailorResumeExtractionAttempt,
+  TailorResumeRunResponsePayload,
+  TailorResumeUploadResponsePayload,
+} from "@/lib/tailor-resume-client-payloads";
 import { formatTailorResumeLatexError } from "@/lib/tailor-resume-error-format";
 import { normalizeTailorResumeLinkUrl } from "@/lib/tailor-resume-links";
+import type {
+  TailorResumeLinkValidationEntry,
+  TailorResumeLinkValidationSummary,
+} from "@/lib/tailor-resume-link-validation";
+import {
+  formatTailorResumeRetryLabel,
+  readTailorResumeDisplayAttempt,
+} from "@/lib/tailor-resume-step-display";
 import type {
   SavedResumeRecord,
   TailorResumeConversationMessage,
@@ -50,28 +68,6 @@ type TailorResumeWorkspaceProps = {
 
 type TailorResumeStepId = "base" | "job";
 
-type TailorResumeExtractionAttempt = {
-  attempt: number;
-  error: string | null;
-  linkSummary: TailorResumeLinkValidationSummary | null;
-  outcome: "failed" | "succeeded";
-  willRetry: boolean;
-};
-
-type TailorResumeLinkValidationSummary = {
-  failedCount: number;
-  passedCount: number;
-  totalCount: number;
-  unverifiedCount: number;
-};
-
-type TailorResumeLinkValidationEntry = {
-  displayText: string | null;
-  outcome: "failed" | "passed" | "unverified";
-  reason: string | null;
-  url: string;
-};
-
 type TailorResumeLatexLinkSyncSummary = {
   addedCount: number;
   addedLinks: Array<{
@@ -80,65 +76,6 @@ type TailorResumeLatexLinkSyncSummary = {
     url: string | null;
   }>;
 };
-
-type TailorResumeUploadResponsePayload = {
-  error?: string;
-  extractionError?: string | null;
-  extractionAttempts?: TailorResumeExtractionAttempt[];
-  linkValidationLinks?: TailorResumeLinkValidationEntry[] | null;
-  linkValidationSummary?: TailorResumeLinkValidationSummary | null;
-  profile?: TailorResumeProfile;
-  savedLinkUpdateCount?: number;
-  savedLinkUpdates?: TailorResumeSavedLinkUpdate[];
-};
-
-type TailorResumeUploadStreamEvent =
-  | {
-      attemptEvent: TailorResumeExtractionAttempt;
-      type: "extraction-attempt";
-    }
-  | {
-      payload: TailorResumeUploadResponsePayload;
-      type: "done";
-    }
-  | {
-      error: string;
-      type: "error";
-    };
-
-type TailorResumeRunResponsePayload = {
-  error?: string;
-  profile?: TailorResumeProfile;
-  savedLinkUpdateCount?: number;
-  savedLinkUpdates?: TailorResumeSavedLinkUpdate[];
-  tailoringStatus?: "already_tailored" | "needs_user_input";
-  tailoredResumeDurationMs?: number;
-  tailoredResumeError?: string | null;
-  tailoredResumeId?: string;
-  userMarkdown?: TailorResumeUserMarkdownState;
-};
-
-type TailorResumeRunStreamResult = {
-  ok: boolean;
-  payload: TailorResumeRunResponsePayload;
-  status: number;
-};
-
-type TailorResumeRunStreamEvent =
-  | {
-      stepEvent: TailorResumeGenerationStepEvent;
-      type: "generation-step";
-    }
-  | {
-      ok: boolean;
-      payload: TailorResumeRunResponsePayload;
-      status: number;
-      type: "done";
-    }
-  | {
-      error: string;
-      type: "error";
-    };
 
 const acceptedResumeMimeTypes = new Set([
   "application/pdf",
@@ -250,7 +187,19 @@ function formatElapsedDuration(durationMs: number | null | undefined) {
 function buildTailorResumeProgressNotification(
   event: TailorResumeGenerationStepEvent,
 ): TailorResumeGenerationProgressNotification {
+  const displayAttempt = readTailorResumeDisplayAttempt(event);
+
   if (event.status === "running") {
+    if (event.retrying) {
+      return {
+        detail: event.detail,
+        title:
+          `Step ${event.stepNumber}: ${event.summary} - ` +
+          formatTailorResumeRetryLabel(displayAttempt),
+        tone: "info",
+      };
+    }
+
     return {
       detail: event.detail,
       title: `Step ${event.stepNumber} is running: ${event.summary}`,
@@ -263,7 +212,9 @@ function buildTailorResumeProgressNotification(
       detail:
         event.detail ??
         `Attempt ${event.attempt ?? 1} failed, so this step started another pass automatically.`,
-      title: `Retrying step ${event.stepNumber}: ${event.summary}`,
+      title:
+        `Step ${event.stepNumber}: ${event.summary} - ` +
+        formatTailorResumeRetryLabel(displayAttempt),
       tone: "error",
     };
   }
@@ -295,6 +246,7 @@ function applyTailorResumeStepEventToProgressState(
   currentState: TailorResumeGenerationProgressState,
   event: TailorResumeGenerationStepEvent,
 ): TailorResumeGenerationProgressState {
+  const displayAttempt = readTailorResumeDisplayAttempt(event);
   const nextActiveStepNumber =
     event.status === "running"
       ? event.stepNumber
@@ -316,7 +268,7 @@ function applyTailorResumeStepEventToProgressState(
       if (step.stepNumber === event.stepNumber) {
         return {
           ...step,
-          attempt: event.attempt,
+          attempt: displayAttempt,
           detail: event.detail,
           status:
             event.status === "running"
@@ -475,126 +427,6 @@ function revokeObjectUrl(url: string | null | undefined) {
   URL.revokeObjectURL(url);
 }
 
-async function readTailorResumeUploadStream(
-  response: Response,
-  handlers: {
-    onAttemptEvent: (attemptEvent: TailorResumeExtractionAttempt) => void;
-  },
-) {
-  if (!response.body) {
-    throw new Error("The resume upload did not return a readable response stream.");
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let finalPayload: TailorResumeUploadResponsePayload | null = null;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-
-      if (!trimmedLine) {
-        continue;
-      }
-
-      const event = JSON.parse(trimmedLine) as TailorResumeUploadStreamEvent;
-
-      if (event.type === "extraction-attempt") {
-        handlers.onAttemptEvent(event.attemptEvent);
-        continue;
-      }
-
-      if (event.type === "error") {
-        throw new Error(event.error);
-      }
-
-      finalPayload = event.payload;
-    }
-
-    if (done) {
-      break;
-    }
-  }
-
-  if (!finalPayload) {
-    throw new Error("The resume upload finished without a final response payload.");
-  }
-
-  return finalPayload;
-}
-
-function isNdjsonResponse(response: Response) {
-  return (
-    response.headers
-      .get("Content-Type")
-      ?.toLowerCase()
-      .includes("text/x-ndjson") ?? false
-  );
-}
-
-async function readTailorResumeGenerationStream(
-  response: Response,
-  handlers: {
-    onStepEvent: (stepEvent: TailorResumeGenerationStepEvent) => void;
-  },
-) {
-  if (!response.body) {
-    throw new Error("The tailoring run did not return a readable response stream.");
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let finalResult: TailorResumeRunStreamResult | null = null;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-
-      if (!trimmedLine) {
-        continue;
-      }
-
-      const event = JSON.parse(trimmedLine) as TailorResumeRunStreamEvent;
-
-      if (event.type === "generation-step") {
-        handlers.onStepEvent(event.stepEvent);
-        continue;
-      }
-
-      if (event.type === "error") {
-        throw new Error(event.error);
-      }
-
-      finalResult = {
-        ok: event.ok,
-        payload: event.payload,
-        status: event.status,
-      };
-    }
-
-    if (done) {
-      break;
-    }
-  }
-
-  if (!finalResult) {
-    throw new Error("The tailoring run finished without a final response payload.");
-  }
-
-  return finalResult;
-}
 
 function showExtractionAttemptToasts(
   attempts: TailorResumeExtractionAttempt[],
@@ -1558,14 +1390,16 @@ export default function TailorResumeWorkspace({
 
       if (!response.ok) {
         payload = (await response.json()) as TailorResumeUploadResponsePayload;
-      } else if (
-        response.headers.get("content-type")?.includes("text/x-ndjson")
-      ) {
+      } else if (isNdjsonResponse(response)) {
         streamedAttemptEvents = true;
         payload = await readTailorResumeUploadStream(response, {
           onAttemptEvent: (attemptEvent) => {
             showExtractionAttemptToast(attemptEvent);
           },
+          parsePayload: (value) =>
+            (typeof value === "object" && value !== null
+              ? value
+              : {}) as TailorResumeUploadResponsePayload,
         });
       } else {
         payload = (await response.json()) as TailorResumeUploadResponsePayload;
@@ -2006,6 +1840,14 @@ export default function TailorResumeWorkspace({
       const streamedResult = isNdjsonResponse(response)
         ? await readTailorResumeGenerationStream(response, {
             onStepEvent: handleTailorResumeStepEvent,
+            parsePayload: (value) =>
+              (typeof value === "object" && value !== null
+                ? value
+                : {}) as TailorResumeRunResponsePayload,
+            parseStepEvent: (value) =>
+              typeof value === "object" && value !== null
+                ? (value as TailorResumeGenerationStepEvent)
+                : null,
           })
         : {
             ok: response.ok,
@@ -2156,6 +1998,14 @@ export default function TailorResumeWorkspace({
       const streamedResult = isNdjsonResponse(response)
         ? await readTailorResumeGenerationStream(response, {
             onStepEvent: handleTailorResumeStepEvent,
+            parsePayload: (value) =>
+              (typeof value === "object" && value !== null
+                ? value
+                : {}) as TailorResumeRunResponsePayload,
+            parseStepEvent: (value) =>
+              typeof value === "object" && value !== null
+                ? (value as TailorResumeGenerationStepEvent)
+                : null,
           })
         : {
             ok: response.ok,
@@ -2293,6 +2143,14 @@ export default function TailorResumeWorkspace({
       const streamedResult = isNdjsonResponse(response)
         ? await readTailorResumeGenerationStream(response, {
             onStepEvent: handleTailorResumeStepEvent,
+            parsePayload: (value) =>
+              (typeof value === "object" && value !== null
+                ? value
+                : {}) as TailorResumeRunResponsePayload,
+            parseStepEvent: (value) =>
+              typeof value === "object" && value !== null
+                ? (value as TailorResumeGenerationStepEvent)
+                : null,
           })
         : {
             ok: response.ok,

@@ -1064,8 +1064,10 @@ export async function compactTailoredResumePageCount(input: {
         estimatedLinesToRecover,
         measurementResult: selfCheckResult.measurementResult,
       });
+      const retryAttempt =
+        attempt < maxCompactionAttempts ? attempt + 1 : attempt;
       await input.onStepEvent?.({
-        attempt,
+        attempt: retryAttempt,
         detail: lastError,
         durationMs: Math.max(0, Date.now() - startedAt),
         retrying: attempt < maxCompactionAttempts,
@@ -1094,8 +1096,10 @@ export async function compactTailoredResumePageCount(input: {
         estimatedLinesToRecover,
         measurementResult,
       });
+      const retryAttempt =
+        attempt < maxCompactionAttempts ? attempt + 1 : attempt;
       await input.onStepEvent?.({
-        attempt,
+        attempt: retryAttempt,
         detail:
           `${lastError} Step 4 is asking for more aggressive candidates that actually remove rendered lines.`,
         durationMs: Math.max(0, Date.now() - startedAt),
@@ -1143,8 +1147,10 @@ export async function compactTailoredResumePageCount(input: {
         estimatedLinesToRecover,
         measurementResult,
       });
+      const retryAttempt =
+        attempt < maxCompactionAttempts ? attempt + 1 : attempt;
       await input.onStepEvent?.({
-        attempt,
+        attempt: retryAttempt,
         detail: lastError,
         durationMs: Math.max(0, Date.now() - startedAt),
         retrying: attempt < maxCompactionAttempts,
@@ -1205,9 +1211,11 @@ export async function compactTailoredResumePageCount(input: {
       estimatedLinesToRecover,
       measurementResult,
     });
+    const retryAttempt =
+      attempt < maxCompactionAttempts ? attempt + 1 : attempt;
 
     await input.onStepEvent?.({
-      attempt,
+      attempt: retryAttempt,
       detail: `${lastError} Step 4 is trying another measured reduction pass.`,
       durationMs: Math.max(0, Date.now() - startedAt),
       retrying: attempt < maxCompactionAttempts,
