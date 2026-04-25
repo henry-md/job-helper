@@ -1,0 +1,4 @@
+- Symptom: the extension only showed the top-level `Web` button after a saved tailored resume was already attached to the current local run, so the primary action row often stayed single-column even though the product wanted a persistent web redirect action beside `Tailor Current Page`.
+- Root cause: the top action reused tailored-resume-specific visibility state instead of modeling `Web` as a separate global navigation affordance.
+- Fix: keep the top `Web` button visible as a stable companion action and let it open the Tailor Resume dashboard by default, deep-linking into the latest tailored resume review only when one is available.
+- Guardrail: if a top-level extension action is meant to be general navigation, do not couple its visibility to narrower run- or page-matched state.

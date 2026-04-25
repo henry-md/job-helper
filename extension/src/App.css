@@ -355,6 +355,166 @@ button:disabled {
   stroke-width: 2;
 }
 
+.tailor-context-loading {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  min-height: 148px;
+  padding: 20px 18px;
+  text-align: center;
+}
+
+.tailor-context-loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(244, 244, 245, 0.12);
+  border-top-color: rgba(110, 231, 183, 0.94);
+  border-radius: 999px;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 0 0 6px rgba(52, 211, 153, 0.04);
+  animation: tailor-context-loading-spin 900ms linear infinite;
+}
+
+.tailor-context-loading-copy {
+  margin: 0;
+  color: var(--muted-strong);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.tailor-empty-state {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  min-height: 260px;
+  flex: 1 1 auto;
+  place-items: center;
+  padding: 16px 0 86px;
+}
+
+.tailor-empty-state-inner {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.tailor-empty-state-graphic {
+  width: min(100%, 248px);
+  height: auto;
+  overflow: visible;
+  filter: drop-shadow(0 24px 48px rgba(0, 0, 0, 0.34));
+  animation: tailor-empty-float 6s ease-in-out infinite;
+}
+
+.tailor-empty-shadow {
+  fill: rgba(0, 0, 0, 0.28);
+}
+
+.tailor-empty-halo {
+  fill: rgba(129, 140, 248, 0.18);
+  filter: blur(10px);
+  transform-origin: center;
+  animation: tailor-empty-halo-pulse 4.8s ease-in-out infinite;
+}
+
+.tailor-empty-chip {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.tailor-empty-chip-left {
+  transform: rotate(-10deg);
+}
+
+.tailor-empty-chip-right {
+  transform: rotate(9deg);
+}
+
+.tailor-empty-chip-card {
+  fill: rgba(15, 23, 42, 0.82);
+  stroke: rgba(244, 244, 245, 0.14);
+  stroke-width: 1.5;
+}
+
+.tailor-empty-chip-dot {
+  fill: rgba(129, 140, 248, 0.92);
+}
+
+.tailor-empty-chip-line {
+  stroke: rgba(226, 232, 240, 0.78);
+  stroke-linecap: round;
+  stroke-width: 2.5;
+}
+
+.tailor-empty-sparkle {
+  fill: rgba(110, 231, 183, 0.92);
+}
+
+.tailor-empty-bubble {
+  fill: rgba(15, 23, 42, 0.9);
+  stroke: rgba(129, 140, 248, 0.38);
+  stroke-width: 2;
+}
+
+.tailor-empty-bubble-sheen {
+  fill: rgba(129, 140, 248, 0.12);
+}
+
+.tailor-empty-eye {
+  fill: #eef2ff;
+}
+
+.tailor-empty-mouth {
+  fill: none;
+  stroke: rgba(196, 181, 253, 0.96);
+  stroke-linecap: round;
+  stroke-width: 5;
+}
+
+.tailor-empty-state-copy {
+  margin: 0;
+  color: var(--muted-strong);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+@keyframes tailor-empty-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes tailor-empty-halo-pulse {
+  0%,
+  100% {
+    opacity: 0.72;
+    transform: scale(0.96);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes tailor-context-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .status-row,
 .snapshot-card {
   border: 1px solid var(--border);
@@ -714,6 +874,11 @@ button:disabled {
   container-type: inline-size;
 }
 
+.tailor-run-shell-menu-open {
+  overflow: visible;
+  z-index: 4;
+}
+
 .tailor-run-shell-body {
   display: grid;
   gap: 8px;
@@ -742,6 +907,38 @@ button:disabled {
 
 .tailor-run-shell-ready {
   border-color: rgba(244, 244, 245, 0.1);
+}
+
+.tailor-run-shell-complete {
+  border-color: rgba(52, 211, 153, 0.28);
+  background:
+    linear-gradient(180deg, rgba(52, 211, 153, 0.16), rgba(52, 211, 153, 0.09));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 0 0 1px rgba(167, 243, 208, 0.08),
+    0 24px 80px rgba(0, 0, 0, 0.24);
+}
+
+.tailor-run-shell-complete .tailor-run-compact-title {
+  color: #effef6;
+}
+
+.tailor-run-shell-complete .tailor-run-detail-time {
+  border-color: rgba(16, 185, 129, 0.18);
+  color: rgba(6, 95, 70, 0.92);
+  background: rgba(236, 253, 245, 0.72);
+}
+
+.tailor-run-shell-complete .tailor-run-menu-trigger {
+  border-color: rgba(16, 185, 129, 0.18);
+  color: rgba(6, 95, 70, 0.92);
+  background: rgba(236, 253, 245, 0.5);
+}
+
+.tailor-run-shell-complete .tailor-run-menu-trigger:hover:not(:disabled) {
+  border-color: rgba(16, 185, 129, 0.28);
+  color: rgba(4, 120, 87, 0.96);
+  background: rgba(236, 253, 245, 0.82);
 }
 
 .tailor-run-shell-warning {
@@ -787,11 +984,9 @@ button:disabled {
 }
 
 .tailor-run-preparing-dialog {
-  display: grid;
-  width: min(100%, 272px);
-  gap: 10px;
-  justify-items: center;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .tailor-run-preparing-spinner {
@@ -804,21 +999,6 @@ button:disabled {
     inset 0 0 0 1px rgba(255, 255, 255, 0.04),
     0 0 0 6px rgba(244, 244, 245, 0.04);
   animation: tailor-run-preparing-spin 900ms linear infinite;
-}
-
-.tailor-run-preparing-title {
-  margin: 0;
-  color: var(--foreground);
-  font-size: 18px;
-  font-weight: 760;
-  line-height: 1.05;
-}
-
-.tailor-run-preparing-copy {
-  margin: 0;
-  color: rgba(228, 228, 231, 0.88);
-  font-size: 12px;
-  line-height: 1.5;
 }
 
 .existing-tailoring-inline-overlay {
@@ -922,6 +1102,10 @@ button:disabled {
   display: none;
 }
 
+.tailor-progress-focus {
+  display: block;
+}
+
 .tailor-progress-step {
   display: grid;
   min-width: 0;
@@ -932,9 +1116,15 @@ button:disabled {
   background: rgba(255, 255, 255, 0.035);
 }
 
+.tailor-progress-step-topline {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
 .tailor-progress-step-number,
-.tailor-progress-step-label,
-.tailor-progress-step-meta {
+.tailor-progress-step-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -957,12 +1147,21 @@ button:disabled {
   line-height: 1.3;
 }
 
-.tailor-progress-step-meta {
-  color: currentColor;
-  font-size: 11px;
-  font-weight: 650;
-  line-height: 1.3;
-  opacity: 0.84;
+.tailor-progress-step-attempt-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 2px 7px;
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.14);
+  color: #fff0c4;
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .tailor-progress-step-pending {
@@ -1024,6 +1223,49 @@ button:disabled {
 .tailor-progress-copy {
   display: grid;
   gap: 2px;
+}
+
+.tailor-run-interview-callout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 11px 12px;
+  border: 1px solid rgba(52, 211, 153, 0.18);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(52, 211, 153, 0.09), rgba(52, 211, 153, 0.04));
+}
+
+.tailor-run-interview-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tailor-run-interview-title,
+.tailor-run-interview-preview {
+  margin: 0;
+}
+
+.tailor-run-interview-title {
+  color: #dffcf1;
+  font-size: 11px;
+  font-weight: 760;
+  letter-spacing: 0.16em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.tailor-run-interview-preview {
+  color: rgba(228, 228, 231, 0.9);
+  font-size: 12px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.tailor-run-interview-action {
+  align-self: center;
 }
 
 .tailor-progress-copy-terminal {
@@ -1539,6 +1781,58 @@ button:disabled {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
+}
+
+.tailor-auth-overlay {
+  position: fixed;
+  inset: 10px;
+  z-index: 70;
+}
+
+.tailor-auth-dialog {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  align-content: center;
+  justify-items: center;
+  gap: 18px;
+  padding: 24px 20px;
+  border: 1px solid rgba(244, 244, 245, 0.1);
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at top, rgba(52, 211, 153, 0.12), transparent 24rem),
+    linear-gradient(180deg, rgba(24, 24, 27, 0.98), rgba(9, 9, 11, 0.98));
+  box-shadow: 0 28px 72px rgba(0, 0, 0, 0.45);
+  text-align: center;
+  backdrop-filter: blur(18px);
+}
+
+.tailor-auth-dialog h2 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 28px;
+  font-weight: 760;
+  line-height: 1.05;
+}
+
+.tailor-auth-connect-action {
+  min-height: 48px;
+  padding: 0 20px;
+  gap: 10px;
+}
+
+.tailor-auth-connect-mark {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(9, 9, 11, 0.72);
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 760;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .collapsible-heading {
@@ -2540,6 +2834,10 @@ button:disabled {
 @media (max-width: 340px) {
   .action-grid,
   .interview-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .tailor-run-interview-callout {
     grid-template-columns: 1fr;
   }
 

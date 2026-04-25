@@ -1,0 +1,4 @@
+- Symptom: opening the tailored-run actions menu in the extension side panel could hide some or all options because the popover was clipped at the card boundary.
+- Root cause: the tailored-run shell used `overflow: hidden` for its normal compact card styling, so the absolutely positioned menu could not escape the card, and sibling cards could also paint above it.
+- Fix: add a menu-open state on the tailored-run shell that switches the card to `overflow: visible` and raises its stacking order only while the menu is open.
+- Guardrail: when a card owns an anchored popover, keep the card clipped by default if needed, but explicitly relax overflow and elevate stacking for the open state so every menu option remains visible.
