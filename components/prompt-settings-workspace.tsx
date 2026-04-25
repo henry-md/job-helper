@@ -3,6 +3,7 @@
 import { FileText, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { tailorResumeGenerationSettingDefinitions, tailorResumePromptFieldDefinitions } from "@/lib/tailor-resume-settings-metadata";
 import { buildTailoredResumeHighlightedPreviewUrl } from "@/lib/tailored-resume-preview-url";
 import type { TailorResumeProfile, TailoredResumeRecord } from "@/lib/tailor-resume-types";
 import type { TailorResumeUserMarkdownState } from "@/lib/tailor-resume-user-memory";
@@ -22,70 +23,8 @@ type PromptSettingsResponse = {
   userMarkdown?: TailorResumeUserMarkdownState;
 };
 
-type GenerationSettingKey = keyof TailorResumeProfile["generationSettings"]["values"];
-
-const promptFieldDefinitions = [
-  {
-    description:
-      "Screenshots into structured application fields.",
-    helper: "Runtime tokens: none.",
-    key: "jobApplicationExtraction",
-    minHeightClassName: "min-h-[220px]",
-    title: "Job Application Extraction",
-  },
-  {
-    description:
-      "Uploaded base resume into the editable LaTeX source document.",
-    helper:
-      "Runtime tokens: {{RETRY_INSTRUCTIONS}}, {{MAX_ATTEMPTS}}.",
-    key: "resumeLatexExtraction",
-    minHeightClassName: "min-h-[420px]",
-    title: "Resume To LaTeX",
-  },
-  {
-    description:
-      "Stage 1 tailoring strategy over plaintext resume blocks.",
-    helper: "Runtime tokens: {{FEEDBACK_BLOCK}}.",
-    key: "tailorResumePlanning",
-    minHeightClassName: "min-h-[420px]",
-    title: "Tailoring Plan",
-  },
-  {
-    description:
-      "Optional AI-led follow-up questions between the plan and LaTeX implementation stages.",
-    helper: "Runtime tokens: {{FEEDBACK_BLOCK}}.",
-    key: "tailorResumeInterview",
-    minHeightClassName: "min-h-[320px]",
-    title: "Tailoring Follow-Up Interview",
-  },
-  {
-    description:
-      "Stage 2 LaTeX block generation for the tailored resume.",
-    helper: "Runtime tokens: {{FEEDBACK_BLOCK}}.",
-    key: "tailorResumeImplementation",
-    minHeightClassName: "min-h-[420px]",
-    title: "Tailored Block Generation",
-  },
-  {
-    description:
-      "Follow-up regeneration of existing tailored resume edit blocks.",
-    helper: "Runtime tokens: {{FEEDBACK_BLOCK}}.",
-    key: "tailorResumeRefinement",
-    minHeightClassName: "min-h-[360px]",
-    title: "Tailored Block Refinement",
-  },
-  {
-    description:
-      "Automatic follow-up request used when a tailored resume grows beyond the original page count.",
-    helper:
-      "Runtime tokens: {{TARGET_PAGE_COUNT}}, {{TARGET_PAGE_COUNT_REQUIREMENT}}, {{TARGET_PAGE_COUNT_HARD_REQUIREMENT}}, {{CURRENT_PAGE_COUNT}}, {{CURRENT_PAGE_LABEL}}.",
-    key: "tailorResumePageCountCompaction",
-    minHeightClassName: "min-h-[220px]",
-    title: "Tailored Resume Page Count Compaction",
-  },
-] as const;
-
-type PromptFieldKey = (typeof promptFieldDefinitions)[number]["key"];
+type GenerationSettingKey = (typeof tailorResumeGenerationSettingDefinitions)[number]["key"];
+type PromptFieldKey = (typeof tailorResumePromptFieldDefinitions)[number]["key"];
 
 function formatSavedAt(value: string | null) {
   if (!value) {
@@ -326,7 +265,7 @@ export default function PromptSettingsWorkspace({
     setDraftUserMarkdown(initialUserMarkdown.markdown);
   }, [initialUserMarkdown]);
 
-  const unsavedPromptCount = promptFieldDefinitions.filter(
+  const unsavedPromptCount = tailorResumePromptFieldDefinitions.filter(
     ({ key }) => draftPromptValues[key] !== savedPromptSettings.values[key],
   ).length;
   const isUserMarkdownChanged = draftUserMarkdown !== savedUserMarkdown.markdown;
@@ -668,113 +607,58 @@ export default function PromptSettingsWorkspace({
           </div>
 
           <div className="mt-4 grid gap-4">
-            <div className="flex flex-col gap-4 border-b border-white/8 pb-4 sm:flex-row sm:items-start sm:justify-between">
-              <div className="max-w-3xl">
-                <h4 className="text-sm font-semibold text-zinc-100">
-                  Allow Step 2 follow-up questions
-                </h4>
-                <p className="mt-2 text-sm leading-6 text-zinc-400">
-                  When enabled, the model may pause after planning to ask one
-                  concise question. When disabled, it skips the question step and
-                  continues with USER.md plus the saved resume.
-                </p>
-              </div>
+            {tailorResumeGenerationSettingDefinitions.map((setting, index) => {
+              const isEnabled = generationSettings.values[setting.key];
 
-              <button
-                aria-checked={
-                  generationSettings.values.allowTailorResumeFollowUpQuestions
-                }
-                className={`inline-flex min-w-[10.5rem] items-center justify-between gap-3 rounded-full border px-4 py-3 text-sm font-medium transition ${
-                  generationSettings.values.allowTailorResumeFollowUpQuestions
-                    ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-200"
-                    : "border-white/10 bg-white/[0.04] text-zinc-300"
-                } ${isSavingGenerationSettings ? "cursor-wait opacity-70" : "hover:border-white/20 hover:bg-white/[0.07]"}`}
-                disabled={isSavingGenerationSettings}
-                onClick={() =>
-                  void updateGenerationSetting(
-                    "allowTailorResumeFollowUpQuestions",
-                    !generationSettings.values.allowTailorResumeFollowUpQuestions,
-                  )
-                }
-                role="switch"
-                type="button"
-              >
-                <span className="text-left">
-                  {generationSettings.values.allowTailorResumeFollowUpQuestions
-                    ? "Enabled"
-                    : "Disabled"}
-                </span>
-                <span
-                  aria-hidden="true"
-                  className={`relative h-6 w-11 rounded-full transition ${
-                    generationSettings.values.allowTailorResumeFollowUpQuestions
-                      ? "bg-emerald-300/35"
-                      : "bg-white/12"
+              return (
+                <div
+                  className={`flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between ${
+                    index < tailorResumeGenerationSettingDefinitions.length - 1
+                      ? "border-b border-white/8 pb-4"
+                      : ""
                   }`}
+                  key={setting.key}
                 >
-                  <span
-                    className={`absolute top-1/2 h-[1.125rem] w-[1.125rem] -translate-y-1/2 rounded-full bg-white shadow-[0_4px_14px_rgba(0,0,0,0.3)] transition ${
-                      generationSettings.values.allowTailorResumeFollowUpQuestions
-                        ? "left-[1.35rem]"
-                        : "left-1"
-                    }`}
-                  />
-                </span>
-              </button>
-            </div>
+                  <div className="max-w-3xl">
+                    <h4 className="text-sm font-semibold text-zinc-100">
+                      {setting.title}
+                    </h4>
+                    <p className="mt-2 text-sm leading-6 text-zinc-400">
+                      {setting.description}
+                    </p>
+                  </div>
 
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div className="max-w-3xl">
-                <h4 className="text-sm font-semibold text-zinc-100">
-                  Edits should not increase page count
-                </h4>
-                <p className="mt-2 text-sm leading-6 text-zinc-400">
-                  When enabled, tailoring automatically runs a highlighted
-                  follow-up compaction pass if the new preview exceeds the
-                  original resume&apos;s page count.
-                </p>
-              </div>
-
-              <button
-                aria-checked={generationSettings.values.preventPageCountIncrease}
-                className={`inline-flex min-w-[10.5rem] items-center justify-between gap-3 rounded-full border px-4 py-3 text-sm font-medium transition ${
-                  generationSettings.values.preventPageCountIncrease
-                    ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-200"
-                    : "border-white/10 bg-white/[0.04] text-zinc-300"
-                } ${isSavingGenerationSettings ? "cursor-wait opacity-70" : "hover:border-white/20 hover:bg-white/[0.07]"}`}
-                disabled={isSavingGenerationSettings}
-                onClick={() =>
-                  void updateGenerationSetting(
-                    "preventPageCountIncrease",
-                    !generationSettings.values.preventPageCountIncrease,
-                  )
-                }
-                role="switch"
-                type="button"
-              >
-                <span className="text-left">
-                  {generationSettings.values.preventPageCountIncrease
-                    ? "Enabled"
-                    : "Disabled"}
-                </span>
-                <span
-                  aria-hidden="true"
-                  className={`relative h-6 w-11 rounded-full transition ${
-                    generationSettings.values.preventPageCountIncrease
-                      ? "bg-emerald-300/35"
-                      : "bg-white/12"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-1/2 h-[1.125rem] w-[1.125rem] -translate-y-1/2 rounded-full bg-white shadow-[0_4px_14px_rgba(0,0,0,0.3)] transition ${
-                      generationSettings.values.preventPageCountIncrease
-                        ? "left-[1.35rem]"
-                        : "left-1"
-                    }`}
-                  />
-                </span>
-              </button>
-            </div>
+                  <button
+                    aria-checked={isEnabled}
+                    className={`inline-flex min-w-[10.5rem] items-center justify-between gap-3 rounded-full border px-4 py-3 text-sm font-medium transition ${
+                      isEnabled
+                        ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-200"
+                        : "border-white/10 bg-white/[0.04] text-zinc-300"
+                    } ${isSavingGenerationSettings ? "cursor-wait opacity-70" : "hover:border-white/20 hover:bg-white/[0.07]"}`}
+                    disabled={isSavingGenerationSettings}
+                    onClick={() =>
+                      void updateGenerationSetting(setting.key, !isEnabled)
+                    }
+                    role="switch"
+                    type="button"
+                  >
+                    <span className="text-left">{isEnabled ? "Enabled" : "Disabled"}</span>
+                    <span
+                      aria-hidden="true"
+                      className={`relative h-6 w-11 rounded-full transition ${
+                        isEnabled ? "bg-emerald-300/35" : "bg-white/12"
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1/2 h-[1.125rem] w-[1.125rem] -translate-y-1/2 rounded-full bg-white shadow-[0_4px_14px_rgba(0,0,0,0.3)] transition ${
+                          isEnabled ? "left-[1.35rem]" : "left-1"
+                        }`}
+                      />
+                    </span>
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </section>
 
@@ -792,7 +676,7 @@ export default function PromptSettingsWorkspace({
                   System Prompts
                 </h3>
                 <span className="rounded-full border border-white/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                  {promptFieldDefinitions.length} templates
+                  {tailorResumePromptFieldDefinitions.length} templates
                 </span>
                 {hasUnsavedChanges ? (
                   <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-amber-200">
@@ -828,7 +712,7 @@ export default function PromptSettingsWorkspace({
               className="grid gap-4 border-t border-white/8 px-4 py-4 sm:px-5"
               id="system-prompts-panel"
             >
-              {promptFieldDefinitions.map((field) => {
+              {tailorResumePromptFieldDefinitions.map((field) => {
                 const isOpen = openPromptKeys[field.key] === true;
                 const isChanged = isPromptChanged(field.key);
                 const isPreviewingOriginal = previewingOriginalKey === field.key;
