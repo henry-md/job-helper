@@ -1,5 +1,7 @@
 import {
   AUTH_SESSION_STORAGE_KEY,
+  buildTailorResumePreparationMessage,
+  buildTailorResumePreparationState,
   buildJobDescriptionFromPageContext,
   buildTailorResumeApplicationContext,
   CAPTURE_COMMAND_NAME,
@@ -11,8 +13,11 @@ import {
   EXTENSION_AUTH_SESSION_ENDPOINT,
   EXTENSION_BROWSER_SESSION_ENDPOINT,
   LAST_TAILORING_STORAGE_KEY,
+  normalizeComparableUrl,
+  PREPARING_TAILORING_STORAGE_KEY,
   type JobHelperAuthSession,
   type JobHelperAuthUser,
+  type JobPageContext,
   readPersonalInfoSummary,
   readJobUrlFromPageContext,
   readTailoredResumeSummaries,
@@ -26,12 +31,15 @@ import {
   isNdjsonResponse,
   readTailorResumeGenerationStream,
 } from "./tailor-resume-stream";
+import { buildCompletedTailoringMessage } from "./tailor-run-copy";
+import { resolvePotentialTailorOverwrite } from "./tailor-overwrite-guard";
 
-type OverlayTone = "error" | "info" | "success";
+type OverlayTone = "error" | "info" | "success" | "warning";
 
 type TailorResumeSummary = {
   companyName: string | null;
   id: string | null;
+  jobIdentifier: string | null;
   positionTitle: string | null;
   status: string | null;
 };
@@ -46,6 +54,7 @@ type AuthStatus =
   | { status: "signedOut" };
 
 let isCaptureInFlight = false;
+let activeTailorResumeAbortController: AbortController | null = null;
 
 async function configureSidePanelAction() {
   try {
@@ -88,6 +97,8 @@ function injectOverlayIntoPage(text: string, tone: OverlayTone) {
   overlay.style.background =
     tone === "success"
       ? "rgba(15, 118, 110, 0.92)"
+      : tone === "warning"
+        ? "rgba(180, 83, 9, 0.94)"
       : tone === "error"
         ? "rgba(185, 28, 28, 0.94)"
         : "rgba(17, 24, 39, 0.9)";
@@ -128,6 +139,7 @@ function readLatestTailoredResume(payload: Record<string, unknown>) {
   return {
     companyName: tailoredResume.companyName,
     id: tailoredResume.id,
+    jobIdentifier: tailoredResume.jobIdentifier,
     positionTitle: tailoredResume.positionTitle,
     status: tailoredResume.status,
   } satisfies TailorResumeSummary;
@@ -141,11 +153,10 @@ function buildSuccessMessage(record: TailorResumeRunRecord) {
       ? `${positionTitle} at ${companyName}`
       : positionTitle || companyName || "this role";
 
-  if (record.tailoredResumeError) {
-    return `Saved a tailored draft for ${jobLabel}. Review it in the side panel`;
-  }
-
-  return `Tailored resume for ${jobLabel}. Preview is in the side panel`;
+  return buildCompletedTailoringMessage({
+    jobLabel,
+    tailoredResumeError: record.tailoredResumeError,
+  });
 }
 
 function buildLiveTailorResumeStatusMessage(
@@ -164,6 +175,7 @@ function buildLiveTailorResumeStatusMessage(
 function buildRunningTailoringRunRecord(input: {
   capturedAt: string;
   message?: string;
+  pageContext?: JobPageContext | null;
   step?: TailorResumeGenerationStepSummary | null;
   tab: chrome.tabs.Tab | null;
 }) {
@@ -172,10 +184,11 @@ function buildRunningTailoringRunRecord(input: {
     companyName: null,
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
     generationStep: input.step ?? null,
+    jobIdentifier: null,
     message:
       input.message ?? buildLiveTailorResumeStatusMessage(input.step ?? null),
-    pageTitle: cleanText(input.tab?.title) || null,
-    pageUrl: cleanText(input.tab?.url) || null,
+    pageTitle: input.pageContext?.title || cleanText(input.tab?.title) || null,
+    pageUrl: input.pageContext?.url || cleanText(input.tab?.url) || null,
     positionTitle: null,
     status: "running",
     tailoredResumeError: null,
@@ -183,28 +196,28 @@ function buildRunningTailoringRunRecord(input: {
   } satisfies TailorResumeRunRecord;
 }
 
-function buildExistingTailoringMessage(payload: Record<string, unknown>) {
-  const existingTailoring = readTailorResumeExistingTailoringState(payload);
-
+function buildExistingTailoringMessage(
+  existingTailoring: ReturnType<typeof readTailorResumeExistingTailoringState>,
+) {
   if (!existingTailoring) {
     return null;
   }
 
   if (existingTailoring.kind === "completed") {
-    return `Already tailored ${existingTailoring.displayName}. Choose whether to keep or overwrite it in the side panel.`;
+    return `Already tailored ${existingTailoring.displayName}. Confirm overwrite in the side panel if you want to replace it.`;
   }
 
   if (existingTailoring.kind === "pending_interview") {
     const roleLabel =
       existingTailoring.positionTitle || existingTailoring.companyName || "this role";
-    return `A Tailor Resume run for ${roleLabel} is waiting on stage 2/4. Choose whether to cancel or overwrite it in the side panel.`;
+    return `A Tailor Resume run for ${roleLabel} is waiting on stage 2/4. Confirm overwrite in the side panel if you want to replace it.`;
   }
 
   const stageLabel = existingTailoring.lastStep
     ? `stage ${existingTailoring.lastStep.stepNumber}/${existingTailoring.lastStep.stepCount}: ${existingTailoring.lastStep.summary}`
     : "the first tailoring stage";
 
-  return `A Tailor Resume run is already loading at ${stageLabel}. Choose whether to cancel or overwrite it in the side panel.`;
+  return `A Tailor Resume run is already loading at ${stageLabel}. Confirm overwrite in the side panel if you want to replace it.`;
 }
 
 async function getActiveTab() {
@@ -252,11 +265,36 @@ async function persistResult(record: TailorResumeRunRecord) {
   });
 }
 
+async function persistTailorPreparationState(
+  preparationState: ReturnType<typeof buildTailorResumePreparationState> | null,
+) {
+  if (preparationState) {
+    await chrome.storage.local.set({
+      [PREPARING_TAILORING_STORAGE_KEY]: preparationState,
+    });
+    return;
+  }
+
+  await chrome.storage.local.remove(PREPARING_TAILORING_STORAGE_KEY);
+}
+
+function isAbortError(error: unknown) {
+  if (error instanceof DOMException) {
+    return error.name === "AbortError";
+  }
+
+  return (
+    error instanceof Error &&
+    /abort/i.test(error.name || error.message || "")
+  );
+}
+
 async function patchTailorResume(
   body: Record<string, unknown>,
   authSession: JobHelperAuthSession,
   options: {
-    onStepEvent?: (stepEvent: TailorResumeGenerationStepSummary) => void;
+      onStepEvent?: (stepEvent: TailorResumeGenerationStepSummary) => void;
+      signal?: AbortSignal;
   } = {},
 ) {
   const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
@@ -268,6 +306,7 @@ async function patchTailorResume(
       "Content-Type": "application/json",
       "x-tailor-resume-stream": "1",
     },
+    signal: options.signal,
   });
 
   if (isNdjsonResponse(response)) {
@@ -283,6 +322,50 @@ async function patchTailorResume(
     payload,
     status: response.status,
   };
+}
+
+async function cancelCurrentTailoring() {
+  const abortController = activeTailorResumeAbortController;
+  activeTailorResumeAbortController = null;
+  abortController?.abort();
+
+  try {
+    const authSession = await ensureJobHelperSession({ interactive: false });
+    const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
+      method: "PATCH",
+      body: JSON.stringify({ action: "cancelCurrentTailoring" }),
+      credentials: "include",
+      headers: {
+        ...authorizationHeaders(authSession),
+        "Content-Type": "application/json",
+      },
+    });
+    const payload = await readJsonResponse(response);
+
+    if (response.status === 401) {
+      await clearStoredAuthSession();
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        readResponseError(payload, "Unable to stop the current tailoring run."),
+      );
+    }
+  } finally {
+    await chrome.storage.local.remove([
+      EXISTING_TAILORING_STORAGE_KEY,
+      LAST_TAILORING_STORAGE_KEY,
+      PREPARING_TAILORING_STORAGE_KEY,
+    ]);
+  }
+
+  const activeTab = await getActiveTab().catch(() => null);
+
+  if (activeTab && typeof activeTab.id === "number") {
+    await showOverlay(activeTab.id, "Stopped the current Tailor Resume run.", "info");
+  }
+
+  return getPersonalInfoSummary();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -541,11 +624,211 @@ async function openUrlInCurrentWindow(url: string) {
     windowId = null;
   }
 
-  await chrome.tabs.create({
+  return chrome.tabs.create({
     active: true,
     ...(windowId === null ? {} : { windowId }),
     url,
   });
+}
+
+async function waitForTabToFinishLoading(
+  tab: chrome.tabs.Tab,
+  timeoutMs = 15_000,
+) {
+  const tabId = tab.id;
+
+  if (typeof tabId !== "number") {
+    throw new Error("Could not open that job tab.");
+  }
+
+  const readLatestTab = async () => {
+    try {
+      return await chrome.tabs.get(tabId);
+    } catch {
+      return tab;
+    }
+  };
+
+  const latestTab = await readLatestTab();
+
+  if (latestTab.status === "complete") {
+    return latestTab;
+  }
+
+  return new Promise<chrome.tabs.Tab>((resolve, reject) => {
+    let settled = false;
+
+    const settle = (nextTab: chrome.tabs.Tab | Error, rejectPromise = false) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      globalThis.clearTimeout(timeoutId);
+      chrome.tabs.onUpdated.removeListener(handleUpdated);
+      chrome.tabs.onRemoved.removeListener(handleRemoved);
+
+      if (rejectPromise) {
+        reject(nextTab);
+        return;
+      }
+
+      resolve(nextTab as chrome.tabs.Tab);
+    };
+
+    const handleUpdated = (
+      updatedTabId: number,
+      changeInfo: { status?: string },
+      updatedTab: chrome.tabs.Tab,
+    ) => {
+      if (updatedTabId !== tabId || changeInfo.status !== "complete") {
+        return;
+      }
+
+      settle(updatedTab);
+    };
+
+    const handleRemoved = (removedTabId: number) => {
+      if (removedTabId !== tabId) {
+        return;
+      }
+
+      settle(
+        new Error("The job tab was closed before Tailor Resume could restart."),
+        true,
+      );
+    };
+
+    const timeoutId = globalThis.setTimeout(() => {
+      void readLatestTab().then((updatedTab) => settle(updatedTab));
+    }, timeoutMs);
+
+    chrome.tabs.onUpdated.addListener(handleUpdated);
+    chrome.tabs.onRemoved.addListener(handleRemoved);
+  });
+}
+
+function readComparableTabUrl(tab: chrome.tabs.Tab) {
+  const comparablePendingUrl =
+    typeof tab.pendingUrl === "string"
+      ? normalizeComparableUrl(tab.pendingUrl)
+      : null;
+
+  if (comparablePendingUrl) {
+    return comparablePendingUrl;
+  }
+
+  return typeof tab.url === "string" ? normalizeComparableUrl(tab.url) : null;
+}
+
+async function findBrowserTabForUrl(url: string) {
+  const normalizedTargetUrl = normalizeComparableUrl(url);
+
+  if (!normalizedTargetUrl) {
+    return null;
+  }
+
+  let currentWindowId: number | null = null;
+
+  try {
+    const [activeTab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    currentWindowId =
+      typeof activeTab?.windowId === "number" ? activeTab.windowId : null;
+  } catch {
+    currentWindowId = null;
+  }
+
+  const tabs = await chrome.tabs.query({});
+  const matchingTabs = tabs.filter(
+    (tab) => readComparableTabUrl(tab) === normalizedTargetUrl,
+  );
+
+  matchingTabs.sort((left, right) => {
+    const leftCurrentWindow =
+      currentWindowId !== null && left.windowId === currentWindowId ? 1 : 0;
+    const rightCurrentWindow =
+      currentWindowId !== null && right.windowId === currentWindowId ? 1 : 0;
+
+    if (leftCurrentWindow !== rightCurrentWindow) {
+      return rightCurrentWindow - leftCurrentWindow;
+    }
+
+    const leftActive = left.active ? 1 : 0;
+    const rightActive = right.active ? 1 : 0;
+
+    if (leftActive !== rightActive) {
+      return rightActive - leftActive;
+    }
+
+    return 0;
+  });
+
+  return matchingTabs[0] ?? null;
+}
+
+async function focusOrCreateBrowserTab(url: string) {
+  const targetUrl = url.trim();
+
+  if (!normalizeComparableUrl(targetUrl)) {
+    throw new Error("Could not open that job because its URL is missing.");
+  }
+
+  const existingTab = await findBrowserTabForUrl(targetUrl);
+
+  if (typeof existingTab?.id === "number") {
+    const activatedTab = await chrome.tabs.update(existingTab.id, {
+      active: true,
+    });
+
+    if (!activatedTab) {
+      throw new Error("Could not focus the existing job tab.");
+    }
+
+    if (typeof activatedTab.windowId === "number") {
+      await chrome.windows.update(activatedTab.windowId, { focused: true });
+    }
+
+    return {
+      created: false,
+      tab: activatedTab,
+    };
+  }
+
+  const createdTab = await openUrlInCurrentWindow(targetUrl);
+
+  return {
+    created: true,
+    tab: createdTab,
+  };
+}
+
+async function goToBrowserTab(url: string) {
+  const result = await focusOrCreateBrowserTab(url);
+  await openSidePanelForTab(result.tab);
+
+  return {
+    created: result.created,
+    tabId: result.tab.id ?? null,
+    windowId: result.tab.windowId ?? null,
+  };
+}
+
+async function triggerTailorResumeRegeneration(url: string) {
+  const result = await focusOrCreateBrowserTab(url);
+  void runCaptureFlow({
+    openSidePanel: true,
+    overwriteExisting: true,
+    tab: result.tab,
+  });
+
+  return {
+    created: result.created,
+    tabId: result.tab.id ?? null,
+    windowId: result.tab.windowId ?? null,
+  };
 }
 
 async function openSidePanelForTab(tab: chrome.tabs.Tab) {
@@ -655,41 +938,83 @@ async function getPersonalInfoSummary() {
   };
 }
 
-async function tailorResumeForTab(activeTab: chrome.tabs.Tab, capturedAt: string) {
-  const tabId = activeTab.id;
+async function loadTailorResumeOverwriteSummary(session: JobHelperAuthSession) {
+  const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
+    credentials: "include",
+    headers: authorizationHeaders(session),
+  });
+  const payload = await readJsonResponse(response);
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      await clearStoredAuthSession();
+    }
+
+    throw new Error(
+      readResponseError(payload, "Could not check for existing tailoring."),
+    );
+  }
+
+  return {
+    activeTailoring: readTailorResumeExistingTailoringState(payload),
+    tailoredResumes: readTailoredResumeSummaries(payload),
+  };
+}
+
+async function tailorResumeForTab(input: {
+  abortController: AbortController;
+  activeTab: chrome.tabs.Tab;
+  authSession: JobHelperAuthSession;
+  capturedAt: string;
+  jobDescription: string;
+  jobUrl: string | null;
+  overwriteExisting?: boolean;
+  pageContext: JobPageContext;
+}) {
+  const {
+    abortController,
+    activeTab,
+    authSession,
+    capturedAt,
+    jobDescription,
+    jobUrl,
+    overwriteExisting,
+    pageContext,
+  } = input;
+  const readyTab = await waitForTabToFinishLoading(activeTab);
+  const tabId = readyTab.id;
 
   if (typeof tabId !== "number") {
     throw new Error("The active tab does not expose an id.");
-  }
-
-  const authSession = await ensureJobHelperSession({ interactive: true });
-
-  const pageContext = await collectPageContext(tabId);
-  const jobDescription = buildJobDescriptionFromPageContext(pageContext);
-  const jobUrl = readJobUrlFromPageContext(pageContext);
-
-  if (!jobDescription) {
-    throw new Error("Could not find job description text on this page.");
   }
 
   const result = await patchTailorResume(
     {
       action: "tailor",
       applicationContext: buildTailorResumeApplicationContext(pageContext),
+      ...(overwriteExisting
+        ? { existingTailoringAction: "overwrite" }
+        : {}),
       jobDescription,
       jobUrl,
     },
     authSession,
     {
       onStepEvent: (stepEvent) => {
+        if (activeTailorResumeAbortController !== abortController) {
+          return;
+        }
+
         void persistResult(
           buildRunningTailoringRunRecord({
             capturedAt,
+            pageContext,
             step: stepEvent,
-            tab: activeTab,
+            tab: readyTab,
           }),
         );
       },
+      signal: abortController.signal,
     },
   );
   const payload = result.payload;
@@ -701,15 +1026,16 @@ async function tailorResumeForTab(activeTab: chrome.tabs.Tab, capturedAt: string
 
     const existingTailoring = readTailorResumeExistingTailoringState(payload);
     const existingTailoringMessage = existingTailoring
-      ? buildExistingTailoringMessage(payload)
+      ? buildExistingTailoringMessage(existingTailoring)
       : null;
 
-    if (existingTailoringMessage) {
+    if (existingTailoring && existingTailoringMessage) {
       const record: TailorResumeRunRecord = {
         capturedAt,
         companyName: null,
         endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
         generationStep: null,
+        jobIdentifier: existingTailoring.jobIdentifier,
         message: existingTailoringMessage,
         pageTitle: pageContext.title || null,
         pageUrl: pageContext.url || null,
@@ -753,6 +1079,7 @@ async function tailorResumeForTab(activeTab: chrome.tabs.Tab, capturedAt: string
       companyName: activeInterview?.companyName ?? null,
       endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
       generationStep: null,
+      jobIdentifier: activeInterview?.jobIdentifier ?? null,
       message: "Resume questions are waiting in the side panel.",
       pageTitle: pageContext.title || null,
       pageUrl: pageContext.url || null,
@@ -779,6 +1106,7 @@ async function tailorResumeForTab(activeTab: chrome.tabs.Tab, capturedAt: string
     companyName: latestTailoredResume?.companyName ?? null,
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
     generationStep: null,
+    jobIdentifier: latestTailoredResume?.jobIdentifier ?? null,
     message: "",
     pageTitle: pageContext.title || null,
     pageUrl: pageContext.url || null,
@@ -799,7 +1127,11 @@ async function tailorResumeForTab(activeTab: chrome.tabs.Tab, capturedAt: string
   await showOverlay(
     tabId,
     record.message,
-    record.status === "success" ? "success" : "error",
+    record.tailoredResumeId && record.tailoredResumeError
+      ? "warning"
+      : record.status === "success"
+        ? "success"
+        : "error",
   );
 
   if (latestTailoredResume?.id) {
@@ -809,10 +1141,14 @@ async function tailorResumeForTab(activeTab: chrome.tabs.Tab, capturedAt: string
 
 async function runCaptureFlow(input: {
   openSidePanel?: boolean;
+  overwriteExisting?: boolean;
   tab?: chrome.tabs.Tab;
 } = {}) {
   let activeTab = input.tab ?? null;
   let capturedAt = new Date().toISOString();
+  const preparingMessage = buildTailorResumePreparationMessage(
+    input.overwriteExisting === true,
+  );
 
   if (isCaptureInFlight) {
     if (input.openSidePanel) {
@@ -831,25 +1167,129 @@ async function runCaptureFlow(input: {
   try {
     activeTab = activeTab ?? (await getActiveTab());
     capturedAt = new Date().toISOString();
-
-    await chrome.storage.local.remove(EXISTING_TAILORING_STORAGE_KEY);
-    await persistResult(
-      buildRunningTailoringRunRecord({
-        capturedAt,
-        tab: activeTab,
-      }),
-    );
+    const abortController = new AbortController();
+    activeTailorResumeAbortController = abortController;
 
     if (typeof activeTab.id === "number") {
-      await showOverlay(activeTab.id, "Tailoring your resume for this job...", "info");
+      await showOverlay(activeTab.id, preparingMessage, "info");
     }
+
+    await persistTailorPreparationState(
+      buildTailorResumePreparationState({
+        capturedAt,
+        message: preparingMessage,
+        pageTitle: cleanText(activeTab.title) || null,
+        pageUrl: cleanText(activeTab.url) || null,
+      }),
+    );
 
     if (input.openSidePanel) {
       await openSidePanelForTab(activeTab);
     }
 
-    await tailorResumeForTab(activeTab, capturedAt);
+    const readyTab = await waitForTabToFinishLoading(activeTab);
+    const tabId = readyTab.id;
+
+    if (typeof tabId !== "number") {
+      throw new Error("The active tab does not expose an id.");
+    }
+
+    const authSession = await ensureJobHelperSession({ interactive: true });
+    const pageContext = await collectPageContext(tabId);
+    const jobDescription = buildJobDescriptionFromPageContext(pageContext);
+    const jobUrl = readJobUrlFromPageContext(pageContext);
+
+    if (!jobDescription) {
+      throw new Error("Could not find job description text on this page.");
+    }
+
+    let overwriteSummary:
+      | Awaited<ReturnType<typeof loadTailorResumeOverwriteSummary>>
+      | null = null;
+
+    try {
+      overwriteSummary = await loadTailorResumeOverwriteSummary(authSession);
+    } catch (error) {
+      console.warn(
+        "Could not refresh Tailor Resume overwrite state before starting.",
+        error,
+      );
+    }
+
+    if (!input.overwriteExisting) {
+      const existingTailoring = resolvePotentialTailorOverwrite({
+        activeTailoring: overwriteSummary?.activeTailoring ?? null,
+        pageIdentity: {
+          canonicalUrl: pageContext.canonicalUrl,
+          jobUrl,
+          pageUrl: pageContext.url,
+        },
+        tailoredResumes: overwriteSummary?.tailoredResumes ?? [],
+      });
+      const existingTailoringMessage =
+        buildExistingTailoringMessage(existingTailoring);
+
+      if (existingTailoring && existingTailoringMessage) {
+        const record: TailorResumeRunRecord = {
+          capturedAt,
+          companyName: null,
+          endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
+          generationStep: null,
+          jobIdentifier: existingTailoring.jobIdentifier,
+          message: existingTailoringMessage,
+          pageTitle: pageContext.title || null,
+          pageUrl: pageContext.url || null,
+          positionTitle: null,
+          status: "error",
+          tailoredResumeError: null,
+          tailoredResumeId: null,
+        };
+
+        await persistTailorPreparationState(null);
+        await persistResult(record);
+        await chrome.storage.local.set({
+          [EXISTING_TAILORING_STORAGE_KEY]: {
+            existingTailoring,
+            jobDescription,
+            jobUrl,
+            pageContext,
+          },
+        });
+        await showOverlay(tabId, existingTailoringMessage, "info");
+        await openSidePanelForTab(readyTab);
+        return;
+      }
+    }
+
+    await persistTailorPreparationState(null);
+    await chrome.storage.local.remove(EXISTING_TAILORING_STORAGE_KEY);
+    await persistResult(
+      buildRunningTailoringRunRecord({
+        capturedAt,
+        pageContext,
+        tab: readyTab,
+      }),
+    );
+
+    await showOverlay(tabId, "Tailoring your resume for this job...", "info");
+
+    await tailorResumeForTab({
+      abortController,
+      activeTab: readyTab,
+      authSession,
+      capturedAt,
+      jobDescription,
+      jobUrl,
+      overwriteExisting: input.overwriteExisting,
+      pageContext,
+    });
   } catch (error) {
+    if (isAbortError(error)) {
+      return;
+    }
+
+    await persistTailorPreparationState(null);
+
     const message =
       error instanceof Error ? error.message : "Failed to tailor the resume.";
     activeTab = activeTab ?? (await getActiveTab().catch(() => null));
@@ -859,6 +1299,7 @@ async function runCaptureFlow(input: {
       companyName: null,
       endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
       generationStep: null,
+      jobIdentifier: null,
       message,
       pageTitle: cleanText(activeTab?.title) || null,
       pageUrl: cleanText(activeTab?.url) || null,
@@ -878,6 +1319,8 @@ async function runCaptureFlow(input: {
       // Ignore follow-up UI failures after persisting the error.
     }
   } finally {
+    await persistTailorPreparationState(null);
+    activeTailorResumeAbortController = null;
     isCaptureInFlight = false;
   }
 }
@@ -957,6 +1400,10 @@ chrome.runtime.onMessage.addListener((
     return sendAsyncResponse(sendResponse, getPersonalInfoSummary);
   }
 
+  if (typedMessage?.type === "JOB_HELPER_CANCEL_CURRENT_TAILORING") {
+    return sendAsyncResponse(sendResponse, cancelCurrentTailoring);
+  }
+
   if (typedMessage?.type === "JOB_HELPER_OPEN_DASHBOARD") {
     return sendAsyncResponse(sendResponse, async () => {
       const callbackUrl =
@@ -966,6 +1413,30 @@ chrome.runtime.onMessage.addListener((
       await openJobHelperCallbackUrl(callbackUrl);
 
       return {};
+    });
+  }
+
+  if (typedMessage?.type === "JOB_HELPER_GO_TO_TAB") {
+    return sendAsyncResponse(sendResponse, async () => {
+      const url = readPayloadString(typedMessage.payload, "url");
+
+      if (!url) {
+        throw new Error("Could not open that job because its URL is missing.");
+      }
+
+      return goToBrowserTab(url);
+    });
+  }
+
+  if (typedMessage?.type === "JOB_HELPER_REGENERATE_TAILORING") {
+    return sendAsyncResponse(sendResponse, async () => {
+      const url = readPayloadString(typedMessage.payload, "url");
+
+      if (!url) {
+        throw new Error("Could not regenerate those edits because the job URL is missing.");
+      }
+
+      return triggerTailorResumeRegeneration(url);
     });
   }
 });

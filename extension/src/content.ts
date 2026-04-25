@@ -1,6 +1,10 @@
-import type { JobPageContext, JobPostingStructuredHint } from "./job-helper";
+import {
+  buildTailorResumePreparationMessage,
+  type JobPageContext,
+  type JobPostingStructuredHint,
+} from "./job-helper";
 
-type OverlayTone = "error" | "info" | "success";
+type OverlayTone = "error" | "info" | "success" | "warning";
 
 let overlayTimeoutId: number | null = null;
 let lastShortcutAt = 0;
@@ -302,6 +306,8 @@ function showOverlay(text: string, tone: OverlayTone) {
   overlay.style.background =
     tone === "success"
       ? "rgba(15, 118, 110, 0.92)"
+      : tone === "warning"
+        ? "rgba(180, 83, 9, 0.94)"
       : tone === "error"
         ? "rgba(185, 28, 28, 0.94)"
         : "rgba(17, 24, 39, 0.9)";
@@ -355,7 +361,7 @@ window.addEventListener(
     }
 
     lastShortcutAt = now;
-    showOverlay("Tailoring your resume for this job...", "info");
+    showOverlay(buildTailorResumePreparationMessage(false), "info");
     void chrome.runtime.sendMessage({
       type: "JOB_HELPER_TRIGGER_CAPTURE",
     });

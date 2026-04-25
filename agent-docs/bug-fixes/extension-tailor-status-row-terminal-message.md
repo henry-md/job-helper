@@ -1,0 +1,4 @@
+- Symptom: after a Tailor Resume extension run finished in a saved-draft review state, the top status row could still say `Could not start Tailor Resume.` even though the last-run card below showed the correct saved result.
+- Root cause: the extension derived `captureState: "error"` from any terminal error-like run and then replaced the real `lastTailoringRun.message` with a generic startup failure string in the status row.
+- Fix: when the extension already has a saved last-run record, let the status row reuse that run's terminal `message` and optional `tailoredResumeError` detail instead of falling back to the generic startup error copy.
+- Guardrail: extension summary UI should prefer the persisted terminal run record as the source of truth for completed Tailor Resume outcomes, especially when a run ends with a saved draft plus review warning.

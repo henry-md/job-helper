@@ -1,6 +1,7 @@
 import {
   AUTH_SESSION_STORAGE_KEY,
   DEFAULT_TAILOR_RESUME_ENDPOINT,
+  EXTENSION_PREFERENCES_STORAGE_KEY,
   LAST_TAILORING_STORAGE_KEY,
   type JobHelperAuthSession,
   type JobPageContext,
@@ -104,13 +105,16 @@ function createMockTailoringRun(status: TailorResumeRunRecord["status"]) {
     message:
       status === "success"
         ? "Tailored resume saved to Job Helper."
-        : "Tailor Resume failed while generating the PDF.",
+        : status === "running"
+          ? "Tailoring your resume for this job..."
+          : "Tailor Resume failed while generating the PDF.",
+    jobIdentifier: null,
     pageTitle: mockPageContext.title,
     pageUrl: mockPageContext.url,
     positionTitle: "Senior Product Engineer",
     status,
     tailoredResumeError:
-      status === "success" ? null : "Debug failure state for visual testing.",
+      status === "error" ? "Debug failure state for visual testing." : null,
     tailoredResumeId: status === "success" ? "debug-tailored-resume" : null,
   } satisfies TailorResumeRunRecord;
 }
@@ -121,6 +125,7 @@ function createMockTailoredResumes() {
       companyName: "Microsoft",
       displayName: "Microsoft - Software Engineer",
       id: "debug-tailored-resume",
+      jobIdentifier: null,
       jobUrl: "https://careers.microsoft.com/jobs/debug-tailored-resume",
       positionTitle: "Software Engineer",
       status: "ready",
@@ -141,6 +146,15 @@ function readInitialTailoringRun(searchParams: URLSearchParams) {
   }
 
   return null;
+}
+
+function readInitialExtensionPreferences(searchParams: URLSearchParams) {
+  return {
+    compactTailorRun:
+      searchParams.get("compact") === "1" ||
+      searchParams.get("compact") === "true" ||
+      searchParams.get("compact") === "on",
+  };
 }
 
 function readStorageValue(
@@ -197,9 +211,18 @@ export function installDebugChromeRuntime() {
   }
 
   const initialTailoringRun = readInitialTailoringRun(searchParams);
+  const initialExtensionPreferences =
+    readInitialExtensionPreferences(searchParams);
 
   if (initialTailoringRun) {
     storage.set(LAST_TAILORING_STORAGE_KEY, initialTailoringRun);
+  }
+
+  if (initialExtensionPreferences.compactTailorRun) {
+    storage.set(
+      EXTENSION_PREFERENCES_STORAGE_KEY,
+      initialExtensionPreferences,
+    );
   }
 
   function emitStorageChange(
@@ -289,6 +312,20 @@ export function installDebugChromeRuntime() {
               [LAST_TAILORING_STORAGE_KEY]: createMockTailoringRun("success"),
             });
           }, 500);
+
+          return { ok: true };
+        }
+
+        if (type === "JOB_HELPER_REGENERATE_TAILORING") {
+          void storageArea.set({
+            [LAST_TAILORING_STORAGE_KEY]: createMockTailoringRun("running"),
+          });
+
+          window.setTimeout(() => {
+            void storageArea.set({
+              [LAST_TAILORING_STORAGE_KEY]: createMockTailoringRun("success"),
+            });
+          }, 750);
 
           return { ok: true };
         }

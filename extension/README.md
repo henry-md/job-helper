@@ -52,6 +52,7 @@ client id for the extension itself:
 ```bash
 GOOGLE_EXTENSION_CLIENT_ID=your-chrome-extension-client-id.apps.googleusercontent.com
 VITE_JOB_HELPER_APP_BASE_URL=http://localhost:3000
+DEBUG_UI=true # optional: enables the side-panel Debug tab
 # Optional, but useful if you need a stable unpacked extension id.
 CHROME_EXTENSION_PUBLIC_KEY=...
 ```
@@ -72,7 +73,8 @@ Recommended setup:
 extension. `VITE_JOB_HELPER_APP_BASE_URL` must be present when Vite builds or
 runs the extension because it is baked into the extension bundle. The extension
 Vite config loads both the repo root `.env` and `extension/.env*`, so keeping
-both values in the root `.env` is usually simplest.
+both values in the root `.env` is usually simplest. When `DEBUG_UI=true`, the
+side panel shows a Debug tab with the current page's URL identity.
 
 Chrome may not show a visible OAuth popup if the current Chrome profile already
 has a usable Google session and the extension grant can be completed silently.
@@ -110,6 +112,6 @@ Run `npm run build`, then load `/Users/Henry/Developer/job-helper/extension/dist
 ## Included pieces
 
 - `src/App.tsx`: native side panel UI rendered with React.
-- `src/content.ts`: content script that scrapes structured page evidence and renders the in-page command banner.
+- `src/content.ts`: content script that scrapes page evidence and renders the in-page command banner.
 - `src/background.ts`: MV3 service worker entry that handles `Cmd+Shift+S` / `Ctrl+Shift+S`, opens the side panel when Chrome allows it, formats the scraped page context into a job description, and calls `PATCH /api/tailor-resume` with `action: "tailor"`.
 - `manifest.config.ts`: typed Chrome extension manifest source used by CRXJS/Vite.

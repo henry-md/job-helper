@@ -1,0 +1,4 @@
+- Symptom: the Chrome extension could reopen showing an old `Stage 1/4` or `needs_input` Tailor Resume card from hours earlier, even though the backend no longer had an active run or pending interview.
+- Root cause: the side panel trusted `jobHelperLastTailoringRun` from `chrome.storage.local` as if it were live state and never reconciled that transient record against backend truth after reload.
+- Fix: expose the current active Tailor Resume run on `GET /api/tailor-resume`, thread it through the extension's personal-info payload, and clear or replace stale local `running` / `needs_input` records when the backend says there is no active run.
+- Guardrail: extension-local progress storage is only a cache; on load, reconcile transient run state against the shared backend before rendering it as live.

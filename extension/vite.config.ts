@@ -8,6 +8,16 @@ import { createManifest } from "./manifest.config";
 const extensionDir = dirname(fileURLToPath(import.meta.url));
 const repoRootDir = resolve(extensionDir, "..");
 
+function isTruthyEnvValue(value: string | undefined) {
+  const normalizedValue = value?.trim().toLowerCase();
+  return (
+    normalizedValue === "1" ||
+    normalizedValue === "true" ||
+    normalizedValue === "yes" ||
+    normalizedValue === "on"
+  );
+}
+
 export default defineConfig(({ mode }) => {
   const env = {
     ...loadEnv(mode, repoRootDir, ""),
@@ -17,7 +27,15 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), crx({ manifest: createManifest(env) })],
+    define: {
+      __DEBUG_UI__: JSON.stringify(
+        isTruthyEnvValue(env.DEBUG_UI ?? env.VITE_DEBUG_UI),
+      ),
+    },
     server: {
+      fs: {
+        allow: [repoRootDir],
+      },
       host: "localhost",
       port: 5186,
       strictPort: true,

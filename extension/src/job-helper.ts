@@ -1,5 +1,6 @@
 export const CAPTURE_COMMAND_NAME = "capture_job_page";
 const fallbackAppBaseUrl = "http://localhost:3000";
+export const EXTENSION_DEBUG_UI_ENABLED = __DEBUG_UI__;
 
 function normalizeAppBaseUrl(value: string | undefined) {
   const trimmedValue = value?.trim();
@@ -34,9 +35,12 @@ export const EXTENSION_AUTH_SESSION_ENDPOINT =
 export const EXTENSION_BROWSER_SESSION_ENDPOINT =
   `${DEFAULT_APP_BASE_URL}/api/extension/auth/browser-session`;
 export const AUTH_SESSION_STORAGE_KEY = "jobHelperAuthSession";
+export const EXTENSION_PREFERENCES_STORAGE_KEY = "jobHelperExtensionPreferences";
 export const LAST_TAILORING_STORAGE_KEY = "jobHelperLastTailoringRun";
 export const EXISTING_TAILORING_STORAGE_KEY =
   "jobHelperExistingTailoringPrompt";
+export const PREPARING_TAILORING_STORAGE_KEY =
+  "jobHelperPreparingTailoringStart";
 
 export function buildTailoredResumeReviewUrl(
   tailoredResumeId: string | null | undefined,
@@ -51,6 +55,28 @@ export function buildTailoredResumeReviewUrl(
     tab: "tailor",
     tailoredResumeId: normalizedTailoredResumeId,
   }).toString()}`;
+}
+
+export function normalizeComparableUrl(value: string | null | undefined) {
+  const trimmedValue = value?.trim();
+
+  if (!trimmedValue) {
+    return null;
+  }
+
+  try {
+    const parsedUrl = new URL(trimmedValue);
+    parsedUrl.hash = "";
+    parsedUrl.search = "";
+    if (parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:") {
+      // Treat http/https variants of the same posting as one comparable URL.
+      parsedUrl.protocol = "https:";
+    }
+    parsedUrl.pathname = parsedUrl.pathname.replace(/\/+$/, "") || "/";
+    return parsedUrl.toString();
+  } catch {
+    return trimmedValue;
+  }
 }
 
 export type JobPostingStructuredHint = {
@@ -97,6 +123,7 @@ export type TailorResumeRunRecord = {
   endpoint: string;
   companyName: string | null;
   generationStep?: TailorResumeGenerationStepSummary | null;
+  jobIdentifier: string | null;
   message: string;
   pageTitle: string | null;
   pageUrl: string | null;
@@ -106,10 +133,18 @@ export type TailorResumeRunRecord = {
   tailoredResumeId: string | null;
 };
 
+export type TailorResumePreparationState = {
+  capturedAt: string;
+  message: string;
+  pageTitle: string | null;
+  pageUrl: string | null;
+};
+
 export type TailoredResumeSummary = {
   companyName: string | null;
   displayName: string;
   id: string;
+  jobIdentifier: string | null;
   jobUrl: string | null;
   positionTitle: string | null;
   status: string | null;
@@ -136,6 +171,7 @@ export type OriginalResumeSummary = {
 };
 
 export type PersonalInfoSummary = {
+  activeTailoring: TailorResumeExistingTailoringState | null;
   applicationCount: number;
   applications: TrackedApplicationSummary[];
   companyCount: number;
@@ -167,6 +203,7 @@ export type TailorResumePendingInterviewSummary = {
   completionRequestedAt: string | null;
   conversation: TailorResumeConversationMessage[];
   id: string;
+  jobIdentifier: string | null;
   positionTitle: string | null;
   questioningSummary: TailorResumeQuestioningSummary | null;
   updatedAt: string;
@@ -187,6 +224,7 @@ export type TailorResumeExistingTailoringState =
       createdAt: string;
       id: string;
       jobDescription: string;
+      jobIdentifier: string | null;
       jobUrl: string | null;
       kind: "active_generation";
       lastStep: TailorResumeGenerationStepSummary | null;
@@ -196,6 +234,7 @@ export type TailorResumeExistingTailoringState =
       companyName: string | null;
       id: string;
       jobDescription: string;
+      jobIdentifier: string | null;
       jobUrl: string | null;
       kind: "pending_interview";
       positionTitle: string | null;
@@ -207,6 +246,7 @@ export type TailorResumeExistingTailoringState =
       displayName: string;
       error: string | null;
       id: string;
+      jobIdentifier: string | null;
       jobUrl: string | null;
       kind: "completed";
       positionTitle: string | null;
@@ -232,6 +272,12 @@ export type JobHelperAuthSession = {
   sessionToken: string;
   user: JobHelperAuthUser;
 };
+
+export function buildTailorResumePreparationMessage(overwriteExisting = false) {
+  return overwriteExisting
+    ? "Starting tailored edits..."
+    : "Checking if this job already has tailoring...";
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -402,7 +448,6 @@ function formatStructuredPosting(
     buildSummaryLine("Compensation", posting.baseSalary),
     posting.datePosted ? `Date posted: ${posting.datePosted}` : null,
     posting.validThrough ? `Valid through: ${posting.validThrough}` : null,
-    posting.identifier ? `Identifier: ${posting.identifier}` : null,
     posting.directApply === true
       ? "Direct apply: yes"
       : posting.directApply === false
@@ -482,6 +527,27 @@ export function readJobUrlFromPageContext(pageContext: JobPageContext) {
   return pageContext.canonicalUrl.trim() || pageContext.url.trim() || null;
 }
 
+export function buildTailorResumePreparationState(input: {
+  capturedAt?: string;
+  message?: string | null;
+  pageContext?: JobPageContext | null;
+  pageTitle?: string | null;
+  pageUrl?: string | null;
+}) {
+  return {
+    capturedAt: input.capturedAt ?? new Date().toISOString(),
+    message:
+      cleanText(input.message) || buildTailorResumePreparationMessage(false),
+    pageTitle: cleanText(input.pageContext?.title ?? input.pageTitle) || null,
+    pageUrl:
+      cleanText(
+        input.pageContext
+          ? readJobUrlFromPageContext(input.pageContext) ?? input.pageContext.url
+          : input.pageUrl,
+      ) || null,
+  } satisfies TailorResumePreparationState;
+}
+
 export function readTailoredResumeSummary(
   value: unknown,
 ): TailoredResumeSummary | null {
@@ -501,6 +567,7 @@ export function readTailoredResumeSummary(
     companyName: readString(value.companyName) || null,
     displayName,
     id,
+    jobIdentifier: readNullableString(value.jobIdentifier),
     jobUrl: readNullableString(value.jobUrl),
     positionTitle: readString(value.positionTitle) || null,
     status: readString(value.status) || null,
@@ -524,6 +591,28 @@ export function readTailoredResumeSummaries(value: unknown) {
       (left, right) =>
         new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
     );
+}
+
+export function readTailorResumePreparationState(
+  value: unknown,
+): TailorResumePreparationState | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const capturedAt = readString(value.capturedAt);
+  const message = readString(value.message);
+
+  if (!capturedAt || !message) {
+    return null;
+  }
+
+  return {
+    capturedAt,
+    message,
+    pageTitle: readNullableString(value.pageTitle),
+    pageUrl: readNullableString(value.pageUrl),
+  };
 }
 
 function readTailorResumeConversationMessage(
@@ -680,6 +769,7 @@ export function readTailorResumeExistingTailoringState(
       createdAt,
       id,
       jobDescription,
+      jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
       jobUrl: readNullableString(existingTailoring.jobUrl),
       kind,
       lastStep: readTailorResumeGenerationStepSummary(
@@ -694,6 +784,7 @@ export function readTailorResumeExistingTailoringState(
       companyName: readNullableString(existingTailoring.companyName),
       id,
       jobDescription: readString(existingTailoring.jobDescription),
+      jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
       jobUrl: readNullableString(existingTailoring.jobUrl),
       kind,
       positionTitle: readNullableString(existingTailoring.positionTitle),
@@ -717,6 +808,7 @@ export function readTailorResumeExistingTailoringState(
       displayName,
       error: readNullableString(existingTailoring.error),
       id,
+      jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
       jobUrl: readNullableString(existingTailoring.jobUrl),
       kind,
       positionTitle: readNullableString(existingTailoring.positionTitle),
@@ -759,6 +851,7 @@ export function readTailorResumePendingInterviewSummary(
     completionRequestedAt: readNullableString(value.completionRequestedAt),
     conversation,
     id,
+    jobIdentifier: readNullableString(planningResult.jobIdentifier),
     positionTitle: readNullableString(planningResult.positionTitle),
     questioningSummary: readTailorResumeQuestioningSummary(
       planningResult.questioningSummary,
@@ -871,6 +964,9 @@ export function readPersonalInfoSummary(input: {
   );
 
   return {
+    activeTailoring: readTailorResumeExistingTailoringState(
+      input.tailorResumePayload,
+    ),
     applicationCount: readNumber(applicationsPayload.applicationCount),
     applications: readTrackedApplicationSummaries(applicationsPayload),
     companyCount: readNumber(applicationsPayload.companyCount),
@@ -887,6 +983,9 @@ export function readPersonalInfoPayload(value: unknown): PersonalInfoSummary {
   const payloadRecord = isRecord(payload) ? payload : {};
 
   return {
+    activeTailoring: readTailorResumeExistingTailoringState(
+      payloadRecord.activeTailoring,
+    ),
     applicationCount: readNumber(payloadRecord.applicationCount),
     applications: readTrackedApplicationSummaries(payloadRecord.applications),
     companyCount: readNumber(payloadRecord.companyCount),
