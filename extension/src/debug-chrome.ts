@@ -1,8 +1,12 @@
 import {
   AUTH_SESSION_STORAGE_KEY,
   DEFAULT_TAILOR_RESUME_ENDPOINT,
+  EXISTING_TAILORING_STORAGE_KEY,
   EXTENSION_PREFERENCES_STORAGE_KEY,
   LAST_TAILORING_STORAGE_KEY,
+  normalizeComparableUrl,
+  PREPARING_TAILORING_STORAGE_KEY,
+  TAILORING_RUNS_STORAGE_KEY,
   type JobHelperAuthSession,
   type JobPageContext,
   type TailorResumeRunRecord,
@@ -97,7 +101,13 @@ const mockPageContext: JobPageContext = {
   url: "https://jobs.example.com/acme-ai/senior-product-engineer",
 };
 
-function createMockTailoringRun(status: TailorResumeRunRecord["status"]) {
+function createMockTailoringRun(
+  status: TailorResumeRunRecord["status"],
+  variant: "default" | "step4-error" | "step4-running" = "default",
+) {
+  const isStep4Error = variant === "step4-error";
+  const isStep4Retry = isStep4Error || variant === "step4-running";
+
   return {
     capturedAt: new Date("2026-04-21T23:10:00.000Z").toISOString(),
     companyName: "Acme AI",
@@ -105,16 +115,34 @@ function createMockTailoringRun(status: TailorResumeRunRecord["status"]) {
     message:
       status === "success"
         ? "Tailored resume saved to Job Helper."
+        : isStep4Retry
+            ? "Stage 4/4: Keeping the tailored resume within the original page count - Retrying (attempt 2)"
         : status === "running"
           ? "Tailoring your resume for this job..."
           : "Tailor Resume failed while generating the PDF.",
+    generationStep: isStep4Retry
+      ? {
+          attempt: 2,
+          detail:
+            "The model did not submit verified compaction candidates after 4 Step 4 tool rounds.",
+          retrying: true,
+          status: "running",
+          stepCount: 4,
+          stepNumber: 4,
+          summary: "Keeping the tailored resume within the original page count",
+        }
+      : null,
     jobIdentifier: null,
     pageTitle: mockPageContext.title,
     pageUrl: mockPageContext.url,
     positionTitle: "Senior Product Engineer",
     status,
     tailoredResumeError:
-      status === "error" ? "Debug failure state for visual testing." : null,
+      status === "error"
+        ? isStep4Error
+          ? "The model did not submit verified compaction candidates after 4 Step 4 tool rounds."
+          : "Debug failure state for visual testing."
+        : null,
     tailoredResumeId: status === "success" ? "debug-tailored-resume" : null,
   } satisfies TailorResumeRunRecord;
 }
@@ -141,8 +169,16 @@ function readInitialAuthSession(searchParams: URLSearchParams) {
 function readInitialTailoringRun(searchParams: URLSearchParams) {
   const runState = searchParams.get("run");
 
-  if (runState === "success" || runState === "error") {
+  if (runState === "running" || runState === "success" || runState === "error") {
     return createMockTailoringRun(runState);
+  }
+
+  if (runState === "step4-running") {
+    return createMockTailoringRun("running", "step4-running");
+  }
+
+  if (runState === "step4-error") {
+    return createMockTailoringRun("error", "step4-error");
   }
 
   return null;
@@ -155,6 +191,26 @@ function readInitialExtensionPreferences(searchParams: URLSearchParams) {
       searchParams.get("compact") === "true" ||
       searchParams.get("compact") === "on",
   };
+}
+
+function readRequestBody(
+  body: BodyInit | null | undefined,
+): Record<string, unknown> {
+  if (typeof body !== "string") {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(body);
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function readBodyString(body: Record<string, unknown>, key: string) {
+  const value = body[key];
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function readStorageValue(
@@ -205,17 +261,26 @@ export function installDebugChromeRuntime() {
   const storage = new Map<string, unknown>();
   const nativeFetch = globalThis.fetch.bind(globalThis);
   let authSession = readInitialAuthSession(searchParams);
+  let mockTailoredResumes = authSession ? createMockTailoredResumes() : [];
+  let mockTailoringRun = readInitialTailoringRun(searchParams);
 
   if (authSession) {
     storage.set(AUTH_SESSION_STORAGE_KEY, authSession);
   }
 
-  const initialTailoringRun = readInitialTailoringRun(searchParams);
+  const initialTailoringRunKey = normalizeComparableUrl(
+    mockTailoringRun?.pageUrl ?? null,
+  );
   const initialExtensionPreferences =
     readInitialExtensionPreferences(searchParams);
 
-  if (initialTailoringRun) {
-    storage.set(LAST_TAILORING_STORAGE_KEY, initialTailoringRun);
+  if (mockTailoringRun) {
+    storage.set(LAST_TAILORING_STORAGE_KEY, mockTailoringRun);
+    if (initialTailoringRunKey) {
+      storage.set(TAILORING_RUNS_STORAGE_KEY, {
+        [initialTailoringRunKey]: mockTailoringRun,
+      });
+    }
   }
 
   if (initialExtensionPreferences.compactTailorRun) {
@@ -223,6 +288,71 @@ export function installDebugChromeRuntime() {
       EXTENSION_PREFERENCES_STORAGE_KEY,
       initialExtensionPreferences,
     );
+  }
+
+  function buildMockPersonalInfo() {
+    const activeTailorings =
+      mockTailoringRun?.status === "running"
+        ? [
+            {
+              companyName: mockTailoringRun.companyName,
+              createdAt: mockTailoringRun.capturedAt,
+              id: "debug-active-tailoring",
+              jobDescription: mockPageContext.description,
+              jobIdentifier: mockTailoringRun.jobIdentifier,
+              jobUrl: mockTailoringRun.pageUrl,
+              kind: "active_generation" as const,
+              lastStep: mockTailoringRun.generationStep ?? null,
+              positionTitle: mockTailoringRun.positionTitle,
+              updatedAt: mockTailoringRun.capturedAt,
+            },
+          ]
+        : [];
+
+    return {
+      activeTailoring: activeTailorings[0] ?? null,
+      activeTailorings,
+      applicationCount: 0,
+      applications: [],
+      companyCount: 0,
+      originalResume: {
+        error: null,
+        filename: "Henry Deutsch Resume.pdf",
+        latexStatus: "ready",
+        pdfUpdatedAt: new Date("2026-04-21T22:45:00.000Z").toISOString(),
+        resumeUpdatedAt: new Date("2026-04-21T22:45:00.000Z").toISOString(),
+      },
+      tailoredResumes: mockTailoredResumes,
+      tailoringInterview: null,
+    };
+  }
+
+  async function clearTailoringState() {
+    mockTailoringRun = null;
+    await storageArea.remove([
+      EXISTING_TAILORING_STORAGE_KEY,
+      LAST_TAILORING_STORAGE_KEY,
+      PREPARING_TAILORING_STORAGE_KEY,
+      TAILORING_RUNS_STORAGE_KEY,
+    ]);
+  }
+
+  function shouldDeleteTailoredResume(input: {
+    jobUrl: string;
+    tailoredResumeId: string;
+  }) {
+    const normalizedTargetJobUrl = normalizeComparableUrl(input.jobUrl);
+
+    return (record: { id: string; jobUrl: string | null }) => {
+      if (input.tailoredResumeId && record.id === input.tailoredResumeId) {
+        return true;
+      }
+
+      return Boolean(
+        normalizedTargetJobUrl &&
+          normalizeComparableUrl(record.jobUrl) === normalizedTargetJobUrl,
+      );
+    };
   }
 
   function emitStorageChange(
@@ -302,14 +432,25 @@ export function installDebugChromeRuntime() {
         if (type === "JOB_HELPER_TAILORED_RESUMES") {
           return {
             ok: true,
-            records: authSession ? createMockTailoredResumes() : [],
+            records: authSession ? mockTailoredResumes : [],
+          };
+        }
+
+        if (type === "JOB_HELPER_PERSONAL_INFO") {
+          return {
+            ok: true,
+            personalInfo: buildMockPersonalInfo(),
           };
         }
 
         if (type === "JOB_HELPER_TRIGGER_CAPTURE") {
           window.setTimeout(() => {
+            mockTailoringRun = createMockTailoringRun("success");
             void storageArea.set({
-              [LAST_TAILORING_STORAGE_KEY]: createMockTailoringRun("success"),
+              [TAILORING_RUNS_STORAGE_KEY]: {
+                [normalizeComparableUrl(mockPageContext.url) ?? mockPageContext.url]:
+                  mockTailoringRun,
+              },
             });
           }, 500);
 
@@ -317,17 +458,33 @@ export function installDebugChromeRuntime() {
         }
 
         if (type === "JOB_HELPER_REGENERATE_TAILORING") {
+          mockTailoringRun = createMockTailoringRun("running", "step4-running");
           void storageArea.set({
-            [LAST_TAILORING_STORAGE_KEY]: createMockTailoringRun("running"),
+            [TAILORING_RUNS_STORAGE_KEY]: {
+              [normalizeComparableUrl(mockPageContext.url) ?? mockPageContext.url]:
+                mockTailoringRun,
+            },
           });
 
           window.setTimeout(() => {
+            mockTailoringRun = createMockTailoringRun("success");
             void storageArea.set({
-              [LAST_TAILORING_STORAGE_KEY]: createMockTailoringRun("success"),
+              [TAILORING_RUNS_STORAGE_KEY]: {
+                [normalizeComparableUrl(mockPageContext.url) ?? mockPageContext.url]:
+                  mockTailoringRun,
+              },
             });
           }, 750);
 
           return { ok: true };
+        }
+
+        if (type === "JOB_HELPER_CANCEL_CURRENT_TAILORING") {
+          await clearTailoringState();
+          return {
+            ok: true,
+            personalInfo: buildMockPersonalInfo(),
+          };
         }
 
         if (type === "JOB_HELPER_OPEN_DASHBOARD") {
@@ -394,7 +551,7 @@ export function installDebugChromeRuntime() {
       return new Response(
         JSON.stringify({
           profile: {
-            tailoredResumes: authSession ? createMockTailoredResumes() : [],
+            tailoredResumes: authSession ? mockTailoredResumes : [],
           },
         }),
         {
@@ -404,6 +561,60 @@ export function installDebugChromeRuntime() {
           status: authSession ? 200 : 401,
         },
       );
+    }
+
+    if (url === DEFAULT_TAILOR_RESUME_ENDPOINT && method === "PATCH") {
+      const body = readRequestBody(init?.body);
+      const action = readBodyString(body, "action");
+
+      if (action === "deleteTailoredResumeArtifact") {
+        const jobUrl = readBodyString(body, "jobUrl");
+        const tailoredResumeId = readBodyString(body, "tailoredResumeId");
+
+        mockTailoredResumes = mockTailoredResumes.filter(
+          (record) =>
+            !shouldDeleteTailoredResume({
+              jobUrl,
+              tailoredResumeId,
+            })(record),
+        );
+        await clearTailoringState();
+
+        return new Response(
+          JSON.stringify({
+            profile: {
+              tailoredResumes: mockTailoredResumes,
+              tailoringInterview: null,
+            },
+            tailoredResumeId: tailoredResumeId || null,
+          }),
+          {
+            headers: {
+              "Content-Type": "application/json",
+            },
+            status: 200,
+          },
+        );
+      }
+
+      if (action === "cancelCurrentTailoring") {
+        await clearTailoringState();
+
+        return new Response(
+          JSON.stringify({
+            profile: {
+              tailoredResumes: mockTailoredResumes,
+              tailoringInterview: null,
+            },
+          }),
+          {
+            headers: {
+              "Content-Type": "application/json",
+            },
+            status: 200,
+          },
+        );
+      }
     }
 
     return nativeFetch(input, init);
