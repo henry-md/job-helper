@@ -260,7 +260,6 @@ function formatStructuredPosting(
     buildSummaryLine("Compensation", posting.baseSalary),
     posting.datePosted ? `Date posted: ${posting.datePosted}` : null,
     posting.validThrough ? `Valid through: ${posting.validThrough}` : null,
-    posting.identifier ? `Identifier: ${posting.identifier}` : null,
     posting.directApply === true
       ? "Direct apply: yes"
       : posting.directApply === false

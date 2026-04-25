@@ -62,17 +62,9 @@ const tailorResumePlanSchema = {
     },
     companyName: { type: "string" },
     displayName: { type: "string" },
-    jobIdentifier: { type: "string" },
     positionTitle: { type: "string" },
   },
-  required: [
-    "thesis",
-    "changes",
-    "companyName",
-    "displayName",
-    "jobIdentifier",
-    "positionTitle",
-  ],
+  required: ["thesis", "changes", "companyName", "displayName", "positionTitle"],
 } as const;
 
 async function emitTailorResumeGenerationStep(
@@ -124,7 +116,7 @@ type TailoredResumeStructuredResponse = {
   changes: TailoredResumeBlockChange[];
   companyName: string;
   displayName: string;
-  jobIdentifier: string;
+  jobIdentifier?: string;
   positionTitle: string;
   thesis: TailoredResumeThesis;
 };

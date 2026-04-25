@@ -177,7 +177,6 @@ test("parseTailoredResumePlanResponse keeps the structured thesis payload", () =
     ],
     companyName: "OpenAI",
     displayName: "OpenAI - Research Engineer",
-    jobIdentifier: "Applied research",
     positionTitle: "Research Engineer",
     thesis: {
       jobDescriptionFocus:
@@ -188,6 +187,7 @@ test("parseTailoredResumePlanResponse keeps the structured thesis payload", () =
   });
 
   assert.equal(parsed.companyName, "OpenAI");
+  assert.equal(parsed.jobIdentifier, "General");
   assert.equal(
     parsed.thesis.jobDescriptionFocus,
     "Over-indexes on research infrastructure and rigorous CI/CD expectations beyond generic software engineering signals.",
@@ -205,7 +205,6 @@ test("parseTailoredResumePlanResponse rejects a missing thesis payload", () => {
         changes: [],
         companyName: "OpenAI",
         displayName: "OpenAI - Research Engineer",
-        jobIdentifier: "Applied research",
         positionTitle: "Research Engineer",
       }),
     /thesis/i,

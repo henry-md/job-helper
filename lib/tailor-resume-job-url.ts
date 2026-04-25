@@ -4,26 +4,6 @@ const jobDescriptionUrlLinePatterns = [
   /^Canonical URL:\s*(\S.+)$/im,
   /^URL:\s*(\S.+)$/im,
 ];
-const ignoredJobUrlSearchParamNames = new Set([
-  "fbclid",
-  "gclid",
-  "gh_src",
-  "mc_cid",
-  "mc_eid",
-  "msclkid",
-  "ref",
-  "referrer",
-  "source",
-]);
-
-function shouldIgnoreJobUrlSearchParam(key: string) {
-  const normalizedKey = key.toLowerCase();
-
-  return (
-    normalizedKey.startsWith("utm_") ||
-    ignoredJobUrlSearchParamNames.has(normalizedKey)
-  );
-}
 
 export function normalizeTailorResumeJobUrl(
   value: string | null | undefined,
@@ -44,19 +24,7 @@ export function normalizeTailorResumeJobUrl(
     url.hash = "";
     url.hostname = url.hostname.toLowerCase();
     url.pathname = url.pathname.replace(/\/+$/, "") || "/";
-
-    const sortedSearchParams = new URLSearchParams();
-    [...url.searchParams.entries()]
-      .filter(([key]) => !shouldIgnoreJobUrlSearchParam(key))
-      .sort(([leftKey, leftValue], [rightKey, rightValue]) =>
-        leftKey === rightKey
-          ? leftValue.localeCompare(rightValue)
-          : leftKey.localeCompare(rightKey),
-      )
-      .forEach(([key, searchValue]) => {
-        sortedSearchParams.append(key, searchValue);
-      });
-    url.search = sortedSearchParams.toString();
+    url.search = "";
 
     return url.toString();
   } catch {

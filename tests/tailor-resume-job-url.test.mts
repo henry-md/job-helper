@@ -59,12 +59,12 @@ function buildTailoredResume(
   };
 }
 
-test("normalizeTailorResumeJobUrl removes hash and sorts query params", () => {
+test("normalizeTailorResumeJobUrl removes hash and query params", () => {
   assert.equal(
     normalizeTailorResumeJobUrl(
       "HTTPS://Jobs.Example.com/roles/123/?b=2&utm_source=email&a=1#apply",
     ),
-    "https://jobs.example.com/roles/123?a=1&b=2",
+    "https://jobs.example.com/roles/123",
   );
 });
 
@@ -107,6 +107,6 @@ test("buildNormalizedJobUrlHash hashes the normalized job URL", () => {
     buildNormalizedJobUrlHash(
       "HTTPS://Jobs.Example.com/roles/123/?b=2&utm_source=email&a=1#apply",
     ),
-    buildNormalizedJobUrlHash("https://jobs.example.com/roles/123?a=1&b=2"),
+    buildNormalizedJobUrlHash("https://jobs.example.com/roles/123"),
   );
 });
