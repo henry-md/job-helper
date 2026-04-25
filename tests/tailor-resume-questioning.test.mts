@@ -77,11 +77,11 @@ test("normalizeTailorResumeInterviewResponseForCurrentTurn does not treat post-s
     },
     response: {
       action: "skip",
-      agenda: "deployment details",
+      assistantMessage: "",
       completionMessage: "",
       debugDecision: "not_applicable",
       learnings: [],
-      question: "",
+      userMarkdownEditOperations: [],
     },
   });
 
@@ -93,9 +93,6 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads finish tool calls"
     output: [
       {
         arguments: JSON.stringify({
-          agenda: "deployment details",
-          completionMessage:
-            "I have enough detail to wrap up, and I am updating USER.md with that context.",
           learnings: [
             {
               detail: "Owned LLM deployment latency work.",
@@ -103,16 +100,23 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads finish tool calls"
               topic: "LLM deployment",
             },
           ],
+          userMarkdownEditOperations: [],
         }),
         call_id: "call-1",
         name: "finish_tailor_resume_interview",
         type: "function_call",
       },
     ],
+    output_text:
+      "I have enough detail to wrap up, and I am updating USER.md with that context.",
   });
 
   assert.equal(response.response.action, "done");
-  assert.equal(response.response.question, "");
+  assert.equal(response.response.assistantMessage, "");
+  assert.equal(
+    response.response.completionMessage,
+    "I have enough detail to wrap up, and I am updating USER.md with that context.",
+  );
   assert.equal(response.response.debugDecision, "not_applicable");
   assert.equal(
     response.response.learnings[0]?.targetSegmentIds[0],
@@ -121,16 +125,49 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads finish tool calls"
   assert.equal(response.toolCalls[0]?.name, "finish_tailor_resume_interview");
 });
 
+test("parseTailorResumeInterviewResponseFromModelOutput reads ask tool calls with assistant text", () => {
+  const response = parseTailorResumeInterviewResponseFromModelOutput({
+    output: [
+      {
+        arguments: JSON.stringify({
+          debugDecision: "not_applicable",
+          learnings: [
+            {
+              detail:
+                "Need the model family, serving stack, and one measurable outcome from the Java LLM pipeline work.",
+              targetSegmentIds: ["segment-2"],
+              topic: "Java LLM pipeline",
+            },
+          ],
+          userMarkdownEditOperations: [],
+        }),
+        call_id: "call-2",
+        name: "ask_tailor_resume_follow_up",
+        type: "function_call",
+      },
+    ],
+    output_text:
+      "For a Java backend angle, strong answers would sound like 'I owned the Spring Boot API layer around the LLM pipeline' or 'I built the Java service flow for prompt orchestration, retrieval, and eval logging.' Which model family, serving stack, and measurable outcome best match your work?",
+  });
+
+  assert.equal(response.response.action, "ask");
+  assert.match(response.response.assistantMessage, /Spring Boot API layer/i);
+  assert.match(
+    response.response.assistantMessage,
+    /Which model family, serving stack, and measurable outcome/i,
+  );
+  assert.equal(response.response.debugDecision, "not_applicable");
+  assert.equal(response.toolCalls[0]?.name, "ask_tailor_resume_follow_up");
+});
+
 test("parseTailorResumeInterviewResponseFromModelOutput rejects plain JSON text", () => {
   assert.throws(
     () =>
       parseTailorResumeInterviewResponseFromModelOutput({
         output_text: JSON.stringify({
           action: "done",
-          agenda: "deployment details",
           debugDecision: "not_applicable",
           learnings: [],
-          question: "",
         }),
       }),
     /tool call/i,

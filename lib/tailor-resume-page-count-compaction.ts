@@ -14,9 +14,12 @@ import {
 import {
   measureTailorResumeLineReductionCandidates,
   type TailorResumeLineReductionCandidate,
+  type TailorResumeLineReductionMeasurement,
   type TailorResumeLineReductionToolResult,
 } from "./tailor-resume-line-reduction-candidates.ts";
-import { getRetryAttemptsToGenerateLatexEdits } from "./tailor-resume-retry-config.ts";
+import {
+  getRetryAttemptsToGeneratePageCountCompaction,
+} from "./tailor-resume-retry-config.ts";
 import { buildTailoredResumeBlockEdits } from "./tailor-resume-review.ts";
 import { stripTailorResumeSegmentIds } from "./tailor-resume-segmentation.ts";
 import { applyTailorResumeBlockChanges } from "./tailor-resume-tailoring.ts";
@@ -60,12 +63,52 @@ type TailorResumeCompactionOutputItem = {
   type?: string;
 };
 
-type TailorResumeLineReductionToolCall = {
+type TailorResumeCompactionResponseInput = Array<
+  | {
+      content: Array<{
+        text: string;
+        type: "input_text";
+      }>;
+      role: "user";
+    }
+  | {
+      call_id: string;
+      output: string;
+      type: "function_call_output";
+    }
+>;
+
+type TailorResumeCompactionToolCall = {
   arguments: string;
   call_id: string;
+  name: string;
 };
 
+type TailorResumeCompactionAttemptHistoryEntry = {
+  attempt: number;
+  detail: string;
+  estimatedLinesToRecover: number;
+  measurementResult: TailorResumeLineReductionToolResult | null;
+};
+
+type TailorResumeCompactionSelfCheckResult =
+  | {
+      candidates: TailorResumeLineReductionCandidate[];
+      measurementResult: TailorResumeLineReductionToolResult | null;
+      model: string;
+      ok: true;
+    }
+  | {
+      error: string;
+      measurementResult: TailorResumeLineReductionToolResult | null;
+      model: string;
+      ok: false;
+    };
+
 const tailorResumeLineReductionToolName = "measure_resume_line_reductions";
+const maxCompactionSelfCheckRounds = 4;
+const maxCompactionHistoryAttemptsForPrompt = 3;
+const maxCompactionMeasurementsPerAttemptForPrompt = 6;
 
 const tailorResumeLineReductionTool = {
   type: "function",
@@ -94,6 +137,234 @@ const tailorResumeLineReductionTool = {
     required: ["candidates"],
   },
 } as const;
+
+const tailorResumeLineReductionSubmissionToolName =
+  "submit_verified_line_reductions";
+
+const tailorResumeLineReductionSubmissionTool = {
+  type: "function",
+  name: tailorResumeLineReductionSubmissionToolName,
+  description:
+    "Submit the final Step 4 candidates after you have used the measurement tool to verify that they reduce rendered lines.",
+  strict: true,
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      candidates: {
+        type: "array",
+        minItems: 1,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            latexCode: { type: "string" },
+            reason: { type: "string" },
+            segmentId: { type: "string" },
+          },
+          required: ["segmentId", "latexCode", "reason"],
+        },
+      },
+      verificationSummary: { type: "string" },
+    },
+    required: ["candidates", "verificationSummary"],
+  },
+} as const;
+
+const knownCompactionToolNames = new Set([
+  tailorResumeLineReductionToolName,
+  tailorResumeLineReductionSubmissionToolName,
+]);
+
+function mapCompactionResponse(response: {
+  id?: string;
+  model?: string | null;
+  output?: Array<{
+    arguments?: unknown;
+    call_id?: unknown;
+    content?: unknown;
+    name?: unknown;
+    type?: unknown;
+  }>;
+  output_text?: string | null;
+}): TailorResumeCompactionResponse {
+  return {
+    id: response.id,
+    model: response.model ?? undefined,
+    output:
+      response.output?.map((outputItem) => {
+        const mappedItem: TailorResumeCompactionOutputItem = {
+          type: typeof outputItem.type === "string" ? outputItem.type : undefined,
+        };
+
+        if (typeof outputItem.name === "string") {
+          mappedItem.name = outputItem.name;
+        }
+
+        if (typeof outputItem.call_id === "string") {
+          mappedItem.call_id = outputItem.call_id;
+        }
+
+        if (typeof outputItem.arguments === "string") {
+          mappedItem.arguments = outputItem.arguments;
+        }
+
+        if (Array.isArray(outputItem.content)) {
+          mappedItem.content = outputItem.content.flatMap((contentItem) => {
+            if (!contentItem || typeof contentItem !== "object") {
+              return [];
+            }
+
+            const mappedContent: { text?: string; type?: string } = {};
+
+            if ("text" in contentItem && typeof contentItem.text === "string") {
+              mappedContent.text = contentItem.text;
+            }
+
+            if ("type" in contentItem && typeof contentItem.type === "string") {
+              mappedContent.type = contentItem.type;
+            }
+
+            return [mappedContent];
+          });
+        }
+
+        return mappedItem;
+      }) ?? [],
+    output_text: response.output_text ?? undefined,
+  };
+}
+
+function findCompactionToolCall(
+  response: TailorResumeCompactionResponse,
+): TailorResumeCompactionToolCall | null {
+  for (const outputItem of response.output ?? []) {
+    if (
+      outputItem.type === "function_call" &&
+      typeof outputItem.name === "string" &&
+      knownCompactionToolNames.has(outputItem.name) &&
+      typeof outputItem.call_id === "string" &&
+      typeof outputItem.arguments === "string"
+    ) {
+      return {
+        arguments: outputItem.arguments,
+        call_id: outputItem.call_id,
+        name: outputItem.name,
+      };
+    }
+  }
+
+  return null;
+}
+
+function parseCompactionSubmissionCandidates(
+  value: unknown,
+): TailorResumeLineReductionCandidate[] {
+  const candidates = parseLineReductionCandidates(value);
+
+  if (candidates.length === 0) {
+    throw new Error("The final compaction submission did not include any candidates.");
+  }
+
+  return candidates;
+}
+
+function describeLineReductionRejectionReason(reason: string | null) {
+  if (!reason) {
+    return "accepted";
+  }
+
+  if (reason.startsWith("candidate_failed_to_compile_or_measure:")) {
+    return reason.replace(
+      "candidate_failed_to_compile_or_measure:",
+      "candidate failed to compile or measure:",
+    );
+  }
+
+  switch (reason) {
+    case "unknown_or_uneditable_segment":
+      return "The segment was unknown or is no longer editable in Step 4.";
+    case "duplicate_candidate_for_segment":
+      return "The same segment was proposed more than once in the same measurement pass.";
+    case "current_segment_line_count_unavailable":
+      return "The current block's rendered line count was unavailable.";
+    case "candidate_segment_line_count_unavailable":
+      return "The candidate block's rendered line count was unavailable after measurement.";
+    case "candidate_did_not_reduce_rendered_line_count":
+      return "The candidate still rendered to the same number of lines as the current replacement.";
+    case "candidate_did_not_reduce_original_rendered_line_count":
+      return "The candidate did not beat the original block's rendered line count.";
+    default:
+      return reason.replace(/_/g, " ");
+  }
+}
+
+function serializeMeasurementForPrompt(
+  input: {
+    label: "accepted" | "rejected";
+    measurement: TailorResumeLineReductionMeasurement;
+  },
+) {
+  return [
+    `- ${input.label} ${input.measurement.candidate.segmentId}: current ${input.measurement.previousLineCount ?? "?"} -> candidate ${input.measurement.candidateLineCount ?? "?"} rendered lines, original ${input.measurement.originalLineCount ?? "?"}`,
+    `  candidate reason: ${truncateForPrompt(input.measurement.candidate.reason, 180)}`,
+    `  candidate latex: ${truncateForPrompt(input.measurement.candidate.latexCode, 260)}`,
+    ...(input.measurement.rejectionReason
+      ? [
+          `  rejection: ${describeLineReductionRejectionReason(
+            input.measurement.rejectionReason,
+          )}`,
+        ]
+      : []),
+  ].join("\n");
+}
+
+function buildLineReductionToolOutput(input: {
+  estimatedLinesToRecover: number;
+  result: TailorResumeLineReductionToolResult;
+}) {
+  const acceptedRenderedLineReduction = input.result.accepted.reduce(
+    (sum, measurement) =>
+      sum + (measurement.previousLineCount - measurement.candidateLineCount),
+    0,
+  );
+
+  return JSON.stringify(
+    {
+      accepted: input.result.accepted.map((measurement) => ({
+        candidateLineCount: measurement.candidateLineCount,
+        latexCode: measurement.candidate.latexCode,
+        originalLineCount: measurement.originalLineCount,
+        previousLineCount: measurement.previousLineCount,
+        reason: measurement.candidate.reason,
+        renderedLineReduction:
+          measurement.previousLineCount - measurement.candidateLineCount,
+        segmentId: measurement.candidate.segmentId,
+      })),
+      acceptedRenderedLineReduction,
+      canSubmitFinalCandidates: input.result.accepted.length > 0,
+      estimatedLinesStillNeeded: input.estimatedLinesToRecover,
+      nextAction:
+        input.result.accepted.length > 0
+          ? `Call ${tailorResumeLineReductionSubmissionToolName} with only the accepted candidates you actually want to apply, or measure a revised set if you want a different tradeoff.`
+          : `Revise the candidates and call ${tailorResumeLineReductionToolName} again. Do not submit final candidates until at least one measurement is accepted.`,
+      rejected: input.result.rejected.map((measurement) => ({
+        candidateLineCount: measurement.candidateLineCount,
+        latexCode: measurement.candidate.latexCode,
+        originalLineCount: measurement.originalLineCount,
+        previousLineCount: measurement.previousLineCount,
+        reason: measurement.candidate.reason,
+        rejectionGuidance: describeLineReductionRejectionReason(
+          measurement.rejectionReason,
+        ),
+        rejectionReason: measurement.rejectionReason,
+        segmentId: measurement.candidate.segmentId,
+      })),
+    },
+    null,
+    2,
+  );
+}
 
 function getOpenAIClient() {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -133,26 +404,6 @@ function readOutputText(response: TailorResumeCompactionResponse) {
   }
 
   return chunks.join("").trim();
-}
-
-function findLineReductionToolCall(
-  response: TailorResumeCompactionResponse,
-): TailorResumeLineReductionToolCall | null {
-  for (const outputItem of response.output ?? []) {
-    if (
-      outputItem.type === "function_call" &&
-      outputItem.name === tailorResumeLineReductionToolName &&
-      typeof outputItem.call_id === "string" &&
-      typeof outputItem.arguments === "string"
-    ) {
-      return {
-        arguments: outputItem.arguments,
-        call_id: outputItem.call_id,
-      };
-    }
-  }
-
-  return null;
 }
 
 function readTrimmedString(value: unknown) {
@@ -306,8 +557,8 @@ function serializeEditableBlocks(input: {
     return "[no editable model blocks are available]";
   }
 
-  return input.workingEdits
-    .map((edit, index) => {
+  const entries = input.workingEdits
+    .map((edit) => {
       const currentLineCount =
         currentLineCounts.get(edit.segmentId)?.lineCount ?? null;
       const sourceLineCount = sourceLineCounts.get(edit.segmentId)?.lineCount ?? null;
@@ -316,68 +567,119 @@ function serializeEditableBlocks(input: {
           ? currentLineCount - sourceLineCount
           : null;
 
-      return [
-        `${index + 1}. segmentId: ${edit.segmentId}`,
-        `   command: ${edit.command ?? "unknown"}`,
-        `   original rendered lines: ${sourceLineCount ?? "[unavailable]"}`,
-        `   current replacement rendered lines: ${currentLineCount ?? "[unavailable]"}`,
-        `   line delta vs original: ${lineDelta === null ? "[unavailable]" : lineDelta}`,
-        `   current generated-by step: ${edit.generatedByStep}`,
-        "   acceptance rule: a Step 4 candidate must render to fewer lines than both the current replacement and the original block when those counts are available",
-        `   current reason: ${edit.reason}`,
-        "   original latex block:",
-        edit.beforeLatexCode,
-        "   current replacement latex block:",
-        readCurrentEditLatex(edit),
-      ].join("\n");
+      return {
+        currentLineCount,
+        edit,
+        lineDelta,
+        sourceLineCount,
+      };
     })
-    .join("\n\n");
+    .sort((left, right) => {
+      const leftPriority =
+        left.currentLineCount === null ? 1 : left.currentLineCount >= 2 ? 2 : 0;
+      const rightPriority =
+        right.currentLineCount === null ? 1 : right.currentLineCount >= 2 ? 2 : 0;
+
+      if (leftPriority !== rightPriority) {
+        return rightPriority - leftPriority;
+      }
+
+      if ((left.currentLineCount ?? -1) !== (right.currentLineCount ?? -1)) {
+        return (right.currentLineCount ?? -1) - (left.currentLineCount ?? -1);
+      }
+
+      return (right.lineDelta ?? -1) - (left.lineDelta ?? -1);
+    });
+  const highPriorityEntries = entries.filter(
+    (entry) => entry.currentLineCount === null || entry.currentLineCount >= 2,
+  );
+  const lastResortEntries = entries.filter(
+    (entry) => entry.currentLineCount !== null && entry.currentLineCount < 2,
+  );
+  const formatEntry = (
+    entry: (typeof entries)[number],
+    priority: "high" | "last_resort",
+  ) =>
+    [
+      `- segmentId: ${entry.edit.segmentId}`,
+      `  command: ${entry.edit.command ?? "unknown"}`,
+      `  compaction priority: ${priority === "high" ? "high" : "last_resort"}`,
+      `  original rendered lines: ${entry.sourceLineCount ?? "[unavailable]"}`,
+      `  current replacement rendered lines: ${entry.currentLineCount ?? "[unavailable]"}`,
+      `  line delta vs original: ${entry.lineDelta === null ? "[unavailable]" : entry.lineDelta}`,
+      `  current generated-by step: ${entry.edit.generatedByStep}`,
+      "  acceptance rule: a Step 4 candidate must render to fewer lines than both the current replacement and the original block when those counts are available",
+      `  current reason: ${entry.edit.reason}`,
+      "  original latex block:",
+      entry.edit.beforeLatexCode,
+      "  current replacement latex block:",
+      readCurrentEditLatex(entry.edit),
+    ].join("\n");
+
+  return [
+    "High-priority compaction targets (these blocks currently span multiple rendered lines or have unknown measurements):",
+    ...(highPriorityEntries.length > 0
+      ? highPriorityEntries.map((entry) => formatEntry(entry, "high"))
+      : ["- none"]),
+    ...(lastResortEntries.length > 0
+      ? [
+          "",
+          "Lower-priority / last-resort targets (these blocks already render in one line, so they usually only help if deleted or radically simplified):",
+          ...lastResortEntries.map((entry) => formatEntry(entry, "last_resort")),
+        ]
+      : []),
+  ].join("\n\n");
 }
 
-function serializeToolMeasurementFeedback(input: {
-  estimatedLinesToRecover: number;
-  result: TailorResumeLineReductionToolResult | null;
-}) {
-  if (!input.result) {
+function serializeCompactionAttemptHistory(
+  history: TailorResumeCompactionAttemptHistoryEntry[],
+) {
+  if (history.length === 0) {
     return "";
   }
 
-  const acceptedReduction = input.result.accepted.reduce(
-    (sum, measurement) =>
-      sum + (measurement.previousLineCount - measurement.candidateLineCount),
-    0,
-  );
-  const acceptedLines =
-    input.result.accepted.length > 0
-      ? input.result.accepted.map(
-          (measurement) =>
-            `- accepted ${measurement.candidate.segmentId}: ${measurement.previousLineCount} -> ${measurement.candidateLineCount} rendered lines`,
-        )
-      : ["- none"];
-  const rejectedLines =
-    input.result.rejected.length > 0
-      ? input.result.rejected.map(
-          (measurement) =>
-            `- rejected ${measurement.candidate.segmentId}: current ${measurement.previousLineCount ?? "?"} -> candidate ${measurement.candidateLineCount ?? "?"} rendered lines, original ${measurement.originalLineCount ?? "?"} (${measurement.rejectionReason ?? "rejected"})`,
-        )
-      : ["- none"];
-
   return [
-    "Previous line-measurement result:",
-    `Accepted rendered line reduction: ${acceptedReduction}`,
-    `Current estimated lines still needed before this attempt: ${input.estimatedLinesToRecover}`,
-    "Accepted candidates:",
-    ...acceptedLines,
-    "Rejected candidates:",
-    ...rejectedLines,
-  ].join("\n");
+    "Previous Step 4 retry memory:",
+    ...history.slice(-maxCompactionHistoryAttemptsForPrompt).map((entry) => {
+      const measurementLines = entry.measurementResult
+        ? [
+            ...entry.measurementResult.accepted.map((measurement) =>
+              serializeMeasurementForPrompt({
+                label: "accepted",
+                measurement,
+              }),
+            ),
+            ...entry.measurementResult.rejected.map((measurement) =>
+              serializeMeasurementForPrompt({
+                label: "rejected",
+                measurement,
+              }),
+            ),
+          ].slice(0, maxCompactionMeasurementsPerAttemptForPrompt)
+        : [];
+
+      return [
+        `Attempt ${entry.attempt}: ${entry.detail}`,
+        `Estimated rendered lines to recover before that attempt: ${entry.estimatedLinesToRecover}`,
+        "Measured candidates:",
+        ...(measurementLines.length > 0
+          ? measurementLines
+          : ["- [no reusable measurement result captured]"]),
+      ].join("\n");
+    }),
+  ].join("\n\n");
 }
 
 function buildCompactionInstructions() {
   return [
     "You are Step 4 of a staged resume-tailoring pipeline.",
     "Your only job is to find real rendered-line reductions in the existing model-edited blocks.",
-    `You must call ${tailorResumeLineReductionToolName}; do not answer with prose instead.`,
+    `Before any final submission, you must call ${tailorResumeLineReductionToolName} to self-check your edits against rendered line counts.`,
+    `You may call ${tailorResumeLineReductionToolName} multiple times until you find a candidate set that actually works.`,
+    `Only after reading the measurement result should you call ${tailorResumeLineReductionSubmissionToolName}.`,
+    `When you call ${tailorResumeLineReductionSubmissionToolName}, include only candidates that survived your latest measurement pass.`,
+    "Do not resubmit the same losing shape after the tool already showed it stayed on the same rendered line count unless you materially changed the LaTeX.",
+    "Prefer high-yield blocks that currently span multiple rendered lines. Treat already-one-line blocks as last resort unless deleting one is truly necessary.",
     "Only include a block in the tool call when you believe the replacement will reduce that exact block by at least one rendered PDF line versus the current model replacement and versus the original resume block shown to the user.",
     "Do not polish, rephrase, or touch a block unless the replacement is likely to create a user-visible rendered-line reduction for that same block.",
     "Use the current replacement LaTeX block shape. Keep the edit inside the same segment and preserve factual accuracy.",
@@ -386,16 +688,16 @@ function buildCompactionInstructions() {
 }
 
 function buildCompactionInput(input: {
+  attemptHistory: TailorResumeCompactionAttemptHistoryEntry[];
   currentLayout: TailorResumeLayoutMeasurement;
   currentPageCount: number;
   estimatedLinesToRecover: number;
-  measurementFeedback: string;
   promptSettings: SystemPromptSettings;
   sourceLayout: TailorResumeLayoutMeasurement;
   targetPageCount: number;
   thesis: TailoredResumeThesis | null;
   workingEdits: TailoredResumeBlockEditRecord[];
-}) {
+}): TailorResumeCompactionResponseInput {
   const thesisText = input.thesis
     ? [
         "Current tailoring thesis:",
@@ -441,17 +743,159 @@ function buildCompactionInput(input: {
               workingEdits: input.workingEdits,
             }),
         },
-        ...(input.measurementFeedback
+        ...(input.attemptHistory.length > 0
           ? [
               {
                 type: "input_text" as const,
-                text: input.measurementFeedback,
+                text: serializeCompactionAttemptHistory(input.attemptHistory),
               },
             ]
           : []),
       ],
     },
   ];
+}
+
+async function collectVerifiedCompactionCandidates(input: {
+  attemptHistory: TailorResumeCompactionAttemptHistoryEntry[];
+  client: OpenAI;
+  currentAnnotatedLatexCode: string;
+  currentLayout: TailorResumeLayoutMeasurement;
+  currentPageCount: number;
+  editableSegmentIds: Set<string>;
+  estimatedLinesToRecover: number;
+  model: string;
+  promptSettings: SystemPromptSettings;
+  sourceLayout: TailorResumeLayoutMeasurement;
+  targetPageCount: number;
+  thesis: TailoredResumeThesis | null;
+  workingEdits: TailoredResumeBlockEditRecord[];
+}): Promise<TailorResumeCompactionSelfCheckResult> {
+  let latestMeasurementResult: TailorResumeLineReductionToolResult | null = null;
+  let latestModel = input.model;
+  let measuredAtLeastOnce = false;
+  let previousResponseId: string | undefined;
+  let responseInput: TailorResumeCompactionResponseInput = buildCompactionInput({
+    attemptHistory: input.attemptHistory,
+    currentLayout: input.currentLayout,
+    currentPageCount: input.currentPageCount,
+    estimatedLinesToRecover: input.estimatedLinesToRecover,
+    promptSettings: input.promptSettings,
+    sourceLayout: input.sourceLayout,
+    targetPageCount: input.targetPageCount,
+    thesis: input.thesis,
+    workingEdits: input.workingEdits,
+  });
+
+  for (let round = 1; round <= maxCompactionSelfCheckRounds; round += 1) {
+    const response = mapCompactionResponse(
+      await input.client.responses.create({
+        input: responseInput,
+        instructions: buildCompactionInstructions(),
+        model: input.model,
+        parallel_tool_calls: false,
+        previous_response_id: previousResponseId,
+        tool_choice: "required",
+        tools: [
+          tailorResumeLineReductionTool,
+          tailorResumeLineReductionSubmissionTool,
+        ],
+      }),
+    );
+
+    previousResponseId = response.id;
+    latestModel = response.model ?? latestModel;
+
+    const toolCall = findCompactionToolCall(response);
+
+    if (!toolCall) {
+      const outputText = readOutputText(response);
+      return {
+        error: outputText
+          ? `The model did not call a Step 4 compaction tool. It returned: ${outputText}`
+          : "The model did not call a Step 4 compaction tool.",
+        measurementResult: latestMeasurementResult,
+        model: latestModel,
+        ok: false,
+      };
+    }
+
+    if (toolCall.name === tailorResumeLineReductionSubmissionToolName) {
+      if (!measuredAtLeastOnce) {
+        return {
+          error:
+            `The model tried to submit final Step 4 candidates before calling ${tailorResumeLineReductionToolName}.`,
+          measurementResult: latestMeasurementResult,
+          model: latestModel,
+          ok: false,
+        };
+      }
+
+      try {
+        return {
+          candidates: parseCompactionSubmissionCandidates(
+            JSON.parse(toolCall.arguments),
+          ),
+          measurementResult: latestMeasurementResult,
+          model: latestModel,
+          ok: true,
+        };
+      } catch (error) {
+        return {
+          error:
+            error instanceof Error
+              ? error.message
+              : "The model returned an invalid final compaction submission.",
+          measurementResult: latestMeasurementResult,
+          model: latestModel,
+          ok: false,
+        };
+      }
+    }
+
+    let candidates: TailorResumeLineReductionCandidate[];
+
+    try {
+      candidates = parseLineReductionCandidates(JSON.parse(toolCall.arguments));
+    } catch (error) {
+      return {
+        error:
+          error instanceof Error
+            ? error.message
+            : "The model returned an invalid line-measurement tool call.",
+        measurementResult: latestMeasurementResult,
+        model: latestModel,
+        ok: false,
+      };
+    }
+
+    latestMeasurementResult = await measureTailorResumeLineReductionCandidates({
+      candidates,
+      currentAnnotatedLatexCode: input.currentAnnotatedLatexCode,
+      currentLayout: input.currentLayout,
+      editableSegmentIds: input.editableSegmentIds,
+      sourceLayout: input.sourceLayout,
+    });
+    measuredAtLeastOnce = true;
+    responseInput = [
+      {
+        call_id: toolCall.call_id,
+        output: buildLineReductionToolOutput({
+          estimatedLinesToRecover: input.estimatedLinesToRecover,
+          result: latestMeasurementResult,
+        }),
+        type: "function_call_output",
+      },
+    ];
+  }
+
+  return {
+    error:
+      `The model did not submit verified compaction candidates after ${maxCompactionSelfCheckRounds} Step 4 tool rounds.`,
+    measurementResult: latestMeasurementResult,
+    model: latestModel,
+    ok: false,
+  };
 }
 
 async function validateFinalCompactedLatex(input: {
@@ -525,7 +969,10 @@ export async function compactTailoredResumePageCount(input: {
 
   const startedAt = Date.now();
   const promptSettings = input.promptSettings ?? createDefaultSystemPromptSettings();
-  const maxCompactionAttempts = Math.max(1, getRetryAttemptsToGenerateLatexEdits());
+  const maxCompactionAttempts = Math.max(
+    1,
+    getRetryAttemptsToGeneratePageCountCompaction(),
+  );
   const model = process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
   const client = getOpenAIClient();
   const editableSegmentIds = new Set(input.edits.map((edit) => edit.segmentId));
@@ -539,7 +986,7 @@ export async function compactTailoredResumePageCount(input: {
   let currentPageCount = input.initialPageCount;
   let sourceLayout: TailorResumeLayoutMeasurement;
   let currentLayout: TailorResumeLayoutMeasurement;
-  let previousMeasurementResult: TailorResumeLineReductionToolResult | null = null;
+  const attemptHistory: TailorResumeCompactionAttemptHistoryEntry[] = [];
   let lastError =
     `Unable to keep the tailored resume within ${buildPageCountLimitLabel(targetPageCount)}.`;
   let lastModel = model;
@@ -591,113 +1038,32 @@ export async function compactTailoredResumePageCount(input: {
       targetPageCount,
     });
     const estimatedLinesToRecover = overflowEstimate.estimatedLinesToRecover;
-    const measurementFeedback = serializeToolMeasurementFeedback({
+    const selfCheckResult = await collectVerifiedCompactionCandidates({
+      attemptHistory,
+      client,
+      currentAnnotatedLatexCode,
+      currentLayout,
+      currentPageCount,
+      editableSegmentIds,
       estimatedLinesToRecover,
-      result: previousMeasurementResult,
-    });
-    const response = await client.responses.create({
-      input: buildCompactionInput({
-        currentLayout,
-        currentPageCount,
-        estimatedLinesToRecover,
-        measurementFeedback,
-        promptSettings,
-        sourceLayout,
-        targetPageCount,
-        thesis: input.thesis,
-        workingEdits,
-      }),
-      instructions: buildCompactionInstructions(),
       model,
-      parallel_tool_calls: false,
-      tool_choice: "required",
-      tools: [tailorResumeLineReductionTool],
+      promptSettings,
+      sourceLayout,
+      targetPageCount,
+      thesis: input.thesis,
+      workingEdits,
     });
 
-    lastModel = (response as { model?: string }).model ?? model;
-    const toolCall = findLineReductionToolCall({
-      id: response.id,
-      model: response.model ?? undefined,
-      output: response.output.map((outputItem) => {
-        const mappedItem: TailorResumeCompactionOutputItem = {
-          type: outputItem.type,
-        };
+    lastModel = selfCheckResult.model;
 
-        if ("name" in outputItem && typeof outputItem.name === "string") {
-          mappedItem.name = outputItem.name;
-        }
-
-        if ("call_id" in outputItem && typeof outputItem.call_id === "string") {
-          mappedItem.call_id = outputItem.call_id;
-        }
-
-        if (
-          "arguments" in outputItem &&
-          typeof outputItem.arguments === "string"
-        ) {
-          mappedItem.arguments = outputItem.arguments;
-        }
-
-        if ("content" in outputItem && Array.isArray(outputItem.content)) {
-          mappedItem.content = outputItem.content.map((contentItem) => {
-            const mappedContent: { text?: string; type?: string } = {};
-
-            if ("type" in contentItem && typeof contentItem.type === "string") {
-              mappedContent.type = contentItem.type;
-            }
-
-            if ("text" in contentItem && typeof contentItem.text === "string") {
-              mappedContent.text = contentItem.text;
-            }
-
-            return mappedContent;
-          });
-        }
-
-        return mappedItem;
-      }),
-      output_text: response.output_text,
-    });
-
-    if (!toolCall) {
-      const outputText = readOutputText({
-        id: response.id,
-        model: response.model ?? undefined,
-        output_text: response.output_text,
-      });
-      lastError = outputText
-        ? `The model did not call ${tailorResumeLineReductionToolName}. It returned: ${outputText}`
-        : `The model did not call ${tailorResumeLineReductionToolName}.`;
-      previousMeasurementResult = {
-        accepted: [],
-        rejected: [],
-      };
-      await input.onStepEvent?.({
+    if (!selfCheckResult.ok) {
+      lastError = selfCheckResult.error;
+      attemptHistory.push({
         attempt,
         detail: lastError,
-        durationMs: Math.max(0, Date.now() - startedAt),
-        retrying: attempt < maxCompactionAttempts,
-        status: attempt < maxCompactionAttempts ? "running" : "failed",
-        stepCount: 4,
-        stepNumber: 4,
-        summary: "Keeping the tailored resume within the original page count",
+        estimatedLinesToRecover,
+        measurementResult: selfCheckResult.measurementResult,
       });
-      continue;
-    }
-
-    let candidates: TailorResumeLineReductionCandidate[];
-
-    try {
-      candidates = parseLineReductionCandidates(JSON.parse(toolCall.arguments));
-    } catch (error) {
-      lastError =
-        error instanceof Error
-          ? error.message
-          : "The model returned an invalid line-measurement tool call.";
-      previousMeasurementResult = {
-        accepted: [],
-        rejected: [],
-      };
       await input.onStepEvent?.({
         attempt,
         detail: lastError,
@@ -712,17 +1078,22 @@ export async function compactTailoredResumePageCount(input: {
     }
 
     const measurementResult = await measureTailorResumeLineReductionCandidates({
-      candidates,
+      candidates: selfCheckResult.candidates,
       currentAnnotatedLatexCode,
       currentLayout,
       editableSegmentIds,
       sourceLayout,
     });
-    previousMeasurementResult = measurementResult;
 
     if (measurementResult.accepted.length === 0) {
       lastError =
         "No proposed compaction candidate reduced its block's measured rendered line count.";
+      attemptHistory.push({
+        attempt,
+        detail: lastError,
+        estimatedLinesToRecover,
+        measurementResult,
+      });
       await input.onStepEvent?.({
         attempt,
         detail:
@@ -766,6 +1137,12 @@ export async function compactTailoredResumePageCount(input: {
         error instanceof Error
           ? error.message
           : "Unable to compile the accepted line reductions.";
+      attemptHistory.push({
+        attempt,
+        detail: lastError,
+        estimatedLinesToRecover,
+        measurementResult,
+      });
       await input.onStepEvent?.({
         attempt,
         detail: lastError,
@@ -822,6 +1199,12 @@ export async function compactTailoredResumePageCount(input: {
       `Accepted ${measurementResult.accepted.length} verified line-saving block ` +
       `change${measurementResult.accepted.length === 1 ? "" : "s"} and removed ${buildLineCountLabel(acceptedLineReduction)}, ` +
       `but the resume still rendered to ${buildPageCountLimitLabel(currentPageCount)}.`;
+    attemptHistory.push({
+      attempt,
+      detail: lastError,
+      estimatedLinesToRecover,
+      measurementResult,
+    });
 
     await input.onStepEvent?.({
       attempt,

@@ -1,5 +1,6 @@
 export const defaultRetryAttemptsToGenerateLatexFromPdf = 3;
 export const defaultRetryAttemptsToGenerateLatexEdits = 3;
+export const defaultRetryAttemptsToGeneratePageCountCompaction = 5;
 
 function parseRetryAttemptCount(
   value: string | undefined,
@@ -31,5 +32,12 @@ export function getRetryAttemptsToGenerateLatexEdits() {
   return parseRetryAttemptCount(
     process.env.RETRY_ATTEMPTS_TO_GENERATE_LATEX_EDITS,
     defaultRetryAttemptsToGenerateLatexEdits,
+  );
+}
+
+export function getRetryAttemptsToGeneratePageCountCompaction() {
+  return parseRetryAttemptCount(
+    process.env.RETRY_ATTEMPTS_TO_GENERATE_PAGE_COUNT_COMPACTION,
+    defaultRetryAttemptsToGeneratePageCountCompaction,
   );
 }

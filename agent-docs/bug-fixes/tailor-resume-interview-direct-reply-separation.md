@@ -1,0 +1,4 @@
+- Symptom: when a Tailor Resume follow-up user asked for more examples or a more specific framing, the assistant often repeated the same JD rationale and sample answers instead of adapting to the new request.
+- Root cause: the interview contract forced the user-facing reply to live inside tool arguments, so the model kept overpacking the tool call with JD framing, examples, and the next question.
+- Fix: keep the tool call as control-plane data only, move the user-facing interview turn into normal assistant text, and update the shared interview prompt so later turns answer the user's latest request directly instead of restating the same setup.
+- Guardrail: when an interview step needs structured state plus natural language, keep the structured facts in the tool call and the conversational wording in assistant text.

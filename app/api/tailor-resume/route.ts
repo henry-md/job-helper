@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import { getApiSession } from "@/lib/api-auth";
+import { createNdjsonStreamWriter } from "@/lib/ndjson-stream";
 import { getPrismaClient } from "@/lib/prisma";
 import { buildNormalizedJobUrlHash } from "@/lib/job-url-hash";
 import {
@@ -422,11 +423,11 @@ function buildTailorResumeConversationMessage(input: {
   };
 }
 
-function buildTailorResumeInterviewQuestionText(input: {
+function buildTailorResumeInterviewAssistantText(input: {
+  assistantMessage: string;
   planningResult: TailorResumePlanningResult;
-  question: string;
 }) {
-  const question = input.question.trim();
+  const assistantMessage = input.assistantMessage.trim();
   const summary = input.planningResult.questioningSummary;
   const debugSentence =
     summary?.debugDecision === "would_ask_without_debug"
@@ -435,7 +436,10 @@ function buildTailorResumeInterviewQuestionText(input: {
         ? " Debug mode note: I would not normally ask this, but I’m asking because debug mode is forcing at least one follow-up question."
         : "";
 
-  return debugSentence ? `${debugSentence.trim()}\n\n${question}` : question;
+  return [debugSentence, assistantMessage]
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function readTailorResumeInterviewAttempt(
@@ -1917,6 +1921,7 @@ async function handleTailorResumeGeneration(
   }
 
   let planningResult = planningStage.planningResult;
+
   let accumulatedModelDurationMs = planningStage.generationDurationMs;
   let userMarkdownAfterQuestioning: TailorResumeUserMarkdownState | undefined;
   let userMarkdownForImplementation = userMarkdownForNonInteractiveRun;
@@ -2024,9 +2029,9 @@ async function handleTailorResumeGeneration(
         conversation: [
           buildTailorResumeConversationMessage({
             role: "assistant",
-            text: buildTailorResumeInterviewQuestionText({
+            text: buildTailorResumeInterviewAssistantText({
+              assistantMessage: questioningResult.assistantMessage,
               planningResult,
-              question: questioningResult.question,
             }),
             toolCalls: questioningResult.toolCalls,
           }),
@@ -2441,9 +2446,9 @@ async function handleAdvanceTailorResumeInterview(
         ...nextConversation,
         buildTailorResumeConversationMessage({
           role: "assistant",
-          text: buildTailorResumeInterviewQuestionText({
+          text: buildTailorResumeInterviewAssistantText({
+            assistantMessage: questioningResult.assistantMessage,
             planningResult: nextPlanningResult,
-            question: questioningResult.question,
           }),
           toolCalls: questioningResult.toolCalls,
         }),
@@ -2899,17 +2904,14 @@ function buildTailorResumeGenerationStreamResponse(
     ) => void | Promise<void>,
   ) => Promise<Response | undefined>,
 ) {
-  const encoder = new TextEncoder();
   const stream = new ReadableStream({
     start(controller) {
-      const sendEvent = (event: unknown) => {
-        controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
-      };
+      const writer = createNdjsonStreamWriter(controller);
 
       void (async () => {
         try {
           const response = await run((stepEvent) => {
-            sendEvent({
+            writer.sendEvent({
               stepEvent,
               type: "generation-step",
             });
@@ -2921,14 +2923,14 @@ function buildTailorResumeGenerationStreamResponse(
 
           const payload = (await response.json()) as Record<string, unknown>;
 
-          sendEvent({
+          writer.sendEvent({
             ok: response.ok,
             payload,
             status: response.status,
             type: "done",
           });
         } catch (error) {
-          sendEvent({
+          writer.sendEvent({
             error:
               error instanceof Error
                 ? error.message
@@ -2936,7 +2938,7 @@ function buildTailorResumeGenerationStreamResponse(
             type: "error",
           });
         } finally {
-          controller.close();
+          writer.close();
         }
       })();
     },
@@ -4694,12 +4696,9 @@ export async function POST(request: Request) {
     await deleteTailorResumePreviewPdf(session.user.id);
 
     if (wantsTailorResumeUploadStream(request)) {
-      const encoder = new TextEncoder();
       const stream = new ReadableStream({
         start(controller) {
-          const sendEvent = (event: unknown) => {
-            controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
-          };
+          const writer = createNdjsonStreamWriter(controller);
 
           void (async () => {
             try {
@@ -4711,7 +4710,7 @@ export async function POST(request: Request) {
                 },
                 {
                   onAttemptEvent: (attemptEvent) => {
-                    sendEvent({
+                    writer.sendEvent({
                       attemptEvent,
                       type: "extraction-attempt",
                     });
@@ -4727,12 +4726,12 @@ export async function POST(request: Request) {
                 await deletePersistedUserResume(previousResumeStoragePath);
               }
 
-              sendEvent({
+              writer.sendEvent({
                 payload: buildExtractionResponse(extractionResult),
                 type: "done",
               });
             } catch (error) {
-              sendEvent({
+              writer.sendEvent({
                 error:
                   error instanceof Error
                     ? error.message
@@ -4740,7 +4739,7 @@ export async function POST(request: Request) {
                 type: "error",
               });
             } finally {
-              controller.close();
+              writer.close();
             }
           })();
         },

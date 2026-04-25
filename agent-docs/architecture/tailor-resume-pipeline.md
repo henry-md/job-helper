@@ -33,9 +33,11 @@ Step 3. Generate block-scoped edits
 Step 4. Condense edits to keep page size from growing
 - If the tailored preview exceeds the source resume's page count, run a compaction/refinement loop over the edited blocks only.
 - Use rendered PDF line measurements to estimate how many lines must be recovered, annotate original/current blocks with measured line counts, and ask the model only for candidates it believes can remove a rendered line.
+- Step 4 should self-check before final submission: let the model call the rendered-line measurement tool, read the exact acceptance/rejection result, revise if needed, and only then submit the final candidate set for server-side validation.
 - Measure candidate replacements in the full LaTeX document and accept only candidates whose exact block-level rendered line count drops versus both the current Step 3 replacement and the original block when that original measurement is available. Keep the Step 3 edit for any candidate that does not create a user-visible line reduction.
 - Step 4 reasons should lead with the job-description fit change and mention shortening only as a passing fragment, not as the main justification.
 - Rebuild from the immutable Step 3 edit set plus accepted reductions and repeat until the compiled preview empirically fits or the attempt budget is exhausted.
+- Retry context should include concise memory of prior measured failures, including the segment, candidate snippet, current/original/candidate line counts, and rejection reason, so later attempts avoid recycling the same same-line-count edits.
 - Persist `generatedByStep` on every review block: `3` for Step 3 implementation output and `4` only when Step 4 accepted a replacement for that block. When `DEBUG_UI` is enabled, review cards show this as a lower-right badge with hover context.
 - This is a follow-up guardrail stage, not a second full-resume rewrite.
 
@@ -43,7 +45,7 @@ Retry model:
 - Extraction can retry LaTeX generation when the first pass is invalid.
 - Planning can retry independently if the structured plan is empty or malformed.
 - Block-scoped implementation retries stay local to the selected segments and compile validation.
-- Page-count compaction retries stay local to the edited blocks until the preview fits or the attempt budget is exhausted.
+- Page-count compaction retries stay local to the edited blocks until the preview fits or the attempt budget is exhausted, and they use a Step-4-specific retry budget instead of borrowing the generic edit-stage retry count.
 - Design goal: retry the failing stage, not the entire pipeline.
 
 Relevant code paths:

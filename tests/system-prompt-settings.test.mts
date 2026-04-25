@@ -54,14 +54,13 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 
-test("buildTailorResumePlanningSystemPrompt asks for job numbers as identifiers", () => {
+test("buildTailorResumePlanningSystemPrompt does not ask for job identifiers", () => {
   const prompt = buildTailorResumePlanningSystemPrompt(
     createDefaultSystemPromptSettings(),
     {},
   );
 
-  assert.match(prompt, /jobIdentifier should prefer a visible requisition, job, posting, or reference number\/id/i);
-  assert.match(prompt, /without labels like "Job ID:"/i);
+  assert.doesNotMatch(prompt, /jobIdentifier/i);
 });
 
 test("buildTailorResumeInterviewSystemPrompt injects retry feedback", () => {
@@ -77,21 +76,21 @@ test("buildTailorResumeInterviewSystemPrompt injects retry feedback", () => {
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 
-test("buildTailorResumeInterviewSystemPrompt requires concise question framing", () => {
+test("buildTailorResumeInterviewSystemPrompt keeps user-facing interview text outside tool arguments", () => {
   const prompt = buildTailorResumeInterviewSystemPrompt(
     createDefaultSystemPromptSettings(),
     {},
   );
 
-  assert.match(prompt, /keep the user-facing question concise/i);
-  assert.match(prompt, /say what in the job description suggests this skill or detail is important/i);
-  assert.match(prompt, /could not find that same skill or detail in the resume/i);
-  assert.match(prompt, /give 1-2 brief examples of strong answers/i);
-  assert.match(prompt, /tailored to that job-description signal/i);
+  assert.match(prompt, /normal assistant text/i);
+  assert.match(prompt, /tool call is the control-plane output/i);
+  assert.match(prompt, /keep the follow-up question concise/i);
+  assert.match(prompt, /adapt it to the user's new constraint or correction/i);
+  assert.match(prompt, /do not repeat the same examples with light rewording/i);
+  assert.match(prompt, /avoid repeating it verbatim on later turns/i);
   assert.match(prompt, /keep the overall interview short/i);
   assert.match(prompt, /usually ask only one follow-up question/i);
   assert.match(prompt, /rarely ask more than 2-3 total/i);
-  assert.match(prompt, /specific tools, ownership, practices, metrics, scope, domain context, or outcomes/i);
   assert.match(prompt, /possible answer shapes, not claims about what the user did/i);
   assert.match(prompt, /ask_tailor_resume_follow_up/i);
   assert.match(prompt, /finish_tailor_resume_interview/i);
@@ -100,10 +99,13 @@ test("buildTailorResumeInterviewSystemPrompt requires concise question framing",
   assert.match(prompt, /close neighbors of resume-supported experience/i);
   assert.match(prompt, /JavaScript framework/i);
   assert.match(prompt, /resume lists C\+\+/i);
-  assert.match(prompt, /During the NewForm refactor, which observability\/diagnosability tools/i);
-  assert.match(prompt, /job description mentions structured logging and OpenTelemetry/i);
-  assert.match(prompt, /I added OpenTelemetry tracing to tRPC endpoints/i);
-  assert.match(prompt, /I built alerts\/dashboards that cut debugging time by 30%/i);
+  assert.match(prompt, /Spring Boot API layer around the LLM pipeline/i);
+  assert.match(prompt, /prompt orchestration, retrieval, and eval logging/i);
+  assert.match(prompt, /Which model family, serving stack, and measurable outcome best match your work/i);
+  assert.equal(
+    prompt.includes("make the question text do four jobs"),
+    false,
+  );
   assert.equal(prompt.includes("totalQuestionBudget"), false);
 });
 
@@ -167,9 +169,11 @@ test("buildTailorResumePageCountCompactionPrompt injects page count tokens", () 
   assert.match(prompt, /Single page is a hard requirement\./i);
   assert.match(prompt, /current tailored preview is 2 pages/i);
   assert.match(prompt, /about 3 rendered lines must be removed/i);
+  assert.match(prompt, /Use the measurement tool as a scratchpad before your final submission/i);
   assert.match(prompt, /Only touch blocks where your proposed replacement is likely to remove/i);
   assert.match(prompt, /same-line-count edits/i);
   assert.match(prompt, /measurement tool will reject/i);
+  assert.match(prompt, /already-one-line blocks as last-resort cuts/i);
   assert.match(prompt, /Lead with what changed in the context of the job description/i);
   assert.match(prompt, /Mention the need to shorten only as a passing sentence fragment/i);
   assert.match(prompt, /fully replaces the old reason shown to the user/i);

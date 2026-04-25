@@ -75,7 +75,6 @@ const askTailorResumeFollowUpToolParameters = {
   type: "object",
   additionalProperties: false,
   properties: {
-    agenda: { type: "string" },
     debugDecision: {
       type: "string",
       enum: [
@@ -88,27 +87,18 @@ const askTailorResumeFollowUpToolParameters = {
       type: "array",
       items: tailorResumeInterviewLearningSchema,
     },
-    question: { type: "string" },
     userMarkdownEditOperations: {
       type: "array",
       items: tailorResumeUserMarkdownEditOperationSchema,
     },
   },
-  required: [
-    "agenda",
-    "debugDecision",
-    "learnings",
-    "question",
-    "userMarkdownEditOperations",
-  ],
+  required: ["debugDecision", "learnings", "userMarkdownEditOperations"],
 } as const;
 
 const finishTailorResumeInterviewToolParameters = {
   type: "object",
   additionalProperties: false,
   properties: {
-    agenda: { type: "string" },
-    completionMessage: { type: "string" },
     learnings: {
       type: "array",
       items: tailorResumeInterviewLearningSchema,
@@ -118,12 +108,7 @@ const finishTailorResumeInterviewToolParameters = {
       items: tailorResumeUserMarkdownEditOperationSchema,
     },
   },
-  required: [
-    "agenda",
-    "completionMessage",
-    "learnings",
-    "userMarkdownEditOperations",
-  ],
+  required: ["learnings", "userMarkdownEditOperations"],
 } as const;
 
 const skipTailorResumeInterviewToolParameters = {
@@ -168,11 +153,10 @@ const tailorResumeInterviewTools = [
 
 type TailorResumeInterviewResponse = {
   action: "ask" | "done" | "skip";
-  agenda: string;
+  assistantMessage: string;
   completionMessage: string;
   debugDecision: TailorResumeInterviewDebugDecision;
   learnings: TailoredResumeQuestionLearning[];
-  question: string;
   userMarkdownEditOperations: TailorResumeUserMarkdownPatchOperation[];
 };
 
@@ -186,8 +170,8 @@ export function normalizeTailorResumeInterviewResponseForCurrentTurn(input: {
 export type AdvanceTailorResumeQuestioningResult =
   | {
       action: "ask";
+      assistantMessage: string;
       generationDurationMs: number;
-      question: string;
       questioningSummary: TailoredResumeQuestioningSummary;
       toolCalls: TailorResumeConversationToolCall[];
       userMarkdownPatchResult: TailorResumeUserMarkdownPatchResult | null;
@@ -373,6 +357,7 @@ function parseTailorResumeUserMarkdownEditOperations(
 
 function parseTailorResumeInterviewResponse(
   value: unknown,
+  outputText: string,
 ): TailorResumeInterviewResponse {
   if (!value || typeof value !== "object") {
     throw new Error("The model did not return a valid interview response.");
@@ -383,11 +368,6 @@ function parseTailorResumeInterviewResponse(
     (value.action === "ask" || value.action === "done" || value.action === "skip")
       ? value.action
       : null;
-  const agenda = "agenda" in value ? readTrimmedString(value.agenda) : "";
-  const completionMessage =
-    "completionMessage" in value
-      ? readTrimmedString(value.completionMessage)
-      : "";
   const debugDecision =
     "debugDecision" in value &&
     (value.debugDecision === "forced_only" ||
@@ -395,7 +375,6 @@ function parseTailorResumeInterviewResponse(
       value.debugDecision === "would_ask_without_debug")
       ? value.debugDecision
       : null;
-  const question = "question" in value ? readTrimmedString(value.question) : "";
   const rawLearnings = "learnings" in value ? value.learnings : null;
   const userMarkdownEditOperations = parseTailorResumeUserMarkdownEditOperations(
     "userMarkdownEditOperations" in value
@@ -409,11 +388,10 @@ function parseTailorResumeInterviewResponse(
 
   return {
     action,
-    agenda,
-    completionMessage,
+    assistantMessage: action === "ask" ? outputText : "",
+    completionMessage: action === "done" ? outputText : "",
     debugDecision,
     learnings: rawLearnings.map(parseTailoredResumeQuestionLearning),
-    question,
     userMarkdownEditOperations,
   };
 }
@@ -472,10 +450,9 @@ export function parseTailorResumeInterviewResponseFromModelOutput(
   response: TailoredResumeResponse,
 ): ParsedTailorResumeInterviewModelOutput {
   const toolCalls = readFunctionToolCalls(response);
+  const outputText = readOutputText(response);
 
   if (toolCalls.length !== 1) {
-    const outputText = readOutputText(response);
-
     throw new Error(
       outputText
         ? "The model returned text instead of exactly one interview tool call."
@@ -496,7 +473,7 @@ export function parseTailorResumeInterviewResponseFromModelOutput(
           ? argumentsJson
           : {}),
         action: "ask",
-      }),
+      }, outputText),
       toolCalls: conversationToolCalls,
     };
   }
@@ -509,13 +486,18 @@ export function parseTailorResumeInterviewResponseFromModelOutput(
           : {}),
         action: "done",
         debugDecision: "not_applicable",
-        question: "",
-      }),
+      }, outputText),
       toolCalls: conversationToolCalls,
     };
   }
 
   if (toolCall.name === "skip_tailor_resume_interview") {
+    if (outputText) {
+      throw new Error(
+        "skip_tailor_resume_interview must not return user-facing assistant text.",
+      );
+    }
+
     const userMarkdownEditOperations =
       argumentsJson && typeof argumentsJson === "object"
         ? parseTailorResumeUserMarkdownEditOperations(
@@ -528,11 +510,10 @@ export function parseTailorResumeInterviewResponseFromModelOutput(
     return {
       response: {
         action: "skip",
-        agenda: "",
+        assistantMessage: "",
         completionMessage: "",
         debugDecision: "not_applicable",
         learnings: [],
-        question: "",
         userMarkdownEditOperations,
       },
       toolCalls: conversationToolCalls,
@@ -707,9 +688,22 @@ function mentionsUserMarkdown(text: string) {
 }
 
 function readUserFacingInterviewText(response: TailorResumeInterviewResponse) {
-  return response.action === "done"
-    ? response.completionMessage
-    : response.question;
+  if (response.action === "done") {
+    return response.completionMessage;
+  }
+
+  return response.assistantMessage;
+}
+
+function deriveTailorResumeQuestioningAgenda(input: {
+  previousSummary: TailoredResumeQuestioningSummary | null;
+  response: TailorResumeInterviewResponse;
+}) {
+  const firstTopic = input.response.learnings
+    .map((learning) => learning.topic.trim())
+    .find(Boolean);
+
+  return firstTopic ?? input.previousSummary?.agenda ?? "";
 }
 
 function validateTailorResumeInterviewResponse(input: {
@@ -763,8 +757,12 @@ function validateTailorResumeInterviewResponse(input: {
       );
     }
 
-    if (input.response.question) {
-      throw new Error('Action "skip" must not return a question.');
+    if (input.response.assistantMessage) {
+      throw new Error('Action "skip" must not return assistantMessage.');
+    }
+
+    if (input.response.completionMessage) {
+      throw new Error('Action "skip" must not return completionMessage.');
     }
 
     if (input.response.debugDecision !== "not_applicable") {
@@ -778,12 +776,8 @@ function validateTailorResumeInterviewResponse(input: {
     return;
   }
 
-  if (!input.response.agenda) {
-    throw new Error("The model returned an interview response without an agenda.");
-  }
-
-  if (input.response.action === "ask" && !input.response.question) {
-    throw new Error('Action "ask" must return a question.');
+  if (input.response.action === "ask" && !input.response.assistantMessage) {
+    throw new Error('Action "ask" must return user-facing assistant text.');
   }
 
   if (input.response.action === "ask" && input.response.completionMessage) {
@@ -794,8 +788,8 @@ function validateTailorResumeInterviewResponse(input: {
     throw new Error('Action "done" must return completionMessage.');
   }
 
-  if (input.response.action === "done" && input.response.question) {
-    throw new Error('Action "done" must not return another question.');
+  if (input.response.action === "done" && input.response.assistantMessage) {
+    throw new Error('Action "done" must not return ask-stage assistant text.');
   }
 
   if (
@@ -803,7 +797,7 @@ function validateTailorResumeInterviewResponse(input: {
     latestUserMessageRequestsAssistantReply(input.conversation)
   ) {
     throw new Error(
-      "The latest user answer asks for an assistant reply. Use ask_tailor_resume_follow_up with a concise response and one confirmation or correction question instead of ending the interview.",
+      "The latest user answer asks for an assistant reply. Use ask_tailor_resume_follow_up, answer in assistant text, and include one confirmation or correction question instead of ending the interview.",
     );
   }
 
@@ -942,7 +936,7 @@ export async function advanceTailorResumeQuestioning(input: {
           ? error.message
           : "The model returned an invalid interview response.";
       feedback =
-        `${lastError}\nCall exactly one valid interview tool. Keep the interview short and focused, ask only one question at a time, keep learnings compact, and only call finish_tailor_resume_interview when you intentionally want the chat to end.`;
+        `${lastError}\nCall exactly one valid interview tool. Put the user-facing assistant reply in normal assistant text instead of tool arguments. Keep the interview short and focused, ask only one question at a time, keep learnings compact, and only call finish_tailor_resume_interview when you intentionally want the chat to end.`;
       continue;
     }
 
@@ -971,7 +965,10 @@ export async function advanceTailorResumeQuestioning(input: {
     }
 
     const questioningSummary: TailoredResumeQuestioningSummary = {
-      agenda: parsedResponse.agenda,
+      agenda: deriveTailorResumeQuestioningAgenda({
+        previousSummary,
+        response: parsedResponse,
+      }),
       askedQuestionCount:
         parsedResponse.action === "ask"
           ? (previousSummary?.askedQuestionCount ?? 0) + 1
@@ -988,8 +985,8 @@ export async function advanceTailorResumeQuestioning(input: {
     if (parsedResponse.action === "ask") {
       return {
         action: "ask",
+        assistantMessage: parsedResponse.assistantMessage,
         generationDurationMs: Math.max(0, Date.now() - startedAt),
-        question: parsedResponse.question,
         questioningSummary,
         toolCalls: parsedToolCalls,
         userMarkdownPatchResult,
