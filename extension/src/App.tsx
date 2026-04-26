@@ -22,6 +22,7 @@ import {
   buildTailorResumeApplicationContext,
   buildTailoredResumeReviewUrl,
   DEFAULT_DASHBOARD_URL,
+  DEFAULT_JOB_APPLICATIONS_ENDPOINT,
   DEFAULT_TAILOR_RESUME_CHAT_ENDPOINT,
   DEFAULT_TAILOR_RESUME_ENDPOINT,
   DEFAULT_TAILOR_RESUME_PREVIEW_ENDPOINT,
@@ -83,6 +84,11 @@ import {
   readTailorRunRegistryKeyFromPageContext,
 } from "./tailor-run-registry";
 import {
+  haveUserSyncStateChanged,
+  readUserSyncStateSnapshot,
+  type UserSyncStateSnapshot,
+} from "../../lib/sync-state.ts";
+import {
   isTailoredResumeArchived,
   splitTailoredResumesByArchiveState,
 } from "../../lib/tailored-resume-archive-state.ts";
@@ -110,7 +116,7 @@ type AuthState =
 
 type AuthActionState = "idle" | "running";
 
-type PanelTab = "archived" | "debug" | "tailor";
+type PanelTab = "applications" | "archived" | "debug" | "tailor";
 
 type PersonalInfoState =
   | { personalInfo: null; status: "idle" | "loading" }
@@ -233,6 +239,17 @@ function readErrorMessage(value: unknown, fallbackMessage: string) {
   return isRecord(value) && typeof value.error === "string"
     ? value.error
     : fallbackMessage;
+}
+
+function shouldIgnoreSyncRefreshError(error: unknown) {
+  const message =
+    error instanceof Error ? error.message.trim().toLowerCase() : "";
+
+  return (
+    message === "failed to fetch" ||
+    message === "load failed" ||
+    message === "networkerror when attempting to fetch resource."
+  );
 }
 
 function assertRuntimeResponseOk(value: unknown, fallbackMessage: string) {
@@ -1598,6 +1615,9 @@ function App() {
   const tailoredResumeMenuRef = useRef<HTMLDivElement | null>(null);
   const tailoredResumeMenuPopoverRef = useRef<HTMLDivElement | null>(null);
   const lastReadyPersonalInfoRef = useRef<PersonalInfoSummary | null>(null);
+  const lastSeenSyncStateRef = useRef<UserSyncStateSnapshot | null>(null);
+  const isSyncRefreshInFlightRef = useRef(false);
+  const isSyncStateCheckInFlightRef = useRef(false);
   const lastSeenTailorInterviewFinishRequestRef = useRef<string | null>(null);
   const dismissedTailorInterviewFinishRequestRef = useRef<string | null>(null);
   const activeTailorRequestAbortControllerRef =
@@ -1605,6 +1625,7 @@ function App() {
   const availablePanelTabs = [
     { id: "tailor" as const, label: "Tailor", title: "Tailor Resume" },
     { id: "archived" as const, label: "Archived", title: "Archived Resumes" },
+    { id: "applications" as const, label: "Applications", title: "Applications" },
     ...(EXTENSION_DEBUG_UI_ENABLED
       ? [{ id: "debug" as const, label: "Debug", title: "Debug" }]
       : []),
@@ -1677,6 +1698,7 @@ function App() {
         }
 
         const nextPersonalInfo = readPersonalInfoPayload(response);
+        lastSeenSyncStateRef.current = nextPersonalInfo.syncState;
 
         setPersonalInfoState({
           personalInfo: nextPersonalInfo,
@@ -1704,6 +1726,20 @@ function App() {
     [],
   );
 
+  const loadSyncState = useCallback(
+    async () => {
+      const response = await chrome.runtime.sendMessage({
+        type: "JOB_HELPER_SYNC_STATE",
+      });
+
+      if (!isRecord(response) || response.ok !== true) {
+        throw new Error(readErrorMessage(response, "Could not read sync state."));
+      }
+
+      return readUserSyncStateSnapshot(response);
+    },
+    [],
+  );
 
   const updateTailoredResumeMenuPosition = useCallback(() => {
     const menuShell = tailoredResumeMenuRef.current;
@@ -2014,6 +2050,7 @@ function App() {
     personalInfoState.status === "ready"
       ? personalInfoState.personalInfo
       : lastReadyPersonalInfoRef.current;
+  const displayedApplications = personalInfo?.applications.slice(0, 12) ?? [];
   const pendingPersonalDeleteImpact = buildPendingPersonalDeleteImpact({
     applications: personalInfo?.applications ?? [],
     pendingDelete: pendingPersonalDelete,
@@ -2023,21 +2060,29 @@ function App() {
   const pendingPersonalDeleteTitle =
     pendingPersonalDeleteImpact && pendingPersonalDeleteImpact.totalCount > 1
       ? `Delete ${pendingPersonalDeleteImpact.totalCount} items?`
-      : "Delete tailored resume?";
+      : pendingPersonalDelete?.kind === "application"
+        ? "Delete application?"
+        : "Delete tailored resume?";
   const pendingPersonalDeleteEyebrow =
     pendingPersonalDeleteImpact && pendingPersonalDeleteImpact.totalCount > 1
       ? "Remove linked items"
-      : "Remove from history";
+      : pendingPersonalDelete?.kind === "application"
+        ? "Remove application"
+        : "Remove from history";
   const pendingPersonalDeleteDescription =
     pendingPersonalDeleteImpact && pendingPersonalDeleteImpact.totalCount > 1
       ? `This will delete ${formatDeleteImpactSummary(
           pendingPersonalDeleteImpact,
         )}. Any included tailored resume preview PDF will be removed too. This action can't be undone.`
-      : "This removes the saved tailored resume and its PDF preview from History. This action can't be undone.";
+      : pendingPersonalDelete?.kind === "application"
+        ? "This will delete the saved application. This action can't be undone."
+        : "This removes the saved tailored resume and its PDF preview from History. This action can't be undone.";
   const pendingPersonalDeleteActionLabel =
     pendingPersonalDeleteImpact && pendingPersonalDeleteImpact.totalCount > 1
       ? `Delete ${pendingPersonalDeleteImpact.totalCount} items`
-      : "Delete resume";
+      : pendingPersonalDelete?.kind === "application"
+        ? "Delete application"
+        : "Delete resume";
   const currentPageContext = state.status === "ready" ? state.snapshot : null;
   const currentPageIdentity = currentPageContext
     ? {
@@ -2787,6 +2832,9 @@ function App() {
   useEffect(() => {
     if (authState.status !== "signedIn") {
       setPersonalInfoState({ personalInfo: null, status: "idle" });
+      setPendingPersonalDelete(null);
+      setPersonalDeleteActionState("idle");
+      setPersonalDeleteError(null);
       setResumePreviewState({ objectUrl: null, status: "idle" });
       setTailoredResumePreviewState({ objectUrl: null, status: "idle" });
       setTailorInterview(null);
@@ -2805,17 +2853,112 @@ function App() {
     loadPersonalInfo,
   ]);
 
+  useEffect(() => {
+    if (!pendingPersonalDelete) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !isDeletingPersonalItem) {
+        setPendingPersonalDelete(null);
+        setPersonalDeleteError(null);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isDeletingPersonalItem, pendingPersonalDelete]);
 
   useEffect(() => {
     if (authState.status !== "signedIn") {
       lastReadyPersonalInfoRef.current = null;
+      lastSeenSyncStateRef.current = null;
       return;
     }
 
     if (personalInfoState.status === "ready") {
       lastReadyPersonalInfoRef.current = personalInfoState.personalInfo;
+      lastSeenSyncStateRef.current = personalInfoState.personalInfo.syncState;
     }
   }, [authState.status, personalInfoState]);
+
+  useEffect(() => {
+    if (authState.status !== "signedIn") {
+      return;
+    }
+
+    let isCancelled = false;
+
+    async function refreshFromSyncState() {
+      if (
+        isCancelled ||
+        document.visibilityState !== "visible" ||
+        isSyncStateCheckInFlightRef.current ||
+        isSyncRefreshInFlightRef.current
+      ) {
+        return;
+      }
+
+      isSyncStateCheckInFlightRef.current = true;
+
+      try {
+        const nextSyncState = await loadSyncState();
+
+        if (isCancelled || !nextSyncState) {
+          return;
+        }
+
+        const previousSyncState = lastSeenSyncStateRef.current;
+
+        if (!previousSyncState) {
+          lastSeenSyncStateRef.current = nextSyncState;
+          return;
+        }
+
+        if (!haveUserSyncStateChanged(previousSyncState, nextSyncState)) {
+          return;
+        }
+
+        isSyncRefreshInFlightRef.current = true;
+
+        try {
+          await loadPersonalInfo({ preserveCurrent: true });
+          if (!isCancelled) {
+            lastSeenSyncStateRef.current = nextSyncState;
+          }
+        } finally {
+          isSyncRefreshInFlightRef.current = false;
+        }
+      } catch (error) {
+        if (!shouldIgnoreSyncRefreshError(error)) {
+          console.error("Could not refresh Job Helper sync state.", error);
+        }
+      } finally {
+        isSyncStateCheckInFlightRef.current = false;
+      }
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        void refreshFromSyncState();
+      }
+    }
+
+    void refreshFromSyncState();
+    const intervalId = window.setInterval(() => {
+      void refreshFromSyncState();
+    }, 1000);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [authState, loadPersonalInfo, loadSyncState]);
 
   useEffect(() => {
     if (personalInfoState.status !== "ready") {
@@ -4207,6 +4350,17 @@ function App() {
     }
   }
 
+  function handleDeleteTailoredResumeFromMenu(tailoredResumeId: string) {
+    setTailoredResumeMenuId(null);
+    setTailoredResumeMenuError(null);
+    setTailoredResumeMenuErrorResumeId(null);
+    setPendingPersonalDelete({
+      kind: "tailoredResume",
+      tailoredResumeId,
+    });
+    setPersonalDeleteError(null);
+  }
+
   async function handleOpenTrackedApplication(
     application: TrackedApplicationSummary,
   ) {
@@ -4216,6 +4370,105 @@ function App() {
     }
 
     await handleOpenApplicationsDashboard();
+  }
+
+  async function deletePendingPersonalItem() {
+    if (
+      authState.status !== "signedIn" ||
+      !pendingPersonalDelete ||
+      !pendingPersonalDeleteImpact
+    ) {
+      return;
+    }
+
+    const currentDelete = pendingPersonalDelete;
+    const currentDeleteImpact = pendingPersonalDeleteImpact;
+    const fallbackMessage =
+      currentDelete.kind === "application"
+        ? "Unable to delete the application."
+        : "Unable to delete the tailored resume.";
+    const previousPersonalInfo = personalInfo ?? null;
+    const optimisticPersonalInfo =
+      previousPersonalInfo && currentDeleteImpact
+        ? removeDeletedItemsFromPersonalInfo({
+            impact: currentDeleteImpact,
+            personalInfo: previousPersonalInfo,
+          })
+        : null;
+
+    setPersonalDeleteActionState("deleting");
+    setPersonalDeleteError(null);
+    setTailoredResumeMutationError(null);
+
+    if (optimisticPersonalInfo) {
+      lastReadyPersonalInfoRef.current = optimisticPersonalInfo;
+      setPersonalInfoState({
+        personalInfo: optimisticPersonalInfo,
+        status: "ready",
+      });
+    }
+
+    setPendingPersonalDelete(null);
+
+    try {
+      if (currentDelete.kind === "application") {
+        const response = await fetch(
+          `${DEFAULT_JOB_APPLICATIONS_ENDPOINT}/${encodeURIComponent(
+            currentDelete.applicationId,
+          )}`,
+          {
+            credentials: "include",
+            headers: {
+              Authorization: `Bearer ${authState.session.sessionToken}`,
+            },
+            method: "DELETE",
+          },
+        );
+        const payload = await response.json().catch(() => ({}));
+
+        if (response.status === 401) {
+          await invalidateAuthSession();
+          throw new Error("Connect Google before managing applications.");
+        }
+
+        if (!response.ok) {
+          throw new Error(readErrorMessage(payload, fallbackMessage));
+        }
+      } else {
+        const result = await patchTailorResume({
+          action: "deleteTailoredResume",
+          tailoredResumeId: currentDelete.tailoredResumeId,
+        });
+
+        if (!result.ok) {
+          throw new Error(
+            readTailorResumePayloadError(result.payload, fallbackMessage),
+          );
+        }
+      }
+
+      setPersonalDeleteError(null);
+      await loadPersonalInfo({ preserveCurrent: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : fallbackMessage;
+
+      if (previousPersonalInfo) {
+        lastReadyPersonalInfoRef.current = previousPersonalInfo;
+        setPersonalInfoState({
+          personalInfo: previousPersonalInfo,
+          status: "ready",
+        });
+      }
+
+      setPendingPersonalDelete(currentDelete);
+      setPersonalDeleteError(message);
+
+      if (currentDelete.kind === "tailoredResume") {
+        setTailoredResumeMutationError(message);
+      }
+    } finally {
+      setPersonalDeleteActionState("idle");
+    }
   }
 
   async function handleGoToTailorRunTab() {
@@ -4658,6 +4911,16 @@ function App() {
                                   {isMenuBusy ? "Opening..." : "Go to tab"}
                                 </button>
                               ) : null}
+                              <button
+                                className="tailor-run-menu-item"
+                                disabled={isMenuBusy}
+                                type="button"
+                                onClick={() =>
+                                  handleDeleteTailoredResumeFromMenu(tailoredResume.id)
+                                }
+                              >
+                                Delete
+                              </button>
                             </div>
                             {menuError ? (
                               <p className="tailor-run-menu-error">{menuError}</p>
@@ -4672,6 +4935,93 @@ function App() {
             );
           })}
         </div>
+      </>
+    );
+  }
+
+  function renderApplicationsSurface() {
+    if (authState.status !== "signedIn") {
+      return <p className="placeholder">Connect Google to load applications.</p>;
+    }
+
+    if (personalInfoState.status === "loading") {
+      return <p className="placeholder">Loading tracked applications...</p>;
+    }
+
+    if (personalInfoState.status === "error") {
+      return <p className="placeholder">{personalInfoState.error}</p>;
+    }
+
+    if (!personalInfo || personalInfo.applications.length === 0) {
+      return <p className="placeholder">No tracked applications yet.</p>;
+    }
+
+    return (
+      <>
+        <div className="application-list">
+          {displayedApplications.map((application) => {
+            const isDeleteDisabled =
+              authActionState === "running" || isDeletingPersonalItem;
+
+            return (
+              <div
+                key={application.id}
+                className="application-row-shell"
+              >
+                <button
+                  className="application-row"
+                  disabled={authActionState === "running"}
+                  type="button"
+                  onClick={() => void handleOpenTrackedApplication(application)}
+                >
+                  <span className="application-main">
+                    <span className="application-title">
+                      {application.jobTitle}
+                    </span>
+                    <span className="application-meta">
+                      {application.companyName}
+                      {application.location ? ` - ${application.location}` : ""}
+                    </span>
+                  </span>
+                  <span className="application-side">
+                    <span className="application-status">
+                      {formatApplicationStatus(application.status)}
+                    </span>
+                    <span className="tailored-resume-date">
+                      {formatTailoredResumeDate(application.appliedAt)}
+                    </span>
+                  </span>
+                </button>
+                <button
+                  aria-label={`Delete ${application.jobTitle} at ${application.companyName}`}
+                  className="icon-action personal-row-delete-action"
+                  disabled={isDeleteDisabled}
+                  title="Delete application"
+                  type="button"
+                  onClick={() => {
+                    setPendingPersonalDelete({
+                      applicationId: application.id,
+                      kind: "application",
+                    });
+                    setPersonalDeleteError(null);
+                  }}
+                >
+                  <TrashIcon />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        {personalInfo.applicationCount > displayedApplications.length ? (
+          <button
+            className="link-action more-action"
+            disabled={authActionState === "running"}
+            type="button"
+            onClick={handleOpenApplicationsDashboard}
+          >
+            View all applications
+          </button>
+        ) : null}
       </>
     );
   }
@@ -5954,6 +6304,14 @@ function App() {
             title: "Archived tailored resume",
           })}
         </section>
+      ) : activePanelTab === "applications" ? (
+        <section className="snapshot-card applications-card">
+          <div className="card-heading-row">
+            <h2>Tracked apps</h2>
+            <span>{personalInfo?.applicationCount ?? 0}</span>
+          </div>
+          {renderApplicationsSurface()}
+        </section>
       ) : (
         <section className="snapshot-card">
           <div className="card-heading-row">
@@ -5968,6 +6326,64 @@ function App() {
           </dl>
         </section>
       )}
+      {pendingPersonalDelete ? (
+        <div
+          className="personal-delete-overlay"
+          role="presentation"
+          onClick={(event) => {
+            if (
+              event.target === event.currentTarget &&
+              !isDeletingPersonalItem
+            ) {
+              setPendingPersonalDelete(null);
+              setPersonalDeleteError(null);
+            }
+          }}
+        >
+          <section
+            aria-describedby="personal-delete-description"
+            aria-labelledby="personal-delete-title"
+            aria-modal="true"
+            className="personal-delete-dialog"
+            role="dialog"
+          >
+            <p className="eyebrow">{pendingPersonalDeleteEyebrow}</p>
+            <h2 id="personal-delete-title">{pendingPersonalDeleteTitle}</h2>
+            <p
+              className="personal-delete-copy"
+              id="personal-delete-description"
+            >
+              {pendingPersonalDeleteDescription}
+            </p>
+            {personalDeleteError ? (
+              <p className="personal-delete-error">{personalDeleteError}</p>
+            ) : null}
+            <div className="personal-delete-actions">
+              <button
+                className="secondary-action compact-action"
+                disabled={isDeletingPersonalItem}
+                type="button"
+                onClick={() => {
+                  setPendingPersonalDelete(null);
+                  setPersonalDeleteError(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="danger-action compact-action"
+                disabled={isDeletingPersonalItem || !pendingPersonalDeleteImpact}
+                type="button"
+                onClick={() => void deletePendingPersonalItem()}
+              >
+                {isDeletingPersonalItem
+                  ? "Deleting..."
+                  : pendingPersonalDeleteActionLabel}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
       <div className={`chat-dock ${isChatOpen ? "chat-dock-open" : ""}`}>
         {isChatOpen ? (
           <section className="chat-panel" aria-label="Job page chat">

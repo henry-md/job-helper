@@ -284,8 +284,27 @@ button:disabled {
     linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
 }
 
+.danger-action {
+  color: #ffe4e6;
+  border: 1px solid rgba(251, 113, 133, 0.28);
+  background:
+    linear-gradient(180deg, rgba(251, 113, 133, 0.18), rgba(136, 19, 55, 0.28));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
 
+.danger-action:hover:not(:disabled) {
+  color: #fff1f2;
+  border-color: rgba(251, 113, 133, 0.4);
+  background:
+    linear-gradient(180deg, rgba(251, 113, 133, 0.24), rgba(159, 18, 57, 0.34));
+}
 
+.danger-action:disabled {
+  color: var(--subtle);
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: none;
+}
 
 .link-action {
   width: 100%;
@@ -1827,12 +1846,59 @@ button:disabled {
   gap: 8px;
 }
 
+.personal-delete-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 65;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(4, 6, 14, 0.82);
+  backdrop-filter: blur(16px);
+}
 
+.personal-delete-dialog {
+  width: min(100%, 360px);
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid rgba(244, 244, 245, 0.1);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(44, 16, 24, 0.98), rgba(9, 9, 11, 0.98));
+  box-shadow: 0 28px 72px rgba(0, 0, 0, 0.45);
+}
 
+.personal-delete-dialog h2,
+.personal-delete-copy,
+.personal-delete-error {
+  margin: 0;
+}
 
+.personal-delete-dialog h2 {
+  color: var(--foreground);
+  font-size: 18px;
+  line-height: 1.2;
+}
 
+.personal-delete-copy {
+  color: var(--muted-strong);
+  font-size: 13px;
+  line-height: 1.5;
+}
 
+.personal-delete-error {
+  color: #fecdd3;
+  font-size: 12px;
+  line-height: 1.45;
+}
 
+.personal-delete-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
 
 .tailor-auth-overlay {
   position: fixed;
@@ -2450,6 +2516,9 @@ button:disabled {
   padding-right: 2px;
 }
 
+.application-row-shell {
+  position: relative;
+}
 
 .application-row {
   display: grid;
@@ -2458,7 +2527,7 @@ button:disabled {
   width: 100%;
   min-height: 58px;
   justify-content: stretch;
-  padding: 9px 11px;
+  padding: 9px 54px 9px 11px;
   border: 1px solid rgba(244, 244, 245, 0.08);
   border-radius: 15px;
   color: var(--foreground);
@@ -2467,7 +2536,8 @@ button:disabled {
   text-align: left;
 }
 
-.application-row:hover:not(:disabled) {
+.application-row:hover:not(:disabled),
+.application-row-shell:hover .application-row:not(:disabled) {
   border-color: rgba(34, 211, 238, 0.28);
   background: rgba(34, 211, 238, 0.08);
 }
@@ -2710,7 +2780,19 @@ button:disabled {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.personal-row-delete-action {
+  position: absolute;
+  top: 50%;
+  right: 11px;
+  z-index: 1;
+  transform: translateY(-50%);
+}
 
+.personal-row-delete-action:hover:not(:disabled) {
+  color: #ffe4e6;
+  border-color: rgba(251, 113, 133, 0.38);
+  background: rgba(159, 18, 57, 0.18);
+}
 
 .tailoring-run-clear-action {
   margin: -7px -5px -7px 0;
