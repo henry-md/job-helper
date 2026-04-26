@@ -38,6 +38,8 @@ import {
   type JobHelperAuthUser,
   type JobPageContext,
   type PersonalInfoSummary,
+  type UserMarkdownSummary,
+  defaultUserMarkdown,
   readPersonalInfoPayload,
   readTailorResumePreparationState,
   readJobUrlFromPageContext,
@@ -1951,6 +1953,22 @@ function App() {
   );
   const [resumePreviewState, setResumePreviewState] =
     useState<ResumePreviewState>({ objectUrl: null, status: "idle" });
+  const [savedSettingsUserMarkdown, setSavedSettingsUserMarkdown] =
+    useState<UserMarkdownSummary>({
+      markdown: defaultUserMarkdown,
+      updatedAt: null,
+    });
+  const [draftSettingsUserMarkdown, setDraftSettingsUserMarkdown] = useState(
+    defaultUserMarkdown,
+  );
+  const [isSettingsOriginalResumeOpen, setIsSettingsOriginalResumeOpen] =
+    useState(false);
+  const [isSettingsUserMarkdownOpen, setIsSettingsUserMarkdownOpen] =
+    useState(false);
+  const [isSavingSettingsUserMarkdown, setIsSavingSettingsUserMarkdown] =
+    useState(false);
+  const [settingsUserMarkdownError, setSettingsUserMarkdownError] =
+    useState<string | null>(null);
   const [tailoredResumePreviewState, setTailoredResumePreviewState] =
     useState<ResumePreviewState>({ objectUrl: null, status: "idle" });
   const [tailoredResumeReviewState, setTailoredResumeReviewState] =
@@ -2620,6 +2638,8 @@ function App() {
     tailorPreparationState?.message?.trim() ||
     buildTailorResumePreparationMessage(false);
   const originalResume = personalInfo?.originalResume ?? null;
+  const isSettingsUserMarkdownChanged =
+    draftSettingsUserMarkdown !== savedSettingsUserMarkdown.markdown;
   const isTailorInterviewAwaitingCompletion = Boolean(
     tailorInterview?.completionRequestedAt,
   );
@@ -3255,11 +3275,93 @@ function App() {
   }
 
   function openSettingsView() {
+    setIsSettingsOriginalResumeOpen(false);
+    setIsSettingsUserMarkdownOpen(false);
+    setSettingsUserMarkdownError(null);
     setIsSettingsViewOpen(true);
   }
 
   function closeSettingsView() {
+    setSettingsUserMarkdownError(null);
     setIsSettingsViewOpen(false);
+  }
+
+  function cancelSettingsUserMarkdownEdits() {
+    setDraftSettingsUserMarkdown(savedSettingsUserMarkdown.markdown);
+    setSettingsUserMarkdownError(null);
+    setIsSettingsUserMarkdownOpen(false);
+  }
+
+  async function saveSettingsUserMarkdown() {
+    if (authState.status !== "signedIn") {
+      return;
+    }
+
+    if (!isSettingsUserMarkdownChanged) {
+      setSettingsUserMarkdownError(null);
+      setIsSettingsUserMarkdownOpen(false);
+      return;
+    }
+
+    setIsSavingSettingsUserMarkdown(true);
+    setSettingsUserMarkdownError(null);
+
+    try {
+      const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
+        body: JSON.stringify({
+          action: "saveUserMarkdown",
+          markdown: draftSettingsUserMarkdown,
+          updatedAt: savedSettingsUserMarkdown.updatedAt,
+        }),
+        credentials: "include",
+        headers: {
+          Authorization: `Bearer ${authState.session.sessionToken}`,
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        userMarkdown?: UserMarkdownSummary;
+      };
+
+      if (response.status === 401) {
+        await invalidateAuthSession();
+        return;
+      }
+
+      if (!response.ok || !payload.userMarkdown) {
+        throw new Error(
+          readTailorResumePayloadError(payload, "Unable to save USER.md."),
+        );
+      }
+
+      const nextUserMarkdown: UserMarkdownSummary = {
+        markdown: payload.userMarkdown.markdown,
+        updatedAt: payload.userMarkdown.updatedAt ?? null,
+      };
+
+      setSavedSettingsUserMarkdown(nextUserMarkdown);
+      setDraftSettingsUserMarkdown(nextUserMarkdown.markdown);
+      setIsSettingsUserMarkdownOpen(false);
+      setPersonalInfoState((currentState) =>
+        currentState.status === "ready"
+          ? {
+              personalInfo: {
+                ...currentState.personalInfo,
+                userMarkdown: nextUserMarkdown,
+              },
+              status: "ready",
+            }
+          : currentState,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to save USER.md.";
+      setSettingsUserMarkdownError(message);
+    } finally {
+      setIsSavingSettingsUserMarkdown(false);
+    }
   }
 
   function openTailorAuthPrompt() {
@@ -3386,6 +3488,40 @@ function App() {
       lastSeenSyncStateRef.current = personalInfoState.personalInfo.syncState;
     }
   }, [authState.status, personalInfoState]);
+
+  useEffect(() => {
+    if (authState.status !== "signedIn") {
+      setSavedSettingsUserMarkdown({
+        markdown: defaultUserMarkdown,
+        updatedAt: null,
+      });
+      setDraftSettingsUserMarkdown(defaultUserMarkdown);
+      setSettingsUserMarkdownError(null);
+      return;
+    }
+
+    if (personalInfoState.status !== "ready") {
+      return;
+    }
+
+    const nextUserMarkdown = personalInfoState.personalInfo.userMarkdown;
+
+    if (
+      savedSettingsUserMarkdown.updatedAt === nextUserMarkdown.updatedAt &&
+      savedSettingsUserMarkdown.markdown === nextUserMarkdown.markdown
+    ) {
+      return;
+    }
+
+    setSavedSettingsUserMarkdown(nextUserMarkdown);
+    setDraftSettingsUserMarkdown(nextUserMarkdown.markdown);
+    setSettingsUserMarkdownError(null);
+  }, [
+    authState.status,
+    personalInfoState,
+    savedSettingsUserMarkdown.markdown,
+    savedSettingsUserMarkdown.updatedAt,
+  ]);
 
   useEffect(() => {
     if (authState.status !== "signedIn") {
@@ -6219,6 +6355,22 @@ function App() {
             : authState.session.user.email ||
               authState.session.user.name ||
               "Connected";
+    const originalResumeSummary =
+      authState.status !== "signedIn"
+        ? "Connect Google to preview your resume."
+        : personalInfoState.status === "loading"
+          ? "Loading resume preview..."
+          : personalInfoState.status === "error"
+            ? personalInfoState.error
+            : originalResume?.filename?.trim() || "No resume data loaded yet.";
+    const userMarkdownSummary =
+      authState.status !== "signedIn"
+        ? "Connect Google to view USER.md."
+        : personalInfoState.status === "loading"
+          ? "Loading USER.md..."
+          : personalInfoState.status === "error"
+            ? personalInfoState.error
+            : `${draftSettingsUserMarkdown.length.toLocaleString()} chars`;
 
     return (
       <section className="settings-page">
@@ -6276,56 +6428,202 @@ function App() {
         </section>
 
         <section className="snapshot-card resume-preview-card settings-card">
-          <div className="card-heading-row">
-            <h2>Base resume</h2>
-          </div>
+          <button
+            aria-controls="settings-original-resume-panel"
+            aria-expanded={isSettingsOriginalResumeOpen}
+            className="settings-disclosure"
+            onClick={() =>
+              setIsSettingsOriginalResumeOpen((currentValue) => !currentValue)
+            }
+            type="button"
+          >
+            <div className="settings-disclosure-copy">
+              <p className="settings-section-eyebrow">Base Resume</p>
+              <div className="settings-disclosure-title-row">
+                <h2 className="settings-disclosure-title">
+                  Original Resume Preview
+                </h2>
+                <span className="settings-disclosure-pill">
+                  {originalResumeSummary}
+                </span>
+              </div>
+              <p className="settings-disclosure-description">
+                Review the uploaded base resume and its rendered preview. This
+                section starts collapsed by default.
+              </p>
+            </div>
+            <span
+              aria-hidden="true"
+              className={`settings-disclosure-chevron ${
+                isSettingsOriginalResumeOpen
+                  ? "settings-disclosure-chevron-open"
+                  : ""
+              }`}
+            >
+              <svg fill="none" viewBox="0 0 20 20">
+                <path
+                  d="m5 7.5 5 5 5-5"
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="1.7"
+                />
+              </svg>
+            </span>
+          </button>
 
-          {authState.status !== "signedIn" ? (
-            <p className="placeholder">Connect Google to preview your resume.</p>
-          ) : personalInfoState.status === "loading" ? (
-            <p className="placeholder">Loading resume preview...</p>
-          ) : personalInfoState.status === "error" ? (
-            <p className="placeholder">{personalInfoState.error}</p>
-          ) : originalResume ? (
-            <>
-              {originalResume.error ? (
-                <p className="preview-error">{originalResume.error}</p>
-              ) : null}
-              {originalResume.pdfUpdatedAt ? (
-                <div className="resume-preview-shell">
-                  {resumePreviewState.status === "loading" ? (
-                    <p className="placeholder">Rendering preview...</p>
-                  ) : resumePreviewState.status === "error" ? (
-                    <p className="placeholder">{resumePreviewState.error}</p>
-                  ) : resumePreviewState.status === "ready" ? (
-                    <iframe
-                      className="resume-preview-frame"
-                      src={resumePreviewState.objectUrl}
-                      title="Resume preview"
-                    />
+          {isSettingsOriginalResumeOpen ? (
+            <div
+              className="settings-disclosure-panel"
+              id="settings-original-resume-panel"
+            >
+              {authState.status !== "signedIn" ? (
+                <p className="placeholder">Connect Google to preview your resume.</p>
+              ) : personalInfoState.status === "loading" ? (
+                <p className="placeholder">Loading resume preview...</p>
+              ) : personalInfoState.status === "error" ? (
+                <p className="placeholder">{personalInfoState.error}</p>
+              ) : originalResume ? (
+                <>
+                  {originalResume.error ? (
+                    <p className="preview-error">{originalResume.error}</p>
+                  ) : null}
+                  {originalResume.pdfUpdatedAt ? (
+                    <div className="resume-preview-shell">
+                      {resumePreviewState.status === "loading" ? (
+                        <p className="placeholder">Rendering preview...</p>
+                      ) : resumePreviewState.status === "error" ? (
+                        <p className="placeholder">{resumePreviewState.error}</p>
+                      ) : resumePreviewState.status === "ready" ? (
+                        <iframe
+                          className="resume-preview-frame"
+                          src={resumePreviewState.objectUrl}
+                          title="Resume preview"
+                        />
+                      ) : (
+                        <p className="placeholder">Preview will appear here.</p>
+                      )}
+                    </div>
                   ) : (
-                    <p className="placeholder">Preview will appear here.</p>
+                    <p className="placeholder preview-placeholder">
+                      No rendered preview is available yet.
+                    </p>
                   )}
-                </div>
+                  {originalResume.resumeUpdatedAt ? (
+                    <dl className="snapshot-grid resume-updated-grid">
+                      <div>
+                        <dt>Updated</dt>
+                        <dd>{formatTailoredResumeDate(originalResume.resumeUpdatedAt)}</dd>
+                      </div>
+                    </dl>
+                  ) : null}
+                </>
               ) : (
-                <p className="placeholder preview-placeholder">
-                  No rendered preview is available yet.
-                </p>
+                <p className="placeholder">No resume data loaded yet.</p>
               )}
-              {originalResume.resumeUpdatedAt ? (
-                <dl className="snapshot-grid resume-updated-grid">
-                  <div>
-                    <dt>Updated</dt>
-                    <dd>{formatTailoredResumeDate(originalResume.resumeUpdatedAt)}</dd>
-                  </div>
-                </dl>
-              ) : null}
-            </>
-          ) : (
-            <p className="placeholder">No resume data loaded yet.</p>
-          )}
+            </div>
+          ) : null}
         </section>
 
+        <section className="snapshot-card settings-card">
+          <button
+            aria-controls="settings-user-markdown-panel"
+            aria-expanded={isSettingsUserMarkdownOpen}
+            className="settings-disclosure"
+            onClick={() =>
+              setIsSettingsUserMarkdownOpen((currentValue) => !currentValue)
+            }
+            type="button"
+          >
+            <div className="settings-disclosure-copy">
+              <p className="settings-section-eyebrow">User Memory</p>
+              <div className="settings-disclosure-title-row">
+                <h2 className="settings-disclosure-title">USER.md</h2>
+                <span className="settings-disclosure-pill">
+                  {userMarkdownSummary}
+                </span>
+                {isSettingsUserMarkdownChanged ? (
+                  <span className="settings-disclosure-pill settings-disclosure-pill-warning">
+                    Unsaved
+                  </span>
+                ) : null}
+              </div>
+              <p className="settings-disclosure-description">
+                Durable resume context used during tailoring. This section
+                starts collapsed by default.
+              </p>
+            </div>
+            <span
+              aria-hidden="true"
+              className={`settings-disclosure-chevron ${
+                isSettingsUserMarkdownOpen
+                  ? "settings-disclosure-chevron-open"
+                  : ""
+              }`}
+            >
+              <svg fill="none" viewBox="0 0 20 20">
+                <path
+                  d="m5 7.5 5 5 5-5"
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="1.7"
+                />
+              </svg>
+            </span>
+          </button>
+
+          {isSettingsUserMarkdownOpen ? (
+            <div
+              className="settings-disclosure-panel"
+              id="settings-user-markdown-panel"
+            >
+              {authState.status !== "signedIn" ? (
+                <p className="placeholder">Connect Google to view USER.md.</p>
+              ) : personalInfoState.status === "loading" ? (
+                <p className="placeholder">Loading USER.md...</p>
+              ) : personalInfoState.status === "error" ? (
+                <p className="placeholder">{personalInfoState.error}</p>
+              ) : (
+                <>
+                  <textarea
+                    className="settings-user-markdown-input"
+                    disabled={isSavingSettingsUserMarkdown}
+                    onChange={(event) =>
+                      setDraftSettingsUserMarkdown(event.target.value)
+                    }
+                    spellCheck={false}
+                    value={draftSettingsUserMarkdown}
+                  />
+                  {settingsUserMarkdownError ? (
+                    <p className="preview-error">{settingsUserMarkdownError}</p>
+                  ) : null}
+                  <div className="settings-user-markdown-actions">
+                    <button
+                      className="secondary-action compact-action settings-account-action"
+                      disabled={isSavingSettingsUserMarkdown}
+                      onClick={cancelSettingsUserMarkdownEdits}
+                      type="button"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="primary-action compact-action settings-account-action"
+                      disabled={
+                        isSavingSettingsUserMarkdown ||
+                        !isSettingsUserMarkdownChanged
+                      }
+                      onClick={() => void saveSettingsUserMarkdown()}
+                      type="button"
+                    >
+                      {isSavingSettingsUserMarkdown ? "Saving..." : "Save"}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : null}
+        </section>
       </section>
     );
   }

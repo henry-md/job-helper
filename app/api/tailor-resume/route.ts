@@ -126,6 +126,7 @@ import {
   deletePersistedUserResume,
   persistUserResume,
 } from "@/lib/job-tracking";
+import { toJobApplicationRecord } from "@/lib/job-application-records";
 import {
   normalizeCompanyName,
   resolveAppliedAt,
@@ -226,6 +227,76 @@ async function writeTailorResumeProfileAndMarkChanged(
 ) {
   await writeTailorResumeProfile(userId, profile);
   await markTailoringChanged(userId);
+}
+
+function readIncludeApplicationsFlag(request: Request) {
+  const includeApplications = new URL(request.url).searchParams.get(
+    "includeApplications",
+  );
+
+  return (
+    includeApplications === "1" ||
+    includeApplications === "true" ||
+    includeApplications === "yes"
+  );
+}
+
+function readApplicationSummaryLimit(request: Request) {
+  const rawLimit = new URL(request.url).searchParams.get("applicationLimit");
+
+  if (!rawLimit) {
+    return 12;
+  }
+
+  const parsedLimit = Number.parseInt(rawLimit, 10);
+
+  if (!Number.isInteger(parsedLimit)) {
+    return 12;
+  }
+
+  return Math.min(Math.max(parsedLimit, 1), 100);
+}
+
+async function readApplicationSummaryPayload(input: {
+  limit: number;
+  userId: string;
+}) {
+  const prisma = getPrismaClient();
+  const [applicationCount, applications, companyCount] = await Promise.all([
+    prisma.jobApplication.count({
+      where: { userId: input.userId },
+    }),
+    prisma.jobApplication.findMany({
+      include: {
+        company: true,
+        referrer: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+      },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+      take: input.limit,
+      where: { userId: input.userId },
+    }),
+    prisma.company.count({
+      where: {
+        applications: {
+          some: {
+            userId: input.userId,
+          },
+        },
+        userId: input.userId,
+      },
+    }),
+  ]);
+
+  return {
+    applicationCount,
+    applications: applications.map(toJobApplicationRecord),
+    companyCount,
+  };
 }
 
 function buildResumeRecord(input: {
@@ -3412,9 +3483,24 @@ export async function GET(request: Request) {
     return unauthorizedResponse();
   }
 
-  const { activeRun, activeRuns, profile, rawProfile } =
-    await readTailorResumeResponseState(session.user.id);
-  const syncState = await readUserSyncStateSnapshotForUser(session.user.id);
+  const includeApplications = readIncludeApplicationsFlag(request);
+  const applicationSummaryLimit = readApplicationSummaryLimit(request);
+  const [
+    { activeRun, activeRuns, profile, rawProfile },
+    syncState,
+    userMarkdown,
+    applicationSummary,
+  ] = await Promise.all([
+    readTailorResumeResponseState(session.user.id),
+    readUserSyncStateSnapshotForUser(session.user.id),
+    readTailorResumeUserMarkdown(session.user.id),
+    includeApplications
+      ? readApplicationSummaryPayload({
+          limit: applicationSummaryLimit,
+          userId: session.user.id,
+        })
+      : Promise.resolve(null),
+  ]);
   const activeTailoringInterviews = readTailorResumeWorkspaceInterviews(
     rawProfile.workspace,
   );
@@ -3428,9 +3514,11 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     activeTailorings,
+    ...(applicationSummary ?? {}),
     existingTailoring,
     profile,
     syncState,
+    userMarkdown,
   });
 }
 

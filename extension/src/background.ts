@@ -6,7 +6,6 @@ import {
   buildTailorResumeApplicationContext,
   CAPTURE_COMMAND_NAME,
   DEFAULT_DASHBOARD_URL,
-  DEFAULT_JOB_APPLICATIONS_ENDPOINT,
   DEFAULT_SYNC_STATE_ENDPOINT,
   DEFAULT_TAILOR_RESUME_ENDPOINT,
   EXISTING_TAILORING_STORAGE_KEY,
@@ -22,7 +21,7 @@ import {
   type JobHelperAuthSession,
   type JobHelperAuthUser,
   type JobPageContext,
-  readPersonalInfoSummary,
+  readPersonalInfoPayload,
   readJobUrlFromPageContext,
   readTailoredResumeSummaries,
   readTailorResumeExistingTailoringState,
@@ -1033,41 +1032,31 @@ async function getTailoredResumeSummaries() {
 
 async function getPersonalInfoSummary() {
   const session = await ensureJobHelperSession({ interactive: false });
-  const [tailorResumeResponse, applicationsResponse] = await Promise.all([
-    fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
-      cache: "no-store",
-      credentials: "include",
-      headers: authorizationHeaders(session),
-    }),
-    fetch(`${DEFAULT_JOB_APPLICATIONS_ENDPOINT}?limit=100`, {
-      cache: "no-store",
-      credentials: "include",
-      headers: authorizationHeaders(session),
-    }),
-  ]);
-  const [tailorResumePayload, applicationsPayload] = await Promise.all([
-    readJsonResponse(tailorResumeResponse),
-    readJsonResponse(applicationsResponse),
-  ]);
+  const personalInfoUrl = new URL(DEFAULT_TAILOR_RESUME_ENDPOINT);
+  personalInfoUrl.searchParams.set("includeApplications", "1");
+  personalInfoUrl.searchParams.set("applicationLimit", "12");
+  const tailorResumeResponse = await fetch(personalInfoUrl, {
+    cache: "no-store",
+    credentials: "include",
+    headers: authorizationHeaders(session),
+  });
+  const tailorResumePayload = await readJsonResponse(tailorResumeResponse);
 
-  if (!tailorResumeResponse.ok || !applicationsResponse.ok) {
-    if (tailorResumeResponse.status === 401 || applicationsResponse.status === 401) {
+  if (!tailorResumeResponse.ok) {
+    if (tailorResumeResponse.status === 401) {
       await clearStoredAuthSession();
     }
 
     throw new Error(
       readResponseError(
-        !tailorResumeResponse.ok ? tailorResumePayload : applicationsPayload,
+        tailorResumePayload,
         "Could not load your Job Helper info.",
       ),
     );
   }
 
   return {
-    personalInfo: readPersonalInfoSummary({
-      applicationsPayload,
-      tailorResumePayload,
-    }),
+    personalInfo: readPersonalInfoPayload(tailorResumePayload),
   };
 }
 

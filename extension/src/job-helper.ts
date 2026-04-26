@@ -5,6 +5,8 @@ import {
 } from "../../lib/sync-state.ts";
 export { normalizeComparableUrl } from "./comparable-job-url.ts";
 
+export const defaultUserMarkdown = "# USER.md\n\n";
+
 export const CAPTURE_COMMAND_NAME = "capture_job_page";
 const fallbackAppBaseUrl = "http://localhost:3000";
 export const EXTENSION_DEBUG_UI_ENABLED = __DEBUG_UI__;
@@ -174,6 +176,12 @@ export type PersonalInfoSummary = {
   tailoredResumes: TailoredResumeSummary[];
   tailoringInterview: TailorResumePendingInterviewSummary | null;
   tailoringInterviews: TailorResumePendingInterviewSummary[];
+  userMarkdown: UserMarkdownSummary;
+};
+
+export type UserMarkdownSummary = {
+  markdown: string;
+  updatedAt: string | null;
 };
 
 export type TailorResumeConversationMessage = {
@@ -1039,6 +1047,23 @@ export function readOriginalResumeSummary(value: unknown): OriginalResumeSummary
   };
 }
 
+function readUserMarkdownSummary(value: unknown): UserMarkdownSummary {
+  const directValue =
+    isRecord(value) && isRecord(value.userMarkdown) ? value.userMarkdown : value;
+
+  if (isRecord(directValue) && typeof directValue.markdown === "string") {
+    return {
+      markdown: directValue.markdown,
+      updatedAt: readNullableString(directValue.updatedAt),
+    };
+  }
+
+  return {
+    markdown: defaultUserMarkdown,
+    updatedAt: null,
+  };
+}
+
 export function readPersonalInfoSummary(input: {
   applicationsPayload: unknown;
   tailorResumePayload: unknown;
@@ -1064,6 +1089,7 @@ export function readPersonalInfoSummary(input: {
     tailoredResumes: tailorResumeProfile?.tailoredResumes ?? [],
     tailoringInterview: tailorResumeProfile?.tailoringInterview ?? null,
     tailoringInterviews: tailorResumeProfile?.tailoringInterviews ?? [],
+    userMarkdown: readUserMarkdownSummary(input.tailorResumePayload),
   };
 }
 
@@ -1072,7 +1098,11 @@ export function readPersonalInfoPayload(value: unknown): PersonalInfoSummary {
     ? value.personalInfo
     : value;
   const payloadRecord = isRecord(payload) ? payload : {};
+  const tailorResumeProfile = readTailorResumeProfileSummary(payloadRecord);
   const activeTailorings = readTailorResumeExistingTailoringStates(payloadRecord);
+  const directTailoredResumes = readTailoredResumeSummaries(
+    payloadRecord.tailoredResumes,
+  );
   const tailoringInterviews = readTailorResumePendingInterviewSummaries(
     payloadRecord.tailoringInterviews,
   );
@@ -1082,6 +1112,8 @@ export function readPersonalInfoPayload(value: unknown): PersonalInfoSummary {
   const normalizedTailoringInterviews =
     tailoringInterviews.length > 0
       ? tailoringInterviews
+      : tailorResumeProfile && tailorResumeProfile.tailoringInterviews.length > 0
+        ? tailorResumeProfile.tailoringInterviews
       : fallbackTailoringInterview
         ? [fallbackTailoringInterview]
         : [];
@@ -1092,13 +1124,21 @@ export function readPersonalInfoPayload(value: unknown): PersonalInfoSummary {
     applicationCount: readNumber(payloadRecord.applicationCount),
     applications: readTrackedApplicationSummaries(payloadRecord.applications),
     companyCount: readNumber(payloadRecord.companyCount),
-    originalResume: readOriginalResumeSummary(payloadRecord.originalResume),
+    originalResume: readOriginalResumeSummary(
+      "originalResume" in payloadRecord
+        ? payloadRecord.originalResume
+        : payloadRecord,
+    ),
     syncState:
       "syncState" in payloadRecord
         ? readUserSyncStateSnapshot(payloadRecord.syncState)
         : emptyUserSyncStateSnapshot(),
-    tailoredResumes: readTailoredResumeSummaries(payloadRecord.tailoredResumes),
+    tailoredResumes:
+      directTailoredResumes.length > 0
+        ? directTailoredResumes
+        : tailorResumeProfile?.tailoredResumes ?? [],
     tailoringInterview: normalizedTailoringInterviews[0] ?? null,
     tailoringInterviews: normalizedTailoringInterviews,
+    userMarkdown: readUserMarkdownSummary(payloadRecord.userMarkdown),
   };
 }

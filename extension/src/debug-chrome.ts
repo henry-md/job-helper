@@ -327,6 +327,12 @@ export function installDebugChromeRuntime() {
       syncState: emptyUserSyncStateSnapshot(),
       tailoredResumes: mockTailoredResumes,
       tailoringInterview: null,
+      tailoringInterviews: [],
+      userMarkdown: {
+        markdown:
+          "# USER.md\n\n- C language was also used in the Ray Tracer project, so we can lean on this even though it is primarily a C++ project.\n",
+        updatedAt: new Date("2026-04-21T22:45:00.000Z").toISOString(),
+      },
     };
   }
 
