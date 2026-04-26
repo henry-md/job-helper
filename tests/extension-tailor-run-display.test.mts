@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   resolveDisplayedTailorRunIdentity,
+  resolveReviewableTailoredResumeId,
   shouldRenderTailorRunShell,
 } from "../extension/src/tailor-run-display.ts";
 
@@ -105,5 +106,44 @@ test("keeps an errored run visible even after switching tabs", () => {
       lastTailoringRunStatus: "error",
     }),
     true,
+  );
+});
+
+test("reuses the last run tailored resume id before the saved list refreshes", () => {
+  assert.equal(
+    resolveReviewableTailoredResumeId({
+      completedTailoringId: null,
+      currentPageTailoredResumeId: null,
+      lastTailoringRunTailoredResumeId: "resume_123",
+      matchedLastTailoredResume: null,
+    }),
+    "resume_123",
+  );
+});
+
+test("suppresses the last run tailored resume id once the saved list marks it archived", () => {
+  assert.equal(
+    resolveReviewableTailoredResumeId({
+      completedTailoringId: null,
+      currentPageTailoredResumeId: null,
+      lastTailoringRunTailoredResumeId: "resume_123",
+      matchedLastTailoredResume: {
+        archivedAt: "2026-04-26T17:55:00.000Z",
+        id: "resume_123",
+      },
+    }),
+    null,
+  );
+});
+
+test("prefers the synced completed tailoring over the stale last run id", () => {
+  assert.equal(
+    resolveReviewableTailoredResumeId({
+      completedTailoringId: "resume_synced",
+      currentPageTailoredResumeId: null,
+      lastTailoringRunTailoredResumeId: "resume_123",
+      matchedLastTailoredResume: null,
+    }),
+    "resume_synced",
   );
 });

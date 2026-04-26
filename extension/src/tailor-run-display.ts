@@ -29,6 +29,11 @@ type TailorRunPageApplicationContext = {
   jobTitle: string | null;
 };
 
+type TailorRunTailoredResumeSummary = {
+  archivedAt: string | null;
+  id: string;
+};
+
 export function shouldRenderTailorRunShell(input: {
   activeTailoringKind: TailorRunExistingTailoringKind | null;
   captureState: TailorRunCaptureState;
@@ -77,6 +82,37 @@ export function shouldRenderTailorRunShell(input: {
   }
 
   return false;
+}
+
+export function resolveReviewableTailoredResumeId(input: {
+  completedTailoringId: string | null;
+  currentPageTailoredResumeId: string | null;
+  lastTailoringRunTailoredResumeId: string | null;
+  matchedLastTailoredResume: TailorRunTailoredResumeSummary | null;
+}) {
+  if (input.completedTailoringId) {
+    return input.completedTailoringId;
+  }
+
+  if (input.currentPageTailoredResumeId) {
+    return input.currentPageTailoredResumeId;
+  }
+
+  const lastTailoringRunTailoredResumeId =
+    input.lastTailoringRunTailoredResumeId?.trim() ?? "";
+
+  if (!lastTailoringRunTailoredResumeId) {
+    return null;
+  }
+
+  if (
+    input.matchedLastTailoredResume?.id === lastTailoringRunTailoredResumeId &&
+    input.matchedLastTailoredResume.archivedAt
+  ) {
+    return null;
+  }
+
+  return lastTailoringRunTailoredResumeId;
 }
 
 export function resolveDisplayedTailorRunIdentity(input: {

@@ -69,6 +69,7 @@ import {
 } from "./tailor-run-identity";
 import {
   resolveDisplayedTailorRunIdentity,
+  resolveReviewableTailoredResumeId,
   shouldRenderTailorRunShell,
 } from "./tailor-run-display";
 import { buildCompletedTailoringMessage } from "./tailor-run-copy";
@@ -100,7 +101,6 @@ import {
   type UserSyncStateSnapshot,
 } from "../../lib/sync-state.ts";
 import {
-  isTailoredResumeArchived,
   splitTailoredResumesByArchiveState,
 } from "../../lib/tailored-resume-archive-state.ts";
 
@@ -1944,6 +1944,95 @@ function SettingsIcon() {
   );
 }
 
+function TailorEmptyStateGraphic() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="tailor-empty-state-graphic"
+      viewBox="0 0 260 196"
+    >
+      <ellipse className="tailor-empty-shadow" cx="130" cy="170" rx="76" ry="14" />
+      <circle className="tailor-empty-halo" cx="130" cy="88" r="54" />
+
+      <g className="tailor-empty-chip tailor-empty-chip-left">
+        <rect
+          className="tailor-empty-chip-card"
+          height="32"
+          rx="12"
+          width="42"
+          x="54"
+          y="72"
+        />
+        <circle className="tailor-empty-chip-dot" cx="67" cy="88" r="2.6" />
+        <circle className="tailor-empty-chip-dot" cx="75" cy="88" r="2.6" />
+        <circle className="tailor-empty-chip-dot" cx="83" cy="88" r="2.6" />
+      </g>
+
+      <g className="tailor-empty-chip tailor-empty-chip-right">
+        <rect
+          className="tailor-empty-chip-card"
+          height="48"
+          rx="12"
+          width="38"
+          x="176"
+          y="64"
+        />
+        <path className="tailor-empty-chip-line" d="M186 80h18M186 88h18M186 96h12" />
+      </g>
+
+      <g className="tailor-empty-sparkles">
+        <circle className="tailor-empty-sparkle" cx="88" cy="46" r="3" />
+        <circle className="tailor-empty-sparkle" cx="195" cy="46" r="2.5" />
+        <circle className="tailor-empty-sparkle" cx="205" cy="127" r="2.5" />
+      </g>
+
+      <g className="tailor-empty-mascot">
+        <path
+          className="tailor-empty-bubble"
+          d="M130 40C161 40 186 62 186 90C186 116 165 138 137 141L123 156L118 140C93 135 74 114 74 90C74 62 99 40 130 40Z"
+        />
+        <path
+          className="tailor-empty-bubble-sheen"
+          d="M96 63C106 53 120 48 135 48C149 48 161 51 169 58C159 50 146 46 131 46C117 46 104 52 96 63Z"
+        />
+        <ellipse className="tailor-empty-eye" cx="108" cy="94" rx="10" ry="8" />
+        <ellipse className="tailor-empty-eye" cx="152" cy="94" rx="10" ry="8" />
+        <path
+          className="tailor-empty-mouth"
+          d="M108 124C114 131 122 134 130 134C138 134 146 131 152 124"
+        />
+      </g>
+    </svg>
+  );
+}
+
+function DocumentEmptyState({ message }: { message: string }) {
+  return (
+    <section aria-label={message} className="tailor-empty-state">
+      <div className="tailor-empty-state-inner">
+        <TailorEmptyStateGraphic />
+        <p className="tailor-empty-state-copy">{message}</p>
+      </div>
+    </section>
+  );
+}
+
+function DocumentEmptySurface(input: {
+  count: number;
+  message: string;
+  title: string;
+}) {
+  return (
+    <section className="document-empty-surface">
+      <div className="document-empty-heading-row">
+        <h2>{input.title}</h2>
+        <span>{input.count}</span>
+      </div>
+      <DocumentEmptyState message={input.message} />
+    </section>
+  );
+}
+
 function readToolCallRecord(value: unknown): ToolCallRecord | null {
   if (!isRecord(value)) {
     return null;
@@ -2835,22 +2924,21 @@ function App() {
     activeTailoring?.kind === "completed"
       ? activeTailoring
       : currentPageCompletedTailoring;
-  const persistedLatestTailoredResumeId =
+  const lastTailoringRunTailoredResumeId =
     lastTailoringRun?.tailoredResumeId?.trim() || null;
-  const persistedLatestTailoredResume =
-    persistedLatestTailoredResumeId && personalInfo
+  const matchedLastTailoredResume =
+    lastTailoringRunTailoredResumeId && personalInfo
       ? personalInfo.tailoredResumes.find(
-          (tailoredResume) => tailoredResume.id === persistedLatestTailoredResumeId,
+          (tailoredResume) =>
+            tailoredResume.id === lastTailoringRunTailoredResumeId,
         ) ?? null
       : null;
-  const latestTailoredResumeId =
-    completedTailoringForDisplay?.tailoredResumeId ||
-    currentPageCompletedTailoredResume?.id ||
-    (persistedLatestTailoredResume &&
-    !isTailoredResumeArchived(persistedLatestTailoredResume)
-      ? persistedLatestTailoredResume.id
-      : null) ||
-    null;
+  const latestTailoredResumeId = resolveReviewableTailoredResumeId({
+    completedTailoringId: completedTailoringForDisplay?.tailoredResumeId ?? null,
+    currentPageTailoredResumeId: currentPageCompletedTailoredResume?.id ?? null,
+    lastTailoringRunTailoredResumeId,
+    matchedLastTailoredResume,
+  });
   const topLevelTailoredResumeId =
     currentPageCompletedTailoredResume?.id ||
     currentPageCompletedTailoring?.tailoredResumeId ||
@@ -2873,6 +2961,92 @@ function App() {
   const completedTailoringPositionTitle =
     completedTailoringForDisplay?.positionTitle ?? null;
   const visibleUnarchivedTailoredResumes = unarchivedTailoredResumes;
+  const visibleCompletedTailoredResume =
+    (topLevelTailoredResumeId
+      ? visibleUnarchivedTailoredResumes.find(
+          (tailoredResume) => tailoredResume.id === topLevelTailoredResumeId,
+        ) ?? null
+      : null) ??
+    (latestTailoredResumeId && latestTailoredResumeId !== topLevelTailoredResumeId
+      ? visibleUnarchivedTailoredResumes.find(
+          (tailoredResume) => tailoredResume.id === latestTailoredResumeId,
+        ) ?? null
+      : null) ??
+    null;
+  const optimisticCompletedTailoredResumeId =
+    topLevelTailoredResumeId ?? latestTailoredResumeId;
+  const optimisticCompletedTailoredResumeTitle =
+    completedTailoringJobLabel ??
+    buildTailorRunIdentityDisplay({
+      companyName:
+        completedTailoringCompanyName ?? lastTailoringRun?.companyName ?? null,
+      positionTitle:
+        completedTailoringPositionTitle ?? lastTailoringRun?.positionTitle ?? null,
+    })?.label ??
+    buildTailoringJobLabel({
+      companyName:
+        completedTailoringCompanyName ?? lastTailoringRun?.companyName ?? null,
+      positionTitle:
+        completedTailoringPositionTitle ?? lastTailoringRun?.positionTitle ?? null,
+    });
+  const optimisticCompletedTailoredResumeTimestamp =
+    completedTailoringUpdatedAt ??
+    lastTailoringRun?.capturedAt ??
+    new Date().toISOString();
+  const optimisticCompletedTailoredResumeJobUrl =
+    completedTailoringForDisplay?.jobUrl ??
+    lastTailoringRun?.pageUrl ??
+    currentPageUrl ??
+    currentPageIdentity?.jobUrl ??
+    currentPageIdentity?.canonicalUrl ??
+    currentPageIdentity?.pageUrl ??
+    null;
+  const optimisticCompletedTailoredResume =
+    !visibleCompletedTailoredResume && optimisticCompletedTailoredResumeId
+      ? ({
+          applicationId: null,
+          archivedAt: null,
+          companyName:
+            completedTailoringCompanyName ?? lastTailoringRun?.companyName ?? null,
+          createdAt: optimisticCompletedTailoredResumeTimestamp,
+          displayName: optimisticCompletedTailoredResumeTitle,
+          id: optimisticCompletedTailoredResumeId,
+          jobIdentifier:
+            completedTailoringForDisplay?.jobIdentifier ??
+            lastTailoringRun?.jobIdentifier ??
+            null,
+          jobUrl: optimisticCompletedTailoredResumeJobUrl,
+          positionTitle:
+            completedTailoringPositionTitle ??
+            lastTailoringRun?.positionTitle ??
+            null,
+          status:
+            completedTailoringForDisplay?.status ??
+            (completedTailoringError ? "failed" : "ready"),
+          updatedAt: optimisticCompletedTailoredResumeTimestamp,
+        } satisfies TailoredResumeSummary)
+      : null;
+  const displayedUnarchivedTailoredResumes = optimisticCompletedTailoredResume
+    ? [
+        optimisticCompletedTailoredResume,
+        ...visibleUnarchivedTailoredResumes.filter(
+          (tailoredResume) =>
+            tailoredResume.id !== optimisticCompletedTailoredResume.id,
+        ),
+      ]
+    : visibleUnarchivedTailoredResumes;
+  const shouldRenderUnarchivedResumeLibrary =
+    authState.status !== "signedIn" ||
+    personalInfoState.status !== "ready" ||
+    displayedUnarchivedTailoredResumes.length > 0;
+  const shouldRenderArchivedResumeEmptySurface =
+    authState.status === "signedIn" &&
+    personalInfoState.status === "ready" &&
+    archivedTailoredResumes.length === 0;
+  const shouldRenderApplicationsEmptySurface =
+    authState.status === "signedIn" &&
+    personalInfoState.status === "ready" &&
+    (!personalInfo || personalInfo.applications.length === 0);
   const hasCompletedTailorRun = Boolean(latestTailoredResumeId);
   const hasCompletedTailorRunWarning = Boolean(
     completedTailoringError || (latestTailoredResumeId && lastTailoringRunError),
@@ -3196,7 +3370,24 @@ function App() {
   const shouldRenderLegacyTailorRunShell =
     shouldShowTailorRunShell &&
     !currentActiveTailorRunCard &&
-    !hasCurrentPageCompletedTailoring;
+    !hasCurrentPageCompletedTailoring &&
+    !optimisticCompletedTailoredResumeId;
+  const hasUnarchivedTailorItems =
+    displayedUnarchivedTailoredResumes.length > 0 ||
+    activeTailorRunCards.length > 0 ||
+    shouldRenderLegacyTailorRunShell;
+  const shouldRenderUnarchivedResumeEmptySurface =
+    authState.status === "signedIn" &&
+    personalInfoState.status === "ready" &&
+    !hasUnarchivedTailorItems;
+  const unarchivedTailorDisplayCount =
+    displayedUnarchivedTailoredResumes.length +
+    activeTailorRunCards.length +
+    (shouldRenderLegacyTailorRunShell &&
+    displayedUnarchivedTailoredResumes.length === 0 &&
+    activeTailorRunCards.length === 0
+      ? 1
+      : 0);
   const showFullscreenTailorRunDetail =
     Boolean(activeTailorRunDetailView && focusedTailoredResumeId);
   const activeTailorRunDetailIdentity =
@@ -5885,6 +6076,437 @@ function App() {
     );
   };
 
+  const legacyTailorRunShell = shouldRenderLegacyTailorRunShell ? (
+    <section
+      aria-label="Tailoring run"
+      className={`snapshot-card tailor-run-shell tailor-run-shell-${statusDisplayState} ${
+        showCompactTailorRunSummary ? "tailor-run-shell-compact" : ""
+      } ${
+        showCompactTailorRunSummary ? "tailor-run-shell-complete" : ""
+      } ${
+        isTailorRunMenuOpen ? "tailor-run-shell-menu-open" : ""
+      } ${
+        isTailoringRunOnCurrentPage ? "tailor-run-shell-current-page" : ""
+      } ${
+        isTailorRunShellOverlayActive ? "tailor-run-shell-overlay-active" : ""
+      }`.trim()}
+    >
+      <div
+        aria-hidden={isTailorRunShellOverlayActive ? "true" : undefined}
+        className={`tailor-run-shell-body ${
+          isTailorRunShellOverlayActive
+            ? "tailor-run-shell-body-obscured"
+            : ""
+        }`.trim()}
+      >
+        {showCompactTailorRunSummary ? (
+          <div className="tailor-run-compact-row">
+            <div className="tailor-run-compact-button">
+              <span className="tailor-run-compact-title">
+                {displayedTailorRunIdentity?.label ?? "Tailoring run"}
+              </span>
+            </div>
+            {shouldShowTailorRunTimestamp ? (
+              <span className="tailor-run-detail-time">
+                {tailoredRunSavedAtLabel}
+              </span>
+            ) : null}
+            {showArchiveTailorRunAction ? (
+              <button
+                className="secondary-action compact-action"
+                disabled={tailorRunMenuActionState !== "idle"}
+                type="button"
+                onClick={() => void handleArchiveTailorRun()}
+              >
+                {tailorRunMenuActionState === "archiving"
+                  ? "Archiving..."
+                  : "Archive"}
+              </button>
+            ) : null}
+            {showTailorRunMenu ? (
+              <div
+                className="tailor-run-menu-shell"
+                ref={tailorRunMenuRef}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <button
+                  aria-expanded={isTailorRunMenuOpen}
+                  aria-label="More tailor run actions"
+                  className="secondary-action compact-action tailor-run-menu-trigger"
+                  disabled={tailorRunMenuActionState !== "idle"}
+                  type="button"
+                  onClick={() => {
+                    setTailorRunMenuError(null);
+                    setIsTailorRunMenuOpen((currentValue) => !currentValue);
+                  }}
+                >
+                  <EllipsisHorizontalIcon />
+                </button>
+                {isTailorRunMenuOpen ? (
+                  <div className="tailor-run-menu-popover">
+                    <div className="tailor-run-menu">
+                      {showPreviewTailorRunAction ? (
+                        <button
+                          className="tailor-run-menu-item"
+                          disabled={tailorRunMenuActionState !== "idle"}
+                          type="button"
+                          onClick={() => {
+                            openTailorRunDetailView("preview");
+                            setIsTailorRunMenuOpen(false);
+                          }}
+                        >
+                          {previewButtonLabel}
+                        </button>
+                      ) : null}
+                      {showQuickReviewTailorRunAction ? (
+                        <button
+                          className="tailor-run-menu-item"
+                          disabled={tailorRunMenuActionState !== "idle"}
+                          type="button"
+                          onClick={() => {
+                            openTailorRunDetailView("quickReview");
+                            setIsTailorRunMenuOpen(false);
+                          }}
+                        >
+                          {quickReviewButtonLabel}
+                        </button>
+                      ) : null}
+                      {displayedTailorRunUrl ? (
+                        <button
+                          className="tailor-run-menu-item"
+                          disabled={tailorRunMenuActionState !== "idle"}
+                          type="button"
+                          onClick={() => void handleGoToTailorRunTab()}
+                        >
+                          {tailorRunMenuActionState === "goingToTab"
+                            ? "Opening..."
+                            : "Go to tab"}
+                        </button>
+                      ) : null}
+                      {showRegenerateTailorRunAction ? (
+                        <button
+                          className="tailor-run-menu-item"
+                          disabled={tailorRunMenuActionState !== "idle"}
+                          type="button"
+                          onClick={() => void handleRegenerateTailorRun()}
+                        >
+                          {tailorRunMenuActionState === "regenerating"
+                            ? "Regenerating..."
+                            : "Regenerate edits"}
+                        </button>
+                      ) : null}
+                      {showArchiveTailorRunAction ? (
+                        <button
+                          className="tailor-run-menu-item"
+                          disabled={tailorRunMenuActionState !== "idle"}
+                          type="button"
+                          onClick={() => void handleArchiveTailorRun()}
+                        >
+                          {tailorRunMenuActionState === "archiving"
+                            ? "Archiving..."
+                            : "Archive"}
+                        </button>
+                      ) : null}
+                      {showDeleteTailorRunAction ? (
+                        <button
+                          className="tailor-run-menu-item"
+                          disabled={
+                            !canDeleteTailorRun ||
+                            tailorRunMenuActionState !== "idle"
+                          }
+                          type="button"
+                          onClick={() => void handleDeleteTailorRun()}
+                        >
+                          {tailorRunMenuActionState === "deleting"
+                            ? "Deleting..."
+                            : "Delete"}
+                        </button>
+                      ) : null}
+                    </div>
+                    {tailorRunMenuError ? (
+                      <p className="tailor-run-menu-error">
+                        {tailorRunMenuError}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <>
+            <div className="tailor-run-meta">
+              <div className="tailor-run-heading">
+                {shouldShowTailorRunIdentity || showStopCurrentTailoringAction ? (
+                  <p
+                    className="tailor-run-url tailor-run-identity-structured"
+                    title={displayedTailorRunIdentity?.title ?? undefined}
+                  >
+                    {displayedTailorRunIdentity?.label ?? "Tailoring run"}
+                  </p>
+                ) : null}
+              </div>
+              {shouldShowTailorRunMetaActions ? (
+                <div className="tailor-run-meta-badges">
+                  {showStopCurrentTailoringAction ? (
+                    <button
+                      className="secondary-action compact-action"
+                      disabled={isStoppingCurrentTailoring}
+                      type="button"
+                      onClick={() => void stopCurrentTailoring()}
+                    >
+                      {isStoppingCurrentTailoring ? "Stopping..." : "Stop run"}
+                    </button>
+                  ) : null}
+                  {showArchiveTailorRunAction ? (
+                    <button
+                      className="secondary-action compact-action"
+                      disabled={tailorRunMenuActionState !== "idle"}
+                      type="button"
+                      onClick={() => void handleArchiveTailorRun()}
+                    >
+                      {tailorRunMenuActionState === "archiving"
+                        ? "Archiving..."
+                        : "Archive"}
+                    </button>
+                  ) : null}
+                  {shouldShowTailorRunTimestamp ? (
+                    <span className="tailor-run-detail-time">
+                      {tailoredRunSavedAtLabel}
+                    </span>
+                  ) : null}
+                  {showTailorRunMenu ? (
+                    <div className="tailor-run-menu-shell" ref={tailorRunMenuRef}>
+                      <button
+                        aria-expanded={isTailorRunMenuOpen}
+                        aria-label="More tailor run actions"
+                        className="secondary-action compact-action tailor-run-menu-trigger"
+                        disabled={tailorRunMenuActionState !== "idle"}
+                        type="button"
+                        onClick={() => {
+                          setTailorRunMenuError(null);
+                          setIsTailorRunMenuOpen((currentValue) => !currentValue);
+                        }}
+                      >
+                        <EllipsisHorizontalIcon />
+                      </button>
+                      {isTailorRunMenuOpen ? (
+                        <div className="tailor-run-menu-popover">
+                          <div className="tailor-run-menu">
+                            {displayedTailorRunUrl ? (
+                              <button
+                                className="tailor-run-menu-item"
+                                disabled={tailorRunMenuActionState !== "idle"}
+                                type="button"
+                                onClick={() => void handleGoToTailorRunTab()}
+                              >
+                                {tailorRunMenuActionState === "goingToTab"
+                                  ? "Opening..."
+                                  : "Go to tab"}
+                              </button>
+                            ) : null}
+                            {showRegenerateTailorRunAction ? (
+                              <button
+                                className="tailor-run-menu-item"
+                                disabled={tailorRunMenuActionState !== "idle"}
+                                type="button"
+                                onClick={() => void handleRegenerateTailorRun()}
+                              >
+                                {tailorRunMenuActionState === "regenerating"
+                                  ? "Regenerating..."
+                                  : "Regenerate edits"}
+                              </button>
+                            ) : null}
+                            {showArchiveTailorRunAction ? (
+                              <button
+                                className="tailor-run-menu-item"
+                                disabled={tailorRunMenuActionState !== "idle"}
+                                type="button"
+                                onClick={() => void handleArchiveTailorRun()}
+                              >
+                                {tailorRunMenuActionState === "archiving"
+                                  ? "Archiving..."
+                                  : "Archive"}
+                              </button>
+                            ) : null}
+                            {showDeleteTailorRunAction ? (
+                              <button
+                                className="tailor-run-menu-item"
+                                disabled={
+                                  !canDeleteTailorRun ||
+                                  tailorRunMenuActionState !== "idle"
+                                }
+                                type="button"
+                                onClick={() => void handleDeleteTailorRun()}
+                              >
+                                {tailorRunMenuActionState === "deleting"
+                                  ? "Deleting..."
+                                  : "Delete"}
+                              </button>
+                            ) : null}
+                          </div>
+                          {tailorRunMenuError ? (
+                            <p className="tailor-run-menu-error">
+                              {tailorRunMenuError}
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+
+            {shouldShowTailorRunFocusedStep && compactTailorRunStep ? (
+              <div className="tailor-progress-focus">
+                <div
+                  aria-current={
+                    compactTailorRunStep.status === "current" ||
+                    compactTailorRunStep.status === "retrying"
+                      ? "step"
+                      : undefined
+                  }
+                  className={`tailor-progress-step tailor-progress-step-${compactTailorRunStep.status} tailor-progress-step-focus`}
+                  title={`Step ${compactTailorRunStep.stepNumber}: ${compactTailorRunStep.label} (${formatTailorResumeProgressStatusLabel({
+                    attempt: compactTailorRunStep.attempt,
+                    status: compactTailorRunStep.status,
+                  })})`}
+                >
+                  <span className="tailor-progress-step-topline">
+                    <span className="tailor-progress-step-number">
+                      Step {compactTailorRunStep.stepNumber}
+                    </span>
+                    {compactTailorRunAttemptBadgeLabel ? (
+                      <span className="tailor-progress-step-attempt-badge">
+                        {compactTailorRunAttemptBadgeLabel}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="tailor-progress-step-label">
+                    {compactTailorRunStepLabel}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+
+            {shouldShowTailorRunCopy ? (
+              <div className="tailor-progress-copy">
+                <p className="tailor-progress-message">{tailorRunMessage}</p>
+                {shouldShowTailorRunDetail ? (
+                  <p className="tailor-progress-detail">{tailorRunDetail}</p>
+                ) : null}
+              </div>
+            ) : null}
+
+            {tailorInterview ? (
+              <div className="tailor-run-interview-callout">
+                <div className="tailor-run-interview-copy">
+                  <p className="tailor-run-interview-title">
+                    {isTailorInterviewAwaitingCompletion
+                      ? "Follow-up chat ready"
+                      : "Question ready to answer"}
+                  </p>
+                  <p className="tailor-run-interview-preview">
+                    {tailorInterviewPreview ??
+                      (isTailorInterviewAwaitingCompletion
+                        ? "The assistant has enough context to finish, but you can still add one more clarification before wrapping up."
+                        : "Open the follow-up chat to answer the current question.")}
+                  </p>
+                </div>
+                <button
+                  className="secondary-action compact-action tailor-run-interview-action"
+                  disabled={isTailorInterviewBusy}
+                  type="button"
+                  onClick={() =>
+                    revealTailorInterview({ focusComposer: true })
+                  }
+                >
+                  Open chat
+                </button>
+              </div>
+            ) : null}
+
+            {showTailoredPreview && !showCompactTailorRunSummary ? (
+              <div className="tailor-run-detail-shell">
+                <div className="tailor-run-detail-nav-row">
+                  <div
+                    aria-label="Tailored resume actions"
+                    className="tailor-run-detail-actions-group tailor-run-detail-actions-group-two-up"
+                    role="group"
+                  >
+                    <button
+                      className="tailor-run-detail-toggle tailor-run-detail-action"
+                      type="button"
+                      onClick={() => openTailorRunDetailView("preview")}
+                    >
+                      {previewButtonLabel}
+                    </button>
+                    <button
+                      className="tailor-run-detail-toggle tailor-run-detail-action"
+                      type="button"
+                      onClick={() => openTailorRunDetailView("quickReview")}
+                    >
+                      {quickReviewButtonLabel}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </>
+        )}
+      </div>
+
+      {isTailorPreparationPending && !existingTailoringPrompt ? (
+        <div className="tailor-run-preparing-overlay" role="presentation">
+          <section
+            aria-label={tailorPreparationMessage}
+            className="tailor-run-preparing-dialog"
+            role="status"
+          >
+            <div
+              aria-hidden="true"
+              className="tailor-run-preparing-spinner"
+            />
+          </section>
+        </div>
+      ) : null}
+
+      {existingTailoringPrompt ? (
+        <div className="existing-tailoring-inline-overlay" role="presentation">
+          <section className="existing-tailoring-inline-dialog">
+            <p className="existing-tailoring-inline-title">Overwrite?</p>
+            <div className="existing-tailoring-inline-actions">
+              <button
+                className="secondary-action compact-action"
+                disabled={existingTailoringPrompt.actionState !== "idle"}
+                type="button"
+                onClick={() => void dismissExistingTailoringPrompt()}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-action compact-action"
+                disabled={existingTailoringPrompt.actionState !== "idle"}
+                type="button"
+                onClick={() => void overwriteExistingTailoring()}
+              >
+                {existingTailoringPrompt.actionState === "overwriting"
+                  ? "Overwriting..."
+                  : "Confirm"}
+              </button>
+            </div>
+            {tailorInterviewError ? (
+              <p className="interview-error existing-tailoring-inline-error">
+                {tailorInterviewError}
+              </p>
+            ) : null}
+          </section>
+        </div>
+      ) : null}
+    </section>
+  ) : null;
+
   function tailoredResumeMatchesCurrentPage(tailoredResume: {
     jobUrl: string | null;
   }) {
@@ -5901,24 +6523,49 @@ function App() {
   function renderTailoredResumeLibrary(input: {
     actionLabel: "archive" | "restore";
     emptyMessage: string;
+    flush?: boolean;
     resumes: TailoredResumeSummary[];
     title: string;
     highlightCurrentPage?: boolean;
   }) {
     if (authState.status !== "signedIn") {
-      return <p className="placeholder">Connect Google to load saved resumes.</p>;
+      return (
+        <p
+          className={`placeholder ${
+            input.flush ? "tailored-resume-placeholder-flush" : ""
+          }`.trim()}
+        >
+          Connect Google to load saved resumes.
+        </p>
+      );
     }
 
     if (personalInfoState.status === "loading") {
-      return <p className="placeholder">Loading tailored resumes...</p>;
+      return (
+        <p
+          className={`placeholder ${
+            input.flush ? "tailored-resume-placeholder-flush" : ""
+          }`.trim()}
+        >
+          Loading tailored resumes...
+        </p>
+      );
     }
 
     if (personalInfoState.status === "error") {
-      return <p className="placeholder">{personalInfoState.error}</p>;
+      return (
+        <p
+          className={`placeholder ${
+            input.flush ? "tailored-resume-placeholder-flush" : ""
+          }`.trim()}
+        >
+          {personalInfoState.error}
+        </p>
+      );
     }
 
     if (input.resumes.length === 0) {
-      return <p className="placeholder">{input.emptyMessage}</p>;
+      return <DocumentEmptyState message={input.emptyMessage} />;
     }
 
     return (
@@ -5928,8 +6575,13 @@ function App() {
             {tailoredResumeMutationError}
           </p>
         ) : null}
-        <div className="tailored-resume-list">
+        <div
+          className={`tailored-resume-list ${
+            input.flush ? "tailored-resume-list-flush" : ""
+          }`.trim()}
+        >
           {input.resumes.map((tailoredResume) => {
+            const isUnarchivedSurface = input.actionLabel === "archive";
             const isCurrentPageMatch =
               input.highlightCurrentPage === true &&
               tailoredResumeMatchesCurrentPage(tailoredResume);
@@ -5953,7 +6605,15 @@ function App() {
             return (
               <div
                 key={tailoredResume.id}
-                className="tailored-resume-row-shell"
+                className={`tailored-resume-row-shell ${
+                  isUnarchivedSurface
+                    ? "tailored-resume-row-shell-unarchived"
+                    : ""
+                } ${
+                  isCurrentPageMatch
+                    ? "tailored-resume-row-shell-current-page"
+                    : ""
+                }`.trim()}
               >
                 <button
                   className={`tailored-resume-row ${
@@ -5984,37 +6644,73 @@ function App() {
                 </button>
 
                 <div className="tailored-resume-row-actions">
-                  <button
-                    aria-label={
-                      input.actionLabel === "archive"
-                        ? `Archive ${tailoredResume.displayName}`
-                        : `Restore ${tailoredResume.displayName}`
-                    }
-                    className="icon-action tailored-resume-row-action-icon"
-                    disabled={isResumeActionDisabled}
-                    title={
-                      isActionPending
+                  {isUnarchivedSurface ? (
+                    <button
+                      aria-label={
+                        input.actionLabel === "archive"
+                          ? `Archive ${tailoredResume.displayName}`
+                          : `Restore ${tailoredResume.displayName}`
+                      }
+                      className="secondary-action compact-action tailored-resume-row-action-pill"
+                      disabled={isResumeActionDisabled}
+                      title={
+                        isActionPending
+                          ? input.actionLabel === "archive"
+                            ? "Archiving..."
+                            : "Restoring..."
+                          : input.actionLabel === "archive"
+                            ? "Archive"
+                            : "Restore"
+                      }
+                      type="button"
+                      onClick={() =>
+                        void setTailoredResumeArchivedState({
+                          archived: input.actionLabel === "archive",
+                          tailoredResumeId: tailoredResume.id,
+                        })
+                      }
+                    >
+                      {isActionPending
                         ? input.actionLabel === "archive"
                           ? "Archiving..."
                           : "Restoring..."
                         : input.actionLabel === "archive"
                           ? "Archive"
-                          : "Restore"
-                    }
-                    type="button"
-                    onClick={() =>
-                      void setTailoredResumeArchivedState({
-                        archived: input.actionLabel === "archive",
-                        tailoredResumeId: tailoredResume.id,
-                      })
-                    }
-                  >
-                    {input.actionLabel === "archive" ? (
-                      <ArchiveTrayDownIcon />
-                    ) : (
-                      <ArchiveTrayUpIcon />
-                    )}
-                  </button>
+                          : "Restore"}
+                    </button>
+                  ) : (
+                    <button
+                      aria-label={
+                        input.actionLabel === "archive"
+                          ? `Archive ${tailoredResume.displayName}`
+                          : `Restore ${tailoredResume.displayName}`
+                      }
+                      className="icon-action tailored-resume-row-action-icon"
+                      disabled={isResumeActionDisabled}
+                      title={
+                        isActionPending
+                          ? input.actionLabel === "archive"
+                            ? "Archiving..."
+                            : "Restoring..."
+                          : input.actionLabel === "archive"
+                            ? "Archive"
+                            : "Restore"
+                      }
+                      type="button"
+                      onClick={() =>
+                        void setTailoredResumeArchivedState({
+                          archived: input.actionLabel === "archive",
+                          tailoredResumeId: tailoredResume.id,
+                        })
+                      }
+                    >
+                      {input.actionLabel === "archive" ? (
+                        <ArchiveTrayDownIcon />
+                      ) : (
+                        <ArchiveTrayUpIcon />
+                      )}
+                    </button>
+                  )}
                   <div
                     className="tailor-run-menu-shell tailored-resume-row-menu-shell"
                     ref={isMenuOpen ? tailoredResumeMenuRef : undefined}
@@ -6109,7 +6805,7 @@ function App() {
     }
 
     if (!personalInfo || personalInfo.applications.length === 0) {
-      return <p className="placeholder">No tracked applications yet.</p>;
+      return <DocumentEmptyState message="No tracked applications yet." />;
     }
 
     return (
@@ -7008,462 +7704,44 @@ function App() {
             ) : null}
           </div>
 
-          {shouldRenderLegacyTailorRunShell ? (
-                <section
-                  aria-label="Tailoring run"
-                  className={`snapshot-card tailor-run-shell tailor-run-shell-${statusDisplayState} ${
-                    showCompactTailorRunSummary ? "tailor-run-shell-compact" : ""
-                  } ${
-                    showCompactTailorRunSummary ? "tailor-run-shell-complete" : ""
-                  } ${
-                    isTailorRunMenuOpen ? "tailor-run-shell-menu-open" : ""
-                  } ${
-                    isTailoringRunOnCurrentPage ? "tailor-run-shell-current-page" : ""
-                  } ${
-                    isTailorRunShellOverlayActive
-                      ? "tailor-run-shell-overlay-active"
-                      : ""
-                  }`}
-                >
-            <div
-              aria-hidden={isTailorRunShellOverlayActive ? "true" : undefined}
-              className={`tailor-run-shell-body ${
-                isTailorRunShellOverlayActive
-                  ? "tailor-run-shell-body-obscured"
-                  : ""
-              }`.trim()}
-            >
-              {showCompactTailorRunSummary ? (
-                <div className="tailor-run-compact-row">
-                  <div className="tailor-run-compact-button">
-                    <span className="tailor-run-compact-title">
-                      {displayedTailorRunIdentity?.label ?? "Tailoring run"}
-                    </span>
-                  </div>
-                  {shouldShowTailorRunTimestamp ? (
-                    <span className="tailor-run-detail-time">
-                      {tailoredRunSavedAtLabel}
-                    </span>
-                  ) : null}
-                  {showArchiveTailorRunAction ? (
-                    <button
-                      className="secondary-action compact-action"
-                      disabled={tailorRunMenuActionState !== "idle"}
-                      type="button"
-                      onClick={() => void handleArchiveTailorRun()}
-                    >
-                      {tailorRunMenuActionState === "archiving"
-                        ? "Archiving..."
-                        : "Archive"}
-                    </button>
-                  ) : null}
-                  {showTailorRunMenu ? (
-                    <div
-                      className="tailor-run-menu-shell"
-                      ref={tailorRunMenuRef}
-                      onClick={(event) => event.stopPropagation()}
-                    >
-                      <button
-                        aria-expanded={isTailorRunMenuOpen}
-                        aria-label="More tailor run actions"
-                        className="secondary-action compact-action tailor-run-menu-trigger"
-                        disabled={tailorRunMenuActionState !== "idle"}
-                        type="button"
-                        onClick={() => {
-                          setTailorRunMenuError(null);
-                          setIsTailorRunMenuOpen((currentValue) => !currentValue);
-                        }}
-                      >
-                        <EllipsisHorizontalIcon />
-                      </button>
-                      {isTailorRunMenuOpen ? (
-                        <div className="tailor-run-menu-popover">
-                          <div className="tailor-run-menu">
-                            {showPreviewTailorRunAction ? (
-                              <button
-                                className="tailor-run-menu-item"
-                                disabled={tailorRunMenuActionState !== "idle"}
-                                type="button"
-                                onClick={() => {
-                                  openTailorRunDetailView("preview");
-                                  setIsTailorRunMenuOpen(false);
-                                }}
-                              >
-                                {previewButtonLabel}
-                              </button>
-                            ) : null}
-                            {showQuickReviewTailorRunAction ? (
-                              <button
-                                className="tailor-run-menu-item"
-                                disabled={tailorRunMenuActionState !== "idle"}
-                                type="button"
-                                onClick={() => {
-                                  openTailorRunDetailView("quickReview");
-                                  setIsTailorRunMenuOpen(false);
-                                }}
-                              >
-                                {quickReviewButtonLabel}
-                              </button>
-                            ) : null}
-                            {displayedTailorRunUrl ? (
-                              <button
-                                className="tailor-run-menu-item"
-                                disabled={tailorRunMenuActionState !== "idle"}
-                                type="button"
-                                onClick={() => void handleGoToTailorRunTab()}
-                              >
-                                {tailorRunMenuActionState === "goingToTab"
-                                  ? "Opening..."
-                                  : "Go to tab"}
-                              </button>
-                            ) : null}
-                            {showRegenerateTailorRunAction ? (
-                              <button
-                                className="tailor-run-menu-item"
-                                disabled={tailorRunMenuActionState !== "idle"}
-                                type="button"
-                                onClick={() => void handleRegenerateTailorRun()}
-                              >
-                                {tailorRunMenuActionState === "regenerating"
-                                  ? "Regenerating..."
-                                  : "Regenerate edits"}
-                              </button>
-                            ) : null}
-                            {showArchiveTailorRunAction ? (
-                              <button
-                                className="tailor-run-menu-item"
-                                disabled={tailorRunMenuActionState !== "idle"}
-                                type="button"
-                                onClick={() => void handleArchiveTailorRun()}
-                              >
-                                {tailorRunMenuActionState === "archiving"
-                                  ? "Archiving..."
-                                  : "Archive"}
-                              </button>
-                            ) : null}
-                            {showDeleteTailorRunAction ? (
-                              <button
-                                className="tailor-run-menu-item"
-                                disabled={
-                                  !canDeleteTailorRun ||
-                                  tailorRunMenuActionState !== "idle"
-                                }
-                                type="button"
-                                onClick={() => void handleDeleteTailorRun()}
-                              >
-                                {tailorRunMenuActionState === "deleting"
-                                  ? "Deleting..."
-                                  : "Delete"}
-                              </button>
-                            ) : null}
-                          </div>
-                          {tailorRunMenuError ? (
-                            <p className="tailor-run-menu-error">
-                              {tailorRunMenuError}
-                            </p>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              ) : (
-                <>
-                  <div className="tailor-run-meta">
-                    <div className="tailor-run-heading">
-                      {shouldShowTailorRunIdentity || showStopCurrentTailoringAction ? (
-                        <p
-                          className="tailor-run-url tailor-run-identity-structured"
-                          title={displayedTailorRunIdentity?.title ?? undefined}
-                        >
-                          {displayedTailorRunIdentity?.label ?? "Tailoring run"}
-                        </p>
-                      ) : null}
-                    </div>
-                    {shouldShowTailorRunMetaActions ? (
-                      <div className="tailor-run-meta-badges">
-                        {showStopCurrentTailoringAction ? (
-                          <button
-                            className="secondary-action compact-action"
-                            disabled={isStoppingCurrentTailoring}
-                            type="button"
-                            onClick={() => void stopCurrentTailoring()}
-                          >
-                            {isStoppingCurrentTailoring ? "Stopping..." : "Stop run"}
-                          </button>
-                        ) : null}
-                        {showArchiveTailorRunAction ? (
-                          <button
-                            className="secondary-action compact-action"
-                            disabled={tailorRunMenuActionState !== "idle"}
-                            type="button"
-                            onClick={() => void handleArchiveTailorRun()}
-                          >
-                            {tailorRunMenuActionState === "archiving"
-                              ? "Archiving..."
-                              : "Archive"}
-                          </button>
-                        ) : null}
-                        {shouldShowTailorRunTimestamp ? (
-                          <span className="tailor-run-detail-time">
-                            {tailoredRunSavedAtLabel}
-                          </span>
-                        ) : null}
-                        {showTailorRunMenu ? (
-                          <div className="tailor-run-menu-shell" ref={tailorRunMenuRef}>
-                            <button
-                              aria-expanded={isTailorRunMenuOpen}
-                              aria-label="More tailor run actions"
-                              className="secondary-action compact-action tailor-run-menu-trigger"
-                              disabled={tailorRunMenuActionState !== "idle"}
-                              type="button"
-                              onClick={() => {
-                                setTailorRunMenuError(null);
-                                setIsTailorRunMenuOpen((currentValue) => !currentValue);
-                              }}
-                            >
-                              <EllipsisHorizontalIcon />
-                            </button>
-                            {isTailorRunMenuOpen ? (
-                              <div className="tailor-run-menu-popover">
-                                <div className="tailor-run-menu">
-                                  {displayedTailorRunUrl ? (
-                                    <button
-                                      className="tailor-run-menu-item"
-                                      disabled={tailorRunMenuActionState !== "idle"}
-                                      type="button"
-                                      onClick={() => void handleGoToTailorRunTab()}
-                                    >
-                                      {tailorRunMenuActionState === "goingToTab"
-                                        ? "Opening..."
-                                        : "Go to tab"}
-                                    </button>
-                                  ) : null}
-                                  {showRegenerateTailorRunAction ? (
-                                    <button
-                                      className="tailor-run-menu-item"
-                                      disabled={tailorRunMenuActionState !== "idle"}
-                                      type="button"
-                                      onClick={() => void handleRegenerateTailorRun()}
-                                    >
-                                      {tailorRunMenuActionState === "regenerating"
-                                        ? "Regenerating..."
-                                        : "Regenerate edits"}
-                                    </button>
-                                  ) : null}
-                                  {showArchiveTailorRunAction ? (
-                                    <button
-                                      className="tailor-run-menu-item"
-                                      disabled={tailorRunMenuActionState !== "idle"}
-                                      type="button"
-                                      onClick={() => void handleArchiveTailorRun()}
-                                    >
-                                      {tailorRunMenuActionState === "archiving"
-                                        ? "Archiving..."
-                                        : "Archive"}
-                                    </button>
-                                  ) : null}
-                                  {showDeleteTailorRunAction ? (
-                                    <button
-                                      className="tailor-run-menu-item"
-                                      disabled={
-                                        !canDeleteTailorRun ||
-                                        tailorRunMenuActionState !== "idle"
-                                      }
-                                      type="button"
-                                      onClick={() => void handleDeleteTailorRun()}
-                                    >
-                                      {tailorRunMenuActionState === "deleting"
-                                        ? "Deleting..."
-                                        : "Delete"}
-                                    </button>
-                                  ) : null}
-                                </div>
-                                {tailorRunMenuError ? (
-                                  <p className="tailor-run-menu-error">
-                                    {tailorRunMenuError}
-                                  </p>
-                                ) : null}
-                              </div>
-                            ) : null}
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-
-                  {shouldShowTailorRunFocusedStep && compactTailorRunStep ? (
-                    <div className="tailor-progress-focus">
-                      <div
-                        aria-current={
-                          compactTailorRunStep.status === "current" ||
-                          compactTailorRunStep.status === "retrying"
-                            ? "step"
-                            : undefined
-                        }
-                        className={`tailor-progress-step tailor-progress-step-${compactTailorRunStep.status} tailor-progress-step-focus`}
-                        title={`Step ${compactTailorRunStep.stepNumber}: ${compactTailorRunStep.label} (${formatTailorResumeProgressStatusLabel({
-                          attempt: compactTailorRunStep.attempt,
-                          status: compactTailorRunStep.status,
-                        })})`}
-                      >
-                        <span className="tailor-progress-step-topline">
-                          <span className="tailor-progress-step-number">
-                            Step {compactTailorRunStep.stepNumber}
-                          </span>
-                          {compactTailorRunAttemptBadgeLabel ? (
-                            <span className="tailor-progress-step-attempt-badge">
-                              {compactTailorRunAttemptBadgeLabel}
-                            </span>
-                          ) : null}
-                        </span>
-                        <span className="tailor-progress-step-label">
-                          {compactTailorRunStepLabel}
-                        </span>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {shouldShowTailorRunCopy ? (
-                    <div className="tailor-progress-copy">
-                      <p className="tailor-progress-message">{tailorRunMessage}</p>
-                      {shouldShowTailorRunDetail ? (
-                        <p className="tailor-progress-detail">{tailorRunDetail}</p>
-                      ) : null}
-                    </div>
-                  ) : null}
-
-                  {tailorInterview ? (
-                    <div className="tailor-run-interview-callout">
-                      <div className="tailor-run-interview-copy">
-                        <p className="tailor-run-interview-title">
-                          {isTailorInterviewAwaitingCompletion
-                            ? "Follow-up chat ready"
-                            : "Question ready to answer"}
-                        </p>
-                        <p className="tailor-run-interview-preview">
-                          {tailorInterviewPreview ??
-                            (isTailorInterviewAwaitingCompletion
-                              ? "The assistant has enough context to finish, but you can still add one more clarification before wrapping up."
-                              : "Open the follow-up chat to answer the current question.")}
-                        </p>
-                      </div>
-                      <button
-                        className="secondary-action compact-action tailor-run-interview-action"
-                        disabled={isTailorInterviewBusy}
-                        type="button"
-                        onClick={() =>
-                          revealTailorInterview({ focusComposer: true })
-                        }
-                      >
-                        Open chat
-                      </button>
-                    </div>
-                  ) : null}
-
-                  {showTailoredPreview && !showCompactTailorRunSummary ? (
-                    <div className="tailor-run-detail-shell">
-                      <div className="tailor-run-detail-nav-row">
-                        <div
-                          aria-label="Tailored resume actions"
-                          className="tailor-run-detail-actions-group tailor-run-detail-actions-group-two-up"
-                          role="group"
-                        >
-                          <button
-                            className="tailor-run-detail-toggle tailor-run-detail-action"
-                            type="button"
-                            onClick={() => openTailorRunDetailView("preview")}
-                          >
-                            {previewButtonLabel}
-                          </button>
-                          <button
-                            className="tailor-run-detail-toggle tailor-run-detail-action"
-                            type="button"
-                            onClick={() => openTailorRunDetailView("quickReview")}
-                          >
-                            {quickReviewButtonLabel}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-                </>
-              )}
-            </div>
-
-            {isTailorPreparationPending && !existingTailoringPrompt ? (
-              <div className="tailor-run-preparing-overlay" role="presentation">
-                <section
-                  aria-label={tailorPreparationMessage}
-                  className="tailor-run-preparing-dialog"
-                  role="status"
-                >
-                  <div
-                    aria-hidden="true"
-                    className="tailor-run-preparing-spinner"
-                  />
-                </section>
+          {shouldRenderUnarchivedResumeEmptySurface ? (
+            <DocumentEmptySurface
+              count={unarchivedTailorDisplayCount}
+              message="No active or completed tailored resumes yet."
+              title="Unarchived resumes"
+            />
+          ) : (
+            <section className="tailor-unarchived-surface">
+              <div className="card-heading-row">
+                <h2>Unarchived resumes</h2>
+                <span>{unarchivedTailorDisplayCount}</span>
               </div>
-            ) : null}
+              <div className="tailored-resume-card-stack">
+                {legacyTailorRunShell}
+                {activeTailorRunCards.length > 0 ? (
+                  <section
+                    aria-label="Active tailoring runs"
+                    className="active-tailor-run-stack"
+                  >
+                    {activeTailorRunCards.map((card) =>
+                      renderActiveTailorRunCard(card),
+                    )}
+                  </section>
+                ) : null}
 
-            {existingTailoringPrompt ? (
-              <div className="existing-tailoring-inline-overlay" role="presentation">
-                <section className="existing-tailoring-inline-dialog">
-                  <p className="existing-tailoring-inline-title">Overwrite?</p>
-                  <div className="existing-tailoring-inline-actions">
-                    <button
-                      className="secondary-action compact-action"
-                      disabled={existingTailoringPrompt.actionState !== "idle"}
-                      type="button"
-                      onClick={() => void dismissExistingTailoringPrompt()}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      className="primary-action compact-action"
-                      disabled={existingTailoringPrompt.actionState !== "idle"}
-                      type="button"
-                      onClick={() => void overwriteExistingTailoring()}
-                    >
-                      {existingTailoringPrompt.actionState === "overwriting"
-                        ? "Overwriting..."
-                        : "Confirm"}
-                    </button>
-                  </div>
-                  {tailorInterviewError ? (
-                    <p className="interview-error existing-tailoring-inline-error">
-                      {tailorInterviewError}
-                    </p>
-                  ) : null}
-                </section>
+                {shouldRenderUnarchivedResumeLibrary
+                  ? renderTailoredResumeLibrary({
+                      actionLabel: "archive",
+                      emptyMessage: "No active or completed tailored resumes yet.",
+                      flush: true,
+                      highlightCurrentPage: true,
+                      resumes: displayedUnarchivedTailoredResumes,
+                      title: "Saved tailored resume",
+                    })
+                  : null}
               </div>
-            ) : null}
-                </section>
-          ) : null}
-
-          {activeTailorRunCards.length > 0 ? (
-            <section
-              aria-label="Active tailoring runs"
-              className="active-tailor-run-stack"
-            >
-              {activeTailorRunCards.map((card) => renderActiveTailorRunCard(card))}
             </section>
-          ) : null}
-
-          <section className="snapshot-card tailored-resume-card">
-            <div className="card-heading-row">
-              <h2>Unarchived resumes</h2>
-              <span>{unarchivedTailoredResumes.length}</span>
-            </div>
-            {renderTailoredResumeLibrary({
-              actionLabel: "archive",
-              emptyMessage:
-                "Completed tailored resumes stay here until you archive them.",
-              highlightCurrentPage: true,
-              resumes: visibleUnarchivedTailoredResumes,
-              title: "Saved tailored resume",
-            })}
-          </section>
+          )}
 
           {tailorInterview && isTailorInterviewOpen ? (
             <section
@@ -7626,26 +7904,42 @@ function App() {
           ) : null}
         </>
       ) : activePanelTab === "archived" ? (
-        <section className="snapshot-card tailored-resume-card">
-          <div className="card-heading-row">
-            <h2>Archived resumes</h2>
-            <span>{archivedTailoredResumes.length}</span>
-          </div>
-          {renderTailoredResumeLibrary({
-            actionLabel: "restore",
-            emptyMessage: "No archived tailored resumes yet.",
-            resumes: archivedTailoredResumes,
-            title: "Archived tailored resume",
-          })}
-        </section>
+        shouldRenderArchivedResumeEmptySurface ? (
+          <DocumentEmptySurface
+            count={archivedTailoredResumes.length}
+            message="No archived tailored resumes yet."
+            title="Archived resumes"
+          />
+        ) : (
+          <section className="snapshot-card tailored-resume-card">
+            <div className="card-heading-row">
+              <h2>Archived resumes</h2>
+              <span>{archivedTailoredResumes.length}</span>
+            </div>
+            {renderTailoredResumeLibrary({
+              actionLabel: "restore",
+              emptyMessage: "No archived tailored resumes yet.",
+              resumes: archivedTailoredResumes,
+              title: "Archived tailored resume",
+            })}
+          </section>
+        )
       ) : activePanelTab === "applications" ? (
-        <section className="snapshot-card applications-card">
-          <div className="card-heading-row">
-            <h2>Tracked apps</h2>
-            <span>{personalInfo?.applicationCount ?? 0}</span>
-          </div>
-          {renderApplicationsSurface()}
-        </section>
+        shouldRenderApplicationsEmptySurface ? (
+          <DocumentEmptySurface
+            count={personalInfo?.applicationCount ?? 0}
+            message="No tracked applications yet."
+            title="Tracked apps"
+          />
+        ) : (
+          <section className="snapshot-card applications-card">
+            <div className="card-heading-row">
+              <h2>Tracked apps</h2>
+              <span>{personalInfo?.applicationCount ?? 0}</span>
+            </div>
+            {renderApplicationsSurface()}
+          </section>
+        )
       ) : (
         <section className="snapshot-card">
           <div className="card-heading-row">
