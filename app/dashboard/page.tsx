@@ -10,8 +10,11 @@ import {
   toReferrerOption,
 } from "@/lib/job-application-records";
 import { getPrismaClient } from "@/lib/prisma";
-import { readTailorResumeProfileState } from "@/lib/tailor-resume-profile-state";
+import { buildActiveTailoringStates } from "@/lib/tailor-resume-existing-tailoring-state";
+import { readTailorResumeResponseState } from "@/lib/tailor-resume-route-response-state";
 import { readTailorResumeUserMarkdown } from "@/lib/tailor-resume-user-memory";
+import { readTailorResumeWorkspaceInterviews } from "@/lib/tailor-resume-workspace-interviews";
+import { readUserSyncStateSnapshotForUser } from "@/lib/user-sync-state";
 import type { CompanyOption, ReferrerOption } from "@/lib/job-application-types";
 import {
   emptyTailorResumeProfile,
@@ -98,12 +101,23 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       };
     }
   })();
-  const tailorResumeProfile = await (async () => {
+  const tailorResumeState = await (async () => {
     try {
-      const state = await readTailorResumeProfileState(session.user.id);
-      return state.profile;
+      const state = await readTailorResumeResponseState(session.user.id);
+      return {
+        activeTailorings: buildActiveTailoringStates({
+          activeRuns: state.activeRuns,
+          tailoringInterviews: readTailorResumeWorkspaceInterviews(
+            state.rawProfile.workspace,
+          ),
+        }),
+        profile: state.profile,
+      };
     } catch {
-      return emptyTailorResumeProfile() satisfies TailorResumeProfile;
+      return {
+        activeTailorings: [],
+        profile: emptyTailorResumeProfile() satisfies TailorResumeProfile,
+      };
     }
   })();
   const tailorResumeUserMarkdown = await (async () => {
@@ -116,6 +130,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       };
     }
   })();
+  const initialSyncState = await readUserSyncStateSnapshotForUser(session.user.id);
 
   const testOpenAIResponseEnabled = ["true", "1", "yes"].includes(
     process.env.TEST_OPENAI_RESPONSE?.trim().toLowerCase() ?? "",
@@ -149,9 +164,11 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             extractionModel={extractionModel}
             referrerOptions={databaseStatus.people}
             statusMessage={statusMessage}
+            initialSyncState={initialSyncState}
+            initialActiveTailorings={tailorResumeState.activeTailorings}
             tailorResumeDebugUiEnabled={isTruthyEnvValue(process.env.DEBUG_UI)}
             tailorResumeOpenAIReady={openAIReady}
-            tailorResumeProfile={tailorResumeProfile}
+            tailorResumeProfile={tailorResumeState.profile}
             tailorResumeUserMarkdown={tailorResumeUserMarkdown}
             initialReviewingTailoredResumeId={
               initialDashboardRouteState.tailoredResumeId

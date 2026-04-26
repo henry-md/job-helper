@@ -2,13 +2,14 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Menu, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import JobApplicationIntake from "@/components/job-application-intake";
 import PromptSettingsWorkspace from "@/components/prompt-settings-workspace";
 import SignOutButton from "@/components/sign-out-button";
 import StatusToast from "@/components/status-toast";
+import TailorResumeActiveRuns from "@/components/tailor-resume-active-runs";
 import TailoredResumeReviewModal from "@/components/tailored-resume-review-modal";
 import TailorResumeWorkspace from "@/components/tailor-resume-workspace";
 import {
@@ -27,6 +28,17 @@ import {
   formatCompactDateOrSameDayTime,
   shouldIncludeShortYear,
 } from "@/lib/date-format";
+import {
+  haveUserSyncStateChanged,
+  readUserSyncStateSnapshot,
+  type UserSyncStateSnapshot,
+} from "@/lib/sync-state";
+import {
+  readTailorResumeExistingTailoringStates,
+  type TailorResumeExistingTailoringState,
+} from "@/lib/tailor-resume-existing-tailoring-state";
+import { normalizeTailorResumeJobUrl } from "@/lib/tailor-resume-job-url";
+import { splitTailoredResumesByArchiveState } from "@/lib/tailored-resume-archive-state";
 import { formatTailoredResumeSidebarName } from "@/lib/tailored-resume-sidebar-name";
 import type {
   CompanyOption,
@@ -39,11 +51,45 @@ import type {
 } from "@/lib/tailor-resume-types";
 import type { TailorResumeUserMarkdownState } from "@/lib/tailor-resume-user-memory";
 
-type TailoredResumeSidebarMutationResponse = {
+type DashboardDeleteImpact = {
+  applicationCount: number;
+  applicationIds: string[];
+  tailoredResumeCount: number;
+  tailoredResumeIds: string[];
+  totalCount: number;
+};
+
+type DashboardDeleteMutationResponse = {
+  deleteImpact?: DashboardDeleteImpact;
   error?: string;
   profile?: TailorResumeProfile;
   tailoredResumeId?: string;
 };
+
+type DashboardApplicationsResponse = {
+  applicationCount?: number;
+  applications?: JobApplicationRecord[];
+  companyCount?: number;
+  error?: string;
+};
+
+type DashboardTailorResumeResponse = {
+  archived?: boolean;
+  activeTailorings?: TailorResumeExistingTailoringState[];
+  error?: string;
+  profile?: TailorResumeProfile;
+  syncState?: UserSyncStateSnapshot;
+};
+
+type PendingDashboardDelete =
+  | {
+      applicationId: string;
+      kind: "application";
+    }
+  | {
+      kind: "tailoredResume";
+      tailoredResumeId: string;
+    };
 
 const dashboardTabs = [
   {
@@ -68,6 +114,202 @@ const defaultTailorHistoryPaneSize = "28%";
 const minTailorWorkspacePaneSize = "58%";
 const minTailorHistoryPaneSize = "18rem";
 const maxTailorHistoryPaneSize = "42%";
+const historyDeleteButtonClassName =
+  "tailor-history-delete mr-1 shrink-0 self-center rounded-full p-2 text-zinc-500 transition hover:bg-rose-400/10 hover:text-rose-200 focus-visible:bg-rose-400/10 focus-visible:text-rose-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:text-zinc-700";
+const historyActionButtonClassName =
+  "shrink-0 rounded-full border border-white/12 px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-300 transition hover:border-emerald-300/35 hover:bg-emerald-400/10 hover:text-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/25 disabled:cursor-not-allowed disabled:opacity-50";
+
+function countDistinctCompanies(applications: JobApplicationRecord[]) {
+  return new Set(
+    applications
+      .map((application) => application.companyName.trim().toLowerCase())
+      .filter((companyName) => companyName.length > 0),
+  ).size;
+}
+
+function uniqueTailoredResumes(records: TailoredResumeRecord[]) {
+  const recordById = new Map<string, TailoredResumeRecord>();
+
+  for (const record of records) {
+    recordById.set(record.id, record);
+  }
+
+  return [...recordById.values()];
+}
+
+function buildTailorResumeProfileRefreshKey(profile: TailorResumeProfile) {
+  return [
+    profile.resume?.updatedAt ?? "",
+    profile.extraction.updatedAt ?? "",
+    profile.latex.updatedAt ?? "",
+    profile.annotatedLatex.updatedAt ?? "",
+    profile.jobDescription,
+    profile.workspace.updatedAt ?? "",
+    profile.workspace.isBaseResumeStepComplete ? "1" : "0",
+    profile.workspace.tailoringInterviews
+      .map(
+        (interview) =>
+          `${interview.id}:${interview.updatedAt}:${interview.completionRequestedAt ?? ""}:${interview.tailorResumeRunId ?? ""}`,
+      )
+      .join("|"),
+    profile.tailoredResumes
+      .map(
+        (record) =>
+          `${record.id}:${record.updatedAt}:${record.archivedAt ?? ""}:${record.status}:${record.pdfUpdatedAt ?? ""}:${record.applicationId ?? ""}:${record.error ?? ""}`,
+      )
+      .join("|"),
+    profile.generationSettings.updatedAt ?? "",
+    profile.promptSettings.updatedAt ?? "",
+  ].join("::");
+}
+
+function findLinkedApplicationForTailoredResume(
+  record: TailoredResumeRecord,
+  applications: JobApplicationRecord[],
+) {
+  if (record.applicationId) {
+    const linkedApplication = applications.find(
+      (application) => application.id === record.applicationId,
+    );
+
+    if (linkedApplication) {
+      return linkedApplication;
+    }
+  }
+
+  const normalizedJobUrl = normalizeTailorResumeJobUrl(record.jobUrl);
+
+  if (!normalizedJobUrl) {
+    return null;
+  }
+
+  return (
+    applications.find(
+      (application) =>
+        normalizeTailorResumeJobUrl(application.jobUrl) === normalizedJobUrl,
+    ) ?? null
+  );
+}
+
+function findLinkedTailoredResumesForApplication(
+  application: JobApplicationRecord,
+  tailoredResumes: TailoredResumeRecord[],
+) {
+  const normalizedJobUrl = normalizeTailorResumeJobUrl(application.jobUrl);
+
+  return tailoredResumes.filter((record) => {
+    if (record.applicationId) {
+      return record.applicationId === application.id;
+    }
+
+    return Boolean(
+      normalizedJobUrl &&
+        normalizeTailorResumeJobUrl(record.jobUrl) === normalizedJobUrl,
+    );
+  });
+}
+
+function formatDeleteImpactSummary(impact: DashboardDeleteImpact) {
+  const parts: string[] = [];
+
+  if (impact.applicationCount > 0) {
+    parts.push(
+      `${impact.applicationCount} application${
+        impact.applicationCount === 1 ? "" : "s"
+      }`,
+    );
+  }
+
+  if (impact.tailoredResumeCount > 0) {
+    parts.push(
+      `${impact.tailoredResumeCount} tailored resume${
+        impact.tailoredResumeCount === 1 ? "" : "s"
+      }`,
+    );
+  }
+
+  if (parts.length === 0) {
+    return "this item";
+  }
+
+  if (parts.length === 1) {
+    return parts[0];
+  }
+
+  return `${parts[0]} and ${parts[1]}`;
+}
+
+function buildPendingDeleteImpact(input: {
+  applications: JobApplicationRecord[];
+  pendingDelete: PendingDashboardDelete | null;
+  tailoredResumes: TailoredResumeRecord[];
+}): DashboardDeleteImpact | null {
+  if (!input.pendingDelete) {
+    return null;
+  }
+
+  const pendingDelete = input.pendingDelete;
+
+  if (pendingDelete.kind === "application") {
+    const application =
+      input.applications.find(
+        (record) => record.id === pendingDelete.applicationId,
+      ) ?? null;
+
+    if (!application) {
+      return null;
+    }
+
+    const linkedTailoredResumes = uniqueTailoredResumes(
+      findLinkedTailoredResumesForApplication(
+        application,
+        input.tailoredResumes,
+      ),
+    );
+
+    return {
+      applicationCount: 1,
+      applicationIds: [application.id],
+      tailoredResumeCount: linkedTailoredResumes.length,
+      tailoredResumeIds: linkedTailoredResumes.map((record) => record.id),
+      totalCount: 1 + linkedTailoredResumes.length,
+    };
+  }
+
+  const tailoredResume =
+    input.tailoredResumes.find(
+      (record) => record.id === pendingDelete.tailoredResumeId,
+    ) ?? null;
+
+  if (!tailoredResume) {
+    return null;
+  }
+
+  const linkedApplication = findLinkedApplicationForTailoredResume(
+    tailoredResume,
+    input.applications,
+  );
+  const linkedTailoredResumes = uniqueTailoredResumes(
+    linkedApplication
+      ? [
+          tailoredResume,
+          ...findLinkedTailoredResumesForApplication(
+            linkedApplication,
+            input.tailoredResumes,
+          ),
+        ]
+      : [tailoredResume],
+  );
+
+  return {
+    applicationCount: linkedApplication ? 1 : 0,
+    applicationIds: linkedApplication ? [linkedApplication.id] : [],
+    tailoredResumeCount: linkedTailoredResumes.length,
+    tailoredResumeIds: linkedTailoredResumes.map((record) => record.id),
+    totalCount:
+      linkedTailoredResumes.length + (linkedApplication ? 1 : 0),
+  };
+}
 
 function getValidProfileImageSrc(value: string | null | undefined) {
   const normalizedValue = value?.trim();
@@ -184,11 +426,13 @@ export default function DashboardWorkspace({
   disabled,
   extractionModel,
   initialReviewingTailoredResumeId,
+  initialSyncState,
   initialTab,
   referrerOptions,
   statusMessage,
   tailorResumeDebugUiEnabled,
   tailorResumeOpenAIReady,
+  initialActiveTailorings,
   tailorResumeProfile,
   tailorResumeUserMarkdown,
   userImage,
@@ -202,6 +446,7 @@ export default function DashboardWorkspace({
   disabled: boolean;
   extractionModel: string;
   initialReviewingTailoredResumeId?: string | null;
+  initialSyncState: UserSyncStateSnapshot;
   initialTab: "new" | "settings" | "tailor";
   referrerOptions: ReferrerOption[];
   statusMessage?: {
@@ -210,6 +455,7 @@ export default function DashboardWorkspace({
   } | null;
   tailorResumeDebugUiEnabled: boolean;
   tailorResumeOpenAIReady: boolean;
+  initialActiveTailorings: TailorResumeExistingTailoringState[];
   tailorResumeProfile: TailorResumeProfile;
   tailorResumeUserMarkdown: TailorResumeUserMarkdownState;
   userImage: string | null | undefined;
@@ -223,33 +469,82 @@ export default function DashboardWorkspace({
       tailoredResumeId: initialReviewingTailoredResumeId ?? null,
     }),
   );
+  const [applicationRecords, setApplicationRecords] = useState<JobApplicationRecord[]>(
+    () => applications,
+  );
+  const [applicationCountState, setApplicationCountState] = useState(
+    applicationCount,
+  );
+  const [companyCountState, setCompanyCountState] = useState(companyCount);
   const [tailorResumeProfileState, setTailorResumeProfileState] =
     useState<TailorResumeProfile>(() => tailorResumeProfile);
   const [tailorResumeUserMarkdownState, setTailorResumeUserMarkdownState] =
     useState<TailorResumeUserMarkdownState>(() => tailorResumeUserMarkdown);
-  const [tailoredResumePendingDeleteId, setTailoredResumePendingDeleteId] = useState<string | null>(null);
+  const [activeTailorings, setActiveTailorings] =
+    useState<TailorResumeExistingTailoringState[]>(() => initialActiveTailorings);
+  const [pendingDashboardDelete, setPendingDashboardDelete] =
+    useState<PendingDashboardDelete | null>(null);
   const [tailoredResumes, setTailoredResumes] = useState<TailoredResumeRecord[]>(
     () => tailorResumeProfile.tailoredResumes,
   );
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isDeletingTailoredResume, setIsDeletingTailoredResume] = useState(false);
+  const [isDeletingDashboardItem, setIsDeletingDashboardItem] = useState(false);
+  const [tailoredResumeArchiveActionId, setTailoredResumeArchiveActionId] =
+    useState<string | null>(null);
   const [isWideDashboardLayout, setIsWideDashboardLayout] = useState(false);
+  const lastSeenSyncStateRef = useRef<UserSyncStateSnapshot>(initialSyncState);
+  const tailorResumeProfileRefreshKeyRef = useRef(
+    buildTailorResumeProfileRefreshKey(tailorResumeProfile),
+  );
+  const isSyncStateCheckInFlightRef = useRef(false);
+  const isSyncRefreshInFlightRef = useRef(false);
   const activeTab = dashboardRouteState.tab;
   const reviewingTailoredResumeId = dashboardRouteState.tailoredResumeId;
   const reviewingTailoredResume =
     tailoredResumes.find((tr) => tr.id === reviewingTailoredResumeId) ?? null;
-  const tailoredResumePendingDelete =
-    tailoredResumes.find((tr) => tr.id === tailoredResumePendingDeleteId) ?? null;
+  const pendingDeleteImpact = buildPendingDeleteImpact({
+    applications: applicationRecords,
+    pendingDelete: pendingDashboardDelete,
+    tailoredResumes,
+  });
   const displayName = userName?.trim()?.split(" ")[0] || userName || "there";
   const profileImageSrc = getValidProfileImageSrc(userImage);
   const includeYearInApplicationDates = shouldIncludeShortYear(
-    applications.map((application) => application.appliedAt),
+    applicationRecords.map((application) => application.appliedAt),
   );
   const includeYearInTailoredResumeDates = shouldIncludeShortYear(
     tailoredResumes.map((tailoredResume) => tailoredResume.updatedAt),
   );
-  const tailoredResumeCountLabel =
-    `${tailoredResumes.length}\u00A0${tailoredResumes.length === 1 ? "resume" : "resumes"}`;
+  const { archived: archivedTailoredResumes, unarchived: unarchivedTailoredResumes } =
+    splitTailoredResumesByArchiveState(tailoredResumes);
+  const totalApplicationCount = applicationCountState;
+  const totalCompanyCount = companyCountState;
+  const pendingDeleteTitle =
+    pendingDeleteImpact && pendingDeleteImpact.totalCount > 1
+      ? `Delete ${pendingDeleteImpact.totalCount} items?`
+      : pendingDashboardDelete?.kind === "application"
+        ? "Delete application?"
+        : "Delete tailored resume?";
+  const pendingDeleteEyebrow =
+    pendingDeleteImpact && pendingDeleteImpact.totalCount > 1
+      ? "Remove linked items"
+      : pendingDashboardDelete?.kind === "application"
+        ? "Remove application"
+        : "Remove from history";
+  const pendingDeleteDescription =
+    pendingDeleteImpact && pendingDeleteImpact.totalCount > 1
+      ? `This will delete ${formatDeleteImpactSummary(
+          pendingDeleteImpact,
+        )}. Any included tailored resume preview PDF will be removed too. This action can't be undone.`
+      : pendingDashboardDelete?.kind === "application"
+        ? "This will delete the saved application. This action can't be undone."
+        : "This removes the saved tailored resume and its PDF preview from History. This action can't be undone.";
+  const pendingDeleteActionLabel =
+    pendingDeleteImpact && pendingDeleteImpact.totalCount > 1
+      ? `Delete ${pendingDeleteImpact.totalCount} items`
+      : pendingDashboardDelete?.kind === "application"
+        ? "Delete application"
+        : "Delete resume";
 
   useEffect(() => {
     setDashboardRouteState(parseDashboardRouteStateFromSearchParams(searchParams));
@@ -270,20 +565,48 @@ export default function DashboardWorkspace({
   }, []);
 
   useEffect(() => {
+    setApplicationRecords(applications);
+    setApplicationCountState(applicationCount);
+    setCompanyCountState(companyCount);
+  }, [applicationCount, applications, companyCount]);
+
+  useEffect(() => {
     setTailorResumeProfileState(tailorResumeProfile);
     setTailoredResumes(tailorResumeProfile.tailoredResumes);
+    tailorResumeProfileRefreshKeyRef.current =
+      buildTailorResumeProfileRefreshKey(tailorResumeProfile);
   }, [tailorResumeProfile]);
 
   useEffect(() => {
     setTailorResumeUserMarkdownState(tailorResumeUserMarkdown);
   }, [tailorResumeUserMarkdown]);
 
-  function applyTailorResumeProfileChange(nextProfile: TailorResumeProfile) {
+  useEffect(() => {
+    setActiveTailorings(initialActiveTailorings);
+  }, [initialActiveTailorings]);
+
+  useEffect(() => {
+    lastSeenSyncStateRef.current = initialSyncState;
+  }, [initialSyncState]);
+
+  const applyApplicationSummaryChange = useCallback((nextSummary: {
+    applicationCount: number;
+    applications: JobApplicationRecord[];
+    companyCount: number;
+  }) => {
+    setApplicationRecords(nextSummary.applications);
+    setApplicationCountState(nextSummary.applicationCount);
+    setCompanyCountState(nextSummary.companyCount);
+  }, []);
+
+  const applyTailorResumeProfileChange = useCallback((nextProfile: TailorResumeProfile) => {
     setTailorResumeProfileState(nextProfile);
     setTailoredResumes(nextProfile.tailoredResumes);
-  }
+    tailorResumeProfileRefreshKeyRef.current =
+      buildTailorResumeProfileRefreshKey(nextProfile);
+  }, []);
 
-  function navigateDashboard(nextRouteState: DashboardRouteState) {
+  const navigateDashboard = useCallback((nextRouteState: DashboardRouteState) => {
     setDashboardRouteState(nextRouteState);
 
     const nextHref = buildDashboardHref(nextRouteState);
@@ -297,38 +620,225 @@ export default function DashboardWorkspace({
         scroll: false,
       });
     }
-  }
+  }, [router, searchParams]);
 
-  function setActiveDashboardTab(nextTab: DashboardTabId) {
+  const setActiveDashboardTab = useCallback((nextTab: DashboardTabId) => {
     setIsMobileMenuOpen(false);
     navigateDashboard({
       tab: nextTab,
       tailoredResumeId: null,
     });
-  }
+  }, [navigateDashboard]);
 
-  function openTailoredResumeReview(tailoredResumeId: string) {
+  const openTailoredResumeReview = useCallback((tailoredResumeId: string) => {
     navigateDashboard({
       tab: "tailor",
       tailoredResumeId,
     });
-  }
+  }, [navigateDashboard]);
 
-  function closeTailoredResumeReview() {
+  const closeTailoredResumeReview = useCallback(() => {
     navigateDashboard({
       tab: "tailor",
       tailoredResumeId: null,
     });
-  }
+  }, [navigateDashboard]);
+
+  const refreshDashboardApplications = useCallback(async () => {
+    const response = await fetch("/api/job-applications?limit=all", {
+      cache: "no-store",
+    });
+    const payload = (await response.json()) as DashboardApplicationsResponse;
+
+    if (!response.ok || !Array.isArray(payload.applications)) {
+      throw new Error(payload.error ?? "Unable to refresh applications.");
+    }
+
+    applyApplicationSummaryChange({
+      applicationCount:
+        typeof payload.applicationCount === "number"
+          ? payload.applicationCount
+          : payload.applications.length,
+      applications: payload.applications,
+      companyCount:
+        typeof payload.companyCount === "number"
+          ? payload.companyCount
+          : countDistinctCompanies(payload.applications),
+    });
+  }, [applyApplicationSummaryChange]);
+
+  const refreshDashboardTailorResume = useCallback(async () => {
+    const response = await fetch("/api/tailor-resume", {
+      cache: "no-store",
+    });
+    const payload = (await response.json()) as DashboardTailorResumeResponse;
+
+    if (!response.ok || !payload.profile) {
+      throw new Error(payload.error ?? "Unable to refresh tailored resumes.");
+    }
+
+    setActiveTailorings(readTailorResumeExistingTailoringStates(payload));
+
+    const nextProfileRefreshKey = buildTailorResumeProfileRefreshKey(
+      payload.profile,
+    );
+
+    if (nextProfileRefreshKey !== tailorResumeProfileRefreshKeyRef.current) {
+      applyTailorResumeProfileChange(payload.profile);
+    }
+
+    if (
+      reviewingTailoredResumeId &&
+      !payload.profile.tailoredResumes.some(
+        (tailoredResume) => tailoredResume.id === reviewingTailoredResumeId,
+      )
+    ) {
+      closeTailoredResumeReview();
+    }
+  }, [
+    applyTailorResumeProfileChange,
+    closeTailoredResumeReview,
+    reviewingTailoredResumeId,
+  ]);
+
+  const refreshDashboardFromSyncState = useCallback(async (
+    nextSyncState: UserSyncStateSnapshot,
+  ) => {
+    const previousSyncState = lastSeenSyncStateRef.current;
+
+    const shouldRefreshApplications =
+      previousSyncState.applicationsVersion !== nextSyncState.applicationsVersion;
+    const shouldRefreshTailoring =
+      previousSyncState.tailoringVersion !== nextSyncState.tailoringVersion;
+
+    await Promise.all([
+      shouldRefreshApplications ? refreshDashboardApplications() : Promise.resolve(),
+      shouldRefreshTailoring ? refreshDashboardTailorResume() : Promise.resolve(),
+    ]);
+
+    lastSeenSyncStateRef.current = nextSyncState;
+  }, [refreshDashboardApplications, refreshDashboardTailorResume]);
+
+  const handleSetTailoredResumeArchivedState = useCallback(async (
+    tailoredResumeId: string,
+    archived: boolean,
+  ) => {
+    setTailoredResumeArchiveActionId(tailoredResumeId);
+
+    try {
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({
+          action: "setTailoredResumeArchivedState",
+          archived,
+          tailoredResumeId,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
+      const payload = (await response.json()) as DashboardTailorResumeResponse;
+
+      if (!response.ok || !payload.profile) {
+        throw new Error(
+          payload.error ??
+            (archived
+              ? "Unable to archive the tailored resume."
+              : "Unable to restore the tailored resume."),
+        );
+      }
+
+      applyTailorResumeProfileChange(payload.profile);
+      toast.success(archived ? "Moved resume to Archived." : "Restored resume.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : archived
+            ? "Unable to archive the tailored resume."
+            : "Unable to restore the tailored resume.",
+      );
+    } finally {
+      setTailoredResumeArchiveActionId(null);
+    }
+  }, [applyTailorResumeProfileChange]);
 
   useEffect(() => {
-    if (!tailoredResumePendingDelete) {
+    let isCancelled = false;
+
+    async function refreshFromSyncState() {
+      if (
+        isCancelled ||
+        document.visibilityState !== "visible" ||
+        isSyncStateCheckInFlightRef.current ||
+        isSyncRefreshInFlightRef.current
+      ) {
+        return;
+      }
+
+      isSyncStateCheckInFlightRef.current = true;
+
+      try {
+        const response = await fetch("/api/sync-state", {
+          cache: "no-store",
+        });
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(
+            (typeof payload?.error === "string" && payload.error) ||
+              "Unable to refresh sync state.",
+          );
+        }
+
+        const nextSyncState = readUserSyncStateSnapshot(payload);
+        const previousSyncState = lastSeenSyncStateRef.current;
+
+        if (!haveUserSyncStateChanged(previousSyncState, nextSyncState)) {
+          return;
+        }
+
+        isSyncRefreshInFlightRef.current = true;
+
+        try {
+          await refreshDashboardFromSyncState(nextSyncState);
+        } finally {
+          isSyncRefreshInFlightRef.current = false;
+        }
+      } catch (error) {
+        console.error("Could not refresh dashboard sync state.", error);
+      } finally {
+        isSyncStateCheckInFlightRef.current = false;
+      }
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        void refreshFromSyncState();
+      }
+    }
+
+    void refreshFromSyncState();
+    const intervalId = window.setInterval(() => {
+      void refreshFromSyncState();
+    }, 1000);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [refreshDashboardFromSyncState]);
+
+  useEffect(() => {
+    if (!pendingDashboardDelete) {
       return;
     }
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && !isDeletingTailoredResume) {
-        setTailoredResumePendingDeleteId(null);
+      if (event.key === "Escape" && !isDeletingDashboardItem) {
+        setPendingDashboardDelete(null);
       }
     }
 
@@ -337,7 +847,7 @@ export default function DashboardWorkspace({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isDeletingTailoredResume, tailoredResumePendingDelete]);
+  }, [isDeletingDashboardItem, pendingDashboardDelete]);
 
   useEffect(() => {
     if (!isMobileMenuOpen) {
@@ -370,46 +880,77 @@ export default function DashboardWorkspace({
     };
   }, [isMobileMenuOpen]);
 
-  async function deleteTailoredResume() {
-    if (!tailoredResumePendingDelete) {
+  async function deletePendingDashboardItem() {
+    if (!pendingDashboardDelete || !pendingDeleteImpact) {
       return;
     }
 
-    setIsDeletingTailoredResume(true);
+    const currentDelete = pendingDashboardDelete;
+    const currentImpact = pendingDeleteImpact;
+    setIsDeletingDashboardItem(true);
 
     try {
-      const response = await fetch("/api/tailor-resume", {
-        body: JSON.stringify({
-          action: "deleteTailoredResume",
-          tailoredResumeId: tailoredResumePendingDelete.id,
-        }),
-        headers: {
-          "Content-Type": "application/json",
-        },
-        method: "PATCH",
-      });
-      const payload = (await response.json()) as TailoredResumeSidebarMutationResponse;
+      const response =
+        currentDelete.kind === "application"
+          ? await fetch(`/api/job-applications/${currentDelete.applicationId}`, {
+              method: "DELETE",
+            })
+          : await fetch("/api/tailor-resume", {
+              body: JSON.stringify({
+                action: "deleteTailoredResume",
+                tailoredResumeId: currentDelete.tailoredResumeId,
+              }),
+              headers: {
+                "Content-Type": "application/json",
+              },
+              method: "PATCH",
+            });
+      const payload = (await response.json()) as DashboardDeleteMutationResponse;
 
       if (!response.ok || !payload.profile) {
-        throw new Error(payload.error ?? "Unable to delete the tailored resume.");
+        throw new Error(
+          payload.error ??
+            (currentDelete.kind === "application"
+              ? "Unable to delete the application."
+              : "Unable to delete the tailored resume."),
+        );
       }
 
       applyTailorResumeProfileChange(payload.profile);
-      setTailoredResumePendingDeleteId(null);
+      setApplicationRecords((currentApplications) => {
+        const nextApplications = currentApplications.filter(
+          (application) => !currentImpact.applicationIds.includes(application.id),
+        );
+        setApplicationCountState((currentCount) =>
+          Math.max(0, currentCount - currentImpact.applicationCount),
+        );
+        setCompanyCountState(countDistinctCompanies(nextApplications));
+        return nextApplications;
+      });
+      setPendingDashboardDelete(null);
 
-      if (reviewingTailoredResumeId === tailoredResumePendingDelete.id) {
+      if (
+        reviewingTailoredResumeId &&
+        currentImpact.tailoredResumeIds.includes(reviewingTailoredResumeId)
+      ) {
         closeTailoredResumeReview();
       }
 
-      toast.success("Deleted the tailored resume.");
+      toast.success(
+        `Deleted ${formatDeleteImpactSummary(
+          payload.deleteImpact ?? currentImpact,
+        )}.`,
+      );
     } catch (error) {
       toast.error(
         error instanceof Error
           ? error.message
-          : "Unable to delete the tailored resume.",
+          : pendingDashboardDelete.kind === "application"
+            ? "Unable to delete the application."
+            : "Unable to delete the tailored resume.",
       );
     } finally {
-      setIsDeletingTailoredResume(false);
+      setIsDeletingDashboardItem(false);
     }
   }
 
@@ -426,76 +967,156 @@ export default function DashboardWorkspace({
     </div>
   );
 
-  const tailorResumeHistoryPane = (
-    <aside className="tailor-history-shell h-full overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto sm:pr-1">
-      <section className="tailor-history-panel glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
-        <div className="tailor-history-header mb-3 flex items-center justify-between gap-3">
-          <p className="tailor-history-heading min-w-0 text-xs uppercase tracking-[0.24em] text-zinc-500">
-            <span className="tailor-history-heading-full">
-              Recent tailored resumes
-            </span>
-            <span className="tailor-history-heading-compact">History</span>
-          </p>
-          <span
-            className="tailor-history-count shrink-0 whitespace-nowrap rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400"
-            title={`${tailoredResumes.length} total tailored resume${
-              tailoredResumes.length === 1 ? "" : "s"
-            }`}
-          >
-            {tailoredResumeCountLabel}
-          </span>
-        </div>
-        {tailoredResumes.length === 0 ? (
-          <p className="text-sm text-zinc-400">No tailored resumes yet.</p>
-        ) : (
-          <div className="tailor-history-list grid gap-2">
-            {tailoredResumes.map((tailoredResume) => (
-              <div
-                key={tailoredResume.id}
-                className="tailor-history-row group relative grid grid-cols-[minmax(0,1fr)_auto_auto] items-center overflow-hidden rounded-[1rem] border border-white/8 bg-black/20 transition hover:border-emerald-400/25 hover:bg-emerald-400/6 focus-within:border-emerald-300/45"
+  const renderTailoredResumeHistoryRows = (
+    historyResumes: TailoredResumeRecord[],
+    options: {
+      archived: boolean;
+    },
+  ) => {
+    if (historyResumes.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="tailor-history-list grid gap-2">
+        {historyResumes.map((tailoredResume) => {
+          const isArchiveActionPending =
+            tailoredResumeArchiveActionId === tailoredResume.id;
+
+          return (
+            <div
+              key={tailoredResume.id}
+              className="tailor-history-row group relative flex items-center justify-between gap-3 overflow-hidden rounded-[1rem] border border-white/8 bg-black/20 transition hover:border-emerald-400/25 hover:bg-emerald-400/6 focus-within:border-emerald-300/45"
+            >
+              <button
+                className="tailor-history-row-open min-w-0 flex-1 overflow-hidden px-3 py-2.5 text-left focus-visible:outline-none"
+                onClick={() => openTailoredResumeReview(tailoredResume.id)}
+                type="button"
               >
-                <button
-                  className="tailor-history-row-open min-w-0 overflow-hidden px-3 py-2.5 pr-1 text-left focus-visible:outline-none"
-                  onClick={() => openTailoredResumeReview(tailoredResume.id)}
-                  type="button"
-                >
-                  <div className="min-w-0 overflow-hidden">
-                    <p
-                      className="tailor-history-title truncate text-sm font-medium text-zinc-100"
-                      title={tailoredResume.displayName}
-                    >
-                      {formatTailoredResumeSidebarName(tailoredResume)}
+                <div className="min-w-0 overflow-hidden">
+                  <p
+                    className="tailor-history-title truncate text-sm font-medium text-zinc-100"
+                    title={tailoredResume.displayName}
+                  >
+                    {formatTailoredResumeSidebarName(tailoredResume)}
+                  </p>
+                  <div className="tailor-history-meta mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    <p className="tailor-history-company min-w-0 flex-1 truncate text-sm text-zinc-400">
+                      {tailoredResume.companyName}
                     </p>
-                    <div className="tailor-history-meta mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                      <p className="tailor-history-company min-w-0 flex-1 truncate text-sm text-zinc-400">
-                        {tailoredResume.companyName}
-                      </p>
-                    </div>
                   </div>
-                </button>
-                <span className="tailor-history-date self-center px-2 text-center text-xs text-zinc-500">
-                  {formatCompactDateOrSameDayTime(
-                    tailoredResume.updatedAt,
-                    {
-                      includeYear: includeYearInTailoredResumeDates,
-                    },
-                  )}
+                </div>
+              </button>
+
+              <div className="flex shrink-0 items-center gap-2 px-2 py-2">
+                <span className="tailor-history-date text-center text-xs text-zinc-500">
+                  {formatCompactDateOrSameDayTime(tailoredResume.updatedAt, {
+                    includeYear: includeYearInTailoredResumeDates,
+                  })}
                 </span>
                 <button
+                  className={historyActionButtonClassName}
+                  disabled={isDeletingDashboardItem || isArchiveActionPending}
+                  onClick={() =>
+                    void handleSetTailoredResumeArchivedState(
+                      tailoredResume.id,
+                      !options.archived,
+                    )
+                  }
+                  type="button"
+                >
+                  {isArchiveActionPending
+                    ? options.archived
+                      ? "Restoring..."
+                      : "Archiving..."
+                    : options.archived
+                      ? "Restore"
+                      : "Archive"}
+                </button>
+                <button
                   aria-label={`Delete ${tailoredResume.displayName}`}
-                  className="tailor-history-delete mr-1 mt-2 shrink-0 rounded-full p-2 text-zinc-500 transition hover:bg-rose-400/10 hover:text-rose-200 focus-visible:bg-rose-400/10 focus-visible:text-rose-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:text-zinc-700"
-                  disabled={isDeletingTailoredResume}
-                  onClick={() => setTailoredResumePendingDeleteId(tailoredResume.id)}
+                  className={historyDeleteButtonClassName}
+                  disabled={isDeletingDashboardItem || isArchiveActionPending}
+                  onClick={() =>
+                    setPendingDashboardDelete({
+                      kind: "tailoredResume",
+                      tailoredResumeId: tailoredResume.id,
+                    })
+                  }
                   title="Delete tailored resume"
                   type="button"
                 >
                   <Trash2 aria-hidden="true" className="h-4 w-4" />
                 </button>
               </div>
-            ))}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const tailorResumeHistoryPane = (
+    <aside className="tailor-history-shell h-full overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto sm:pr-1">
+      <div className="grid gap-[clamp(0.75rem,1.2vh,1rem)]">
+        <section className="tailor-history-panel glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
+          <div className="tailor-history-header mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="tailor-history-heading min-w-0 text-xs uppercase tracking-[0.24em] text-zinc-500">
+                Unarchived
+              </p>
+              <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
+                Working set
+              </h2>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {activeTailorings.length > 0 ? (
+                <span className="tailor-history-count shrink-0 whitespace-nowrap rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
+                  {activeTailorings.length} active
+                </span>
+              ) : null}
+              <span className="tailor-history-count shrink-0 whitespace-nowrap rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
+                {unarchivedTailoredResumes.length} resumes
+              </span>
+            </div>
           </div>
-        )}
-      </section>
+
+          {activeTailorings.length === 0 && unarchivedTailoredResumes.length === 0 ? (
+            <p className="text-sm text-zinc-400">No unarchived tailored resumes yet.</p>
+          ) : (
+            <div className="grid gap-3">
+              <TailorResumeActiveRuns activeTailorings={activeTailorings} embedded />
+              {renderTailoredResumeHistoryRows(unarchivedTailoredResumes, {
+                archived: false,
+              })}
+            </div>
+          )}
+        </section>
+
+        <section className="tailor-history-panel glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
+          <div className="tailor-history-header mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="tailor-history-heading min-w-0 text-xs uppercase tracking-[0.24em] text-zinc-500">
+                Archived
+              </p>
+              <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
+                Stored tailored resumes
+              </h2>
+            </div>
+            <span className="tailor-history-count shrink-0 whitespace-nowrap rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
+              {archivedTailoredResumes.length} resumes
+            </span>
+          </div>
+
+          {archivedTailoredResumes.length === 0 ? (
+            <p className="text-sm text-zinc-400">No archived tailored resumes yet.</p>
+          ) : (
+            renderTailoredResumeHistoryRows(archivedTailoredResumes, {
+              archived: true,
+            })
+          )}
+        </section>
+      </div>
     </aside>
   );
 
@@ -631,13 +1252,13 @@ export default function DashboardWorkspace({
         onTailoredResumesChange={setTailoredResumes}
         record={reviewingTailoredResume}
       />
-      {typeof document !== "undefined" && tailoredResumePendingDelete
+      {typeof document !== "undefined" && pendingDashboardDelete
         ? createPortal(
             <div
               className="fixed inset-0 z-[220] flex items-center justify-center bg-black/58 p-4 backdrop-blur-sm"
               onClick={(event) => {
                 if (event.target === event.currentTarget) {
-                  setTailoredResumePendingDeleteId(null);
+                  setPendingDashboardDelete(null);
                 }
               }}
             >
@@ -652,39 +1273,38 @@ export default function DashboardWorkspace({
                 <div className="relative grid gap-3 px-5 pb-5 pt-5 text-left sm:px-6 sm:pb-6 sm:pt-6">
                   <div>
                     <p className="text-[0.68rem] uppercase tracking-[0.24em] text-rose-100/75">
-                      Remove from history
+                      {pendingDeleteEyebrow}
                     </p>
                     <h2
                       className="mt-3 text-[1.35rem] font-semibold tracking-tight text-zinc-50"
                       id="delete-tailored-resume-title"
                     >
-                      Delete tailored resume?
+                      {pendingDeleteTitle}
                     </h2>
                     <p
                       className="mt-3 max-w-md text-sm leading-6 text-zinc-400"
                       id="delete-tailored-resume-description"
                     >
-                      This removes the saved tailored resume and its PDF preview
-                      from History. This action can&apos;t be undone.
+                      {pendingDeleteDescription}
                     </p>
                   </div>
                 </div>
                 <div className="flex flex-col-reverse gap-2 border-t border-white/10 bg-black/20 px-5 py-4 sm:flex-row sm:justify-end sm:px-6 sm:py-5">
                   <button
                     className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={isDeletingTailoredResume}
-                    onClick={() => setTailoredResumePendingDeleteId(null)}
+                    disabled={isDeletingDashboardItem}
+                    onClick={() => setPendingDashboardDelete(null)}
                     type="button"
                   >
                     Cancel
                   </button>
                   <button
                     className="rounded-full border border-rose-300/18 bg-[linear-gradient(180deg,rgba(251,113,133,0.16),rgba(159,18,57,0.24))] px-4 py-2.5 text-sm font-medium text-rose-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition hover:bg-[linear-gradient(180deg,rgba(251,113,133,0.2),rgba(159,18,57,0.28))] disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={isDeletingTailoredResume}
-                    onClick={() => void deleteTailoredResume()}
+                    disabled={isDeletingDashboardItem}
+                    onClick={() => void deletePendingDashboardItem()}
                     type="button"
                   >
-                    {isDeletingTailoredResume ? "Deleting..." : "Delete resume"}
+                    {isDeletingDashboardItem ? "Deleting..." : pendingDeleteActionLabel}
                   </button>
                 </div>
               </div>
@@ -713,38 +1333,51 @@ export default function DashboardWorkspace({
                   </p>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="shrink-0 whitespace-nowrap rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
-                      {applicationCount}&nbsp;apps
+                      {totalApplicationCount}&nbsp;apps
                     </span>
                     <span className="shrink-0 whitespace-nowrap rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
-                      {companyCount}&nbsp;companies
+                      {totalCompanyCount}&nbsp;companies
                     </span>
                   </div>
                 </div>
-                {applications.length === 0 ? (
+                {applicationRecords.length === 0 ? (
                   <p className="text-sm text-zinc-400">No applications yet.</p>
                 ) : (
                   <div className="grid gap-2">
-                    {applications.slice(0, 4).map((application) => (
+                    {applicationRecords.slice(0, 4).map((application) => (
                       <div
                         key={application.id}
-                        className="rounded-[1rem] border border-white/8 bg-black/20 px-3 py-2.5"
+                        className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center overflow-hidden rounded-[1rem] border border-white/8 bg-black/20"
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium text-zinc-100">
-                              {application.jobTitle}
-                            </p>
-                            <p className="truncate text-sm text-zinc-400">
-                              {application.companyName}
-                            </p>
-                          </div>
-                          <span className="shrink-0 text-xs text-zinc-500">
-                            {formatCompactDate(
-                              application.appliedAt,
-                              includeYearInApplicationDates,
-                            )}
-                          </span>
+                        <div className="min-w-0 px-3 py-2.5">
+                          <p className="truncate text-sm font-medium text-zinc-100">
+                            {application.jobTitle}
+                          </p>
+                          <p className="truncate text-sm text-zinc-400">
+                            {application.companyName}
+                          </p>
                         </div>
+                        <span className="shrink-0 px-2 text-xs text-zinc-500">
+                          {formatCompactDate(
+                            application.appliedAt,
+                            includeYearInApplicationDates,
+                          )}
+                        </span>
+                        <button
+                          aria-label={`Delete ${application.jobTitle} at ${application.companyName}`}
+                          className={historyDeleteButtonClassName}
+                          disabled={isDeletingDashboardItem}
+                          onClick={() =>
+                            setPendingDashboardDelete({
+                              applicationId: application.id,
+                              kind: "application",
+                            })
+                          }
+                          title="Delete application"
+                          type="button"
+                        >
+                          <Trash2 aria-hidden="true" className="h-4 w-4" />
+                        </button>
                       </div>
                     ))}
                   </div>
