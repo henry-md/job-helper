@@ -12,6 +12,7 @@ type PromptSettingsWorkspaceProps = {
   defaultPromptValues: TailorResumeProfile["promptSettings"]["values"];
   initialGenerationSettings: TailorResumeProfile["generationSettings"];
   initialPromptSettings: TailorResumeProfile["promptSettings"];
+  profile: TailorResumeProfile;
   initialUserMarkdown: TailorResumeUserMarkdownState;
   onUserMarkdownChange?: (userMarkdown: TailorResumeUserMarkdownState) => void;
   tailoredResumes: TailorResumeProfile["tailoredResumes"];
@@ -48,6 +49,14 @@ function buildPromptPreviewPdfUrl(record: TailoredResumeRecord | null) {
 
   const baseUrl = buildTailoredResumeHighlightedPreviewUrl(record);
   return `${baseUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
+}
+
+function buildBaseResumePreviewPdfUrl(updatedAt: string | null) {
+  if (!updatedAt) {
+    return null;
+  }
+
+  return `/api/tailor-resume/preview?updatedAt=${encodeURIComponent(updatedAt)}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
 }
 
 function compareTailoredResumeUpdatedAt(
@@ -219,6 +228,7 @@ export default function PromptSettingsWorkspace({
   defaultPromptValues,
   initialGenerationSettings,
   initialPromptSettings,
+  profile,
   initialUserMarkdown,
   onUserMarkdownChange,
   tailoredResumes,
@@ -237,6 +247,7 @@ export default function PromptSettingsWorkspace({
   const [draftUserMarkdown, setDraftUserMarkdown] = useState(
     initialUserMarkdown.markdown,
   );
+  const [isOriginalResumeOpen, setIsOriginalResumeOpen] = useState(false);
   const [isSavingUserMarkdown, setIsSavingUserMarkdown] = useState(false);
   const [isUserMarkdownOpen, setIsUserMarkdownOpen] = useState(false);
   const [isSystemPromptsOpen, setIsSystemPromptsOpen] = useState(false);
@@ -278,6 +289,19 @@ export default function PromptSettingsWorkspace({
 
     return [...tailoredResumes].sort(compareTailoredResumeUpdatedAt)[0] ?? null;
   }, [tailoredResumes]);
+  const originalResumePreviewUrl = useMemo(
+    () => buildBaseResumePreviewPdfUrl(profile.latex.pdfUpdatedAt),
+    [profile.latex.pdfUpdatedAt],
+  );
+  const originalResumeFilename =
+    profile.resume?.originalFilename?.trim() || "No resume uploaded yet";
+  const originalResumePreviewSummary = profile.resume
+    ? originalResumePreviewUrl
+      ? "View the compiled original-resume preview that tailoring uses as its starting point."
+      : profile.latex.error
+        ? "A resume is uploaded, but the latest preview is unavailable until the LaTeX compiles cleanly again."
+        : "A resume is uploaded, but a preview PDF is not available yet."
+    : "Upload a base resume in the Tailor Resume tab to review it here later.";
 
   function isPromptChanged(key: PromptFieldKey) {
     return draftPromptValues[key] !== savedPromptSettings.values[key];
@@ -510,6 +534,74 @@ export default function PromptSettingsWorkspace({
       <div className="mt-5 overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto sm:pr-1">
         <section className="mb-4 overflow-hidden rounded-[1.35rem] border border-white/8 bg-black/20">
           <button
+            aria-controls="original-resume-panel"
+            aria-expanded={isOriginalResumeOpen}
+            className="flex w-full items-start justify-between gap-4 px-4 py-4 text-left transition hover:bg-white/[0.03] sm:px-5"
+            onClick={() => setIsOriginalResumeOpen((currentValue) => !currentValue)}
+            type="button"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+                Base Resume
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-3">
+                <h3 className="text-base font-semibold text-zinc-100">
+                  Original Resume Preview
+                </h3>
+                <span className="max-w-full truncate rounded-full border border-white/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                  {originalResumeFilename}
+                </span>
+              </div>
+              <p className="mt-2 text-sm leading-6 text-zinc-400">
+                {originalResumePreviewSummary} This section starts collapsed by
+                default to keep settings tidy.
+              </p>
+            </div>
+            <span
+              aria-hidden="true"
+              className={`shrink-0 pt-1 text-zinc-400 transition-transform ${
+                isOriginalResumeOpen ? "rotate-180" : ""
+              }`}
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 20 20">
+                <path
+                  d="m5 7.5 5 5 5-5"
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="1.7"
+                />
+              </svg>
+            </span>
+          </button>
+
+          {isOriginalResumeOpen ? (
+            <div
+              className="border-t border-white/8 px-4 py-4 sm:px-5"
+              id="original-resume-panel"
+            >
+              {originalResumePreviewUrl ? (
+                <div className="overflow-hidden rounded-[1.1rem] border border-white/10 bg-zinc-950/80">
+                  <iframe
+                    className="h-[32rem] w-full border-0 bg-white"
+                    src={originalResumePreviewUrl}
+                    title="Original resume preview"
+                  />
+                </div>
+              ) : (
+                <div className="rounded-[1.1rem] border border-dashed border-white/10 bg-zinc-950/55 px-4 py-6 text-sm leading-6 text-zinc-400">
+                  {profile.resume
+                    ? profile.latex.error ??
+                      "No preview PDF is available for the current base resume yet."
+                    : "No base resume has been uploaded yet."}
+                </div>
+              )}
+            </div>
+          ) : null}
+        </section>
+
+        <section className="mb-4 overflow-hidden rounded-[1.35rem] border border-white/8 bg-black/20">
+          <button
             aria-controls="user-markdown-panel"
             aria-expanded={isUserMarkdownOpen}
             className="flex w-full items-start justify-between gap-4 px-4 py-4 text-left transition hover:bg-white/[0.03] sm:px-5"
@@ -589,7 +681,7 @@ export default function PromptSettingsWorkspace({
                   onClick={() => void saveUserMarkdown()}
                   type="button"
                 >
-                  {isSavingUserMarkdown ? "Saving..." : "Done"}
+                  {isSavingUserMarkdown ? "Saving..." : "Save"}
                 </button>
               </div>
             </div>

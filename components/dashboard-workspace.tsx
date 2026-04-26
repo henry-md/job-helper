@@ -1427,6 +1427,7 @@ export default function DashboardWorkspace({
                 defaultPromptValues={defaultPromptSettings}
                 initialGenerationSettings={tailorResumeProfileState.generationSettings}
                 initialPromptSettings={tailorResumeProfileState.promptSettings}
+                profile={tailorResumeProfileState}
                 initialUserMarkdown={tailorResumeUserMarkdownState}
                 onUserMarkdownChange={setTailorResumeUserMarkdownState}
                 tailoredResumes={tailoredResumes}
