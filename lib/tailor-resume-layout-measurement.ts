@@ -232,6 +232,16 @@ async function loadPdfDocument(pdfBuffer: Buffer) {
   };
 }
 
+export async function countPdfPages(pdfBuffer: Buffer) {
+  const { loadingTask, pdfDocument } = await loadPdfDocument(pdfBuffer);
+
+  try {
+    return pdfDocument.numPages;
+  } finally {
+    await loadingTask.destroy();
+  }
+}
+
 function isTextItem(item: TextContent["items"][number]): item is TextItem {
   return "str" in item;
 }

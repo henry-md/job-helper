@@ -40,6 +40,9 @@ import {
   buildTailoredResumePreviewPdfUrl,
 } from "@/lib/tailored-resume-preview-url";
 import { buildTailoredResumeDownloadFilename } from "@/lib/tailored-resume-download-filename";
+import {
+  getTailoredResumeGenerationFailureLabel,
+} from "@/lib/tailored-resume-generation-state";
 import { stripTailorResumeSegmentIds } from "@/lib/tailor-resume-segmentation";
 
 function resolveSelectedEdit(
@@ -949,6 +952,9 @@ export default function TailoredResumeReviewModal({
     () => (record ? buildTailoredResumeReviewEdits(record) : []),
     [record],
   );
+  const generationFailureLabel = record
+    ? getTailoredResumeGenerationFailureLabel(record)
+    : null;
   const previewSnapshotDataUrls = useMemo(
     () =>
       Object.entries(previewSnapshotDataUrlByPage)
@@ -2481,6 +2487,13 @@ export default function TailoredResumeReviewModal({
                   >
                     {record.displayName}
                   </p>
+                  {generationFailureLabel ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="rounded-full border border-rose-300/20 bg-rose-400/10 px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.18em] text-rose-100">
+                        {generationFailureLabel}
+                      </span>
+                    </div>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -2515,6 +2528,17 @@ export default function TailoredResumeReviewModal({
             </div>
           </div>
         </div>
+
+        {record.error ? (
+          <div className="border-b border-rose-300/12 bg-[linear-gradient(180deg,rgba(251,113,133,0.1),rgba(127,29,29,0.08))] px-4 py-3 text-sm leading-6 text-rose-100/90 sm:px-5">
+            <p className="font-medium text-rose-50">
+              This tailoring run saved a previewable draft, but the generation still failed.
+            </p>
+            <p className="mt-1 whitespace-pre-wrap break-words text-rose-100/80">
+              {record.error}
+            </p>
+          </div>
+        ) : null}
 
         {isRecoveringPreview && !record.pdfUpdatedAt ? (
           <div className="flex flex-1 items-center justify-center px-6 py-10 text-center text-sm leading-6 text-zinc-400">

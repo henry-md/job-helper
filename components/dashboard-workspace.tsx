@@ -39,6 +39,10 @@ import {
 } from "@/lib/tailor-resume-existing-tailoring-state";
 import { normalizeTailorResumeJobUrl } from "@/lib/tailor-resume-job-url";
 import { splitTailoredResumesByArchiveState } from "@/lib/tailored-resume-archive-state";
+import {
+  getTailoredResumeGenerationFailureLabel,
+  hasTailoredResumeGenerationFailure,
+} from "@/lib/tailored-resume-generation-state";
 import { formatTailoredResumeSidebarName } from "@/lib/tailored-resume-sidebar-name";
 import type {
   CompanyOption,
@@ -978,15 +982,24 @@ export default function DashboardWorkspace({
     }
 
     return (
-      <div className="tailor-history-list grid gap-2">
+        <div className="tailor-history-list grid gap-2">
         {historyResumes.map((tailoredResume) => {
           const isArchiveActionPending =
             tailoredResumeArchiveActionId === tailoredResume.id;
+          const generationFailureLabel =
+            getTailoredResumeGenerationFailureLabel(tailoredResume);
+          const hasGenerationFailure = hasTailoredResumeGenerationFailure(
+            tailoredResume,
+          );
 
           return (
             <div
               key={tailoredResume.id}
-              className="tailor-history-row group relative flex items-center justify-between gap-3 overflow-hidden rounded-[1rem] border border-white/8 bg-black/20 transition hover:border-emerald-400/25 hover:bg-emerald-400/6 focus-within:border-emerald-300/45"
+              className={`tailor-history-row group relative flex items-center justify-between gap-3 overflow-hidden rounded-[1rem] border transition focus-within:border-emerald-300/45 ${
+                hasGenerationFailure
+                  ? "border-rose-300/18 bg-[linear-gradient(180deg,rgba(251,113,133,0.14),rgba(127,29,29,0.16))] hover:border-rose-300/32 hover:bg-[linear-gradient(180deg,rgba(251,113,133,0.18),rgba(127,29,29,0.2))] focus-within:border-rose-300/36"
+                  : "border-white/8 bg-black/20 hover:border-emerald-400/25 hover:bg-emerald-400/6"
+              }`}
             >
               <button
                 className="tailor-history-row-open min-w-0 flex-1 overflow-hidden px-3 py-2.5 text-left focus-visible:outline-none"
@@ -995,21 +1008,36 @@ export default function DashboardWorkspace({
               >
                 <div className="min-w-0 overflow-hidden">
                   <p
-                    className="tailor-history-title truncate text-sm font-medium text-zinc-100"
+                    className={`tailor-history-title truncate text-sm font-medium ${
+                      hasGenerationFailure ? "text-rose-50" : "text-zinc-100"
+                    }`}
                     title={tailoredResume.displayName}
                   >
                     {formatTailoredResumeSidebarName(tailoredResume)}
                   </p>
                   <div className="tailor-history-meta mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                    <p className="tailor-history-company min-w-0 flex-1 truncate text-sm text-zinc-400">
+                    <p
+                      className={`tailor-history-company min-w-0 flex-1 truncate text-sm ${
+                        hasGenerationFailure ? "text-rose-100/85" : "text-zinc-400"
+                      }`}
+                    >
                       {tailoredResume.companyName}
                     </p>
+                    {generationFailureLabel ? (
+                      <span className="rounded-full border border-rose-300/22 bg-rose-400/12 px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.18em] text-rose-100">
+                        {generationFailureLabel}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
               </button>
 
               <div className="flex shrink-0 items-center gap-2 px-2 py-2">
-                <span className="tailor-history-date text-center text-xs text-zinc-500">
+                <span
+                  className={`tailor-history-date text-center text-xs ${
+                    hasGenerationFailure ? "text-rose-100/75" : "text-zinc-500"
+                  }`}
+                >
                   {formatCompactDateOrSameDayTime(tailoredResume.updatedAt, {
                     includeYear: includeYearInTailoredResumeDates,
                   })}

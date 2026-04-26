@@ -6,6 +6,7 @@ import {
 } from "./system-prompt-settings.ts";
 import { validateTailorResumeLatexDocument } from "./tailor-resume-link-validation.ts";
 import {
+  countPdfPages,
   estimateTailorResumeOverflowLines,
   indexTailorResumeSegmentMeasurements,
   measureTailorResumeLayout,
@@ -26,9 +27,6 @@ import { applyTailorResumeBlockChanges } from "./tailor-resume-tailoring.ts";
 import {
   resolveTailoredResumeCurrentEditLatexCode,
 } from "./tailor-resume-edit-history.ts";
-import {
-  countPdfPages,
-} from "./tailored-resume-preview-snapshots.ts";
 import type {
   TailorResumeGenerationStepEvent,
   TailoredResumeBlockEditRecord,
@@ -941,6 +939,7 @@ function buildCompactionInstructions() {
     "Only include a block in the tool call when you believe the replacement will reduce that exact block by at least one rendered PDF line versus the current saved replacement for that block.",
     "Do not polish, rephrase, or touch a block unless the replacement is likely to create a user-visible rendered-line reduction for that same block.",
     "Use the current replacement LaTeX block shape. Keep the edit inside the same segment and preserve factual accuracy.",
+    "If a verified candidate set still leaves the resume above the target page count, widen the next measurement pass to include an additional high-priority multi-line block instead of repeatedly banking the same small cut shape.",
     `If ${tailorResumePageCountVerificationToolName} shows the resume is still above the target, you may still submit those verified line-saving candidates so the next server-side retry starts from a smaller draft.`,
     "Every candidate reason replaces the old saved reason. Lead with what changed for the job-description fit, and mention shortening only as a passing fragment when necessary.",
   ].join("\n");

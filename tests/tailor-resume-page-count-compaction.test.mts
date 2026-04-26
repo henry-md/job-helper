@@ -335,3 +335,182 @@ test("page-count compaction keeps verified line-saving edits even when the exact
     }
   }
 });
+
+test("page-count compaction retries from kept reductions and can finish on a later pass", async () => {
+  const fixture = await buildCompactionOverflowFixture();
+  const toolNamesSeen: string[][] = [];
+  let responseIndex = 0;
+  const shortLatex =
+    String.raw`\resumeitem{Led role-aligned platform engineering delivery with measurable reliability impact.}`;
+  const firstCandidate = fixture.candidate;
+  const remainingCandidates = fixture.edits
+    .filter((edit) => edit.segmentId !== firstCandidate.segmentId)
+    .map((edit) => ({
+      latexCode: shortLatex,
+      reason:
+        "Keeps the platform-delivery emphasis for the role while compressing the block further.",
+      segmentId: edit.segmentId,
+    }));
+  const fakeClient = {
+    responses: {
+      create: async (parameters: {
+        input: unknown;
+        previous_response_id?: string;
+        tools: Array<{ name?: string }>;
+      }) => {
+        toolNamesSeen.push(parameters.tools.map((tool) => tool.name ?? ""));
+
+        switch (responseIndex++) {
+          case 0:
+            return {
+              id: "resp-1",
+              model: "test-openai-response",
+              output: [
+                {
+                  arguments: JSON.stringify({
+                    candidates: [firstCandidate],
+                  }),
+                  call_id: "call-1",
+                  name: "measure_resume_line_reductions",
+                  type: "function_call",
+                },
+              ],
+            };
+          case 1:
+            assert.equal(parameters.previous_response_id, "resp-1");
+            return {
+              id: "resp-2",
+              model: "test-openai-response",
+              output: [
+                {
+                  arguments: JSON.stringify({
+                    candidates: [firstCandidate],
+                  }),
+                  call_id: "call-2",
+                  name: "verify_resume_page_count",
+                  type: "function_call",
+                },
+              ],
+            };
+          case 2:
+            assert.equal(parameters.previous_response_id, "resp-2");
+            return {
+              id: "resp-3",
+              model: "test-openai-response",
+              output: [
+                {
+                  arguments: JSON.stringify({
+                    candidates: [firstCandidate],
+                    verificationSummary:
+                      "Verified a real line reduction, but the exact page count still needs another pass.",
+                  }),
+                  call_id: "call-3",
+                  name: "submit_verified_line_reductions",
+                  type: "function_call",
+                },
+              ],
+            };
+          case 3:
+            return {
+              id: "resp-4",
+              model: "test-openai-response",
+              output: [
+                {
+                  arguments: JSON.stringify({
+                    candidates: remainingCandidates,
+                  }),
+                  call_id: "call-4",
+                  name: "measure_resume_line_reductions",
+                  type: "function_call",
+                },
+              ],
+            };
+          case 4:
+            assert.equal(parameters.previous_response_id, "resp-4");
+            return {
+              id: "resp-5",
+              model: "test-openai-response",
+              output: [
+                {
+                  arguments: JSON.stringify({
+                    candidates: remainingCandidates,
+                  }),
+                  call_id: "call-5",
+                  name: "verify_resume_page_count",
+                  type: "function_call",
+                },
+              ],
+            };
+          case 5:
+            assert.equal(parameters.previous_response_id, "resp-5");
+            return {
+              id: "resp-6",
+              model: "test-openai-response",
+              output: [
+                {
+                  arguments: JSON.stringify({
+                    candidates: remainingCandidates,
+                    verificationSummary:
+                      "Widened the pass to the remaining multi-line blocks and verified the exact page count now fits.",
+                  }),
+                  call_id: "call-6",
+                  name: "submit_verified_line_reductions",
+                  type: "function_call",
+                },
+              ],
+            };
+          default:
+            throw new Error("Unexpected extra compaction tool round.");
+        }
+      },
+    },
+  } as unknown as OpenAI;
+  const previousRetryBudget =
+    process.env.RETRY_ATTEMPTS_TO_GENERATE_PAGE_COUNT_COMPACTION;
+
+  process.env.RETRY_ATTEMPTS_TO_GENERATE_PAGE_COUNT_COMPACTION = "2";
+
+  try {
+    const result = await compactTailoredResumePageCount({
+      annotatedLatexCode: fixture.annotatedLatexCode,
+      client: fakeClient,
+      edits: fixture.edits,
+      initialPageCount: fixture.initialPageCount,
+      latexCode: fixture.latexCode,
+      model: "test-openai-response",
+      previewPdf: fixture.previewPdf,
+      sourceAnnotatedLatexCode: fixture.sourceAnnotatedLatexCode,
+      targetPageCount: 1,
+      thesis: null,
+    });
+
+    assert.equal(result.validationError, null);
+    assert.equal(result.pageCount, 1);
+    assert.ok(result.previewPdf.length > 0);
+    assert.deepEqual(
+      result.edits
+        .filter((edit) =>
+          [firstCandidate.segmentId, ...remainingCandidates.map((candidate) => candidate.segmentId)].includes(
+            edit.segmentId,
+          ),
+        )
+        .map((edit) => edit.generatedByStep),
+      [4, 4, 4, 4],
+    );
+    assert.equal(toolNamesSeen.length, 6);
+    for (const toolNames of toolNamesSeen) {
+      assert.deepEqual(toolNames, [
+        "measure_resume_line_reductions",
+        "verify_resume_page_count",
+        "submit_verified_line_reductions",
+      ]);
+    }
+  } finally {
+    if (previousRetryBudget === undefined) {
+      delete process.env.RETRY_ATTEMPTS_TO_GENERATE_PAGE_COUNT_COMPACTION;
+    } else {
+      process.env.RETRY_ATTEMPTS_TO_GENERATE_PAGE_COUNT_COMPACTION =
+        previousRetryBudget;
+    }
+  }
+});

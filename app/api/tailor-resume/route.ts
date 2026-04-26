@@ -82,6 +82,7 @@ import {
   buildPendingInterviewExistingTailoringState,
   type TailorResumeExistingTailoringState,
 } from "@/lib/tailor-resume-existing-tailoring-state";
+import { countPdfPages } from "@/lib/tailor-resume-layout-measurement";
 import {
   implementTailoredResumePlan,
   planTailoredResume,
@@ -114,7 +115,6 @@ import {
   upsertTailorResumeWorkspaceInterview,
   withTailorResumeWorkspaceInterviews,
 } from "@/lib/tailor-resume-workspace-interviews";
-import { countPdfPages } from "@/lib/tailored-resume-preview-snapshots";
 import {
   readTailorResumeUserMarkdown,
   saveTailorResumeUserMarkdown,
@@ -1629,9 +1629,15 @@ async function finalizeTailorResumeGeneration(input: {
       ids: input.overwrittenDbTailoredResumeIds ?? [],
       userId: input.userId,
     });
+    const savedTailoredResumeHasGenerationFailure = Boolean(
+      savedTailoredResume.error?.trim(),
+    );
     await updateTailorResumeRunStatus({
+      error: savedTailoredResumeHasGenerationFailure
+        ? savedTailoredResume.error
+        : undefined,
       runId: input.runId,
-      status: "SUCCEEDED",
+      status: savedTailoredResumeHasGenerationFailure ? "FAILED" : "SUCCEEDED",
       tailoredResumeId: savedTailoredResume.id,
       userId: input.userId,
     });
