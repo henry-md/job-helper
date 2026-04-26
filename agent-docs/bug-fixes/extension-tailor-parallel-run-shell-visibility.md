@@ -1,0 +1,6 @@
+- Symptom: when a second Tailor Resume run started on a different job page, the side panel only showed the newest current-page shell and the older in-flight run disappeared from view.
+- Root cause: the Tailor tab stored transient run state per job, but the render path still treated the visible shell as a single current-page card plus one remembered run, so switching the active tab replaced the older job's loading UI instead of rendering both.
+- Fix: keep all in-flight Tailor Resume runs in one shared stack, with the current-tab run retaining the blue outline while the other active jobs render immediately below it from the per-job preparation/run registries and any unmatched server-side active runs.
+- UI guardrail: current-tab and non-current active runs need to render from the same normalized active-card object so they share the exact same title source, stop/menu controls, and step-only body.
+- UI guardrail: secondary active cards still need to surface the same compact focused step block as the current-tab shell, not just a generic loading line, otherwise the second run looks too early and hides whether generation actually progressed.
+- Guardrail: per-job concurrency is not complete unless the UI surfaces more than one in-flight job at once; do not collapse multi-job Tailor state back into one visible card keyed only by the active tab.

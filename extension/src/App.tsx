@@ -61,7 +61,10 @@ import {
   isNdjsonResponse,
   readTailorResumeGenerationStream,
 } from "./tailor-resume-stream";
-import { readTailorRunDisplayUrl } from "./tailor-run-identity";
+import {
+  buildTailorRunIdentityDisplay,
+  readTailorRunDisplayUrl,
+} from "./tailor-run-identity";
 import {
   resolveDisplayedTailorRunIdentity,
   shouldRenderTailorRunShell,
@@ -150,6 +153,18 @@ type PersonalDeleteImpact = {
   totalCount: number;
 };
 
+type ActiveTailorRunCard = {
+  deleteTarget: TailorRunDeleteTarget | null;
+  existingTailoringId: string | null;
+  id: string;
+  isCurrentPage: boolean;
+  pageKey: string | null;
+  sortTime: number;
+  statusDisplayState: "loading" | "ready" | "warning";
+  step: TailorRunProgressStep;
+  title: string;
+  url: string | null;
+};
 
 type FloatingMenuPosition = {
   left: number;
@@ -988,6 +1003,414 @@ function readTailorRunCompactStep(steps: TailorRunProgressStep[]) {
   );
 }
 
+function buildTailorRunCardTitle(input: {
+  companyName: string | null;
+  pageTitle: string | null;
+  positionTitle: string | null;
+  url: string | null;
+}) {
+  const identity = buildTailorRunIdentityDisplay({
+    companyName: input.companyName,
+    positionTitle: input.positionTitle,
+  });
+
+  if (identity?.label) {
+    return identity.label;
+  }
+
+  const pageTitle = input.pageTitle?.replace(/\s+/g, " ").trim();
+
+  if (pageTitle) {
+    return pageTitle;
+  }
+
+  return readTailorRunDisplayUrl(input.url) ?? "Tailoring run";
+}
+
+function readActiveTailorRunStep(input: {
+  captureState: CaptureState;
+  existingTailoring: TailorResumeExistingTailoringState | null;
+  lastTailoringRun: TailorResumeRunRecord | null;
+  tailorGenerationStep: TailorResumeGenerationStepSummary | null;
+  tailorInterview: TailorResumePendingInterviewSummary | null;
+}) {
+  const compactStep = readTailorRunCompactStep(
+    readTailorRunProgressSteps(input),
+  );
+
+  if (!compactStep || compactStep.status === "pending") {
+    const firstStep = createTailorRunProgressSteps()[0];
+
+    return {
+      ...firstStep,
+      status: "current" as const,
+    };
+  }
+
+  return compactStep;
+}
+
+function readActiveTailorRunSortTime(value: string | null | undefined) {
+  const timestamp = Date.parse(value ?? "");
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function readExistingTailoringSortTime(
+  existingTailoring: TailorResumeExistingTailoringState,
+) {
+  const createdAtTimestamp = Date.parse(existingTailoring.createdAt);
+
+  if (Number.isFinite(createdAtTimestamp)) {
+    return createdAtTimestamp;
+  }
+
+  return readActiveTailorRunSortTime(existingTailoring.updatedAt);
+}
+
+function buildTailorRunDeleteTarget(input: TailorRunDeleteTarget) {
+  return input.jobUrl || input.tailoredResumeId || input.tailorRunId ? input : null;
+}
+
+function buildActiveTailorRunCardFromRun(input: {
+  id: string;
+  isCurrentPage?: boolean;
+  pageKey?: string | null;
+  run: TailorResumeRunRecord;
+  titleFallback?: {
+    companyName: string | null;
+    pageTitle: string | null;
+    positionTitle: string | null;
+    url: string | null;
+  };
+}): ActiveTailorRunCard | null {
+  if (input.run.status !== "running" && input.run.status !== "needs_input") {
+    return null;
+  }
+
+  const url = input.run.pageUrl ?? input.titleFallback?.url ?? null;
+
+  return {
+    deleteTarget: buildTailorRunDeleteTarget({
+      jobUrl: url,
+      tailoredResumeId: input.run.tailoredResumeId ?? null,
+      tailorRunId: null,
+    }),
+    existingTailoringId: null,
+    id: input.id,
+    isCurrentPage: input.isCurrentPage ?? false,
+    pageKey: input.pageKey ?? null,
+    sortTime: readActiveTailorRunSortTime(input.run.capturedAt),
+    statusDisplayState:
+      input.run.status === "needs_input" ? "ready" : "loading",
+    step: readActiveTailorRunStep({
+      captureState: readCaptureStateFromTailoringRun(input.run) ?? "idle",
+      existingTailoring: null,
+      lastTailoringRun: input.run,
+      tailorGenerationStep: input.run.generationStep ?? null,
+      tailorInterview: null,
+    }),
+    title: buildTailorRunCardTitle({
+      companyName: input.run.companyName ?? input.titleFallback?.companyName ?? null,
+      pageTitle: input.run.pageTitle ?? input.titleFallback?.pageTitle ?? null,
+      positionTitle:
+        input.run.positionTitle ?? input.titleFallback?.positionTitle ?? null,
+      url,
+    }),
+    url,
+  };
+}
+
+function buildActiveTailorRunCardFromExistingTailoring(input: {
+  existingTailoring: TailorResumeExistingTailoringState;
+  id: string;
+  isCurrentPage?: boolean;
+  pageKey?: string | null;
+  previousRun: TailorResumeRunRecord | null;
+  statusDisplayState?: ActiveTailorRunCard["statusDisplayState"];
+  titleFallback?: {
+    companyName: string | null;
+    pageTitle: string | null;
+    positionTitle: string | null;
+    url: string | null;
+  };
+}): ActiveTailorRunCard | null {
+  if (input.existingTailoring.kind === "completed") {
+    return null;
+  }
+
+  const run = buildTailoringRunRecordFromExistingTailoring({
+    existingTailoring: input.existingTailoring,
+    previousRun: input.previousRun,
+  });
+  const nextCard = buildActiveTailorRunCardFromRun({
+    id: input.id,
+    isCurrentPage: input.isCurrentPage,
+    pageKey: input.pageKey,
+    run,
+    titleFallback: input.titleFallback,
+  });
+
+  if (!nextCard) {
+    return null;
+  }
+
+  const url = input.existingTailoring.jobUrl ?? nextCard.url;
+
+  return {
+    ...nextCard,
+    deleteTarget: buildTailorRunDeleteTarget({
+      jobUrl: url,
+      tailoredResumeId: null,
+      tailorRunId: input.existingTailoring.id,
+    }),
+    existingTailoringId: input.existingTailoring.id,
+    sortTime: readExistingTailoringSortTime(input.existingTailoring),
+    statusDisplayState:
+      input.statusDisplayState ??
+      (input.existingTailoring.kind === "pending_interview" ? "ready" : "loading"),
+    url,
+  };
+}
+
+function buildActiveTailorRunCardFromPreparation(input: {
+  id: string;
+  isCurrentPage?: boolean;
+  pageKey?: string | null;
+  preparation: TailorResumePreparationState;
+  run: TailorResumeRunRecord | null;
+  titleFallback?: {
+    companyName: string | null;
+    pageTitle: string | null;
+    positionTitle: string | null;
+    url: string | null;
+  };
+}): ActiveTailorRunCard {
+  const url =
+    input.preparation.pageUrl ?? input.run?.pageUrl ?? input.titleFallback?.url ?? null;
+
+  return {
+    deleteTarget: buildTailorRunDeleteTarget({
+      jobUrl: url,
+      tailoredResumeId: null,
+      tailorRunId: null,
+    }),
+    existingTailoringId: null,
+    id: input.id,
+    isCurrentPage: input.isCurrentPage ?? false,
+    pageKey: input.pageKey ?? null,
+    sortTime: readActiveTailorRunSortTime(input.preparation.capturedAt),
+    statusDisplayState: "loading",
+    step: readActiveTailorRunStep({
+      captureState: "running",
+      existingTailoring: null,
+      lastTailoringRun: input.run,
+      tailorGenerationStep: input.run?.generationStep ?? null,
+      tailorInterview: null,
+    }),
+    title: buildTailorRunCardTitle({
+      companyName: input.run?.companyName ?? input.titleFallback?.companyName ?? null,
+      pageTitle:
+        input.preparation.pageTitle ??
+        input.run?.pageTitle ??
+        input.titleFallback?.pageTitle ??
+        null,
+      positionTitle:
+        input.run?.positionTitle ?? input.titleFallback?.positionTitle ?? null,
+      url,
+    }),
+    url,
+  };
+}
+
+function buildCurrentActiveTailorRunCard(input: {
+  hasCurrentPageCompletedTailoring: boolean;
+  currentPageApplicationContext: TailorResumeApplicationContext | null;
+  currentPageContext: JobPageContext | null;
+  currentPagePersonalInfoTailoring: TailorResumeExistingTailoringState | null;
+  currentPageRegistryKey: string | null;
+  currentPageStoredTailoringRun: TailorResumeRunRecord | null;
+  currentTailorPreparationState: TailorResumePreparationState | null;
+  currentPageUrl: string | null;
+}) {
+  const titleFallback = {
+    companyName:
+      input.currentPagePersonalInfoTailoring?.companyName ??
+      input.currentPageStoredTailoringRun?.companyName ??
+      input.currentPageApplicationContext?.companyName ??
+      null,
+    pageTitle:
+      input.currentPageStoredTailoringRun?.pageTitle ??
+      input.currentTailorPreparationState?.pageTitle ??
+      input.currentPageContext?.title ??
+      null,
+    positionTitle:
+      input.currentPagePersonalInfoTailoring?.positionTitle ??
+      input.currentPageStoredTailoringRun?.positionTitle ??
+      input.currentPageApplicationContext?.jobTitle ??
+      null,
+    url:
+      input.currentPagePersonalInfoTailoring?.jobUrl ??
+      input.currentPageStoredTailoringRun?.pageUrl ??
+      input.currentTailorPreparationState?.pageUrl ??
+      input.currentPageUrl,
+  };
+  const cardId = `current:${input.currentPageRegistryKey ?? titleFallback.url ?? "active"}`;
+
+  if (
+    input.currentPagePersonalInfoTailoring &&
+    input.currentPagePersonalInfoTailoring.kind !== "completed"
+  ) {
+    return buildActiveTailorRunCardFromExistingTailoring({
+      existingTailoring: input.currentPagePersonalInfoTailoring,
+      id: cardId,
+      isCurrentPage: true,
+      pageKey: input.currentPageRegistryKey,
+      previousRun: input.currentPageStoredTailoringRun,
+      titleFallback,
+    });
+  }
+
+  if (input.hasCurrentPageCompletedTailoring) {
+    return null;
+  }
+
+  if (isTransientTailoringRun(input.currentPageStoredTailoringRun)) {
+    const currentRun = input.currentPageStoredTailoringRun;
+
+    if (!currentRun) {
+      return null;
+    }
+
+    return buildActiveTailorRunCardFromRun({
+      id: cardId,
+      isCurrentPage: true,
+      pageKey: input.currentPageRegistryKey,
+      run: currentRun,
+      titleFallback,
+    });
+  }
+
+  if (input.currentTailorPreparationState) {
+    return buildActiveTailorRunCardFromPreparation({
+      id: cardId,
+      isCurrentPage: true,
+      pageKey: input.currentPageRegistryKey,
+      preparation: input.currentTailorPreparationState,
+      run: input.currentPageStoredTailoringRun,
+      titleFallback,
+    });
+  }
+
+  return null;
+}
+
+function buildParallelTailorRunCards(input: {
+  currentPageContext: JobPageContext | null;
+  currentPageRegistryKey: string | null;
+  existingTailoringPromptsByKey: TailorStorageRegistry<ExistingTailoringPromptState>;
+  personalInfo: PersonalInfoSummary | null;
+  tailorPreparationsByKey: TailorStorageRegistry<TailorResumePreparationState>;
+  tailoringRunsByKey: TailorStorageRegistry<TailorResumeRunRecord>;
+}) {
+  const cards: ActiveTailorRunCard[] = [];
+  const seenComparableUrls = new Set<string>();
+  const localRegistryKeys = new Set<string>([
+    ...Object.keys(input.existingTailoringPromptsByKey),
+    ...Object.keys(input.tailorPreparationsByKey),
+    ...Object.keys(input.tailoringRunsByKey),
+  ]);
+
+  for (const registryKey of localRegistryKeys) {
+    if (registryKey === input.currentPageRegistryKey) {
+      continue;
+    }
+
+    const prompt = input.existingTailoringPromptsByKey[registryKey] ?? null;
+    const preparation = input.tailorPreparationsByKey[registryKey] ?? null;
+    const run = input.tailoringRunsByKey[registryKey] ?? null;
+    const nextCard = prompt
+      ? buildActiveTailorRunCardFromExistingTailoring({
+          existingTailoring: prompt.existingTailoring,
+          id: `prompt:${registryKey}`,
+          pageKey: registryKey,
+          previousRun: run,
+          statusDisplayState: "warning",
+        })
+      : preparation
+        ? buildActiveTailorRunCardFromPreparation({
+            id: `preparation:${registryKey}`,
+            pageKey: registryKey,
+            preparation,
+            run,
+          })
+        : run
+          ? buildActiveTailorRunCardFromRun({
+              id: `run:${registryKey}`,
+              pageKey: registryKey,
+              run,
+            })
+          : null;
+
+    if (!nextCard) {
+      continue;
+    }
+
+    if (
+      nextCard.url &&
+      tailoringRunMatchesPageContext(nextCard.url, input.currentPageContext)
+    ) {
+      continue;
+    }
+
+    const comparableUrl = normalizeComparableUrl(nextCard.url);
+
+    if (comparableUrl) {
+      seenComparableUrls.add(comparableUrl);
+    }
+
+    cards.push(nextCard);
+  }
+
+  for (const activeTailoring of input.personalInfo?.activeTailorings ?? []) {
+    if (activeTailoring.kind === "completed") {
+      continue;
+    }
+
+    const comparableUrl = normalizeComparableUrl(activeTailoring.jobUrl);
+
+    if (
+      (activeTailoring.jobUrl &&
+        tailoringRunMatchesPageContext(
+          activeTailoring.jobUrl,
+          input.currentPageContext,
+        )) ||
+      (comparableUrl && seenComparableUrls.has(comparableUrl))
+    ) {
+      continue;
+    }
+
+    const nextCard = buildActiveTailorRunCardFromExistingTailoring({
+      existingTailoring: activeTailoring,
+      id: `server:${activeTailoring.id}`,
+      previousRun: null,
+    });
+
+    if (!nextCard) {
+      continue;
+    }
+
+    if (comparableUrl) {
+      seenComparableUrls.add(comparableUrl);
+    }
+
+    cards.push(nextCard);
+  }
+
+  cards.sort((left, right) => right.sortTime - left.sortTime);
+
+  return cards;
+}
+
 function readJobPageIdentity(pageContext: JobPageContext | null) {
   if (!pageContext) {
     return null;
@@ -1542,6 +1965,16 @@ function App() {
   const [tailorRunMenuError, setTailorRunMenuError] = useState<string | null>(
     null,
   );
+  const [backgroundTailorRunMenuId, setBackgroundTailorRunMenuId] =
+    useState<string | null>(null);
+  const [backgroundTailorRunMenuActionState, setBackgroundTailorRunMenuActionState] =
+    useState<"deleting" | "goingToTab" | "idle" | "stopping">("idle");
+  const [backgroundTailorRunMenuActionCardId, setBackgroundTailorRunMenuActionCardId] =
+    useState<string | null>(null);
+  const [backgroundTailorRunMenuError, setBackgroundTailorRunMenuError] =
+    useState<string | null>(null);
+  const [backgroundTailorRunMenuErrorCardId, setBackgroundTailorRunMenuErrorCardId] =
+    useState<string | null>(null);
   const [selectedTailoredResumeId, setSelectedTailoredResumeId] =
     useState<string | null>(null);
   const [tailoredResumeMenuId, setTailoredResumeMenuId] =
@@ -1612,6 +2045,7 @@ function App() {
   const tailorInterviewInputRef = useRef<HTMLTextAreaElement | null>(null);
   const chatMessagesEndRef = useRef<HTMLDivElement | null>(null);
   const tailorRunMenuRef = useRef<HTMLDivElement | null>(null);
+  const backgroundTailorRunMenuRef = useRef<HTMLDivElement | null>(null);
   const tailoredResumeMenuRef = useRef<HTMLDivElement | null>(null);
   const tailoredResumeMenuPopoverRef = useRef<HTMLDivElement | null>(null);
   const lastReadyPersonalInfoRef = useRef<PersonalInfoSummary | null>(null);
@@ -2155,6 +2589,29 @@ function App() {
       : null);
   const hasCurrentPageCompletedTailoring =
     Boolean(currentPageCompletedTailoredResume);
+  const currentActiveTailorRunCard = buildCurrentActiveTailorRunCard({
+    hasCurrentPageCompletedTailoring,
+    currentPageApplicationContext,
+    currentPageContext,
+    currentPagePersonalInfoTailoring,
+    currentPageRegistryKey,
+    currentPageStoredTailoringRun,
+    currentTailorPreparationState:
+      currentPageTailorPreparationState ?? tailorPreparationState,
+    currentPageUrl,
+  });
+  const parallelTailorRunCards = buildParallelTailorRunCards({
+    currentPageContext,
+    currentPageRegistryKey,
+    existingTailoringPromptsByKey,
+    personalInfo,
+    tailorPreparationsByKey,
+    tailoringRunsByKey,
+  });
+  const activeTailorRunCards = [
+    ...(currentActiveTailorRunCard ? [currentActiveTailorRunCard] : []),
+    ...parallelTailorRunCards,
+  ].sort((left, right) => right.sortTime - left.sortTime);
   const isSuppressingActiveTailoringHydration =
     activeTailoringOverrideState === "overwriting" || isStoppingCurrentTailoring;
   const isTailorPreparationPending =
@@ -2561,7 +3018,9 @@ function App() {
   const isTailorRunShellOverlayActive =
     Boolean(existingTailoringPrompt) || isTailorPreparationPending;
   const shouldRenderLegacyTailorRunShell =
-    shouldShowTailorRunShell && !hasCurrentPageCompletedTailoring;
+    shouldShowTailorRunShell &&
+    !currentActiveTailorRunCard &&
+    !hasCurrentPageCompletedTailoring;
   const showFullscreenTailorRunDetail =
     Boolean(activeTailorRunDetailView && focusedTailoredResumeId);
   const activeTailorRunDetailIdentity =
@@ -2610,7 +3069,50 @@ function App() {
     setTailorRunMenuError(null);
   }, [displayedTailorRunUrl]);
 
+  useEffect(() => {
+    if (!backgroundTailorRunMenuId) {
+      return;
+    }
 
+    const handleMouseDown = (event: MouseEvent) => {
+      if (backgroundTailorRunMenuActionState !== "idle") {
+        return;
+      }
+
+      if (!backgroundTailorRunMenuRef.current?.contains(event.target as Node)) {
+        setBackgroundTailorRunMenuId(null);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (backgroundTailorRunMenuActionState !== "idle") {
+        return;
+      }
+
+      if (event.key === "Escape") {
+        setBackgroundTailorRunMenuId(null);
+      }
+    };
+
+    window.addEventListener("mousedown", handleMouseDown);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("mousedown", handleMouseDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [backgroundTailorRunMenuActionState, backgroundTailorRunMenuId]);
+
+  useEffect(() => {
+    if (
+      backgroundTailorRunMenuId &&
+      !parallelTailorRunCards.some((card) => card.id === backgroundTailorRunMenuId)
+    ) {
+      setBackgroundTailorRunMenuId(null);
+      setBackgroundTailorRunMenuError(null);
+      setBackgroundTailorRunMenuErrorCardId(null);
+    }
+  }, [backgroundTailorRunMenuId, parallelTailorRunCards]);
 
   useEffect(() => {
     if (!tailoredResumeMenuId) {
@@ -4729,6 +5231,331 @@ function App() {
     }
   }
 
+  async function handleGoToBackgroundTailorRunTab(card: ActiveTailorRunCard) {
+    const targetUrl = card.url?.trim() ?? "";
+
+    if (
+      card.isCurrentPage ||
+      !targetUrl ||
+      backgroundTailorRunMenuActionState !== "idle"
+    ) {
+      return;
+    }
+
+    setBackgroundTailorRunMenuActionState("goingToTab");
+    setBackgroundTailorRunMenuActionCardId(card.id);
+    setBackgroundTailorRunMenuError(null);
+    setBackgroundTailorRunMenuErrorCardId(null);
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        payload: {
+          url: targetUrl,
+        },
+        type: "JOB_HELPER_GO_TO_TAB",
+      });
+      assertRuntimeResponseOk(response, "Could not open that job tab.");
+      setBackgroundTailorRunMenuId(null);
+    } catch (error) {
+      setBackgroundTailorRunMenuErrorCardId(card.id);
+      setBackgroundTailorRunMenuError(
+        error instanceof Error ? error.message : "Could not open that job tab.",
+      );
+    } finally {
+      setBackgroundTailorRunMenuActionState("idle");
+      setBackgroundTailorRunMenuActionCardId(null);
+    }
+  }
+
+  async function handleStopBackgroundTailorRun(card: ActiveTailorRunCard) {
+    const jobUrl = card.deleteTarget?.jobUrl?.trim() || card.url?.trim() || "";
+    const existingTailoringId = card.existingTailoringId?.trim() ?? "";
+
+    if (
+      card.isCurrentPage ||
+      backgroundTailorRunMenuActionState !== "idle" ||
+      (!jobUrl && !existingTailoringId)
+    ) {
+      return;
+    }
+
+    setBackgroundTailorRunMenuActionState("stopping");
+    setBackgroundTailorRunMenuActionCardId(card.id);
+    setBackgroundTailorRunMenuError(null);
+    setBackgroundTailorRunMenuErrorCardId(null);
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        payload: {
+          existingTailoringId: existingTailoringId || null,
+          jobUrl: jobUrl || null,
+          pageKey: card.pageKey,
+        },
+        type: "JOB_HELPER_CANCEL_CURRENT_TAILORING",
+      });
+      assertRuntimeResponseOk(response, "Unable to stop the tailoring run.");
+      setBackgroundTailorRunMenuId(null);
+      setPersonalInfoState({
+        personalInfo: readPersonalInfoPayload(response),
+        status: "ready",
+      });
+    } catch (error) {
+      await loadPersonalInfo();
+      setBackgroundTailorRunMenuErrorCardId(card.id);
+      setBackgroundTailorRunMenuError(
+        error instanceof Error ? error.message : "Unable to stop the tailoring run.",
+      );
+    } finally {
+      setBackgroundTailorRunMenuActionState("idle");
+      setBackgroundTailorRunMenuActionCardId(null);
+    }
+  }
+
+  async function handleDeleteBackgroundTailorRun(card: ActiveTailorRunCard) {
+    const deleteTarget = card.deleteTarget;
+    const jobUrl = deleteTarget?.jobUrl?.trim() || card.url?.trim() || "";
+    const existingTailoringId = card.existingTailoringId?.trim() ?? "";
+
+    if (
+      card.isCurrentPage ||
+      backgroundTailorRunMenuActionState !== "idle" ||
+      (!deleteTarget && !jobUrl && !existingTailoringId)
+    ) {
+      return;
+    }
+
+    setBackgroundTailorRunMenuActionState("deleting");
+    setBackgroundTailorRunMenuActionCardId(card.id);
+    setBackgroundTailorRunMenuError(null);
+    setBackgroundTailorRunMenuErrorCardId(null);
+
+    try {
+      if (jobUrl || existingTailoringId) {
+        const cancelResponse = await chrome.runtime.sendMessage({
+          payload: {
+            existingTailoringId: existingTailoringId || null,
+            jobUrl: jobUrl || null,
+            pageKey: card.pageKey,
+          },
+          type: "JOB_HELPER_CANCEL_CURRENT_TAILORING",
+        });
+        assertRuntimeResponseOk(
+          cancelResponse,
+          "Unable to stop the tailoring run before deleting it.",
+        );
+        setPersonalInfoState({
+          personalInfo: readPersonalInfoPayload(cancelResponse),
+          status: "ready",
+        });
+      }
+
+      if (deleteTarget) {
+        const result = await patchTailorResume({
+          action: "deleteTailoredResumeArtifact",
+          ...(deleteTarget.jobUrl ? { jobUrl: deleteTarget.jobUrl } : {}),
+          ...(deleteTarget.tailorRunId ? { tailorRunId: deleteTarget.tailorRunId } : {}),
+          ...(deleteTarget.tailoredResumeId
+            ? { tailoredResumeId: deleteTarget.tailoredResumeId }
+            : {}),
+        });
+
+        if (!result.ok) {
+          throw new Error(
+            readTailorResumePayloadError(
+              result.payload,
+              "Unable to delete the tailored resume.",
+            ),
+          );
+        }
+      }
+
+      setBackgroundTailorRunMenuId(null);
+      await loadPersonalInfo();
+    } catch (error) {
+      await loadPersonalInfo();
+      setBackgroundTailorRunMenuErrorCardId(card.id);
+      setBackgroundTailorRunMenuError(
+        error instanceof Error
+          ? error.message
+          : "Unable to delete the tailored resume.",
+      );
+    } finally {
+      setBackgroundTailorRunMenuActionState("idle");
+      setBackgroundTailorRunMenuActionCardId(null);
+    }
+  }
+
+  const renderActiveTailorRunCard = (card: ActiveTailorRunCard) => {
+    const isCurrentCard = card.isCurrentPage;
+    const isMenuOpen = isCurrentCard
+      ? isTailorRunMenuOpen
+      : backgroundTailorRunMenuId === card.id;
+    const isMenuBusy = isCurrentCard
+      ? tailorRunMenuActionState !== "idle"
+      : backgroundTailorRunMenuActionState !== "idle";
+    const isStopBusy = isCurrentCard
+      ? isStoppingCurrentTailoring
+      : backgroundTailorRunMenuActionState === "stopping" &&
+        backgroundTailorRunMenuActionCardId === card.id;
+    const showMenuError = isCurrentCard
+      ? tailorRunMenuError
+      : backgroundTailorRunMenuErrorCardId === card.id
+        ? backgroundTailorRunMenuError
+        : null;
+    const menuActionStateLabel = isCurrentCard
+      ? tailorRunMenuActionState
+      : backgroundTailorRunMenuActionCardId === card.id
+        ? backgroundTailorRunMenuActionState
+        : "idle";
+    const attemptBadgeLabel = readTailorResumeProgressAttemptBadgeLabel({
+      attempt: card.step.attempt,
+      status: card.step.status,
+    });
+    const stepLabel = formatTailorResumeProgressStepLabel({
+      label: card.step.label,
+      status: card.step.status,
+    });
+
+    return (
+      <section
+        aria-label={card.title}
+        className={`snapshot-card tailor-run-shell tailor-run-shell-${card.statusDisplayState} ${
+          isCurrentCard ? "tailor-run-shell-current-page" : ""
+        } ${isMenuOpen ? "tailor-run-shell-menu-open" : ""}`.trim()}
+        key={card.id}
+      >
+        <div className="tailor-run-shell-body">
+          <div className="tailor-run-meta">
+            <div className="tailor-run-heading">
+              <p
+                className="tailor-run-url tailor-run-identity-structured"
+                title={card.title}
+              >
+                {card.title}
+              </p>
+            </div>
+            <div className="tailor-run-meta-badges">
+              <button
+                className="secondary-action compact-action"
+                disabled={
+                  isCurrentCard
+                    ? isStoppingCurrentTailoring ||
+                      tailorRunMenuActionState !== "idle"
+                    : isMenuBusy
+                }
+                type="button"
+                onClick={() =>
+                  isCurrentCard
+                    ? void stopCurrentTailoring()
+                    : void handleStopBackgroundTailorRun(card)
+                }
+              >
+                {isStopBusy ? "Stopping..." : "Stop run"}
+              </button>
+              <div
+                className="tailor-run-menu-shell"
+                ref={isCurrentCard && isMenuOpen
+                  ? tailorRunMenuRef
+                  : !isCurrentCard && isMenuOpen
+                    ? backgroundTailorRunMenuRef
+                    : undefined}
+              >
+                <button
+                  aria-expanded={isMenuOpen}
+                  aria-label="More tailor run actions"
+                  className="secondary-action compact-action tailor-run-menu-trigger"
+                  disabled={isMenuBusy}
+                  type="button"
+                  onClick={() => {
+                    if (isCurrentCard) {
+                      setTailorRunMenuError(null);
+                      setIsTailorRunMenuOpen((currentValue) => !currentValue);
+                      return;
+                    }
+
+                    setBackgroundTailorRunMenuError(null);
+                    setBackgroundTailorRunMenuErrorCardId(null);
+                    setBackgroundTailorRunMenuId((currentValue) =>
+                      currentValue === card.id ? null : card.id,
+                    );
+                  }}
+                >
+                  <EllipsisHorizontalIcon />
+                </button>
+                {isMenuOpen ? (
+                  <div className="tailor-run-menu-popover">
+                    <div className="tailor-run-menu">
+                      {card.url ? (
+                        <button
+                          className="tailor-run-menu-item"
+                          disabled={isMenuBusy}
+                          type="button"
+                          onClick={() =>
+                            isCurrentCard
+                              ? void handleGoToTailorRunTab()
+                              : void handleGoToBackgroundTailorRunTab(card)
+                          }
+                        >
+                          {menuActionStateLabel === "goingToTab"
+                            ? "Opening..."
+                            : "Go to tab"}
+                        </button>
+                      ) : null}
+                      <button
+                        className="tailor-run-menu-item"
+                        disabled={isMenuBusy}
+                        type="button"
+                        onClick={() =>
+                          isCurrentCard
+                            ? void handleDeleteTailorRun()
+                            : void handleDeleteBackgroundTailorRun(card)
+                        }
+                      >
+                        {menuActionStateLabel === "deleting"
+                          ? "Deleting..."
+                          : "Delete"}
+                      </button>
+                    </div>
+                    {showMenuError ? (
+                      <p className="tailor-run-menu-error">{showMenuError}</p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="tailor-progress-focus">
+            <div
+              aria-current={
+                card.step.status === "current" || card.step.status === "retrying"
+                  ? "step"
+                  : undefined
+              }
+              className={`tailor-progress-step tailor-progress-step-${card.step.status} tailor-progress-step-focus`}
+              title={`Step ${card.step.stepNumber}: ${card.step.label} (${formatTailorResumeProgressStatusLabel({
+                attempt: card.step.attempt,
+                status: card.step.status,
+              })})`}
+            >
+              <span className="tailor-progress-step-topline">
+                <span className="tailor-progress-step-number">
+                  Step {card.step.stepNumber}
+                </span>
+                {attemptBadgeLabel ? (
+                  <span className="tailor-progress-step-attempt-badge">
+                    {attemptBadgeLabel}
+                  </span>
+                ) : null}
+              </span>
+              <span className="tailor-progress-step-label">{stepLabel}</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  };
+
   function tailoredResumeMatchesCurrentPage(tailoredResume: {
     jobUrl: string | null;
   }) {
@@ -6115,6 +6942,14 @@ function App() {
                 </section>
           ) : null}
 
+          {activeTailorRunCards.length > 0 ? (
+            <section
+              aria-label="Active tailoring runs"
+              className="active-tailor-run-stack"
+            >
+              {activeTailorRunCards.map((card) => renderActiveTailorRunCard(card))}
+            </section>
+          ) : null}
 
           <section className="snapshot-card tailored-resume-card">
             <div className="card-heading-row">

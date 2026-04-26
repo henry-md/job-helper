@@ -1360,6 +1360,10 @@ button:disabled {
   line-height: 1.32;
 }
 
+.active-tailor-run-stack {
+  display: grid;
+  gap: 8px;
+}
 
 .tailor-run-detail-shell {
   display: grid;
