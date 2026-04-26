@@ -1,3 +1,10 @@
+import {
+  emptyUserSyncStateSnapshot,
+  readUserSyncStateSnapshot,
+  type UserSyncStateSnapshot,
+} from "../../lib/sync-state.ts";
+export { normalizeComparableUrl } from "./comparable-job-url.ts";
+
 export const CAPTURE_COMMAND_NAME = "capture_job_page";
 const fallbackAppBaseUrl = "http://localhost:3000";
 export const EXTENSION_DEBUG_UI_ENABLED = __DEBUG_UI__;
@@ -20,6 +27,7 @@ export const DEFAULT_APP_BASE_URL = normalizeAppBaseUrl(
   import.meta.env.VITE_JOB_HELPER_APP_BASE_URL,
 );
 export const DEFAULT_DASHBOARD_URL = `${DEFAULT_APP_BASE_URL}/dashboard`;
+export const DEFAULT_SYNC_STATE_ENDPOINT = `${DEFAULT_APP_BASE_URL}/api/sync-state`;
 export const DEFAULT_JOB_APPLICATIONS_ENDPOINT =
   `${DEFAULT_APP_BASE_URL}/api/job-applications`;
 export const DEFAULT_TAILOR_RESUME_ENDPOINT =
@@ -59,28 +67,6 @@ export function buildTailoredResumeReviewUrl(
     tab: "tailor",
     tailoredResumeId: normalizedTailoredResumeId,
   }).toString()}`;
-}
-
-export function normalizeComparableUrl(value: string | null | undefined) {
-  const trimmedValue = value?.trim();
-
-  if (!trimmedValue) {
-    return null;
-  }
-
-  try {
-    const parsedUrl = new URL(trimmedValue);
-    parsedUrl.hash = "";
-    parsedUrl.search = "";
-    if (parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:") {
-      // Treat http/https variants of the same posting as one comparable URL.
-      parsedUrl.protocol = "https:";
-    }
-    parsedUrl.pathname = parsedUrl.pathname.replace(/\/+$/, "") || "/";
-    return parsedUrl.toString();
-  } catch {
-    return trimmedValue;
-  }
 }
 
 export type JobPostingStructuredHint = {
@@ -145,7 +131,10 @@ export type TailorResumePreparationState = {
 };
 
 export type TailoredResumeSummary = {
+  applicationId: string | null;
+  archivedAt: string | null;
   companyName: string | null;
+  createdAt: string;
   displayName: string;
   id: string;
   jobIdentifier: string | null;
@@ -181,6 +170,7 @@ export type PersonalInfoSummary = {
   applications: TrackedApplicationSummary[];
   companyCount: number;
   originalResume: OriginalResumeSummary;
+  syncState: UserSyncStateSnapshot;
   tailoredResumes: TailoredResumeSummary[];
   tailoringInterview: TailorResumePendingInterviewSummary | null;
   tailoringInterviews: TailorResumePendingInterviewSummary[];
@@ -243,6 +233,7 @@ export type TailorResumeExistingTailoringState =
     }
   | {
       companyName: string | null;
+      createdAt: string;
       id: string;
       jobDescription: string;
       jobIdentifier: string | null;
@@ -254,6 +245,7 @@ export type TailorResumeExistingTailoringState =
     }
   | {
       companyName: string | null;
+      createdAt: string;
       displayName: string;
       error: string | null;
       id: string;
@@ -568,15 +560,19 @@ export function readTailoredResumeSummary(
   }
 
   const id = readString(value.id);
+  const createdAt = readString(value.createdAt);
   const displayName = readString(value.displayName);
   const updatedAt = readString(value.updatedAt);
 
-  if (!id || !displayName || !updatedAt) {
+  if (!createdAt || !id || !displayName || !updatedAt) {
     return null;
   }
 
   return {
+    applicationId: readNullableString(value.applicationId),
+    archivedAt: readNullableString(value.archivedAt),
     companyName: readString(value.companyName) || null,
+    createdAt,
     displayName,
     id,
     jobIdentifier: readNullableString(value.jobIdentifier),
@@ -599,10 +595,16 @@ export function readTailoredResumeSummaries(value: unknown) {
   return tailoredResumes
     .map(readTailoredResumeSummary)
     .filter((record): record is TailoredResumeSummary => Boolean(record))
-    .sort(
-      (left, right) =>
-        new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
-    );
+    .sort((left, right) => {
+      const createdAtDifference =
+        new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+
+      if (createdAtDifference !== 0) {
+        return createdAtDifference;
+      }
+
+      return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
+    });
 }
 
 export function readTailorResumePreparationState(
@@ -794,8 +796,15 @@ export function readTailorResumeExistingTailoringState(
   }
 
   if (kind === "pending_interview") {
+    const createdAt = readString(existingTailoring.createdAt);
+
+    if (!createdAt) {
+      return null;
+    }
+
     return {
       companyName: readNullableString(existingTailoring.companyName),
+      createdAt,
       id,
       jobDescription: readString(existingTailoring.jobDescription),
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
@@ -810,15 +819,17 @@ export function readTailorResumeExistingTailoringState(
   }
 
   if (kind === "completed") {
+    const createdAt = readString(existingTailoring.createdAt);
     const displayName = readString(existingTailoring.displayName);
     const tailoredResumeId = readString(existingTailoring.tailoredResumeId);
 
-    if (!displayName || !tailoredResumeId) {
+    if (!createdAt || !displayName || !tailoredResumeId) {
       return null;
     }
 
     return {
       companyName: readNullableString(existingTailoring.companyName),
+      createdAt,
       displayName,
       error: readNullableString(existingTailoring.error),
       id,
@@ -854,7 +865,16 @@ export function readTailorResumeExistingTailoringStates(value: unknown) {
     );
 
   if (parsedActiveTailorings.length > 0) {
-    return parsedActiveTailorings;
+    return parsedActiveTailorings.sort((left, right) => {
+      const createdAtDifference =
+        Date.parse(right.createdAt || "") - Date.parse(left.createdAt || "");
+
+      if (createdAtDifference !== 0) {
+        return createdAtDifference;
+      }
+
+      return Date.parse(right.updatedAt || "") - Date.parse(left.updatedAt || "");
+    });
   }
 
   const singleActiveTailoring = readTailorResumeExistingTailoringState(value);
@@ -1040,6 +1060,7 @@ export function readPersonalInfoSummary(input: {
     applications: readTrackedApplicationSummaries(applicationsPayload),
     companyCount: readNumber(applicationsPayload.companyCount),
     originalResume: readOriginalResumeSummary(input.tailorResumePayload),
+    syncState: readUserSyncStateSnapshot(input.tailorResumePayload),
     tailoredResumes: tailorResumeProfile?.tailoredResumes ?? [],
     tailoringInterview: tailorResumeProfile?.tailoringInterview ?? null,
     tailoringInterviews: tailorResumeProfile?.tailoringInterviews ?? [],
@@ -1072,6 +1093,10 @@ export function readPersonalInfoPayload(value: unknown): PersonalInfoSummary {
     applications: readTrackedApplicationSummaries(payloadRecord.applications),
     companyCount: readNumber(payloadRecord.companyCount),
     originalResume: readOriginalResumeSummary(payloadRecord.originalResume),
+    syncState:
+      "syncState" in payloadRecord
+        ? readUserSyncStateSnapshot(payloadRecord.syncState)
+        : emptyUserSyncStateSnapshot(),
     tailoredResumes: readTailoredResumeSummaries(payloadRecord.tailoredResumes),
     tailoringInterview: normalizedTailoringInterviews[0] ?? null,
     tailoringInterviews: normalizedTailoringInterviews,

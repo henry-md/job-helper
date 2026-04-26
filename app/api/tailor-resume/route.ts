@@ -77,6 +77,12 @@ import {
   formatTailorResumeStepError,
 } from "@/lib/tailor-resume-step-error";
 import {
+  buildActiveRunExistingTailoringState,
+  buildActiveTailoringStates,
+  buildPendingInterviewExistingTailoringState,
+  type TailorResumeExistingTailoringState,
+} from "@/lib/tailor-resume-existing-tailoring-state";
+import {
   implementTailoredResumePlan,
   planTailoredResume,
 } from "@/lib/tailor-resume-tailoring";
@@ -126,10 +132,10 @@ import {
 } from "@/lib/job-tracking-shared";
 import {
   deleteDbTailoredResumes,
+  deleteLinkedDashboardArtifacts,
   deleteTailorResumeArtifacts,
   findActiveTailorResumeRun,
   readTailorResumeResponseState,
-  type TailorResumeDbRunRecord,
   uniqueNonEmptyStrings,
 } from "@/lib/tailor-resume-route-response-state";
 import {
@@ -137,6 +143,10 @@ import {
   saveTailorResumePromptSettingsAction,
   saveTailorResumeUserMarkdownAction,
 } from "@/lib/tailor-resume-route-settings";
+import {
+  bumpUserSyncState,
+  readUserSyncStateSnapshotForUser,
+} from "@/lib/user-sync-state";
 
 const maxJobDescriptionLength = 200_000;
 const maxLatexCodeLength = 300_000;
@@ -194,6 +204,28 @@ function logTailorResumeDiagnostic(input: {
   };
 
   console.info(`[tailor-resume] ${input.message} ${JSON.stringify(payload)}`);
+}
+
+async function markApplicationsChanged(userId: string) {
+  await bumpUserSyncState({
+    applications: true,
+    userId,
+  });
+}
+
+async function markTailoringChanged(userId: string) {
+  await bumpUserSyncState({
+    tailoring: true,
+    userId,
+  });
+}
+
+async function writeTailorResumeProfileAndMarkChanged(
+  userId: string,
+  profile: TailorResumeProfile,
+) {
+  await writeTailorResumeProfile(userId, profile);
+  await markTailoringChanged(userId);
 }
 
 function buildResumeRecord(input: {
@@ -509,7 +541,9 @@ type TailorResumeApplicationContext = {
 };
 
 type TailoredResumeDbRecord = {
+  archivedAt: Date | null;
   companyName: string | null;
+  createdAt: Date;
   displayName: string;
   error: string | null;
   id: string;
@@ -519,44 +553,6 @@ type TailoredResumeDbRecord = {
   status: string;
   updatedAt: Date;
 };
-
-type TailorResumeExistingTailoringState =
-  | {
-      companyName: string | null;
-      createdAt: string;
-      id: string;
-      jobDescription: string;
-      jobIdentifier: string | null;
-      jobUrl: string | null;
-      kind: "active_generation";
-      lastStep: TailorResumeGenerationStepEvent | null;
-      positionTitle: string | null;
-      updatedAt: string;
-    }
-  | {
-      companyName: string | null;
-      id: string;
-      jobDescription: string;
-      jobIdentifier: string | null;
-      jobUrl: string | null;
-      kind: "pending_interview";
-      positionTitle: string | null;
-      questionCount: number | null;
-      updatedAt: string;
-    }
-  | {
-      companyName: string | null;
-      displayName: string;
-      error: string | null;
-      id: string;
-      jobIdentifier: string | null;
-      jobUrl: string | null;
-      kind: "completed";
-      positionTitle: string | null;
-      status: string;
-      tailoredResumeId: string;
-      updatedAt: string;
-    };
 
 async function completeTailorResumeInterviewAndFinalize(input: {
   applicationId: string | null;
@@ -836,7 +832,7 @@ async function ensureTailorResumeJobApplication(input: {
   const normalizedJobUrl = normalizeTailorResumeJobUrl(input.jobUrl);
   const jobUrlHash = buildTailorResumeJobUrlHash(normalizedJobUrl);
 
-  if (!normalizedJobUrl || !jobUrlHash || !input.applicationContext) {
+  if (!normalizedJobUrl || !jobUrlHash) {
     return null;
   }
 
@@ -894,76 +890,11 @@ async function ensureTailorResumeJobApplication(input: {
     },
   });
 
+  await markApplicationsChanged(input.userId);
+
   return {
     id: application.id,
     jobUrlHash,
-  };
-}
-
-function buildTailorResumeRunStepEvent(
-  run: TailorResumeDbRunRecord,
-): TailorResumeGenerationStepEvent | null {
-  const rawStatus = run.stepStatus?.trim().toLowerCase() ?? null;
-  const status =
-    rawStatus === "failed"
-      ? "failed"
-      : rawStatus === "running"
-        ? "running"
-        : rawStatus === "skipped"
-          ? "skipped"
-          : rawStatus === "succeeded"
-            ? "succeeded"
-            : null;
-
-  if (!run.stepNumber || !run.stepCount || !run.stepSummary || !status) {
-    return null;
-  }
-
-  return {
-    attempt: run.stepAttempt,
-    detail: run.stepDetail,
-    durationMs: 0,
-    retrying: run.stepRetrying === true,
-    status,
-    stepCount: run.stepCount,
-    stepNumber: run.stepNumber,
-    summary: run.stepSummary,
-  };
-}
-
-function buildActiveRunExistingTailoringState(
-  run: TailorResumeDbRunRecord,
-): TailorResumeExistingTailoringState {
-  return {
-    companyName: run.application.company.name,
-    createdAt: run.createdAt.toISOString(),
-    id: run.id,
-    jobDescription: run.jobDescription,
-    jobIdentifier: null,
-    jobUrl: run.jobUrl,
-    kind: "active_generation",
-    lastStep: buildTailorResumeRunStepEvent(run),
-    positionTitle: run.application.title,
-    updatedAt: run.updatedAt.toISOString(),
-  };
-}
-
-function buildPendingInterviewExistingTailoringState(
-  tailoringInterview: TailorResumePendingInterview,
-  run?: TailorResumeDbRunRecord,
-): TailorResumeExistingTailoringState {
-  const questioningSummary = tailoringInterview.planningResult.questioningSummary;
-
-  return {
-    companyName: tailoringInterview.planningResult.companyName || null,
-    id: run?.id ?? tailoringInterview.tailorResumeRunId ?? tailoringInterview.id,
-    jobDescription: tailoringInterview.jobDescription,
-    jobIdentifier: tailoringInterview.planningResult.jobIdentifier || null,
-    jobUrl: tailoringInterview.jobUrl,
-    kind: "pending_interview",
-    positionTitle: tailoringInterview.planningResult.positionTitle || null,
-    questionCount: questioningSummary?.askedQuestionCount ?? null,
-    updatedAt: run?.updatedAt.toISOString() ?? tailoringInterview.updatedAt,
   };
 }
 
@@ -987,50 +918,12 @@ function matchesTailorResumeInterviewTarget(
   return normalizeTailorResumeJobUrl(interview.jobUrl) === normalizedJobUrl;
 }
 
-function buildActiveTailoringStates(input: {
-  activeRuns: TailorResumeDbRunRecord[];
-  tailoringInterviews: TailorResumePendingInterview[];
-}) {
-  const activeRunsById = new Map(
-    input.activeRuns.map((run) => [run.id, run] as const),
-  );
-  const representedRunIds = new Set<string>();
-  const activeTailorings: TailorResumeExistingTailoringState[] = [];
-
-  for (const tailoringInterview of input.tailoringInterviews) {
-    const run =
-      tailoringInterview.tailorResumeRunId
-        ? activeRunsById.get(tailoringInterview.tailorResumeRunId)
-        : undefined;
-
-    if (run) {
-      representedRunIds.add(run.id);
-    }
-
-    activeTailorings.push(
-      buildPendingInterviewExistingTailoringState(tailoringInterview, run),
-    );
-  }
-
-  for (const run of input.activeRuns) {
-    if (representedRunIds.has(run.id)) {
-      continue;
-    }
-
-    activeTailorings.push(buildActiveRunExistingTailoringState(run));
-  }
-
-  return activeTailorings.sort(
-    (left, right) =>
-      Date.parse(right.updatedAt || "") - Date.parse(left.updatedAt || ""),
-  );
-}
-
 function buildCompletedExistingTailoringState(
   tailoredResume: TailorResumeProfile["tailoredResumes"][number],
 ): TailorResumeExistingTailoringState {
   return {
     companyName: tailoredResume.companyName,
+    createdAt: tailoredResume.createdAt,
     displayName: tailoredResume.displayName,
     error: tailoredResume.error,
     id: tailoredResume.id,
@@ -1049,6 +942,7 @@ function buildDbCompletedExistingTailoringState(
 ): TailorResumeExistingTailoringState {
   return {
     companyName: tailoredResume.companyName,
+    createdAt: tailoredResume.createdAt.toISOString(),
     displayName: tailoredResume.displayName,
     error: tailoredResume.error,
     id: tailoredResume.id,
@@ -1071,7 +965,7 @@ async function findLatestDbTailoredResume(input: {
   }
 
   return getPrismaClient().tailoredResume.findFirst({
-    orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+    orderBy: [{ createdAt: "desc" }, { updatedAt: "desc" }],
     where: {
       applicationId: input.applicationId,
       userId: input.userId,
@@ -1104,6 +998,8 @@ async function createTailorResumeRun(input: {
     },
   });
 
+  await markTailoringChanged(input.userId);
+
   return run.id;
 }
 
@@ -1116,7 +1012,7 @@ async function updateTailorResumeRunStep(input: {
     return;
   }
 
-  await getPrismaClient().tailorResumeRun.updateMany({
+  const updatedRuns = await getPrismaClient().tailorResumeRun.updateMany({
     data: buildTailorResumeRunStepUpdate(input.event),
     where: {
       id: input.runId,
@@ -1126,6 +1022,10 @@ async function updateTailorResumeRunStep(input: {
       userId: input.userId,
     },
   });
+
+  if (updatedRuns.count > 0) {
+    await markTailoringChanged(input.userId);
+  }
 }
 
 async function updateTailorResumeRunStatus(input: {
@@ -1139,7 +1039,7 @@ async function updateTailorResumeRunStatus(input: {
     return;
   }
 
-  await getPrismaClient().tailorResumeRun.updateMany({
+  const updatedRuns = await getPrismaClient().tailorResumeRun.updateMany({
     data: {
       error: input.error ?? null,
       status: input.status,
@@ -1159,6 +1059,10 @@ async function updateTailorResumeRunStatus(input: {
       userId: input.userId,
     },
   });
+
+  if (updatedRuns.count > 0) {
+    await markTailoringChanged(input.userId);
+  }
 }
 
 async function isTailorResumeRunStillActive(input: {
@@ -1191,7 +1095,7 @@ async function cancelActiveTailorResumeRuns(input: {
     return;
   }
 
-  await getPrismaClient().tailorResumeRun.updateMany({
+  const cancelledRuns = await getPrismaClient().tailorResumeRun.updateMany({
     data: {
       status: "CANCELLED",
     },
@@ -1203,10 +1107,15 @@ async function cancelActiveTailorResumeRuns(input: {
       userId: input.userId,
     },
   });
+
+  if (cancelledRuns.count > 0) {
+    await markTailoringChanged(input.userId);
+  }
 }
 
 async function upsertDbTailoredResume(input: {
   applicationId: string | null;
+  archivedAt: string | null;
   companyName: string | null;
   displayName: string;
   error: string | null;
@@ -1228,6 +1137,7 @@ async function upsertDbTailoredResume(input: {
     },
     create: {
       applicationId: input.applicationId,
+      archivedAt: input.archivedAt ? new Date(input.archivedAt) : null,
       companyName: input.companyName,
       displayName: input.displayName,
       error: input.error,
@@ -1241,6 +1151,7 @@ async function upsertDbTailoredResume(input: {
     },
     update: {
       applicationId: input.applicationId,
+      archivedAt: input.archivedAt ? new Date(input.archivedAt) : null,
       companyName: input.companyName,
       displayName: input.displayName,
       error: input.error,
@@ -1250,6 +1161,8 @@ async function upsertDbTailoredResume(input: {
       status: input.status,
     },
   });
+
+  await markTailoringChanged(input.userId);
 }
 
 async function finalizeTailorResumeGeneration(input: {
@@ -1478,7 +1391,7 @@ async function finalizeTailorResumeGeneration(input: {
         }
 
         if (nextRawProfile !== latestState.rawProfile) {
-          await writeTailorResumeProfile(input.userId, nextRawProfile);
+          await writeTailorResumeProfileAndMarkChanged(input.userId, nextRawProfile);
         }
       });
     }
@@ -1542,7 +1455,9 @@ async function finalizeTailorResumeGeneration(input: {
       jobDescription: input.jobDescription,
       snapshotRawProfile: input.rawProfile,
       tailoredResume: {
+        applicationId: input.applicationId,
         annotatedLatexCode: tailoringResult.annotatedLatexCode,
+        archivedAt: null,
         companyName: tailoringResult.companyName,
         createdAt: tailoredResumeUpdatedAt,
         displayName: tailoringResult.displayName,
@@ -1585,7 +1500,7 @@ async function finalizeTailorResumeGeneration(input: {
         }
       : mergedRawProfileWithOverwrite;
 
-    await writeTailorResumeProfile(input.userId, nextRawProfile);
+    await writeTailorResumeProfileAndMarkChanged(input.userId, nextRawProfile);
 
     return {
       lockedLinks: latestState.lockedLinks,
@@ -1628,6 +1543,7 @@ async function finalizeTailorResumeGeneration(input: {
   if (savedTailoredResume) {
     await upsertDbTailoredResume({
       applicationId: input.applicationId,
+      archivedAt: savedTailoredResume.archivedAt,
       companyName: savedTailoredResume.companyName,
       displayName: savedTailoredResume.displayName,
       error: savedTailoredResume.error,
@@ -1838,7 +1754,7 @@ async function handleTailorResumeGeneration(
         },
       };
 
-      await writeTailorResumeProfile(userId, nextRawProfile);
+      await writeTailorResumeProfileAndMarkChanged(userId, nextRawProfile);
 
       return {
         applicationId: application?.id ?? null,
@@ -1931,7 +1847,7 @@ async function handleTailorResumeGeneration(
           : latestState.rawProfile;
 
       if (failedProfile !== latestState.rawProfile) {
-        await writeTailorResumeProfile(userId, failedProfile);
+        await writeTailorResumeProfileAndMarkChanged(userId, failedProfile);
       }
     });
 
@@ -2116,7 +2032,7 @@ async function handleTailorResumeGeneration(
           ),
         };
 
-        await writeTailorResumeProfile(userId, nextRawProfile);
+        await writeTailorResumeProfileAndMarkChanged(userId, nextRawProfile);
 
         return {
           lockedLinks: latestState.lockedLinks,
@@ -2515,7 +2431,7 @@ async function handleAdvanceTailorResumeInterview(
         ),
       };
 
-      await writeTailorResumeProfile(userId, nextRawProfile);
+      await writeTailorResumeProfileAndMarkChanged(userId, nextRawProfile);
 
       return {
         lockedLinks: latestState.lockedLinks,
@@ -2635,7 +2551,7 @@ async function handleAdvanceTailorResumeInterview(
       ),
     };
 
-    await writeTailorResumeProfile(userId, nextRawProfile);
+    await writeTailorResumeProfileAndMarkChanged(userId, nextRawProfile);
 
     return {
       lockedLinks: latestState.lockedLinks,
@@ -2831,7 +2747,7 @@ async function handleCancelTailorResumeInterview(userId: string) {
       ),
     };
 
-    await writeTailorResumeProfile(userId, nextRawProfile);
+    await writeTailorResumeProfileAndMarkChanged(userId, nextRawProfile);
     await updateTailorResumeRunStatus({
       runId: tailoringInterview.tailorResumeRunId,
       status: "CANCELLED",
@@ -2878,7 +2794,9 @@ async function handleCancelCurrentTailoring(userId: string) {
       : rawProfile;
 
     if (tailoringInterview) {
-      await writeTailorResumeProfile(userId, nextRawProfile);
+      await writeTailorResumeProfileAndMarkChanged(userId, nextRawProfile);
+    } else if (cancelledRuns.count > 0) {
+      await markTailoringChanged(userId);
     }
 
     return NextResponse.json({
@@ -2955,7 +2873,7 @@ async function handleCancelExistingTailoring(
         : rawProfile.workspace,
     };
 
-    await writeTailorResumeProfile(userId, nextRawProfile);
+    await writeTailorResumeProfileAndMarkChanged(userId, nextRawProfile);
 
     return NextResponse.json({
       profile: mergeTailorResumeProfileWithLockedLinks(
@@ -3023,7 +2941,9 @@ async function handleCancelTailoringByJobUrl(
     };
 
     if (nextRawProfile !== rawProfile) {
-      await writeTailorResumeProfile(userId, nextRawProfile);
+      await writeTailorResumeProfileAndMarkChanged(userId, nextRawProfile);
+    } else if (cancelledRuns.count > 0) {
+      await markTailoringChanged(userId);
     }
 
     return NextResponse.json({
@@ -3363,7 +3283,7 @@ async function ensureTailoredResumePreview(input: {
     ),
   };
 
-  await writeTailorResumeProfile(input.userId, nextRawProfile);
+  await writeTailorResumeProfileAndMarkChanged(input.userId, nextRawProfile);
 
   return nextRawProfile;
 }
@@ -3396,7 +3316,7 @@ async function runResumeExtraction(
     },
   };
 
-  await writeTailorResumeProfile(userId, extractingProfile);
+  await writeTailorResumeProfileAndMarkChanged(userId, extractingProfile);
 
   try {
     const resumePath = path.join(process.cwd(), "public", savedResume.storagePath);
@@ -3438,7 +3358,7 @@ async function runResumeExtraction(
       links: extraction.resumeLinks,
     };
 
-    await writeTailorResumeProfile(userId, readyRawProfile);
+    await writeTailorResumeProfileAndMarkChanged(userId, readyRawProfile);
     return {
       extractionAttempts: extraction.attemptEvents,
       linkValidationLinks: extraction.links,
@@ -3467,7 +3387,7 @@ async function runResumeExtraction(
       },
     };
 
-    await writeTailorResumeProfile(userId, failedRawProfile);
+    await writeTailorResumeProfileAndMarkChanged(userId, failedRawProfile);
     return {
       extractionAttempts: [],
       linkValidationLinks: [],
@@ -3494,6 +3414,7 @@ export async function GET(request: Request) {
 
   const { activeRun, activeRuns, profile, rawProfile } =
     await readTailorResumeResponseState(session.user.id);
+  const syncState = await readUserSyncStateSnapshotForUser(session.user.id);
   const activeTailoringInterviews = readTailorResumeWorkspaceInterviews(
     rawProfile.workspace,
   );
@@ -3509,6 +3430,7 @@ export async function GET(request: Request) {
     activeTailorings,
     existingTailoring,
     profile,
+    syncState,
   });
 }
 
@@ -3783,7 +3705,7 @@ export async function PATCH(request: Request) {
       linkValidationSummary = validation.summary;
     }
 
-    await writeTailorResumeProfile(session.user.id, nextRawProfile);
+    await writeTailorResumeProfileAndMarkChanged(session.user.id, nextRawProfile);
 
     const nextProfile = mergeTailorResumeProfileWithLockedLinks(
       nextRawProfile,
@@ -3828,25 +3750,27 @@ export async function PATCH(request: Request) {
       );
     }
 
-    await deleteTailoredResumePdf(session.user.id, tailoredResume.id);
-    await deleteDbTailoredResumes({
-      ids: [tailoredResume.id],
+    const deleteResult = await deleteLinkedDashboardArtifacts({
+      tailoredResumeId: tailoredResume.id,
       userId: session.user.id,
     });
 
-    const nextRawProfile: TailorResumeProfile = {
-      ...rawProfile,
-      tailoredResumes: rawProfile.tailoredResumes.filter(
-        (record) => record.id !== tailoredResume.id,
-      ),
-    };
-
-    await writeTailorResumeProfile(session.user.id, nextRawProfile);
+    if (deleteResult.impact.tailoredResumeCount === 0) {
+      return NextResponse.json(
+        { error: "The tailored resume could not be found." },
+        { status: 404 },
+      );
+    }
 
     return NextResponse.json({
-      profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
-        includeLockedOnly: true,
-      }),
+      deleteImpact: deleteResult.impact,
+      profile: mergeTailorResumeProfileWithLockedLinks(
+        deleteResult.rawProfile,
+        deleteResult.lockedLinks,
+        {
+          includeLockedOnly: true,
+        },
+      ),
       tailoredResumeId,
     });
   }
@@ -3949,7 +3873,7 @@ export async function PATCH(request: Request) {
       deletedTailoredResumeIds.size > 0 ||
       shouldClearInterview
     ) {
-      await writeTailorResumeProfile(session.user.id, nextRawProfile);
+      await writeTailorResumeProfileAndMarkChanged(session.user.id, nextRawProfile);
     }
 
     return NextResponse.json({
@@ -4012,7 +3936,7 @@ export async function PATCH(request: Request) {
           };
 
     if (nextRawProfile !== rawProfile) {
-      await writeTailorResumeProfile(session.user.id, nextRawProfile);
+      await writeTailorResumeProfileAndMarkChanged(session.user.id, nextRawProfile);
       await getPrismaClient().tailoredResume.updateMany({
         data: {
           displayName: nextDisplayName,
@@ -4025,6 +3949,77 @@ export async function PATCH(request: Request) {
     }
 
     return NextResponse.json({
+      profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
+        includeLockedOnly: true,
+      }),
+      tailoredResumeId,
+    });
+  }
+
+  if ("action" in body && body.action === "setTailoredResumeArchivedState") {
+    const tailoredResumeId =
+      "tailoredResumeId" in body && typeof body.tailoredResumeId === "string"
+        ? body.tailoredResumeId.trim()
+        : "";
+    const archived =
+      "archived" in body && typeof body.archived === "boolean"
+        ? body.archived
+        : null;
+
+    if (!tailoredResumeId || archived === null) {
+      return NextResponse.json(
+        { error: "Provide the tailored resume and whether it should be archived." },
+        { status: 400 },
+      );
+    }
+
+    const tailoredResumeIndex = rawProfile.tailoredResumes.findIndex(
+      (record) => record.id === tailoredResumeId,
+    );
+
+    if (tailoredResumeIndex === -1) {
+      return NextResponse.json(
+        { error: "The tailored resume could not be found." },
+        { status: 404 },
+      );
+    }
+
+    const currentTailoredResume = rawProfile.tailoredResumes[tailoredResumeIndex];
+    const isCurrentlyArchived = Boolean(currentTailoredResume.archivedAt);
+    const nextUpdatedAt = new Date().toISOString();
+    const nextRawProfile: TailorResumeProfile =
+      isCurrentlyArchived === archived
+        ? rawProfile
+        : {
+            ...rawProfile,
+            tailoredResumes: rawProfile.tailoredResumes.map((record, index) =>
+              index === tailoredResumeIndex
+                ? {
+                    ...record,
+                    archivedAt: archived
+                      ? record.archivedAt ?? nextUpdatedAt
+                      : null,
+                    updatedAt: nextUpdatedAt,
+                  }
+                : record,
+            ),
+          };
+
+    if (nextRawProfile !== rawProfile) {
+      await writeTailorResumeProfileAndMarkChanged(session.user.id, nextRawProfile);
+      await getPrismaClient().tailoredResume.updateMany({
+        data: {
+          archivedAt: archived ? new Date(nextUpdatedAt) : null,
+        },
+        where: {
+          profileRecordId: tailoredResumeId,
+          userId: session.user.id,
+        },
+      });
+    }
+
+    return NextResponse.json({
+      archived,
       profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
         includeLockedOnly: true,
       }),
@@ -4167,7 +4162,7 @@ export async function PATCH(request: Request) {
       ),
     };
 
-    await writeTailorResumeProfile(session.user.id, nextRawProfile);
+    await writeTailorResumeProfileAndMarkChanged(session.user.id, nextRawProfile);
 
     return NextResponse.json({
       profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
@@ -4295,7 +4290,7 @@ export async function PATCH(request: Request) {
     nextRawProfile.annotatedLatex = compiledLatex.annotatedLatex;
     nextRawProfile.latex = compiledLatex.latex;
 
-    await writeTailorResumeProfile(session.user.id, nextRawProfile);
+    await writeTailorResumeProfileAndMarkChanged(session.user.id, nextRawProfile);
 
     const nextProfile = mergeTailorResumeProfileWithLockedLinks(
       nextRawProfile,
@@ -4462,7 +4457,7 @@ export async function PATCH(request: Request) {
       ),
     };
 
-    await writeTailorResumeProfile(session.user.id, nextRawProfile);
+    await writeTailorResumeProfileAndMarkChanged(session.user.id, nextRawProfile);
 
     return NextResponse.json({
       profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
@@ -4564,7 +4559,7 @@ export async function PATCH(request: Request) {
         ),
       };
 
-      await writeTailorResumeProfile(session.user.id, nextRawProfile);
+      await writeTailorResumeProfileAndMarkChanged(session.user.id, nextRawProfile);
 
       return NextResponse.json({
         assistantMessage: refinementResult.summary,
@@ -4715,7 +4710,7 @@ export async function PATCH(request: Request) {
     );
   }
 
-  await writeTailorResumeProfile(session.user.id, nextRawProfile);
+  await writeTailorResumeProfileAndMarkChanged(session.user.id, nextRawProfile);
 
   const nextProfile = mergeTailorResumeProfileWithLockedLinks(
     nextRawProfile,
@@ -4793,7 +4788,7 @@ export async function POST(request: Request) {
       },
     };
 
-    await writeTailorResumeProfile(session.user.id, profileWithSavedResume);
+    await writeTailorResumeProfileAndMarkChanged(session.user.id, profileWithSavedResume);
     await deleteTailorResumePreviewPdf(session.user.id);
 
     if (wantsTailorResumeUploadStream(request)) {

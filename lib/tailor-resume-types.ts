@@ -209,7 +209,9 @@ export type TailorResumePendingInterview = {
 };
 
 export type TailoredResumeRecord = {
+  applicationId?: string | null;
   annotatedLatexCode: string;
+  archivedAt: string | null;
   companyName: string;
   createdAt: string;
   displayName: string;
@@ -1058,6 +1060,7 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
   const createdAt = readNullableString(value.createdAt);
   const updatedAt = readNullableString(value.updatedAt);
   const pdfUpdatedAt = readNullableString(value.pdfUpdatedAt);
+  const archivedAt = readNullableString(value.archivedAt);
   const error = readNullableString(value.error);
   const sourceAnnotatedLatexCode = readNullableString(value.sourceAnnotatedLatexCode);
   const thesis = parseTailoredResumeThesis(value.thesis);
@@ -1104,7 +1107,9 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
   }
 
   return {
+    applicationId: readNullableString(value.applicationId),
     annotatedLatexCode,
+    archivedAt,
     companyName,
     createdAt,
     displayName,

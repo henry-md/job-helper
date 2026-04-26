@@ -1,22 +1,21 @@
-import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
-import { authOptions } from "@/auth";
+import { getApiSession } from "@/lib/api-auth";
 import { normalizeJobApplicationWriteInput } from "@/lib/job-application-form";
 import { getPrismaClient } from "@/lib/prisma";
+import { bumpUserSyncState } from "@/lib/user-sync-state";
 import { buildNormalizedJobUrlHash } from "@/lib/job-url-hash";
 import {
   normalizeCompanyName,
   resolveAppliedAt,
 } from "@/lib/job-tracking-shared";
-import {
-  deletePersistedJobScreenshot,
-} from "@/lib/job-tracking";
+import { mergeTailorResumeProfileWithLockedLinks } from "@/lib/tailor-resume-locked-links";
+import { deleteLinkedDashboardArtifacts } from "@/lib/tailor-resume-route-response-state";
 
 export async function PATCH(
   request: Request,
   context: { params: Promise<{ applicationId: string }> },
 ) {
-  const session = await getServerSession(authOptions);
+  const session = await getApiSession(request);
 
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
@@ -179,6 +178,11 @@ export async function PATCH(
       },
     });
 
+    await bumpUserSyncState({
+      applications: true,
+      userId: session.user.id,
+    });
+
     return NextResponse.json({ application });
   } catch (error) {
     const detail =
@@ -189,59 +193,38 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ applicationId: string }> },
 ) {
-  const session = await getServerSession(authOptions);
+  const session = await getApiSession(request);
 
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
 
   const { applicationId } = await context.params;
-  const prisma = getPrismaClient();
 
   try {
-    const existingApplication = await prisma.jobApplication.findFirst({
-      where: {
-        id: applicationId,
-        userId: session.user.id,
-      },
-      include: {
-        screenshots: {
-          select: {
-            id: true,
-            storagePath: true,
-          },
-        },
-      },
+    const deleteResult = await deleteLinkedDashboardArtifacts({
+      applicationId,
+      userId: session.user.id,
     });
 
-    if (!existingApplication) {
+    if (deleteResult.impact.applicationCount === 0) {
       return NextResponse.json({ error: "Application not found." }, { status: 404 });
     }
 
-    await prisma.$transaction([
-      prisma.jobApplicationScreenshot.deleteMany({
-        where: {
-          applicationId: existingApplication.id,
-          userId: session.user.id,
+    return NextResponse.json({
+      deleteImpact: deleteResult.impact,
+      ok: true,
+      profile: mergeTailorResumeProfileWithLockedLinks(
+        deleteResult.rawProfile,
+        deleteResult.lockedLinks,
+        {
+          includeLockedOnly: true,
         },
-      }),
-      prisma.jobApplication.delete({
-        where: {
-          id: existingApplication.id,
-        },
-      }),
-    ]);
-
-    await Promise.all(
-      existingApplication.screenshots.map((screenshot) =>
-        deletePersistedJobScreenshot(screenshot.storagePath),
       ),
-    );
-
-    return NextResponse.json({ ok: true });
+    });
   } catch (error) {
     const detail =
       error instanceof Error ? error.message : "Failed to delete the application.";

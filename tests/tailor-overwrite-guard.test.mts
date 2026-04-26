@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  matchesTailorOverwritePageIdentity,
   resolveCompletedTailoringForPage,
   resolvePotentialTailorOverwrite,
 } from "../extension/src/tailor-overwrite-guard.ts";
+import { normalizeComparableUrl } from "../extension/src/comparable-job-url.ts";
 
 function buildPageIdentity(
   overrides: Partial<{
@@ -54,6 +56,7 @@ function buildActiveTailoring(
 
 function buildTailoredResumeSummary(
   overrides: Partial<{
+    archivedAt: string | null;
     companyName: string | null;
     displayName: string;
     id: string;
@@ -65,6 +68,7 @@ function buildTailoredResumeSummary(
   }> = {},
 ) {
   return {
+    archivedAt: null,
     companyName: "Example Corp",
     displayName: "Example Corp - Software Engineer",
     id: "tailored-123",
@@ -166,4 +170,49 @@ test("matches the current page even when other jobs are running in parallel", ()
 
   assert.equal(result?.kind, "active_generation");
   assert.equal(result?.id, "run-123");
+});
+
+test("normalizeComparableUrl preserves stable job id query params", () => {
+  assert.equal(
+    normalizeComparableUrl(
+      "https://apply.careers.microsoft.com/careers?domain=microsoft.com&start=0&location=United+States&pid=1970393556744821&sort_by=match&filter_include_remote=1",
+    ),
+    "https://apply.careers.microsoft.com/careers?pid=1970393556744821",
+  );
+});
+
+test("does not treat different pid-based career pages as the same job", () => {
+  assert.equal(
+    matchesTailorOverwritePageIdentity({
+      jobUrl:
+        "https://apply.careers.microsoft.com/careers?domain=microsoft.com&start=0&location=United+States&pid=1970393556744821&sort_by=match&filter_include_remote=1",
+      pageIdentity: {
+        canonicalUrl:
+          "https://apply.careers.microsoft.com/careers?domain=microsoft.com&query=software+engineer&start=0&location=United+States&pid=1970393556637410&sort_by=match&filter_include_remote=1&filter_seniority=Entry",
+        jobUrl:
+          "https://apply.careers.microsoft.com/careers?domain=microsoft.com&query=software+engineer&start=0&location=United+States&pid=1970393556637410&sort_by=match&filter_include_remote=1&filter_seniority=Entry",
+        pageUrl:
+          "https://apply.careers.microsoft.com/careers?domain=microsoft.com&query=software+engineer&start=0&location=United+States&pid=1970393556637410&sort_by=match&filter_include_remote=1&filter_seniority=Entry",
+      },
+    }),
+    false,
+  );
+});
+
+test("still matches pid-based career pages when only non-identity query params differ", () => {
+  assert.equal(
+    matchesTailorOverwritePageIdentity({
+      jobUrl:
+        "https://apply.careers.microsoft.com/careers?domain=microsoft.com&query=software+engineer&start=0&location=United+States&pid=1970393556637410&sort_by=match&filter_include_remote=1&filter_seniority=Entry",
+      pageIdentity: {
+        canonicalUrl:
+          "https://apply.careers.microsoft.com/careers?pid=1970393556637410&utm_source=extension",
+        jobUrl:
+          "https://apply.careers.microsoft.com/careers?sort_by=recent&pid=1970393556637410",
+        pageUrl:
+          "https://apply.careers.microsoft.com/careers?domain=microsoft.com&pid=1970393556637410#job",
+      },
+    }),
+    true,
+  );
 });

@@ -7,6 +7,7 @@ import {
   CAPTURE_COMMAND_NAME,
   DEFAULT_DASHBOARD_URL,
   DEFAULT_JOB_APPLICATIONS_ENDPOINT,
+  DEFAULT_SYNC_STATE_ENDPOINT,
   DEFAULT_TAILOR_RESUME_ENDPOINT,
   EXISTING_TAILORING_STORAGE_KEY,
   EXTENSION_AUTH_GOOGLE_ENDPOINT,
@@ -30,6 +31,7 @@ import {
   readTailorResumeProfileSummary,
   type TailorResumeRunRecord,
 } from "./job-helper";
+import { readUserSyncStateSnapshot } from "../../lib/sync-state.ts";
 import { collectPageContextFromTab } from "./page-context";
 import {
   isNdjsonResponse,
@@ -1008,6 +1010,7 @@ async function openJobHelperCallbackUrl(callbackUrl: string) {
 async function getTailoredResumeSummaries() {
   const session = await ensureJobHelperSession({ interactive: false });
   const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
+    cache: "no-store",
     credentials: "include",
     headers: authorizationHeaders(session),
   });
@@ -1032,10 +1035,12 @@ async function getPersonalInfoSummary() {
   const session = await ensureJobHelperSession({ interactive: false });
   const [tailorResumeResponse, applicationsResponse] = await Promise.all([
     fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
+      cache: "no-store",
       credentials: "include",
       headers: authorizationHeaders(session),
     }),
-    fetch(`${DEFAULT_JOB_APPLICATIONS_ENDPOINT}?limit=12`, {
+    fetch(`${DEFAULT_JOB_APPLICATIONS_ENDPOINT}?limit=100`, {
+      cache: "no-store",
       credentials: "include",
       headers: authorizationHeaders(session),
     }),
@@ -1066,8 +1071,31 @@ async function getPersonalInfoSummary() {
   };
 }
 
+async function getSyncStateSummary() {
+  const session = await ensureJobHelperSession({ interactive: false });
+  const response = await fetch(DEFAULT_SYNC_STATE_ENDPOINT, {
+    cache: "no-store",
+    credentials: "include",
+    headers: authorizationHeaders(session),
+  });
+  const payload = await readJsonResponse(response);
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      await clearStoredAuthSession();
+    }
+
+    throw new Error(readResponseError(payload, "Could not read sync state."));
+  }
+
+  return {
+    syncState: readUserSyncStateSnapshot(payload),
+  };
+}
+
 async function loadTailorResumeOverwriteSummary(session: JobHelperAuthSession) {
   const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
+    cache: "no-store",
     credentials: "include",
     headers: authorizationHeaders(session),
   });
@@ -1564,6 +1592,10 @@ chrome.runtime.onMessage.addListener((
 
   if (typedMessage?.type === "JOB_HELPER_PERSONAL_INFO") {
     return sendAsyncResponse(sendResponse, getPersonalInfoSummary);
+  }
+
+  if (typedMessage?.type === "JOB_HELPER_SYNC_STATE") {
+    return sendAsyncResponse(sendResponse, getSyncStateSummary);
   }
 
   if (typedMessage?.type === "JOB_HELPER_CANCEL_CURRENT_TAILORING") {

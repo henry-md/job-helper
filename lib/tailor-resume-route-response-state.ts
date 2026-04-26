@@ -1,12 +1,16 @@
 import { buildNormalizedJobUrlHash } from "./job-url-hash.ts";
 import { deletePersistedJobScreenshot } from "./job-tracking.ts";
+import { normalizeTailorResumeJobUrl } from "./tailor-resume-job-url.ts";
 import { readTailorResumeProfileState } from "./tailor-resume-profile-state.ts";
 import {
   deleteTailoredResumePdf,
   withTailorResumeProfileLock,
   writeTailorResumeProfile,
 } from "./tailor-resume-storage.ts";
-import type { TailorResumeProfile } from "./tailor-resume-types.ts";
+import type {
+  TailorResumeLockedLinkRecord,
+  TailorResumeProfile,
+} from "./tailor-resume-types.ts";
 import {
   readTailorResumeWorkspaceInterviews,
   withTailorResumeWorkspaceInterviews,
@@ -16,6 +20,7 @@ import {
   shouldDeleteActiveTailorResumeRun,
 } from "./tailor-resume-artifact-cleanup.ts";
 import { getPrismaClient } from "./prisma.ts";
+import { bumpUserSyncState } from "./user-sync-state.ts";
 
 export type TailorResumeDbRunRecord = {
   application: {
@@ -40,6 +45,26 @@ export type TailorResumeDbRunRecord = {
   updatedAt: Date;
 };
 
+export type LinkedDashboardDeleteImpact = {
+  applicationCount: number;
+  applicationIds: string[];
+  tailoredResumeCount: number;
+  tailoredResumeIds: string[];
+  totalCount: number;
+};
+
+type ResolvedLinkedDashboardDeleteImpact = LinkedDashboardDeleteImpact & {
+  dbTailoredResumeIds: string[];
+  interviewIds: string[];
+};
+
+type TailoredResumeLinkRecord = {
+  applicationId: string | null;
+  id: string;
+  jobUrl: string | null;
+  profileRecordId: string;
+};
+
 export function uniqueNonEmptyStrings(values: Array<string | null | undefined>) {
   const seen = new Set<string>();
   const result: string[] = [];
@@ -58,6 +83,12 @@ export function uniqueNonEmptyStrings(values: Array<string | null | undefined>) 
   return result;
 }
 
+function uniqueNormalizedJobUrls(values: Array<string | null | undefined>) {
+  return uniqueNonEmptyStrings(
+    values.map((value) => normalizeTailorResumeJobUrl(value)),
+  );
+}
+
 export async function findActiveTailorResumeRun(input: {
   applicationId: string | null;
   userId: string;
@@ -67,7 +98,7 @@ export async function findActiveTailorResumeRun(input: {
   }
 
   return getPrismaClient().tailorResumeRun.findFirst({
-    orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+    orderBy: [{ createdAt: "desc" }, { updatedAt: "desc" }],
     select: {
       application: {
         select: {
@@ -108,7 +139,7 @@ export async function findActiveTailorResumeRunsForUser(input: {
   userId: string;
 }) {
   return getPrismaClient().tailorResumeRun.findMany({
-    orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+    orderBy: [{ createdAt: "desc" }, { updatedAt: "desc" }],
     select: {
       application: {
         select: {
@@ -235,6 +266,260 @@ async function deleteJobApplications(input: {
   );
 }
 
+async function resolveLinkedDashboardDeleteImpact(input: {
+  applicationIds?: string[];
+  rawProfile: TailorResumeProfile;
+  tailoredResumeIds?: string[];
+  userId: string;
+}): Promise<ResolvedLinkedDashboardDeleteImpact> {
+  const prisma = getPrismaClient();
+  const requestedTailoredResumeIds = uniqueNonEmptyStrings(
+    input.tailoredResumeIds ?? [],
+  );
+  const requestedProfileTailoredResumes = input.rawProfile.tailoredResumes.filter(
+    (record) => requestedTailoredResumeIds.includes(record.id),
+  );
+  const requestedDbTailoredResumes = requestedTailoredResumeIds.length
+    ? await prisma.tailoredResume.findMany({
+        select: {
+          applicationId: true,
+          id: true,
+          jobUrl: true,
+          profileRecordId: true,
+        },
+        where: {
+          OR: [
+            {
+              id: {
+                in: requestedTailoredResumeIds,
+              },
+            },
+            {
+              profileRecordId: {
+                in: requestedTailoredResumeIds,
+              },
+            },
+          ],
+          userId: input.userId,
+        },
+      })
+    : [];
+  const requestedApplicationIds = uniqueNonEmptyStrings([
+    ...(input.applicationIds ?? []),
+    ...requestedProfileTailoredResumes.map((record) => record.applicationId),
+    ...requestedDbTailoredResumes.map((record) => record.applicationId),
+  ]);
+  const requestedJobUrlHashes = uniqueNonEmptyStrings(
+    [
+      ...requestedProfileTailoredResumes.map((record) => record.jobUrl),
+      ...requestedDbTailoredResumes.map((record) => record.jobUrl),
+    ].map((jobUrl) => buildNormalizedJobUrlHash(jobUrl)),
+  );
+  const [applicationsById, applicationsByJobUrl] = await Promise.all([
+    requestedApplicationIds.length > 0
+      ? prisma.jobApplication.findMany({
+          select: {
+            id: true,
+            jobUrl: true,
+          },
+          where: {
+            id: {
+              in: requestedApplicationIds,
+            },
+            userId: input.userId,
+          },
+        })
+      : Promise.resolve([]),
+    requestedJobUrlHashes.length > 0
+      ? prisma.jobApplication.findMany({
+          select: {
+            id: true,
+            jobUrl: true,
+          },
+          where: {
+            jobUrlHash: {
+              in: requestedJobUrlHashes,
+            },
+            userId: input.userId,
+          },
+        })
+      : Promise.resolve([]),
+  ]);
+  const applicationById = new Map<
+    string,
+    {
+      id: string;
+      jobUrl: string | null;
+    }
+  >();
+
+  for (const application of [...applicationsById, ...applicationsByJobUrl]) {
+    applicationById.set(application.id, application);
+  }
+
+  const linkedApplications = [...applicationById.values()];
+  const linkedApplicationIds = linkedApplications.map((application) => application.id);
+  const linkedApplicationIdSet = new Set(linkedApplicationIds);
+  const linkedApplicationJobUrls = uniqueNormalizedJobUrls(
+    linkedApplications.map((application) => application.jobUrl),
+  );
+  const linkedApplicationJobUrlSet = new Set(linkedApplicationJobUrls);
+  const linkedDbTailoredResumes: TailoredResumeLinkRecord[] =
+    linkedApplicationIds.length > 0
+      ? await prisma.tailoredResume.findMany({
+          select: {
+            applicationId: true,
+            id: true,
+            jobUrl: true,
+            profileRecordId: true,
+          },
+          where: {
+            applicationId: {
+              in: linkedApplicationIds,
+            },
+            userId: input.userId,
+          },
+        })
+      : [];
+  const allLinkedDbTailoredResumes = [
+    ...requestedDbTailoredResumes,
+    ...linkedDbTailoredResumes,
+  ];
+  const tailoredResumeIds = uniqueNonEmptyStrings([
+    ...requestedTailoredResumeIds,
+    ...allLinkedDbTailoredResumes.map((record) => record.profileRecordId),
+    ...input.rawProfile.tailoredResumes
+      .filter((record) => {
+        if (
+          record.applicationId &&
+          linkedApplicationIdSet.has(record.applicationId)
+        ) {
+          return true;
+        }
+
+        const normalizedJobUrl = normalizeTailorResumeJobUrl(record.jobUrl);
+        return Boolean(
+          normalizedJobUrl &&
+            linkedApplicationJobUrlSet.has(normalizedJobUrl),
+        );
+      })
+      .map((record) => record.id),
+  ]);
+  const interviewIds = uniqueNonEmptyStrings(
+    readTailorResumeWorkspaceInterviews(input.rawProfile.workspace)
+      .filter((interview) => {
+        if (
+          interview.applicationId &&
+          linkedApplicationIdSet.has(interview.applicationId)
+        ) {
+          return true;
+        }
+
+        const normalizedJobUrl = normalizeTailorResumeJobUrl(interview.jobUrl);
+        return Boolean(
+          normalizedJobUrl &&
+            linkedApplicationJobUrlSet.has(normalizedJobUrl),
+        );
+      })
+      .map((interview) => interview.id),
+  );
+
+  return {
+    applicationCount: linkedApplicationIds.length,
+    applicationIds: linkedApplicationIds,
+    dbTailoredResumeIds: uniqueNonEmptyStrings(
+      allLinkedDbTailoredResumes.map((record) => record.id),
+    ),
+    interviewIds,
+    tailoredResumeCount: tailoredResumeIds.length,
+    tailoredResumeIds,
+    totalCount: linkedApplicationIds.length + tailoredResumeIds.length,
+  };
+}
+
+export async function deleteLinkedDashboardArtifacts(input: {
+  applicationId?: string | null;
+  tailoredResumeId?: string | null;
+  userId: string;
+}): Promise<{
+  impact: LinkedDashboardDeleteImpact;
+  lockedLinks: TailorResumeLockedLinkRecord[];
+  rawProfile: TailorResumeProfile;
+}> {
+  return withTailorResumeProfileLock(input.userId, async () => {
+    const latestState = await readTailorResumeProfileState(input.userId);
+    const impact = await resolveLinkedDashboardDeleteImpact({
+      applicationIds: input.applicationId ? [input.applicationId] : [],
+      rawProfile: latestState.rawProfile,
+      tailoredResumeIds: input.tailoredResumeId ? [input.tailoredResumeId] : [],
+      userId: input.userId,
+    });
+
+    if (impact.totalCount === 0) {
+      return {
+        impact,
+        lockedLinks: latestState.lockedLinks,
+        rawProfile: latestState.rawProfile,
+      };
+    }
+
+    await Promise.all(
+      impact.tailoredResumeIds.map((tailoredResumeId) =>
+        deleteTailoredResumePdf(input.userId, tailoredResumeId),
+      ),
+    );
+    await deleteDbTailoredResumes({
+      ids: [...impact.dbTailoredResumeIds, ...impact.tailoredResumeIds],
+      userId: input.userId,
+    });
+    await deleteJobApplications({
+      applicationIds: impact.applicationIds,
+      userId: input.userId,
+    });
+
+    const tailoredResumeIdSet = new Set(impact.tailoredResumeIds);
+    const interviewIdSet = new Set(impact.interviewIds);
+    const nextRawProfile: TailorResumeProfile = {
+      ...latestState.rawProfile,
+      tailoredResumes: latestState.rawProfile.tailoredResumes.filter(
+        (record) => !tailoredResumeIdSet.has(record.id),
+      ),
+      workspace:
+        interviewIdSet.size > 0
+          ? withTailorResumeWorkspaceInterviews(
+              latestState.rawProfile.workspace,
+              readTailorResumeWorkspaceInterviews(
+                latestState.rawProfile.workspace,
+              ).filter((interview) => !interviewIdSet.has(interview.id)),
+              new Date().toISOString(),
+            )
+          : latestState.rawProfile.workspace,
+    };
+
+    if (impact.tailoredResumeCount > 0 || interviewIdSet.size > 0) {
+      await writeTailorResumeProfile(input.userId, nextRawProfile);
+    }
+
+    await bumpUserSyncState({
+      applications: impact.applicationCount > 0,
+      tailoring: impact.tailoredResumeCount > 0 || interviewIdSet.size > 0,
+      userId: input.userId,
+    });
+
+    return {
+      impact: {
+        applicationCount: impact.applicationCount,
+        applicationIds: impact.applicationIds,
+        tailoredResumeCount: impact.tailoredResumeCount,
+        tailoredResumeIds: impact.tailoredResumeIds,
+        totalCount: impact.totalCount,
+      },
+      lockedLinks: latestState.lockedLinks,
+      rawProfile: nextRawProfile,
+    };
+  });
+}
+
 export async function deleteTailorResumeArtifacts(input: {
   jobUrls?: Array<string | null | undefined>;
   runIds?: string[];
@@ -345,6 +630,12 @@ export async function deleteTailorResumeArtifacts(input: {
       },
     });
   }
+
+  await bumpUserSyncState({
+    applications: applicationIds.length > 0,
+    tailoring: dbTailoredResumes.length > 0 || dbRuns.length > 0,
+    userId: input.userId,
+  });
 }
 
 async function cleanupInvalidTailorResumeArtifacts(userId: string) {
@@ -418,6 +709,12 @@ async function cleanupInvalidTailorResumeArtifacts(userId: string) {
       jobUrls: invalidTailoredResumes.map((record) => record.jobUrl),
       runIds: staleRunIds,
       tailoredResumeIds: invalidTailoredResumes.map((record) => record.id),
+      userId,
+    });
+
+    await bumpUserSyncState({
+      applications: false,
+      tailoring: invalidTailoredResumes.length > 0 || staleRunIds.length > 0,
       userId,
     });
   });

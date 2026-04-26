@@ -1,36 +1,14 @@
 import type {
   TailorResumeExistingTailoringState,
   TailoredResumeSummary,
-} from "./job-helper";
+} from "./job-helper.ts";
+import { normalizeComparableUrl } from "./comparable-job-url.ts";
 
 export type TailorOverwritePageIdentity = {
   canonicalUrl: string | null;
   jobUrl: string | null;
   pageUrl: string | null;
 };
-
-function normalizeComparableUrl(value: string | null | undefined) {
-  const trimmedValue = value?.trim();
-
-  if (!trimmedValue) {
-    return null;
-  }
-
-  try {
-    const parsedUrl = new URL(trimmedValue);
-    parsedUrl.hash = "";
-    parsedUrl.search = "";
-
-    if (parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:") {
-      parsedUrl.protocol = "https:";
-    }
-
-    parsedUrl.pathname = parsedUrl.pathname.replace(/\/+$/, "") || "/";
-    return parsedUrl.toString();
-  } catch {
-    return trimmedValue;
-  }
-}
 
 export function matchesTailorOverwritePageIdentity(input: {
   jobUrl: string | null;
@@ -56,6 +34,7 @@ function buildCompletedExistingTailoringState(
 ): TailorResumeExistingTailoringState {
   return {
     companyName: tailoredResume.companyName,
+    createdAt: tailoredResume.createdAt,
     displayName: tailoredResume.displayName,
     error: null,
     id: tailoredResume.id,

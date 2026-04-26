@@ -4,6 +4,16 @@ const jobDescriptionUrlLinePatterns = [
   /^Canonical URL:\s*(\S.+)$/im,
   /^URL:\s*(\S.+)$/im,
 ];
+const comparableQueryParamAllowlist = new Set([
+  "gh_jid",
+  "jid",
+  "job_id",
+  "jobid",
+  "jk",
+  "pid",
+  "req_id",
+  "reqid",
+]);
 
 export function normalizeTailorResumeJobUrl(
   value: string | null | undefined,
@@ -22,9 +32,30 @@ export function normalizeTailorResumeJobUrl(
     }
 
     url.hash = "";
+    url.protocol = "https:";
     url.hostname = url.hostname.toLowerCase();
     url.pathname = url.pathname.replace(/\/+$/, "") || "/";
-    url.search = "";
+    const comparableQueryEntries = [...url.searchParams.entries()]
+      .map(([key, entryValue]) => [key.toLowerCase(), entryValue.trim()] as const)
+      .filter(
+        ([key, entryValue]) =>
+          entryValue.length > 0 &&
+          comparableQueryParamAllowlist.has(key),
+      )
+      .sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+        leftKey === rightKey
+          ? leftValue.localeCompare(rightValue)
+          : leftKey.localeCompare(rightKey),
+      );
+    const comparableSearchParams = new URLSearchParams();
+
+    for (const [key, entryValue] of comparableQueryEntries) {
+      comparableSearchParams.append(key, entryValue);
+    }
+
+    url.search = comparableSearchParams.toString()
+      ? `?${comparableSearchParams.toString()}`
+      : "";
 
     return url.toString();
   } catch {

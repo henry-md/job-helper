@@ -11,6 +11,7 @@ import {
   type JobPageContext,
   type TailorResumeRunRecord,
 } from "./job-helper";
+import { emptyUserSyncStateSnapshot } from "../../lib/sync-state.ts";
 
 type StorageChangeListener = (
   changes: Record<string, chrome.storage.StorageChange>,
@@ -150,6 +151,7 @@ function createMockTailoringRun(
 function createMockTailoredResumes() {
   return [
     {
+      archivedAt: null as string | null,
       companyName: "Microsoft",
       displayName: "Microsoft - Software Engineer",
       id: "debug-tailored-resume",
@@ -322,6 +324,7 @@ export function installDebugChromeRuntime() {
         pdfUpdatedAt: new Date("2026-04-21T22:45:00.000Z").toISOString(),
         resumeUpdatedAt: new Date("2026-04-21T22:45:00.000Z").toISOString(),
       },
+      syncState: emptyUserSyncStateSnapshot(),
       tailoredResumes: mockTailoredResumes,
       tailoringInterview: null,
     };
@@ -582,6 +585,39 @@ export function installDebugChromeRuntime() {
 
         return new Response(
           JSON.stringify({
+            profile: {
+              tailoredResumes: mockTailoredResumes,
+              tailoringInterview: null,
+            },
+            tailoredResumeId: tailoredResumeId || null,
+          }),
+          {
+            headers: {
+              "Content-Type": "application/json",
+            },
+            status: 200,
+          },
+        );
+      }
+
+      if (action === "setTailoredResumeArchivedState") {
+        const tailoredResumeId = readBodyString(body, "tailoredResumeId");
+        const archived = body.archived === true;
+        const updatedAt = new Date().toISOString();
+
+        mockTailoredResumes = mockTailoredResumes.map((record) =>
+          record.id === tailoredResumeId
+            ? {
+                ...record,
+                archivedAt: archived ? updatedAt : null,
+                updatedAt,
+              }
+            : record,
+        );
+
+        return new Response(
+          JSON.stringify({
+            archived,
             profile: {
               tailoredResumes: mockTailoredResumes,
               tailoringInterview: null,

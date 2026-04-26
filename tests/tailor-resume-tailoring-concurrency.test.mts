@@ -29,6 +29,7 @@ function buildTailoredResume(
 ): TailoredResumeRecord {
   return {
     annotatedLatexCode: overrides.annotatedLatexCode ?? "% annotated",
+    archivedAt: overrides.archivedAt ?? null,
     companyName: overrides.companyName ?? "OpenAI",
     createdAt: overrides.createdAt ?? "2026-04-20T12:00:00.000Z",
     displayName: overrides.displayName ?? "OpenAI - Research Engineer",

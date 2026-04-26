@@ -4,6 +4,7 @@ import { authOptions } from "@/auth";
 import { getApiSession } from "@/lib/api-auth";
 import { normalizeJobApplicationWriteInput } from "@/lib/job-application-form";
 import { getPrismaClient } from "@/lib/prisma";
+import { bumpUserSyncState } from "@/lib/user-sync-state";
 import { buildNormalizedJobUrlHash } from "@/lib/job-url-hash";
 import type {
   JobApplicationExtraction,
@@ -73,6 +74,10 @@ function readApplicationListLimit(request: Request) {
     return 25;
   }
 
+  if (rawLimit.trim().toLowerCase() === "all") {
+    return null;
+  }
+
   const parsedLimit = Number.parseInt(rawLimit, 10);
 
   if (!Number.isInteger(parsedLimit)) {
@@ -108,7 +113,7 @@ export async function GET(request: Request) {
           },
         },
         orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-        take: limit,
+        ...(limit === null ? {} : { take: limit }),
         where: { userId: session.user.id },
       }),
       prisma.company.count({
@@ -338,6 +343,11 @@ export async function POST(request: Request) {
           },
         },
       },
+    });
+
+    await bumpUserSyncState({
+      applications: true,
+      userId: session.user.id,
     });
 
     return NextResponse.json({ application: savedApplication });

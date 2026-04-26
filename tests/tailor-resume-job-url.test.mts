@@ -13,6 +13,7 @@ function buildTailoredResume(
 ): TailoredResumeRecord {
   return {
     annotatedLatexCode: "% annotated",
+    archivedAt: overrides.archivedAt ?? null,
     companyName: "OpenAI",
     createdAt: "2026-04-20T12:00:00.000Z",
     displayName: "OpenAI - Research Engineer",
@@ -68,6 +69,24 @@ test("normalizeTailorResumeJobUrl removes hash and query params", () => {
   );
 });
 
+test("normalizeTailorResumeJobUrl preserves stable job id query params", () => {
+  assert.equal(
+    normalizeTailorResumeJobUrl(
+      "https://apply.careers.microsoft.com/careers?domain=microsoft.com&query=software+engineer&pid=1970393556637410&filter_include_remote=1",
+    ),
+    "https://apply.careers.microsoft.com/careers?pid=1970393556637410",
+  );
+});
+
+test("normalizeTailorResumeJobUrl treats http and https variants as the same posting", () => {
+  assert.equal(
+    normalizeTailorResumeJobUrl(
+      "http://apply.careers.microsoft.com/careers/job/1970393556754651?domain=microsoft.com",
+    ),
+    "https://apply.careers.microsoft.com/careers/job/1970393556754651",
+  );
+});
+
 test("readTailorResumeJobUrlFromDescription prefers canonical URL lines", () => {
   assert.equal(
     readTailorResumeJobUrlFromDescription(
@@ -108,5 +127,27 @@ test("buildNormalizedJobUrlHash hashes the normalized job URL", () => {
       "HTTPS://Jobs.Example.com/roles/123/?b=2&utm_source=email&a=1#apply",
     ),
     buildNormalizedJobUrlHash("https://jobs.example.com/roles/123"),
+  );
+});
+
+test("buildNormalizedJobUrlHash matches http and https variants", () => {
+  assert.equal(
+    buildNormalizedJobUrlHash(
+      "http://apply.careers.microsoft.com/careers/job/1970393556754651",
+    ),
+    buildNormalizedJobUrlHash(
+      "https://apply.careers.microsoft.com/careers/job/1970393556754651",
+    ),
+  );
+});
+
+test("buildNormalizedJobUrlHash distinguishes pid-based job URLs", () => {
+  assert.notEqual(
+    buildNormalizedJobUrlHash(
+      "https://apply.careers.microsoft.com/careers?pid=1970393556744821&domain=microsoft.com",
+    ),
+    buildNormalizedJobUrlHash(
+      "https://apply.careers.microsoft.com/careers?pid=1970393556637410&domain=microsoft.com",
+    ),
   );
 });

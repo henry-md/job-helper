@@ -1,0 +1,4 @@
+- Symptom: deleting or changing tailored resumes/applications in the web app or extension could leave the other surface showing stale cards until a manual refresh.
+- Root cause: the extension and dashboard each kept their own local UI state, but there was no cheap shared invalidation signal to tell the other client that server truth had changed.
+- Fix: add a per-user sync-state record with separate `applicationsVersion` and `tailoringVersion` counters, bump the relevant counter after successful cross-surface-visible mutations, and poll a tiny sync endpoint every second while the client is visible so only real changes trigger a refetch.
+- Guardrail: poll a lightweight version/cursor endpoint at high frequency, but keep heavier application/profile reloads event-driven so fast sync does not turn into continuous expensive recomputation.
