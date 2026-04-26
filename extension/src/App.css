@@ -1755,6 +1755,194 @@ button:disabled {
   display: flex;
 }
 
+.tailored-preview-stage {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  gap: 12px;
+}
+
+.tailored-preview-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+}
+
+.tailored-preview-toolbar-copy {
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+.tailored-preview-toolbar-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.tailored-preview-toolbar-description {
+  margin: 4px 0 0;
+  color: var(--subtle);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.tailored-preview-highlight-toggle {
+  flex: 0 0 auto;
+}
+
+.tailored-preview-highlight-toggle-active {
+  color: #dffcf1;
+  border-color: rgba(110, 231, 183, 0.34);
+  background:
+    linear-gradient(180deg, rgba(52, 211, 153, 0.16), rgba(52, 211, 153, 0.06));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 10px 24px rgba(0, 0, 0, 0.18);
+}
+
+.tailored-preview-highlight-toggle:hover:not(:disabled) {
+  border-color: rgba(110, 231, 183, 0.42);
+}
+
+.tailored-preview-overlay-root {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.07), transparent 24rem),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.04));
+}
+
+.tailored-preview-overlay-scroller {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 18px 14px;
+}
+
+.tailored-preview-overlay-stack {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.tailored-preview-overlay-page {
+  position: relative;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow:
+    0 0 0 1px rgba(15, 23, 42, 0.08),
+    0 24px 60px rgba(0, 0, 0, 0.18);
+}
+
+.tailored-preview-overlay-page canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #ffffff;
+}
+
+.tailored-preview-overlay-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.tailored-preview-overlay-highlight {
+  position: absolute;
+  border-radius: 4px;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.02),
+    0 8px 18px rgba(217, 119, 6, 0.12);
+}
+
+.tailored-preview-overlay-highlight--changed {
+  background: rgba(245, 158, 11, 0.28);
+  border: 1px solid rgba(217, 119, 6, 0.22);
+}
+
+.tailored-preview-overlay-highlight--added {
+  background: rgba(34, 197, 94, 0.22);
+  border: 1px solid rgba(22, 163, 74, 0.18);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.02),
+    0 8px 18px rgba(22, 163, 74, 0.1);
+}
+
+.tailored-preview-overlay-loading,
+.tailored-preview-overlay-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tailored-preview-overlay-loading {
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.tailored-preview-overlay-pill {
+  border: 1px solid rgba(228, 228, 231, 0.92);
+  border-radius: 999px;
+  padding: 8px 14px;
+  color: #3f3f46;
+  background: rgba(255, 255, 255, 0.96);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
+}
+
+.tailored-preview-overlay-error {
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.tailored-preview-overlay-error-card,
+.tailored-preview-overlay-empty {
+  max-width: 360px;
+  border: 1px solid rgba(228, 228, 231, 0.92);
+  border-radius: 20px;
+  padding: 16px 18px;
+  color: #52525b;
+  background: rgba(255, 255, 255, 0.96);
+  text-align: center;
+  line-height: 1.55;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.1);
+}
+
+.tailored-preview-overlay-error-card p,
+.tailored-preview-overlay-empty {
+  margin: 0;
+}
+
+.tailored-preview-overlay-error-card pre {
+  margin: 12px 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  border: 1px solid rgba(228, 228, 231, 0.92);
+  border-radius: 16px;
+  padding: 12px 14px;
+  color: #71717a;
+  background: rgba(255, 255, 255, 0.92);
+  text-align: left;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .tailor-run-detail-page-body-review {
   overflow-y: auto;
   padding-right: 2px;

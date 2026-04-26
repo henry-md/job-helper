@@ -3,6 +3,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -14,6 +15,7 @@ import {
   type TailoredResumeReviewEdit,
   type TailoredResumeReviewRecord,
 } from "../../lib/tailored-resume-review-record.ts";
+import { buildTailoredResumeInteractivePreviewQueries } from "../../lib/tailor-resume-preview-focus.ts";
 import "./App.css";
 import {
   AUTH_SESSION_STORAGE_KEY,
@@ -58,6 +60,7 @@ import {
   type TrackedApplicationSummary,
 } from "./job-helper";
 import { collectPageContextFromTab } from "./page-context";
+import TailoredResumeOverlayPreview from "./tailored-resume-overlay-preview";
 import TailoredResumeQuickReview from "./tailored-resume-quick-review";
 import {
   isNdjsonResponse,
@@ -2143,6 +2146,8 @@ function App() {
     useState<string | null>(null);
   const [tailoredResumePreviewState, setTailoredResumePreviewState] =
     useState<ResumePreviewState>({ objectUrl: null, status: "idle" });
+  const [isTailoredPreviewDiffHighlightingEnabled, setIsTailoredPreviewDiffHighlightingEnabled] =
+    useState(false);
   const [tailoredResumeReviewState, setTailoredResumeReviewState] =
     useState<TailoredResumeReviewState>({ record: null, status: "idle" });
   const [pendingTailoredResumeReviewEditId, setPendingTailoredResumeReviewEditId] =
@@ -3249,10 +3254,29 @@ function App() {
     tailoredResumeReviewState.record?.id === focusedTailoredResumeId
       ? tailoredResumeReviewState.record
       : null;
+  const tailoredPreviewHighlightQueries = useMemo(() => {
+    if (!activeTailoredResumeReviewRecord?.annotatedLatexCode) {
+      return [];
+    }
+
+    return buildTailoredResumeInteractivePreviewQueries({
+      annotatedLatexCode: activeTailoredResumeReviewRecord.annotatedLatexCode,
+      edits: activeTailoredResumeReviewRecord.edits,
+      sourceAnnotatedLatexCode:
+        activeTailoredResumeReviewRecord.sourceAnnotatedLatexCode,
+    }).highlightQueries;
+  }, [activeTailoredResumeReviewRecord]);
   const tailoredResumeReviewError =
     tailoredResumeReviewState.status === "error"
       ? tailoredResumeReviewState.error
       : null;
+  const canToggleTailoredPreviewDiffHighlighting = Boolean(
+    activeTailoredResumeReviewRecord?.edits.length &&
+      activeTailoredResumeReviewRecord?.annotatedLatexCode,
+  );
+  const shouldShowTailoredPreviewDiffHighlighting =
+    isTailoredPreviewDiffHighlightingEnabled &&
+    canToggleTailoredPreviewDiffHighlighting;
   const showTailoredPreview = Boolean(latestTailoredResumeId);
   const showTopLevelTailoredWebAction = true;
   const previewButtonLabel = "Preview";
@@ -7178,24 +7202,86 @@ function App() {
     Boolean(chatPageUrl);
 
   function renderTailoredPreviewSurface() {
+    const isShowingHighlightedPreview =
+      shouldShowTailoredPreviewDiffHighlighting;
+
     return (
       <div className="tailor-run-detail-page-body tailor-run-detail-page-body-preview">
-        <div className="resume-preview-shell tailored-preview-shell tailor-run-fullscreen-preview">
-          {tailoredResumePreviewState.status === "loading" ? (
-            <p className="placeholder">Rendering tailored preview...</p>
-          ) : tailoredResumePreviewState.status === "error" ? (
-            <p className="preview-error">{tailoredResumePreviewState.error}</p>
-          ) : tailoredResumePreviewState.status === "ready" ? (
-            <iframe
-              className="resume-preview-frame"
-              src={tailoredResumePreviewState.objectUrl}
-              title="Tailored resume preview"
-            />
-          ) : (
-            <p className="placeholder preview-placeholder">
-              Tailored preview will appear here.
-            </p>
-          )}
+        <div className="tailored-preview-stage">
+          {canToggleTailoredPreviewDiffHighlighting ? (
+            <div className="tailored-preview-toolbar">
+              <div className="tailored-preview-toolbar-copy">
+                <p className="tailored-preview-toolbar-label">Rendered PDF</p>
+                <p className="tailored-preview-toolbar-description">
+                  Highlights are painted on the clean PDF render, so the
+                  highlighted view keeps the same page count without becoming a
+                  grainy static image.
+                </p>
+              </div>
+              <button
+                aria-pressed={isShowingHighlightedPreview}
+                className={`secondary-action compact-action tailored-preview-highlight-toggle ${
+                  isShowingHighlightedPreview
+                    ? "tailored-preview-highlight-toggle-active"
+                    : ""
+                }`.trim()}
+                onClick={() =>
+                  setIsTailoredPreviewDiffHighlightingEnabled(
+                    (currentValue) => !currentValue,
+                  )
+                }
+                title={
+                  isShowingHighlightedPreview
+                    ? "Show the clean rendered PDF."
+                    : "Show the rendered PDF with diff highlights."
+                }
+                type="button"
+              >
+                {isShowingHighlightedPreview
+                  ? "Hide diff highlighting"
+                  : "Show diff highlighting"}
+              </button>
+            </div>
+          ) : null}
+          <div className="resume-preview-shell tailored-preview-shell tailor-run-fullscreen-preview">
+            {isShowingHighlightedPreview ? (
+              tailoredResumePreviewState.status === "loading" ? (
+                <p className="placeholder">
+                  Rendering highlighted tailored preview...
+                </p>
+              ) : tailoredResumePreviewState.status === "error" ? (
+                <p className="preview-error">{tailoredResumePreviewState.error}</p>
+              ) : tailoredResumePreviewState.status === "ready" ? (
+                <TailoredResumeOverlayPreview
+                  displayName={activeTailoredResumeReviewRecord?.displayName ?? "Resume"}
+                  highlightQueries={tailoredPreviewHighlightQueries}
+                  pdfUrl={tailoredResumePreviewState.objectUrl}
+                />
+              ) : (
+                <p className="placeholder preview-placeholder">
+                  Highlighted tailored preview will appear here.
+                </p>
+              )
+            ) : (
+              <>
+                {tailoredResumePreviewState.status === "loading" ? (
+                  <p className="placeholder">Rendering tailored preview...</p>
+                ) : tailoredResumePreviewState.status === "error" ? (
+                  <p className="preview-error">{tailoredResumePreviewState.error}</p>
+                ) : tailoredResumePreviewState.status === "ready" ? (
+                  <iframe
+                    className="resume-preview-frame"
+                    src={tailoredResumePreviewState.objectUrl}
+                    title="Tailored resume preview"
+                  />
+                ) : (
+                  <p className="placeholder preview-placeholder">
+                    Tailored preview will appear here.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
     );

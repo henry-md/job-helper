@@ -20,9 +20,11 @@ export type TailoredResumeReviewRecord = Pick<
   TailoredResumeRecord,
   "displayName" | "error" | "id" | "pdfUpdatedAt" | "updatedAt"
 > & {
+  annotatedLatexCode: string | null;
   companyName: string | null;
   edits: TailoredResumeReviewEdit[];
   positionTitle: string | null;
+  sourceAnnotatedLatexCode: string | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -36,6 +38,10 @@ function readString(value: unknown) {
 function readNullableString(value: unknown) {
   const stringValue = readString(value);
   return stringValue || null;
+}
+
+function readNullableRawString(value: unknown) {
+  return typeof value === "string" ? value : null;
 }
 
 function readTailoredResumeReviewEdit(
@@ -109,6 +115,7 @@ export function readTailoredResumeReviewRecord(
   }
 
   return {
+    annotatedLatexCode: readNullableRawString(value.annotatedLatexCode),
     companyName: readNullableString(value.companyName),
     displayName,
     edits,
@@ -116,6 +123,7 @@ export function readTailoredResumeReviewRecord(
     id,
     pdfUpdatedAt: readNullableString(value.pdfUpdatedAt),
     positionTitle: readNullableString(value.positionTitle),
+    sourceAnnotatedLatexCode: readNullableRawString(value.sourceAnnotatedLatexCode),
     updatedAt,
   };
 }

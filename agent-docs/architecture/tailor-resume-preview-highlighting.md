@@ -1,9 +1,10 @@
 Tailor Resume review preview highlighting:
 
-- Purpose: the review modal can show a temporary highlighted PDF without mutating the saved clean preview on disk.
+- Purpose: Tailor Resume surfaces can show temporary edit highlighting without mutating the saved clean preview on disk.
 - Entry points:
-  - `components/tailored-resume-review-modal.tsx` switches the iframe between the clean preview URL and the highlighted preview URL.
-  - `app/api/tailor-resume/preview/route.ts` accepts `highlights=true` and compiles an ephemeral highlighted PDF for that response only.
+  - `components/tailored-resume-review-modal.tsx` uses the interactive preview renderer to paint overlay highlights on top of the clean compiled PDF.
+  - `extension/src/App.tsx` exposes a fullscreen preview toggle that switches between the clean PDF iframe and a client-side highlighted overlay renderer in `extension/src/tailored-resume-overlay-preview.tsx`.
+  - `app/api/tailor-resume/preview/route.ts` still accepts `highlights=true` and compiles an ephemeral highlighted PDF for PDF-only contexts that do not require pagination stability.
 
 Implementation:
 
@@ -13,6 +14,8 @@ Implementation:
 - Each changed block is rebuilt from `beforeLatexCode` vs `afterLatexCode` with `buildTailoredResumeDiffRows(...)`.
 - Added-only rows become green highlights; modified rows become amber highlights over just the added/replacement text.
 - The in-app interactive renderer is separate from the highlighted PDF. It draws browser overlays on top of the clean compiled PDF, keeps all currently active segment diffs visible at once, and treats clicking an edit card as a temporary focus event that scrolls to the block and pulses the overlay without changing the steady highlight set.
+- The extension's fullscreen diff-highlighting mode is also post-layout now. It renders the clean PDF locally with `pdf.js`, then paints the same diff-style overlays on top of that page canvas. This preserves the clean preview's pagination while avoiding the blur introduced by pre-rendered page images.
+- The extension review payload needs raw `annotatedLatexCode` and `sourceAnnotatedLatexCode` so it can rebuild the same highlight queries the web review modal uses without recompiling a second highlighted PDF.
 - The review modal's original/tailored LaTeX block panes sync vertical scrolling by diff row index. The source pane's top visible row and relative offset inside that row drive the other pane, with a short programmatic-scroll guard to avoid feedback loops. This keeps analogous rows lined up without requiring model output changes.
 
 Multi-line highlight rule:
@@ -29,3 +32,4 @@ Guardrails:
 
 - Never persist the highlighted LaTeX or highlighted PDF as the canonical saved preview; the saved preview remains the clean compiled document.
 - If highlighted compilation fails, the preview route should fall back to the stored clean PDF rather than breaking the review modal.
+- For pagination-sensitive highlighted views, prefer post-layout overlays on top of the clean PDF instead of recompiling highlighted LaTeX. If image snapshots are considered as a fallback, treat the visual-quality tradeoff as a product decision rather than assuming rasterization is acceptable by default.
