@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -46,9 +47,11 @@ import {
   type TailorResumeExistingTailoringState,
   type TailorResumeConversationMessage,
   type TailorResumeGenerationStepSummary,
+  type TailorResumeApplicationContext,
   type TailorResumePreparationState,
   type TailorResumePendingInterviewSummary,
   type TailorResumeRunRecord,
+  type TailoredResumeSummary,
   type TrackedApplicationSummary,
 } from "./job-helper";
 import { collectPageContextFromTab } from "./page-context";
@@ -79,6 +82,10 @@ import {
   buildTailorRunRegistryKey,
   readTailorRunRegistryKeyFromPageContext,
 } from "./tailor-run-registry";
+import {
+  isTailoredResumeArchived,
+  splitTailoredResumesByArchiveState,
+} from "../../lib/tailored-resume-archive-state.ts";
 
 type PanelState =
   | { status: "idle"; snapshot: null }
@@ -103,8 +110,7 @@ type AuthState =
 
 type AuthActionState = "idle" | "running";
 
-type PanelTab = "debug" | "personal" | "tailor";
-type PersonalSectionId = "applications" | "resume" | "tailoredResumes";
+type PanelTab = "archived" | "debug" | "tailor";
 
 type PersonalInfoState =
   | { personalInfo: null; status: "idle" | "loading" }
@@ -125,6 +131,24 @@ type TailoredResumeReviewState =
       record: TailoredResumeReviewRecord | null;
       status: "error";
     };
+
+type PendingPersonalDelete =
+  | { applicationId: string; kind: "application" }
+  | { kind: "tailoredResume"; tailoredResumeId: string };
+
+type PersonalDeleteImpact = {
+  applicationCount: number;
+  applicationIds: string[];
+  tailoredResumeCount: number;
+  tailoredResumeIds: string[];
+  totalCount: number;
+};
+
+
+type FloatingMenuPosition = {
+  left: number;
+  top: number;
+};
 
 const TAILOR_RESUME_SHORTCUT_KEYS = ["⌘", "⇧", "S"] as const;
 const TAILOR_RESUME_SHORTCUT_ARIA_LABEL = "Command Shift S";
@@ -461,6 +485,227 @@ function sameTailoringJobUrl(left: string | null, right: string | null) {
   return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
 }
 
+function resolveTailoredResumeByComparableUrl(input: {
+  candidates: Array<string | null | undefined>;
+  tailoredResumes: TailoredResumeSummary[];
+}) {
+  const comparableCandidates = input.candidates
+    .map((candidate) => normalizeComparableUrl(candidate))
+    .filter((candidate): candidate is string => Boolean(candidate));
+
+  if (comparableCandidates.length === 0) {
+    return null;
+  }
+
+  return (
+    input.tailoredResumes.find((tailoredResume) => {
+      const comparableTailoredResumeUrl = normalizeComparableUrl(
+        tailoredResume.jobUrl,
+      );
+
+      return Boolean(
+        comparableTailoredResumeUrl &&
+          comparableCandidates.includes(comparableTailoredResumeUrl),
+      );
+    }) ?? null
+  );
+}
+
+function uniqueTailoredResumeSummaries(records: TailoredResumeSummary[]) {
+  const recordById = new Map<string, TailoredResumeSummary>();
+
+  for (const record of records) {
+    recordById.set(record.id, record);
+  }
+
+  return [...recordById.values()];
+}
+
+function findLinkedApplicationForTailoredResume(
+  record: TailoredResumeSummary,
+  applications: TrackedApplicationSummary[],
+) {
+  if (record.applicationId) {
+    const linkedApplication =
+      applications.find((application) => application.id === record.applicationId) ??
+      null;
+
+    return {
+      application: linkedApplication,
+      applicationId: record.applicationId,
+      jobUrl: linkedApplication?.jobUrl ?? record.jobUrl,
+    };
+  }
+
+  const normalizedJobUrl = normalizeComparableUrl(record.jobUrl);
+
+  if (!normalizedJobUrl) {
+    return null;
+  }
+
+  const linkedApplication =
+    applications.find(
+      (application) => normalizeComparableUrl(application.jobUrl) === normalizedJobUrl,
+    ) ?? null;
+
+  if (!linkedApplication) {
+    return null;
+  }
+
+  return {
+    application: linkedApplication,
+    applicationId: linkedApplication.id,
+    jobUrl: linkedApplication.jobUrl,
+  };
+}
+
+function findLinkedTailoredResumesForApplication(
+  input: {
+    applicationId: string;
+    jobUrl: string | null;
+  },
+  tailoredResumes: TailoredResumeSummary[],
+) {
+  const normalizedJobUrl = normalizeComparableUrl(input.jobUrl);
+
+  return tailoredResumes.filter((record) => {
+    if (record.applicationId) {
+      return record.applicationId === input.applicationId;
+    }
+
+    return Boolean(
+      normalizedJobUrl &&
+        normalizeComparableUrl(record.jobUrl) === normalizedJobUrl,
+    );
+  });
+}
+
+function formatDeleteImpactSummary(impact: PersonalDeleteImpact) {
+  const parts: string[] = [];
+
+  if (impact.applicationCount > 0) {
+    parts.push(
+      `${impact.applicationCount} application${
+        impact.applicationCount === 1 ? "" : "s"
+      }`,
+    );
+  }
+
+  if (impact.tailoredResumeCount > 0) {
+    parts.push(
+      `${impact.tailoredResumeCount} tailored resume${
+        impact.tailoredResumeCount === 1 ? "" : "s"
+      }`,
+    );
+  }
+
+  if (parts.length === 0) {
+    return "this item";
+  }
+
+  if (parts.length === 1) {
+    return parts[0];
+  }
+
+  return `${parts[0]} and ${parts[1]}`;
+}
+
+function buildPendingPersonalDeleteImpact(input: {
+  applications: TrackedApplicationSummary[];
+  pendingDelete: PendingPersonalDelete | null;
+  tailoredResumes: TailoredResumeSummary[];
+}): PersonalDeleteImpact | null {
+  const pendingDelete = input.pendingDelete;
+
+  if (!pendingDelete) {
+    return null;
+  }
+
+  if (pendingDelete.kind === "application") {
+    const application =
+      input.applications.find(
+        (record) => record.id === pendingDelete.applicationId,
+      ) ?? null;
+
+    if (!application) {
+      return null;
+    }
+
+    const linkedTailoredResumes = uniqueTailoredResumeSummaries(
+      findLinkedTailoredResumesForApplication(
+        {
+          applicationId: application.id,
+          jobUrl: application.jobUrl,
+        },
+        input.tailoredResumes,
+      ),
+    );
+
+    return {
+      applicationCount: 1,
+      applicationIds: [application.id],
+      tailoredResumeCount: linkedTailoredResumes.length,
+      tailoredResumeIds: linkedTailoredResumes.map((record) => record.id),
+      totalCount: 1 + linkedTailoredResumes.length,
+    };
+  }
+
+  const tailoredResume =
+    input.tailoredResumes.find(
+      (record) => record.id === pendingDelete.tailoredResumeId,
+    ) ?? null;
+
+  if (!tailoredResume) {
+    return null;
+  }
+
+  const linkedApplication = findLinkedApplicationForTailoredResume(
+    tailoredResume,
+    input.applications,
+  );
+  const linkedTailoredResumes = uniqueTailoredResumeSummaries(
+    linkedApplication
+      ? [
+          tailoredResume,
+          ...findLinkedTailoredResumesForApplication(
+            {
+              applicationId: linkedApplication.applicationId,
+              jobUrl: linkedApplication.jobUrl,
+            },
+            input.tailoredResumes,
+          ),
+        ]
+      : [tailoredResume],
+  );
+
+  return {
+    applicationCount: linkedApplication ? 1 : 0,
+    applicationIds: linkedApplication ? [linkedApplication.applicationId] : [],
+    tailoredResumeCount: linkedTailoredResumes.length,
+    tailoredResumeIds: linkedTailoredResumes.map((record) => record.id),
+    totalCount:
+      linkedTailoredResumes.length + (linkedApplication ? 1 : 0),
+  };
+}
+
+function removeDeletedItemsFromPersonalInfo(input: {
+  impact: PersonalDeleteImpact;
+  personalInfo: PersonalInfoSummary;
+}): PersonalInfoSummary {
+  const applicationIds = new Set(input.impact.applicationIds);
+  const tailoredResumeIds = new Set(input.impact.tailoredResumeIds);
+
+  return {
+    ...input.personalInfo,
+    applications: input.personalInfo.applications.filter(
+      (application) => !applicationIds.has(application.id),
+    ),
+    tailoredResumes: input.personalInfo.tailoredResumes.filter(
+      (tailoredResume) => !tailoredResumeIds.has(tailoredResume.id),
+    ),
+  };
+}
+
 function buildTailoringRunRecordFromExistingTailoring(input: {
   existingTailoring: TailorResumeExistingTailoringState;
   previousRun: TailorResumeRunRecord | null;
@@ -773,10 +1018,12 @@ type ChatStatus = "error" | "idle" | "loading" | "ready";
 type ChatSendStatus = "idle" | "streaming";
 type TailorRunDetailView = "preview" | "quickReview";
 type TailorRunMenuActionState =
+  | "archiving"
   | "deleting"
   | "goingToTab"
   | "idle"
   | "regenerating";
+type TailoredResumeMenuActionState = "goingToTab" | "idle";
 
 type ExistingTailoringPromptState = {
   actionState: "idle" | "overwriting";
@@ -1141,70 +1388,33 @@ function EllipsisHorizontalIcon() {
   );
 }
 
+function ArchiveTrayDownIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M5 7.25h14v3.1c0 .9-.72 1.65-1.62 1.65H6.62C5.72 12 5 11.25 5 10.35v-3.1Z" />
+      <path d="M6.8 12v5.25c0 .97.78 1.75 1.75 1.75h6.9c.97 0 1.75-.78 1.75-1.75V12" />
+      <path d="M12 9v5" />
+      <path d="m9.8 11.8 2.2 2.2 2.2-2.2" />
+    </svg>
+  );
+}
+
+function ArchiveTrayUpIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M5 7.25h14v3.1c0 .9-.72 1.65-1.62 1.65H6.62C5.72 12 5 11.25 5 10.35v-3.1Z" />
+      <path d="M6.8 12v5.25c0 .97.78 1.75 1.75 1.75h6.9c.97 0 1.75-.78 1.75-1.75V12" />
+      <path d="M12 14V9" />
+      <path d="m9.8 11.2 2.2-2.2 2.2 2.2" />
+    </svg>
+  );
+}
+
 function SettingsIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
       <path d="M4.5 12a7.5 7.5 0 0 1 .165-1.575L3.323 9.393a.75.75 0 0 1-.165-.982l1.5-2.598a.75.75 0 0 1 .92-.33l1.581.638A7.5 7.5 0 0 1 9 4.935l.24-1.677a.75.75 0 0 1 .742-.633h3.036a.75.75 0 0 1 .742.633L14 4.935a7.5 7.5 0 0 1 1.84 1.186l1.581-.638a.75.75 0 0 1 .92.33l1.5 2.598a.75.75 0 0 1-.165.982l-1.342 1.032c.11.514.165 1.041.165 1.575s-.055 1.061-.165 1.575l1.342 1.032a.75.75 0 0 1 .165.982l-1.5 2.598a.75.75 0 0 1-.92.33l-1.581-.638A7.5 7.5 0 0 1 14 19.065l-.24 1.677a.75.75 0 0 1-.742.633H9.982a.75.75 0 0 1-.742-.633L9 19.065a7.5 7.5 0 0 1-1.84-1.186l-1.581.638a.75.75 0 0 1-.92-.33l-1.5-2.598a.75.75 0 0 1 .165-.982l1.342-1.032A7.5 7.5 0 0 1 4.5 12Z" />
       <path d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-    </svg>
-  );
-}
-
-function TailorEmptyStateGraphic() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="tailor-empty-state-graphic"
-      viewBox="0 0 260 196"
-    >
-      <ellipse className="tailor-empty-shadow" cx="130" cy="170" rx="76" ry="14" />
-      <circle className="tailor-empty-halo" cx="130" cy="88" r="54" />
-
-      <g className="tailor-empty-chip tailor-empty-chip-left">
-        <rect
-          className="tailor-empty-chip-card"
-          height="32"
-          rx="12"
-          width="42"
-          x="54"
-          y="72"
-        />
-        <circle className="tailor-empty-chip-dot" cx="67" cy="88" r="2.6" />
-        <circle className="tailor-empty-chip-dot" cx="75" cy="88" r="2.6" />
-        <circle className="tailor-empty-chip-dot" cx="83" cy="88" r="2.6" />
-      </g>
-
-      <g className="tailor-empty-chip tailor-empty-chip-right">
-        <rect
-          className="tailor-empty-chip-card"
-          height="48"
-          rx="12"
-          width="38"
-          x="176"
-          y="64"
-        />
-        <path className="tailor-empty-chip-line" d="M186 80h18M186 88h18M186 96h12" />
-      </g>
-
-      <g className="tailor-empty-sparkles">
-        <circle className="tailor-empty-sparkle" cx="88" cy="46" r="3" />
-        <circle className="tailor-empty-sparkle" cx="195" cy="46" r="2.5" />
-        <circle className="tailor-empty-sparkle" cx="205" cy="127" r="2.5" />
-      </g>
-
-      <g className="tailor-empty-mascot">
-        <path
-          className="tailor-empty-bubble"
-          d="M130 40C161 40 186 62 186 90C186 116 165 138 137 141L123 156L118 140C93 135 74 114 74 90C74 62 99 40 130 40Z"
-        />
-        <path
-          className="tailor-empty-bubble-sheen"
-          d="M96 63C106 53 120 48 135 48C149 48 161 51 169 58C159 50 146 46 131 46C117 46 104 52 96 63Z"
-        />
-        <ellipse className="tailor-empty-eye" cx="108" cy="94" rx="10" ry="8" />
-        <ellipse className="tailor-empty-eye" cx="152" cy="94" rx="10" ry="8" />
-        <path className="tailor-empty-mouth" d="M108 124C114 131 122 134 130 134C138 134 146 131 152 124" />
-      </g>
     </svg>
   );
 }
@@ -1292,6 +1502,13 @@ function App() {
   const [isTailorAuthPromptOpen, setIsTailorAuthPromptOpen] = useState(false);
   const [personalInfoState, setPersonalInfoState] =
     useState<PersonalInfoState>({ personalInfo: null, status: "idle" });
+  const [pendingPersonalDelete, setPendingPersonalDelete] =
+    useState<PendingPersonalDelete | null>(null);
+  const [personalDeleteActionState, setPersonalDeleteActionState] =
+    useState<"idle" | "deleting">("idle");
+  const [personalDeleteError, setPersonalDeleteError] = useState<string | null>(
+    null,
+  );
   const [resumePreviewState, setResumePreviewState] =
     useState<ResumePreviewState>({ objectUrl: null, status: "idle" });
   const [tailoredResumePreviewState, setTailoredResumePreviewState] =
@@ -1308,13 +1525,24 @@ function App() {
   const [tailorRunMenuError, setTailorRunMenuError] = useState<string | null>(
     null,
   );
-  const [collapsedPersonalSections, setCollapsedPersonalSections] = useState<
-    Record<PersonalSectionId, boolean>
-  >({
-    applications: true,
-    resume: true,
-    tailoredResumes: true,
-  });
+  const [selectedTailoredResumeId, setSelectedTailoredResumeId] =
+    useState<string | null>(null);
+  const [tailoredResumeMenuId, setTailoredResumeMenuId] =
+    useState<string | null>(null);
+  const [tailoredResumeMenuActionState, setTailoredResumeMenuActionState] =
+    useState<TailoredResumeMenuActionState>("idle");
+  const [tailoredResumeMenuActionResumeId, setTailoredResumeMenuActionResumeId] =
+    useState<string | null>(null);
+  const [tailoredResumeMenuError, setTailoredResumeMenuError] =
+    useState<string | null>(null);
+  const [tailoredResumeMenuErrorResumeId, setTailoredResumeMenuErrorResumeId] =
+    useState<string | null>(null);
+  const [tailoredResumeMenuPosition, setTailoredResumeMenuPosition] =
+    useState<FloatingMenuPosition | null>(null);
+  const [tailoredResumeArchiveActionId, setTailoredResumeArchiveActionId] =
+    useState<string | null>(null);
+  const [tailoredResumeMutationError, setTailoredResumeMutationError] =
+    useState<string | null>(null);
   const [tailoringRunsByKey, setTailoringRunsByKey] = useState<
     TailorStorageRegistry<TailorResumeRunRecord>
   >({});
@@ -1367,6 +1595,8 @@ function App() {
   const tailorInterviewInputRef = useRef<HTMLTextAreaElement | null>(null);
   const chatMessagesEndRef = useRef<HTMLDivElement | null>(null);
   const tailorRunMenuRef = useRef<HTMLDivElement | null>(null);
+  const tailoredResumeMenuRef = useRef<HTMLDivElement | null>(null);
+  const tailoredResumeMenuPopoverRef = useRef<HTMLDivElement | null>(null);
   const lastReadyPersonalInfoRef = useRef<PersonalInfoSummary | null>(null);
   const lastSeenTailorInterviewFinishRequestRef = useRef<string | null>(null);
   const dismissedTailorInterviewFinishRequestRef = useRef<string | null>(null);
@@ -1374,7 +1604,7 @@ function App() {
     useRef<AbortController | null>(null);
   const availablePanelTabs = [
     { id: "tailor" as const, label: "Tailor", title: "Tailor Resume" },
-    { id: "personal" as const, label: "Personal", title: "Personal Info" },
+    { id: "archived" as const, label: "Archived", title: "Archived Resumes" },
     ...(EXTENSION_DEBUG_UI_ENABLED
       ? [{ id: "debug" as const, label: "Debug", title: "Debug" }]
       : []),
@@ -1429,34 +1659,73 @@ function App() {
     }
   }, []);
 
-  const loadPersonalInfo = useCallback(async () => {
-    setPersonalInfoState({ personalInfo: null, status: "loading" });
-
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: "JOB_HELPER_PERSONAL_INFO",
-      });
-
-      if (!isRecord(response) || response.ok !== true) {
-        throw new Error(
-          readErrorMessage(response, "Could not load your Job Helper info."),
-        );
+  const loadPersonalInfo = useCallback(
+    async (options: { preserveCurrent?: boolean } = {}) => {
+      if (!options.preserveCurrent) {
+        setPersonalInfoState({ personalInfo: null, status: "loading" });
       }
 
-      setPersonalInfoState({
-        personalInfo: readPersonalInfoPayload(response),
-        status: "ready",
-      });
-    } catch (error) {
-      setPersonalInfoState({
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not load your Job Helper info.",
-        personalInfo: null,
-        status: "error",
-      });
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: "JOB_HELPER_PERSONAL_INFO",
+        });
+
+        if (!isRecord(response) || response.ok !== true) {
+          throw new Error(
+            readErrorMessage(response, "Could not load your Job Helper info."),
+          );
+        }
+
+        const nextPersonalInfo = readPersonalInfoPayload(response);
+
+        setPersonalInfoState({
+          personalInfo: nextPersonalInfo,
+          status: "ready",
+        });
+      } catch (error) {
+        if (options.preserveCurrent && lastReadyPersonalInfoRef.current) {
+          setPersonalInfoState({
+            personalInfo: lastReadyPersonalInfoRef.current,
+            status: "ready",
+          });
+          return;
+        }
+
+        setPersonalInfoState({
+          error:
+            error instanceof Error
+              ? error.message
+              : "Could not load your Job Helper info.",
+          personalInfo: null,
+          status: "error",
+        });
+      }
+    },
+    [],
+  );
+
+
+  const updateTailoredResumeMenuPosition = useCallback(() => {
+    const menuShell = tailoredResumeMenuRef.current;
+
+    if (!menuShell || typeof window === "undefined") {
+      setTailoredResumeMenuPosition(null);
+      return;
     }
+
+    const anchorRect = menuShell.getBoundingClientRect();
+    const menuWidth = 176;
+    const viewportPadding = 12;
+    const nextLeft = Math.min(
+      Math.max(viewportPadding, anchorRect.right - menuWidth),
+      window.innerWidth - menuWidth - viewportPadding,
+    );
+    const nextTop = Math.max(viewportPadding, anchorRect.bottom + 8);
+
+    setTailoredResumeMenuPosition({
+      left: nextLeft,
+      top: nextTop,
+    });
   }, []);
 
   const persistTailorPreparationState = useCallback(
@@ -1745,6 +2014,30 @@ function App() {
     personalInfoState.status === "ready"
       ? personalInfoState.personalInfo
       : lastReadyPersonalInfoRef.current;
+  const pendingPersonalDeleteImpact = buildPendingPersonalDeleteImpact({
+    applications: personalInfo?.applications ?? [],
+    pendingDelete: pendingPersonalDelete,
+    tailoredResumes: personalInfo?.tailoredResumes ?? [],
+  });
+  const isDeletingPersonalItem = personalDeleteActionState === "deleting";
+  const pendingPersonalDeleteTitle =
+    pendingPersonalDeleteImpact && pendingPersonalDeleteImpact.totalCount > 1
+      ? `Delete ${pendingPersonalDeleteImpact.totalCount} items?`
+      : "Delete tailored resume?";
+  const pendingPersonalDeleteEyebrow =
+    pendingPersonalDeleteImpact && pendingPersonalDeleteImpact.totalCount > 1
+      ? "Remove linked items"
+      : "Remove from history";
+  const pendingPersonalDeleteDescription =
+    pendingPersonalDeleteImpact && pendingPersonalDeleteImpact.totalCount > 1
+      ? `This will delete ${formatDeleteImpactSummary(
+          pendingPersonalDeleteImpact,
+        )}. Any included tailored resume preview PDF will be removed too. This action can't be undone.`
+      : "This removes the saved tailored resume and its PDF preview from History. This action can't be undone.";
+  const pendingPersonalDeleteActionLabel =
+    pendingPersonalDeleteImpact && pendingPersonalDeleteImpact.totalCount > 1
+      ? `Delete ${pendingPersonalDeleteImpact.totalCount} items`
+      : "Delete resume";
   const currentPageContext = state.status === "ready" ? state.snapshot : null;
   const currentPageIdentity = currentPageContext
     ? {
@@ -1779,6 +2072,44 @@ function App() {
           tailoringInterviews: personalInfo.tailoringInterviews,
         })
       : null;
+  const currentPageUrl = readJobPageIdentity(currentPageContext);
+  const currentPageApplicationContext = currentPageContext
+    ? buildTailorResumeApplicationContext(currentPageContext)
+    : null;
+  const { archived: archivedTailoredResumes, unarchived: unarchivedTailoredResumes } =
+    splitTailoredResumesByArchiveState(personalInfo?.tailoredResumes ?? []);
+  const currentPageCompletedTailoring =
+    !existingTailoringPrompt &&
+    !(activeTailoringOverrideState === "overwriting" || isStoppingCurrentTailoring) &&
+    currentPageIdentity &&
+    personalInfo
+      ? resolveCompletedTailoringForPage({
+          activeTailorings: personalInfo.activeTailorings,
+          pageIdentity: currentPageIdentity,
+          tailoredResumes: unarchivedTailoredResumes,
+        })
+      : null;
+  const currentPageCompletedTailoredResume =
+    resolveTailoredResumeByComparableUrl({
+      candidates: [
+        currentPageCompletedTailoring?.jobUrl ?? null,
+        currentPageStoredTailoringRun?.pageUrl ?? null,
+        currentPageUrl,
+        currentPageIdentity?.jobUrl ?? null,
+        currentPageIdentity?.canonicalUrl ?? null,
+        currentPageIdentity?.pageUrl ?? null,
+        currentPageRegistryKey,
+      ],
+      tailoredResumes: unarchivedTailoredResumes,
+    }) ??
+    (currentPageCompletedTailoring?.kind === "completed"
+      ? unarchivedTailoredResumes.find(
+          (tailoredResume) =>
+            tailoredResume.id === currentPageCompletedTailoring.tailoredResumeId,
+        ) ?? null
+      : null);
+  const hasCurrentPageCompletedTailoring =
+    Boolean(currentPageCompletedTailoredResume);
   const isSuppressingActiveTailoringHydration =
     activeTailoringOverrideState === "overwriting" || isStoppingCurrentTailoring;
   const isTailorPreparationPending =
@@ -1787,10 +2118,6 @@ function App() {
     tailorPreparationState?.message?.trim() ||
     buildTailorResumePreparationMessage(false);
   const originalResume = personalInfo?.originalResume ?? null;
-  const isResumeCollapsed = collapsedPersonalSections.resume;
-  const isTailoredResumesCollapsed =
-    collapsedPersonalSections.tailoredResumes;
-  const isApplicationsCollapsed = collapsedPersonalSections.applications;
   const isTailorInterviewAwaitingCompletion = Boolean(
     tailorInterview?.completionRequestedAt,
   );
@@ -1820,38 +2147,44 @@ function App() {
     captureState === "finishing" ||
     isStoppingCurrentTailoring ||
     isFinishingTailorInterview;
-  const currentPageApplicationContext = currentPageContext
-    ? buildTailorResumeApplicationContext(currentPageContext)
-    : null;
-  const currentPageUrl = readJobPageIdentity(currentPageContext);
   const lastTailoringRunMessage = lastTailoringRun?.message?.trim() || null;
   const lastTailoringRunError = lastTailoringRun?.tailoredResumeError?.trim() || null;
   const activeTailoring =
     existingTailoringPrompt?.existingTailoring ??
     currentPagePersonalInfoTailoring ??
     null;
-  const currentPageCompletedTailoring =
-    !existingTailoringPrompt &&
-    !isTailorPreparationPending &&
-    !isSuppressingActiveTailoringHydration &&
-    currentPageIdentity &&
-    personalInfo
-      ? resolveCompletedTailoringForPage({
-          activeTailorings: personalInfo.activeTailorings,
-          pageIdentity: currentPageIdentity,
-          tailoredResumes: personalInfo.tailoredResumes,
-        })
-      : null;
   const completedTailoringForDisplay =
     activeTailoring?.kind === "completed"
       ? activeTailoring
       : currentPageCompletedTailoring;
+  const persistedLatestTailoredResumeId =
+    lastTailoringRun?.tailoredResumeId?.trim() || null;
+  const persistedLatestTailoredResume =
+    persistedLatestTailoredResumeId && personalInfo
+      ? personalInfo.tailoredResumes.find(
+          (tailoredResume) => tailoredResume.id === persistedLatestTailoredResumeId,
+        ) ?? null
+      : null;
   const latestTailoredResumeId =
-    lastTailoringRun?.tailoredResumeId?.trim() ||
     completedTailoringForDisplay?.tailoredResumeId ||
+    currentPageCompletedTailoredResume?.id ||
+    (persistedLatestTailoredResume &&
+    !isTailoredResumeArchived(persistedLatestTailoredResume)
+      ? persistedLatestTailoredResume.id
+      : null) ||
     null;
   const topLevelTailoredResumeId =
-    currentPageCompletedTailoring?.tailoredResumeId || latestTailoredResumeId;
+    currentPageCompletedTailoredResume?.id ||
+    currentPageCompletedTailoring?.tailoredResumeId ||
+    latestTailoredResumeId;
+  const selectedTailoredResume =
+    selectedTailoredResumeId && personalInfo
+      ? personalInfo.tailoredResumes.find(
+          (tailoredResume) => tailoredResume.id === selectedTailoredResumeId,
+        ) ?? null
+      : null;
+  const focusedTailoredResumeId =
+    selectedTailoredResume?.id ?? latestTailoredResumeId ?? null;
   const completedTailoringError =
     completedTailoringForDisplay?.error?.trim() || null;
   const completedTailoringJobLabel = completedTailoringForDisplay?.displayName || null;
@@ -1861,6 +2194,7 @@ function App() {
     completedTailoringForDisplay?.companyName ?? null;
   const completedTailoringPositionTitle =
     completedTailoringForDisplay?.positionTitle ?? null;
+  const visibleUnarchivedTailoredResumes = unarchivedTailoredResumes;
   const hasCompletedTailorRun = Boolean(latestTailoredResumeId);
   const hasCompletedTailorRunWarning = Boolean(
     completedTailoringError || (latestTailoredResumeId && lastTailoringRunError),
@@ -2059,8 +2393,8 @@ function App() {
             ? currentPageContext?.title?.trim() || null
             : statusDetail;
   const activeTailoredResumeReviewRecord =
-    latestTailoredResumeId &&
-    tailoredResumeReviewState.record?.id === latestTailoredResumeId
+    focusedTailoredResumeId &&
+    tailoredResumeReviewState.record?.id === focusedTailoredResumeId
       ? tailoredResumeReviewState.record
       : null;
   const tailoredResumeReviewError =
@@ -2150,9 +2484,11 @@ function App() {
       captureState !== "idle" ||
       isStoppingCurrentTailoring,
   );
+  const showArchiveTailorRunAction = Boolean(topLevelTailoredResumeId);
   const showDeleteTailorRunAction = canDeleteTailorRun;
   const shouldShowTailorRunMetaActions =
     showStopCurrentTailoringAction ||
+    showArchiveTailorRunAction ||
     isTailoringRunOnCurrentPage ||
     shouldShowTailorRunTimestamp ||
     showTailorRunMenu;
@@ -2179,33 +2515,16 @@ function App() {
   const showQuickReviewTailorRunAction = Boolean(latestTailoredResumeId);
   const isTailorRunShellOverlayActive =
     Boolean(existingTailoringPrompt) || isTailorPreparationPending;
+  const shouldRenderLegacyTailorRunShell =
+    shouldShowTailorRunShell && !hasCurrentPageCompletedTailoring;
   const showFullscreenTailorRunDetail =
-    activePanelTab === "tailor" &&
-    shouldShowTailorRunShell &&
-    Boolean(activeTailorRunDetailView && latestTailoredResumeId);
-  const activeTailorRunDetailIdentity = displayedTailorRunIdentity?.label ?? null;
+    Boolean(activeTailorRunDetailView && focusedTailoredResumeId);
+  const activeTailorRunDetailIdentity =
+    selectedTailoredResume?.displayName ?? displayedTailorRunIdentity?.label ?? null;
   const shouldShowTailorAuthPrompt =
     activePanelTab === "tailor" &&
     isTailorAuthPromptOpen &&
     authState.status !== "signedIn";
-  const shouldShowTailorContextLoading =
-    activePanelTab === "tailor" &&
-    authState.status === "signedIn" &&
-    !shouldShowTailorRunShell &&
-    !tailorInterview &&
-    !shouldShowTailorAuthPrompt &&
-    (state.status !== "ready" ||
-      (!personalInfo &&
-        (personalInfoState.status === "idle" ||
-          personalInfoState.status === "loading")));
-  const shouldShowTailorEmptyState =
-    activePanelTab === "tailor" &&
-    authState.status === "signedIn" &&
-    !shouldShowTailorRunShell &&
-    !tailorInterview &&
-    !shouldShowTailorAuthPrompt &&
-    !shouldShowTailorContextLoading;
-  const tailorEmptyStateMessage = "No tailored resume for this page yet.";
 
   useEffect(() => {
     if (!isTailorRunMenuOpen) {
@@ -2245,6 +2564,91 @@ function App() {
     setIsTailorRunMenuOpen(false);
     setTailorRunMenuError(null);
   }, [displayedTailorRunUrl]);
+
+
+
+  useEffect(() => {
+    if (!tailoredResumeMenuId) {
+      setTailoredResumeMenuPosition(null);
+      return;
+    }
+
+    updateTailoredResumeMenuPosition();
+
+    const handleMouseDown = (event: MouseEvent) => {
+      if (tailoredResumeMenuActionState !== "idle") {
+        return;
+      }
+
+      const clickedNode = event.target as Node;
+      const clickedInsideShell = tailoredResumeMenuRef.current?.contains(
+        clickedNode,
+      );
+      const clickedInsidePopover = tailoredResumeMenuPopoverRef.current?.contains(
+        clickedNode,
+      );
+
+      if (!clickedInsideShell && !clickedInsidePopover) {
+        setTailoredResumeMenuId(null);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (tailoredResumeMenuActionState !== "idle") {
+        return;
+      }
+
+      if (event.key === "Escape") {
+        setTailoredResumeMenuId(null);
+      }
+    };
+
+    const handleViewportChange = () => {
+      updateTailoredResumeMenuPosition();
+    };
+
+    window.addEventListener("mousedown", handleMouseDown);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+
+    return () => {
+      window.removeEventListener("mousedown", handleMouseDown);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [
+    tailoredResumeMenuActionState,
+    tailoredResumeMenuId,
+    updateTailoredResumeMenuPosition,
+  ]);
+
+  useEffect(() => {
+    if (
+      tailoredResumeMenuId &&
+      !personalInfo?.tailoredResumes.some(
+        (tailoredResume) => tailoredResume.id === tailoredResumeMenuId,
+      )
+    ) {
+      setTailoredResumeMenuId(null);
+      setTailoredResumeMenuError(null);
+      setTailoredResumeMenuErrorResumeId(null);
+      setTailoredResumeMenuPosition(null);
+    }
+  }, [personalInfo?.tailoredResumes, tailoredResumeMenuId]);
+
+  useEffect(() => {
+    if (
+      selectedTailoredResumeId &&
+      !personalInfo?.tailoredResumes.some(
+        (tailoredResume) => tailoredResume.id === selectedTailoredResumeId,
+      )
+    ) {
+      setSelectedTailoredResumeId(null);
+      setActiveTailorRunDetailView(null);
+    }
+  }, [personalInfo?.tailoredResumes, selectedTailoredResumeId]);
 
   function beginTailorRequest() {
     activeTailorRequestAbortControllerRef.current?.abort();
@@ -2290,12 +2694,17 @@ function App() {
     [],
   );
 
-  function openTailorRunDetailView(nextView: TailorRunDetailView) {
+  function openTailorRunDetailView(
+    nextView: TailorRunDetailView,
+    tailoredResumeId: string | null = null,
+  ) {
+    setSelectedTailoredResumeId(tailoredResumeId);
     setActiveTailorRunDetailView(nextView);
   }
 
   function closeTailorRunDetailView() {
     setActiveTailorRunDetailView(null);
+    setSelectedTailoredResumeId(null);
   }
 
   function openSettingsView() {
@@ -2396,6 +2805,7 @@ function App() {
     loadPersonalInfo,
   ]);
 
+
   useEffect(() => {
     if (authState.status !== "signedIn") {
       lastReadyPersonalInfoRef.current = null;
@@ -2455,6 +2865,24 @@ function App() {
       return;
     }
 
+    if (
+      hasCurrentPageCompletedTailoring &&
+      isTransientTailoringRun(currentPageStoredTailoringRun ?? lastTailoringRun)
+    ) {
+      setLastTailoringRun(null);
+      setTailorGenerationStep(null);
+      setCaptureState((currentCaptureState) =>
+        currentCaptureState === "blocked" ? "blocked" : "idle",
+      );
+      void persistTailoringRun(null, currentPageRegistryKey).catch((error) => {
+        console.error(
+          "Could not clear a completed tailoring run from local storage.",
+          error,
+        );
+      });
+      return;
+    }
+
     if (!isStaleTailoringRun(lastTailoringRun)) {
       return;
     }
@@ -2468,7 +2896,10 @@ function App() {
       console.error("Could not clear a stale tailoring run.", error);
     });
   }, [
+    currentPageRegistryKey,
+    currentPageStoredTailoringRun,
     currentPagePersonalInfoTailoring,
+    hasCurrentPageCompletedTailoring,
     isSuppressingActiveTailoringHydration,
     lastTailoringRun,
     personalInfoState,
@@ -2576,7 +3007,7 @@ function App() {
   useEffect(() => {
     const sessionToken =
       authState.status === "signedIn" ? authState.session.sessionToken : null;
-    const tailoredResumeId = latestTailoredResumeId;
+    const tailoredResumeId = focusedTailoredResumeId;
 
     if (!sessionToken || !tailoredResumeId) {
       setTailoredResumeReviewState({ record: null, status: "idle" });
@@ -2634,18 +3065,19 @@ function App() {
     return () => {
       isMounted = false;
     };
-  }, [authState, latestTailoredResumeId, loadTailoredResumeReview]);
+  }, [authState, focusedTailoredResumeId, loadTailoredResumeReview]);
 
   useEffect(() => {
-    if (!latestTailoredResumeId || activePanelTab !== "tailor") {
+    if (!focusedTailoredResumeId) {
       setActiveTailorRunDetailView(null);
+      setSelectedTailoredResumeId(null);
     }
-  }, [activePanelTab, latestTailoredResumeId]);
+  }, [focusedTailoredResumeId]);
 
   useEffect(() => {
     const sessionToken =
       authState.status === "signedIn" ? authState.session.sessionToken : null;
-    const tailoredResumeId = latestTailoredResumeId ?? "";
+    const tailoredResumeId = focusedTailoredResumeId ?? "";
     const tailoredResumePdfUpdatedAt = activeTailoredResumeReviewRecord?.pdfUpdatedAt ?? null;
 
     if (!sessionToken || !tailoredResumeId) {
@@ -2722,8 +3154,8 @@ function App() {
   }, [
     activeTailoredResumeReviewRecord?.pdfUpdatedAt,
     authState,
+    focusedTailoredResumeId,
     invalidateAuthSession,
-    latestTailoredResumeId,
   ]);
 
   useEffect(() => {
@@ -3706,7 +4138,20 @@ function App() {
     }
   }
 
-  async function handleOpenTailoredResume(tailoredResumeId: string | null = null) {
+  function openTailoredResumeDetailView(
+    tailoredResumeId: string,
+    nextView: TailorRunDetailView = "quickReview",
+  ) {
+    setSelectedTailoredResumeId(tailoredResumeId);
+    setActiveTailorRunDetailView(nextView);
+    setTailoredResumeMenuId(null);
+    setTailoredResumeMenuError(null);
+    setTailoredResumeMenuErrorResumeId(null);
+  }
+
+  async function handleOpenTailoredResumeOnWeb(
+    tailoredResumeId: string | null = null,
+  ) {
     setAuthActionState("running");
 
     try {
@@ -3727,6 +4172,38 @@ function App() {
       });
     } finally {
       setAuthActionState("idle");
+    }
+  }
+
+  async function handleGoToTailoredResumeTab(tailoredResume: TailoredResumeSummary) {
+    const targetUrl = tailoredResume.jobUrl?.trim() ?? "";
+
+    if (!targetUrl || tailoredResumeMenuActionState !== "idle") {
+      return;
+    }
+
+    setTailoredResumeMenuActionState("goingToTab");
+    setTailoredResumeMenuActionResumeId(tailoredResume.id);
+    setTailoredResumeMenuError(null);
+    setTailoredResumeMenuErrorResumeId(null);
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        payload: {
+          url: targetUrl,
+        },
+        type: "JOB_HELPER_GO_TO_TAB",
+      });
+      assertRuntimeResponseOk(response, "Could not open that job tab.");
+      setTailoredResumeMenuId(null);
+    } catch (error) {
+      setTailoredResumeMenuError(
+        error instanceof Error ? error.message : "Could not open that job tab.",
+      );
+      setTailoredResumeMenuErrorResumeId(tailoredResume.id);
+    } finally {
+      setTailoredResumeMenuActionState("idle");
+      setTailoredResumeMenuActionResumeId(null);
     }
   }
 
@@ -3797,6 +4274,33 @@ function App() {
     } finally {
       setTailorRunMenuActionState("idle");
     }
+  }
+
+  async function handleArchiveTailorRun() {
+    const tailoredResumeId = topLevelTailoredResumeId?.trim() ?? "";
+
+    if (!tailoredResumeId || tailorRunMenuActionState !== "idle") {
+      return;
+    }
+
+    setTailorRunMenuActionState("archiving");
+    setTailorRunMenuError(null);
+
+    const result = await setTailoredResumeArchivedState({
+      archived: true,
+      tailoredResumeId,
+    });
+
+    if (result.ok) {
+      setActiveTailorRunDetailView(null);
+      setIsTailorRunMenuOpen(false);
+    } else {
+      setTailorRunMenuError(
+        result.error ?? "Unable to archive the tailored resume.",
+      );
+    }
+
+    setTailorRunMenuActionState("idle");
   }
 
   async function handleDeleteTailorRun() {
@@ -3972,11 +4476,204 @@ function App() {
     }
   }
 
-  function togglePersonalSection(sectionId: PersonalSectionId) {
-    setCollapsedPersonalSections((currentSections) => ({
-      ...currentSections,
-      [sectionId]: !currentSections[sectionId],
-    }));
+  function tailoredResumeMatchesCurrentPage(tailoredResume: {
+    jobUrl: string | null;
+  }) {
+    if (!currentPageIdentity) {
+      return false;
+    }
+
+    return matchesTailorOverwritePageIdentity({
+      jobUrl: tailoredResume.jobUrl,
+      pageIdentity: currentPageIdentity,
+    });
+  }
+
+  function renderTailoredResumeLibrary(input: {
+    actionLabel: "archive" | "restore";
+    emptyMessage: string;
+    resumes: TailoredResumeSummary[];
+    title: string;
+    highlightCurrentPage?: boolean;
+  }) {
+    if (authState.status !== "signedIn") {
+      return <p className="placeholder">Connect Google to load saved resumes.</p>;
+    }
+
+    if (personalInfoState.status === "loading") {
+      return <p className="placeholder">Loading tailored resumes...</p>;
+    }
+
+    if (personalInfoState.status === "error") {
+      return <p className="placeholder">{personalInfoState.error}</p>;
+    }
+
+    if (input.resumes.length === 0) {
+      return <p className="placeholder">{input.emptyMessage}</p>;
+    }
+
+    return (
+      <>
+        {tailoredResumeMutationError ? (
+          <p className="preview-error tailored-resume-action-error">
+            {tailoredResumeMutationError}
+          </p>
+        ) : null}
+        <div className="tailored-resume-list">
+          {input.resumes.map((tailoredResume) => {
+            const isCurrentPageMatch =
+              input.highlightCurrentPage === true &&
+              tailoredResumeMatchesCurrentPage(tailoredResume);
+            const isActionPending =
+              tailoredResumeArchiveActionId === tailoredResume.id;
+            const isMenuOpen = tailoredResumeMenuId === tailoredResume.id;
+            const isMenuBusy =
+              tailoredResumeMenuActionState !== "idle" &&
+              tailoredResumeMenuActionResumeId === tailoredResume.id;
+            const menuError =
+              tailoredResumeMenuErrorResumeId === tailoredResume.id
+                ? tailoredResumeMenuError
+                : null;
+            const canGoToTab = Boolean(tailoredResume.jobUrl?.trim());
+            const isResumeActionDisabled =
+              authActionState === "running" ||
+              isDeletingPersonalItem ||
+              isActionPending ||
+              isMenuBusy;
+
+            return (
+              <div
+                key={tailoredResume.id}
+                className="tailored-resume-row-shell"
+              >
+                <button
+                  className={`tailored-resume-row ${
+                    isCurrentPageMatch ? "tailored-resume-row-current-page" : ""
+                  }`.trim()}
+                  disabled={authActionState === "running"}
+                  type="button"
+                  onClick={() =>
+                    openTailoredResumeDetailView(
+                      tailoredResume.id,
+                      "quickReview",
+                    )
+                  }
+                >
+                  <span className="tailored-resume-main">
+                    <span className="tailored-resume-title">
+                      {tailoredResume.displayName}
+                    </span>
+                    <span className="tailored-resume-meta">
+                      {tailoredResume.companyName ||
+                        tailoredResume.positionTitle ||
+                        input.title}
+                    </span>
+                  </span>
+                  <span className="tailored-resume-date">
+                    {formatTailoredResumeDate(tailoredResume.updatedAt)}
+                  </span>
+                </button>
+
+                <div className="tailored-resume-row-actions">
+                  <button
+                    aria-label={
+                      input.actionLabel === "archive"
+                        ? `Archive ${tailoredResume.displayName}`
+                        : `Restore ${tailoredResume.displayName}`
+                    }
+                    className="icon-action tailored-resume-row-action-icon"
+                    disabled={isResumeActionDisabled}
+                    title={
+                      isActionPending
+                        ? input.actionLabel === "archive"
+                          ? "Archiving..."
+                          : "Restoring..."
+                        : input.actionLabel === "archive"
+                          ? "Archive"
+                          : "Restore"
+                    }
+                    type="button"
+                    onClick={() =>
+                      void setTailoredResumeArchivedState({
+                        archived: input.actionLabel === "archive",
+                        tailoredResumeId: tailoredResume.id,
+                      })
+                    }
+                  >
+                    {input.actionLabel === "archive" ? (
+                      <ArchiveTrayDownIcon />
+                    ) : (
+                      <ArchiveTrayUpIcon />
+                    )}
+                  </button>
+                  <div
+                    className="tailor-run-menu-shell tailored-resume-row-menu-shell"
+                    ref={isMenuOpen ? tailoredResumeMenuRef : undefined}
+                  >
+                    <button
+                      aria-expanded={isMenuOpen}
+                      aria-label={`Actions for ${tailoredResume.displayName}`}
+                      className="secondary-action compact-action tailor-run-menu-trigger"
+                      disabled={authActionState === "running" || isDeletingPersonalItem}
+                      type="button"
+                      onClick={() => {
+                        const shouldOpen = tailoredResumeMenuId !== tailoredResume.id;
+
+                        setTailoredResumeMenuId(
+                          shouldOpen ? tailoredResume.id : null,
+                        );
+                        setTailoredResumeMenuError(null);
+                        setTailoredResumeMenuErrorResumeId(null);
+                        setTailoredResumeMenuPosition(null);
+
+                        if (shouldOpen) {
+                          window.requestAnimationFrame(() => {
+                            updateTailoredResumeMenuPosition();
+                          });
+                        }
+                      }}
+                    >
+                      <EllipsisHorizontalIcon />
+                    </button>
+                    {isMenuOpen && tailoredResumeMenuPosition
+                      ? createPortal(
+                          <div
+                            className="tailor-run-menu-popover tailored-resume-row-menu-popover-floating"
+                            ref={tailoredResumeMenuPopoverRef}
+                            style={{
+                              left: `${tailoredResumeMenuPosition.left}px`,
+                              top: `${tailoredResumeMenuPosition.top}px`,
+                            }}
+                          >
+                            <div className="tailor-run-menu">
+                              {canGoToTab ? (
+                                <button
+                                  className="tailor-run-menu-item"
+                                  disabled={isMenuBusy}
+                                  type="button"
+                                  onClick={() =>
+                                    void handleGoToTailoredResumeTab(tailoredResume)
+                                  }
+                                >
+                                  {isMenuBusy ? "Opening..." : "Go to tab"}
+                                </button>
+                              ) : null}
+                            </div>
+                            {menuError ? (
+                              <p className="tailor-run-menu-error">{menuError}</p>
+                            ) : null}
+                          </div>,
+                          document.body,
+                        )
+                      : null}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </>
+    );
   }
 
   function syncTailoredResumeReviewFromPayload(payload: unknown) {
@@ -4013,6 +4710,69 @@ function App() {
           }
         : currentState,
     );
+  }
+
+  async function setTailoredResumeArchivedState(input: {
+    archived: boolean;
+    tailoredResumeId: string;
+  }) {
+    if (
+      authState.status !== "signedIn" ||
+      !input.tailoredResumeId ||
+      tailoredResumeArchiveActionId
+    ) {
+      return {
+        error: input.archived
+          ? "Unable to archive the tailored resume."
+          : "Unable to restore the tailored resume.",
+        ok: false as const,
+      };
+    }
+
+    setTailoredResumeArchiveActionId(input.tailoredResumeId);
+    setTailoredResumeMutationError(null);
+
+    try {
+      const result = await patchTailorResume({
+        action: "setTailoredResumeArchivedState",
+        archived: input.archived,
+        tailoredResumeId: input.tailoredResumeId,
+      });
+
+      if (!result.ok) {
+        throw new Error(
+          readTailorResumePayloadError(
+            result.payload,
+            input.archived
+              ? "Unable to archive the tailored resume."
+              : "Unable to restore the tailored resume.",
+          ),
+        );
+      }
+
+      syncTailoredResumeSummariesFromPayload(result.payload);
+      await loadPersonalInfo({ preserveCurrent: true });
+
+      return {
+        ok: true as const,
+      };
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : input.archived
+            ? "Unable to archive the tailored resume."
+            : "Unable to restore the tailored resume.";
+
+      setTailoredResumeMutationError(message);
+
+      return {
+        error: message,
+        ok: false as const,
+      };
+    } finally {
+      setTailoredResumeArchiveActionId(null);
+    }
   }
 
   async function setTailoredResumeReviewEditState(
@@ -4338,6 +5098,57 @@ function App() {
           </div>
         </section>
 
+        <section className="snapshot-card resume-preview-card settings-card">
+          <div className="card-heading-row">
+            <h2>Base resume</h2>
+          </div>
+
+          {authState.status !== "signedIn" ? (
+            <p className="placeholder">Connect Google to preview your resume.</p>
+          ) : personalInfoState.status === "loading" ? (
+            <p className="placeholder">Loading resume preview...</p>
+          ) : personalInfoState.status === "error" ? (
+            <p className="placeholder">{personalInfoState.error}</p>
+          ) : originalResume ? (
+            <>
+              {originalResume.error ? (
+                <p className="preview-error">{originalResume.error}</p>
+              ) : null}
+              {originalResume.pdfUpdatedAt ? (
+                <div className="resume-preview-shell">
+                  {resumePreviewState.status === "loading" ? (
+                    <p className="placeholder">Rendering preview...</p>
+                  ) : resumePreviewState.status === "error" ? (
+                    <p className="placeholder">{resumePreviewState.error}</p>
+                  ) : resumePreviewState.status === "ready" ? (
+                    <iframe
+                      className="resume-preview-frame"
+                      src={resumePreviewState.objectUrl}
+                      title="Resume preview"
+                    />
+                  ) : (
+                    <p className="placeholder">Preview will appear here.</p>
+                  )}
+                </div>
+              ) : (
+                <p className="placeholder preview-placeholder">
+                  No rendered preview is available yet.
+                </p>
+              )}
+              {originalResume.resumeUpdatedAt ? (
+                <dl className="snapshot-grid resume-updated-grid">
+                  <div>
+                    <dt>Updated</dt>
+                    <dd>{formatTailoredResumeDate(originalResume.resumeUpdatedAt)}</dd>
+                  </div>
+                </dl>
+              ) : null}
+            </>
+          ) : (
+            <p className="placeholder">No resume data loaded yet.</p>
+          )}
+        </section>
+
       </section>
     );
   }
@@ -4384,6 +5195,36 @@ function App() {
               {activeTailorRunDetailIdentity}
             </p>
           ) : null}
+          <div className="panel-detail-toggle-group" aria-label="Tailored resume detail">
+            <button
+              aria-pressed={activeTailorRunDetailView === "quickReview"}
+              className={`panel-detail-toggle ${
+                activeTailorRunDetailView === "quickReview"
+                  ? "panel-detail-toggle-active"
+                  : ""
+              }`.trim()}
+              type="button"
+              onClick={() =>
+                openTailorRunDetailView("quickReview", focusedTailoredResumeId)
+              }
+            >
+              Review edits
+            </button>
+            <button
+              aria-pressed={activeTailorRunDetailView === "preview"}
+              className={`panel-detail-toggle ${
+                activeTailorRunDetailView === "preview"
+                  ? "panel-detail-toggle-active"
+                  : ""
+              }`.trim()}
+              type="button"
+              onClick={() =>
+                openTailorRunDetailView("preview", focusedTailoredResumeId)
+              }
+            >
+              Preview
+            </button>
+          </div>
         </div>
 
         <section className="tailor-run-detail-page">
@@ -4481,7 +5322,9 @@ function App() {
                 aria-label="Open tailored resume on web"
                 disabled={authActionState === "running"}
                 type="button"
-                onClick={() => void handleOpenTailoredResume(topLevelTailoredResumeId)}
+                onClick={() =>
+                  void handleOpenTailoredResumeOnWeb(topLevelTailoredResumeId)
+                }
               >
                 <span>Web</span>
                 <ArrowUpRightIcon />
@@ -4489,23 +5332,23 @@ function App() {
             ) : null}
           </div>
 
-          {shouldShowTailorRunShell ? (
-            <section
-              aria-label="Tailoring run"
-              className={`snapshot-card tailor-run-shell tailor-run-shell-${statusDisplayState} ${
-                showCompactTailorRunSummary ? "tailor-run-shell-compact" : ""
-              } ${
-                showCompactTailorRunSummary ? "tailor-run-shell-complete" : ""
-              } ${
-                isTailorRunMenuOpen ? "tailor-run-shell-menu-open" : ""
-              } ${
-                isTailoringRunOnCurrentPage ? "tailor-run-shell-current-page" : ""
-              } ${
-                isTailorRunShellOverlayActive
-                  ? "tailor-run-shell-overlay-active"
-                  : ""
-              }`}
-            >
+          {shouldRenderLegacyTailorRunShell ? (
+                <section
+                  aria-label="Tailoring run"
+                  className={`snapshot-card tailor-run-shell tailor-run-shell-${statusDisplayState} ${
+                    showCompactTailorRunSummary ? "tailor-run-shell-compact" : ""
+                  } ${
+                    showCompactTailorRunSummary ? "tailor-run-shell-complete" : ""
+                  } ${
+                    isTailorRunMenuOpen ? "tailor-run-shell-menu-open" : ""
+                  } ${
+                    isTailoringRunOnCurrentPage ? "tailor-run-shell-current-page" : ""
+                  } ${
+                    isTailorRunShellOverlayActive
+                      ? "tailor-run-shell-overlay-active"
+                      : ""
+                  }`}
+                >
             <div
               aria-hidden={isTailorRunShellOverlayActive ? "true" : undefined}
               className={`tailor-run-shell-body ${
@@ -4525,6 +5368,18 @@ function App() {
                     <span className="tailor-run-detail-time">
                       {tailoredRunSavedAtLabel}
                     </span>
+                  ) : null}
+                  {showArchiveTailorRunAction ? (
+                    <button
+                      className="secondary-action compact-action"
+                      disabled={tailorRunMenuActionState !== "idle"}
+                      type="button"
+                      onClick={() => void handleArchiveTailorRun()}
+                    >
+                      {tailorRunMenuActionState === "archiving"
+                        ? "Archiving..."
+                        : "Archive"}
+                    </button>
                   ) : null}
                   {showTailorRunMenu ? (
                     <div
@@ -4598,6 +5453,18 @@ function App() {
                                   : "Regenerate edits"}
                               </button>
                             ) : null}
+                            {showArchiveTailorRunAction ? (
+                              <button
+                                className="tailor-run-menu-item"
+                                disabled={tailorRunMenuActionState !== "idle"}
+                                type="button"
+                                onClick={() => void handleArchiveTailorRun()}
+                              >
+                                {tailorRunMenuActionState === "archiving"
+                                  ? "Archiving..."
+                                  : "Archive"}
+                              </button>
+                            ) : null}
                             {showDeleteTailorRunAction ? (
                               <button
                                 className="tailor-run-menu-item"
@@ -4649,6 +5516,18 @@ function App() {
                             {isStoppingCurrentTailoring ? "Stopping..." : "Stop run"}
                           </button>
                         ) : null}
+                        {showArchiveTailorRunAction ? (
+                          <button
+                            className="secondary-action compact-action"
+                            disabled={tailorRunMenuActionState !== "idle"}
+                            type="button"
+                            onClick={() => void handleArchiveTailorRun()}
+                          >
+                            {tailorRunMenuActionState === "archiving"
+                              ? "Archiving..."
+                              : "Archive"}
+                          </button>
+                        ) : null}
                         {shouldShowTailorRunTimestamp ? (
                           <span className="tailor-run-detail-time">
                             {tailoredRunSavedAtLabel}
@@ -4694,6 +5573,18 @@ function App() {
                                       {tailorRunMenuActionState === "regenerating"
                                         ? "Regenerating..."
                                         : "Regenerate edits"}
+                                    </button>
+                                  ) : null}
+                                  {showArchiveTailorRunAction ? (
+                                    <button
+                                      className="tailor-run-menu-item"
+                                      disabled={tailorRunMenuActionState !== "idle"}
+                                      type="button"
+                                      onClick={() => void handleArchiveTailorRun()}
+                                    >
+                                      {tailorRunMenuActionState === "archiving"
+                                        ? "Archiving..."
+                                        : "Archive"}
                                     </button>
                                   ) : null}
                                   {showDeleteTailorRunAction ? (
@@ -4871,37 +5762,24 @@ function App() {
                 </section>
               </div>
             ) : null}
-            </section>
+                </section>
           ) : null}
 
-          {shouldShowTailorContextLoading ? (
-            <section
-              aria-label="Loading tailor state"
-              className="snapshot-card tailor-context-loading"
-            >
-              <div
-                aria-hidden="true"
-                className="tailor-context-loading-spinner"
-              />
-              <p className="tailor-context-loading-copy">
-                Checking this page...
-              </p>
-            </section>
-          ) : null}
 
-          {shouldShowTailorEmptyState ? (
-            <section
-              aria-label="No tailored resume on this page"
-              className="tailor-empty-state"
-            >
-              <div className="tailor-empty-state-inner">
-                <TailorEmptyStateGraphic />
-                <p className="tailor-empty-state-copy">
-                  {tailorEmptyStateMessage}
-                </p>
-              </div>
-            </section>
-          ) : null}
+          <section className="snapshot-card tailored-resume-card">
+            <div className="card-heading-row">
+              <h2>Unarchived resumes</h2>
+              <span>{unarchivedTailoredResumes.length}</span>
+            </div>
+            {renderTailoredResumeLibrary({
+              actionLabel: "archive",
+              emptyMessage:
+                "Completed tailored resumes stay here until you archive them.",
+              highlightCurrentPage: true,
+              resumes: visibleUnarchivedTailoredResumes,
+              title: "Saved tailored resume",
+            })}
+          </section>
 
           {tailorInterview && isTailorInterviewOpen ? (
             <section
@@ -5063,219 +5941,19 @@ function App() {
             </div>
           ) : null}
         </>
-      ) : activePanelTab === "personal" ? (
-        <>
-          <section className="snapshot-card tailored-resume-card collapsible-card">
-            <button
-              aria-controls="personal-tailored-resumes-content"
-              aria-expanded={!isTailoredResumesCollapsed}
-              className="collapsible-heading"
-              type="button"
-              onClick={() => togglePersonalSection("tailoredResumes")}
-            >
-              <span className="collapsible-heading-main">
-                <span
-                  aria-hidden="true"
-                  className={`collapse-chevron ${
-                    isTailoredResumesCollapsed ? "" : "collapse-chevron-open"
-                  }`}
-                />
-                <span className="collapsible-heading-title">
-                  Tailored resumes
-                </span>
-              </span>
-              {personalInfo ? (
-                <span className="collapsible-heading-badge">
-                  {personalInfo.tailoredResumes.length}
-                </span>
-              ) : null}
-            </button>
-            {!isTailoredResumesCollapsed ? (
-              <div id="personal-tailored-resumes-content">
-                {authState.status !== "signedIn" ? (
-              <p className="placeholder">Connect Google to load saved resumes.</p>
-            ) : personalInfoState.status === "loading" ? (
-              <p className="placeholder">Loading tailored resumes...</p>
-            ) : personalInfoState.status === "error" ? (
-              <p className="placeholder">{personalInfoState.error}</p>
-            ) : !personalInfo || personalInfo.tailoredResumes.length === 0 ? (
-              <p className="placeholder">No tailored resumes yet.</p>
-            ) : (
-              <div className="tailored-resume-list">
-                {personalInfo.tailoredResumes.map((tailoredResume) => (
-                  <button
-                    key={tailoredResume.id}
-                    className="tailored-resume-row"
-                    disabled={authActionState === "running"}
-                    type="button"
-                    onClick={() => handleOpenTailoredResume(tailoredResume.id)}
-                  >
-                    <span className="tailored-resume-main">
-                      <span className="tailored-resume-title">
-                        {tailoredResume.displayName}
-                      </span>
-                      <span className="tailored-resume-meta">
-                        {tailoredResume.companyName ||
-                          tailoredResume.positionTitle ||
-                          "Saved tailored resume"}
-                      </span>
-                    </span>
-                    <span className="tailored-resume-date">
-                      {formatTailoredResumeDate(tailoredResume.updatedAt)}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-              </div>
-            ) : null}
-          </section>
-
-          <section className="snapshot-card applications-card collapsible-card">
-            <button
-              aria-controls="personal-applications-content"
-              aria-expanded={!isApplicationsCollapsed}
-              className="collapsible-heading"
-              type="button"
-              onClick={() => togglePersonalSection("applications")}
-            >
-              <span className="collapsible-heading-main">
-                <span
-                  aria-hidden="true"
-                  className={`collapse-chevron ${
-                    isApplicationsCollapsed ? "" : "collapse-chevron-open"
-                  }`}
-                />
-                <span className="collapsible-heading-title">Tracked apps</span>
-              </span>
-              {personalInfo ? (
-                <span className="collapsible-heading-badge">
-                  {personalInfo.applicationCount}
-                </span>
-              ) : null}
-            </button>
-            {!isApplicationsCollapsed ? (
-              <div id="personal-applications-content">
-                {authState.status !== "signedIn" ? (
-              <p className="placeholder">Connect Google to load applications.</p>
-            ) : personalInfoState.status === "loading" ? (
-              <p className="placeholder">Loading tracked applications...</p>
-            ) : personalInfoState.status === "error" ? (
-              <p className="placeholder">{personalInfoState.error}</p>
-            ) : !personalInfo || personalInfo.applications.length === 0 ? (
-              <p className="placeholder">No tracked applications yet.</p>
-            ) : (
-              <div className="application-list">
-                {personalInfo.applications.map((application) => (
-                  <button
-                    key={application.id}
-                    className="application-row"
-                    type="button"
-                    onClick={() => void handleOpenTrackedApplication(application)}
-                  >
-                    <span className="application-main">
-                      <span className="application-title">
-                        {application.jobTitle}
-                      </span>
-                      <span className="application-meta">
-                        {application.companyName}
-                        {application.location ? ` - ${application.location}` : ""}
-                      </span>
-                    </span>
-                    <span className="application-side">
-                      <span className="application-status">
-                        {formatApplicationStatus(application.status)}
-                      </span>
-                      <span className="tailored-resume-date">
-                        {formatTailoredResumeDate(application.appliedAt)}
-                      </span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-            {personalInfo && personalInfo.applicationCount > personalInfo.applications.length ? (
-              <button
-                className="link-action more-action"
-                disabled={authActionState === "running"}
-                type="button"
-                onClick={handleOpenApplicationsDashboard}
-              >
-                View all applications
-              </button>
-            ) : null}
-              </div>
-            ) : null}
-          </section>
-
-          <section className="snapshot-card resume-preview-card collapsible-card">
-            <button
-              aria-controls="personal-resume-content"
-              aria-expanded={!isResumeCollapsed}
-              className="collapsible-heading"
-              type="button"
-              onClick={() => togglePersonalSection("resume")}
-            >
-              <span className="collapsible-heading-main">
-                <span
-                  aria-hidden="true"
-                  className={`collapse-chevron ${
-                    isResumeCollapsed ? "" : "collapse-chevron-open"
-                  }`}
-                />
-                <span className="collapsible-heading-title">Resume</span>
-              </span>
-            </button>
-            {!isResumeCollapsed ? (
-              <div id="personal-resume-content">
-                {authState.status !== "signedIn" ? (
-              <p className="placeholder">Connect Google to preview your resume.</p>
-            ) : personalInfoState.status === "loading" ? (
-              <p className="placeholder">Loading resume preview...</p>
-            ) : personalInfoState.status === "error" ? (
-              <p className="placeholder">{personalInfoState.error}</p>
-            ) : originalResume ? (
-              <>
-                {originalResume.error ? (
-                  <p className="preview-error">{originalResume.error}</p>
-                ) : null}
-                {originalResume.pdfUpdatedAt ? (
-                  <div className="resume-preview-shell">
-                    {resumePreviewState.status === "loading" ? (
-                      <p className="placeholder">Rendering preview...</p>
-                    ) : resumePreviewState.status === "error" ? (
-                      <p className="placeholder">{resumePreviewState.error}</p>
-                    ) : resumePreviewState.status === "ready" ? (
-                      <iframe
-                        className="resume-preview-frame"
-                        src={resumePreviewState.objectUrl}
-                        title="Resume preview"
-                      />
-                    ) : (
-                      <p className="placeholder">Preview will appear here.</p>
-                    )}
-                  </div>
-                ) : (
-                  <p className="placeholder preview-placeholder">
-                    No rendered preview is available yet.
-                  </p>
-                )}
-                {originalResume.resumeUpdatedAt ? (
-                  <dl className="snapshot-grid resume-updated-grid">
-                    <div>
-                      <dt>Updated</dt>
-                      <dd>{formatTailoredResumeDate(originalResume.resumeUpdatedAt)}</dd>
-                    </div>
-                  </dl>
-                ) : null}
-              </>
-            ) : (
-              <p className="placeholder">No resume data loaded yet.</p>
-            )}
-              </div>
-            ) : null}
-          </section>
-        </>
+      ) : activePanelTab === "archived" ? (
+        <section className="snapshot-card tailored-resume-card">
+          <div className="card-heading-row">
+            <h2>Archived resumes</h2>
+            <span>{archivedTailoredResumes.length}</span>
+          </div>
+          {renderTailoredResumeLibrary({
+            actionLabel: "restore",
+            emptyMessage: "No archived tailored resumes yet.",
+            resumes: archivedTailoredResumes,
+            title: "Archived tailored resume",
+          })}
+        </section>
       ) : (
         <section className="snapshot-card">
           <div className="card-heading-row">
