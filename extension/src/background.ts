@@ -30,7 +30,10 @@ import {
   readTailorResumeProfileSummary,
   type TailorResumeRunRecord,
 } from "./job-helper";
-import { readUserSyncStateSnapshot } from "../../lib/sync-state.ts";
+import {
+  haveUserSyncStateChanged,
+  readUserSyncStateSnapshot,
+} from "../../lib/sync-state.ts";
 import { collectPageContextFromTab } from "./page-context";
 import {
   isNdjsonResponse,
@@ -38,6 +41,11 @@ import {
 } from "./tailor-resume-stream";
 import { findMatchingCurrentWindowTabForUrl } from "./browser-tab-targeting";
 import { buildCompletedTailoringMessage } from "./tailor-run-copy";
+import {
+  buildPersonalInfoCacheEntry,
+  PERSONAL_INFO_CACHE_STORAGE_KEY,
+  readPersonalInfoCacheEntry,
+} from "./personal-info-cache";
 import { resolvePotentialTailorOverwrite } from "./tailor-overwrite-guard";
 import {
   buildTailorRunRegistryKey,
@@ -73,6 +81,9 @@ const activeTailorResumeAbortControllers = new Map<
   string,
   AbortController
 >();
+let personalInfoCacheRefreshPromise: Promise<{
+  personalInfo: ReturnType<typeof readPersonalInfoPayload>;
+}> | null = null;
 
 async function configureSidePanelAction() {
   try {
@@ -542,7 +553,10 @@ async function writeStoredAuthSession(session: JobHelperAuthSession) {
 }
 
 async function clearStoredAuthSession() {
-  await chrome.storage.local.remove(AUTH_SESSION_STORAGE_KEY);
+  await chrome.storage.local.remove([
+    AUTH_SESSION_STORAGE_KEY,
+    PERSONAL_INFO_CACHE_STORAGE_KEY,
+  ]);
 }
 
 async function readJsonResponse(response: Response) {
@@ -1030,8 +1044,32 @@ async function getTailoredResumeSummaries() {
   };
 }
 
-async function getPersonalInfoSummary() {
-  const session = await ensureJobHelperSession({ interactive: false });
+async function writeStoredPersonalInfoCache(input: {
+  personalInfo: ReturnType<typeof readPersonalInfoPayload>;
+  userId: string;
+}) {
+  await chrome.storage.local.set({
+    [PERSONAL_INFO_CACHE_STORAGE_KEY]: buildPersonalInfoCacheEntry({
+      personalInfo: input.personalInfo,
+      userId: input.userId,
+    }),
+  });
+}
+
+async function readStoredPersonalInfoCache(userId: string) {
+  const result = await chrome.storage.local.get(PERSONAL_INFO_CACHE_STORAGE_KEY);
+  const cacheEntry = readPersonalInfoCacheEntry(
+    result[PERSONAL_INFO_CACHE_STORAGE_KEY],
+  );
+
+  if (!cacheEntry || cacheEntry.userId !== userId) {
+    return null;
+  }
+
+  return cacheEntry;
+}
+
+async function fetchFreshPersonalInfoSummary(session: JobHelperAuthSession) {
   const personalInfoUrl = new URL(DEFAULT_TAILOR_RESUME_ENDPOINT);
   personalInfoUrl.searchParams.set("includeApplications", "1");
   personalInfoUrl.searchParams.set("applicationLimit", "12");
@@ -1055,13 +1093,43 @@ async function getPersonalInfoSummary() {
     );
   }
 
+  const personalInfo = readPersonalInfoPayload(tailorResumePayload);
+  await writeStoredPersonalInfoCache({
+    personalInfo,
+    userId: session.user.id,
+  });
+
   return {
-    personalInfo: readPersonalInfoPayload(tailorResumePayload),
+    personalInfo,
   };
 }
 
-async function getSyncStateSummary() {
-  const session = await ensureJobHelperSession({ interactive: false });
+async function refreshPersonalInfoCache(session: JobHelperAuthSession) {
+  if (personalInfoCacheRefreshPromise) {
+    return personalInfoCacheRefreshPromise;
+  }
+
+  const refreshPromise = fetchFreshPersonalInfoSummary(session).finally(() => {
+    personalInfoCacheRefreshPromise = null;
+  });
+  personalInfoCacheRefreshPromise = refreshPromise;
+
+  return refreshPromise;
+}
+
+function refreshSharedPersonalInfoCache(
+  session: JobHelperAuthSession,
+  reason: string,
+) {
+  void refreshPersonalInfoCache(session).catch((error) => {
+    console.warn(
+      `Could not refresh the shared personal info cache after ${reason}.`,
+      error,
+    );
+  });
+}
+
+async function fetchSyncStateSummary(session: JobHelperAuthSession) {
   const response = await fetch(DEFAULT_SYNC_STATE_ENDPOINT, {
     cache: "no-store",
     credentials: "include",
@@ -1080,6 +1148,45 @@ async function getSyncStateSummary() {
   return {
     syncState: readUserSyncStateSnapshot(payload),
   };
+}
+
+async function getPersonalInfoSummary() {
+  const session = await ensureJobHelperSession({ interactive: false });
+  const cachedPersonalInfo = await readStoredPersonalInfoCache(session.user.id);
+
+  if (!cachedPersonalInfo) {
+    return refreshPersonalInfoCache(session);
+  }
+
+  try {
+    const { syncState } = await fetchSyncStateSummary(session);
+
+    if (!haveUserSyncStateChanged(cachedPersonalInfo.personalInfo.syncState, syncState)) {
+      return {
+        personalInfo: cachedPersonalInfo.personalInfo,
+      };
+    }
+
+    return refreshPersonalInfoCache(session);
+  } catch (error) {
+    const cachedAtTime = Date.parse(cachedPersonalInfo.cachedAt);
+    const cacheAgeMs = Number.isFinite(cachedAtTime)
+      ? Date.now() - cachedAtTime
+      : Number.POSITIVE_INFINITY;
+
+    if (cacheAgeMs <= 15_000) {
+      return {
+        personalInfo: cachedPersonalInfo.personalInfo,
+      };
+    }
+
+    throw error;
+  }
+}
+
+async function getSyncStateSummary() {
+  const session = await ensureJobHelperSession({ interactive: false });
+  return fetchSyncStateSummary(session);
 }
 
 async function loadTailorResumeOverwriteSummary(session: JobHelperAuthSession) {
@@ -1128,6 +1235,15 @@ async function tailorResumeForTab(input: {
     pageKey,
     pageContext,
   } = input;
+  let hasRequestedSharedPersonalInfoRefresh = false;
+  const requestSharedPersonalInfoRefresh = () => {
+    if (hasRequestedSharedPersonalInfoRefresh) {
+      return;
+    }
+
+    hasRequestedSharedPersonalInfoRefresh = true;
+    refreshSharedPersonalInfoCache(authSession, "the tailoring run started");
+  };
   const readyTab = await waitForTabToFinishLoading(activeTab);
   const tabId = readyTab.id;
 
@@ -1152,6 +1268,7 @@ async function tailorResumeForTab(input: {
           return;
         }
 
+        requestSharedPersonalInfoRefresh();
         void persistResult(
           pageKey,
           buildRunningTailoringRunRecord({
@@ -1200,6 +1317,10 @@ async function tailorResumeForTab(input: {
         jobUrl,
         pageContext,
       });
+      refreshSharedPersonalInfoCache(
+        authSession,
+        "an existing tailoring run blocked a new start",
+      );
       await showOverlay(tabId, existingTailoringMessage, "info");
       await openSidePanelForTab(activeTab);
       return;
@@ -1236,6 +1357,10 @@ async function tailorResumeForTab(input: {
     };
 
     await persistResult(pageKey, record);
+    refreshSharedPersonalInfoCache(
+      authSession,
+      "the tailoring run moved into interview follow-up",
+    );
     await showOverlay(tabId, record.message, "info");
     return;
   }
@@ -1269,6 +1394,10 @@ async function tailorResumeForTab(input: {
     : buildSuccessMessage(record);
 
   await persistResult(pageKey, record);
+  refreshSharedPersonalInfoCache(
+    authSession,
+    "the tailoring run finished",
+  );
   await showOverlay(
     tabId,
     record.message,
@@ -1434,6 +1563,10 @@ async function runCaptureFlow(input: {
         pageContext,
         tab: readyTab,
       }),
+    );
+    refreshSharedPersonalInfoCache(
+      authSession,
+      "the tailoring run was dispatched",
     );
 
     await showOverlay(tabId, "Tailoring your resume for this job...", "info");
