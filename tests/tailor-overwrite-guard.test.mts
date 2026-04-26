@@ -101,6 +101,7 @@ test("returns a completed overwrite prompt when a saved tailored resume matches"
 
   assert.deepEqual(result, {
     companyName: "Example Corp",
+    createdAt: undefined,
     displayName: "Example Corp - Software Engineer",
     error: null,
     id: "tailored-123",
