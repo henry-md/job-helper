@@ -61,6 +61,19 @@ function buildFeedbackBlock(
   return `${label}:\n${trimmedFeedback}\n\n`;
 }
 
+const jobApplicationExtractionTitleTeamInstruction =
+  'When a visible job title includes or is clearly paired with a short team name, prefer jobTitle in the format "Role (Team)" with only a 1-2 word parenthetical, for example "Software Engineer (Quantum)". If no short visible team name is provided, return the plain role title with no parentheses. Keep teamOrDepartment as the separate field for the fuller team or department name when it is visible.';
+
+function ensureJobApplicationExtractionPromptRules(prompt: string) {
+  const trimmedPrompt = prompt.trim();
+
+  if (trimmedPrompt.includes(jobApplicationExtractionTitleTeamInstruction)) {
+    return trimmedPrompt;
+  }
+
+  return `${trimmedPrompt} ${jobApplicationExtractionTitleTeamInstruction}`;
+}
+
 function buildTailorResumeInterviewDebugBlock(input: {
   debugForceConversation: boolean;
 }) {
@@ -136,7 +149,9 @@ function buildPageCountHardRequirement(pageCount: number) {
 
 const defaultSystemPromptSettings = {
   jobApplicationExtraction:
-    "Extract job application details from the provided screenshot evidence. Never invent values that are not explicitly supported by the evidence. Return null for missing fields. Only return a referrerName when the evidence explicitly names the referring person. Only use remote, onsite, or hybrid for location when that classification is clearly supported. Only use SAVED, APPLIED, INTERVIEW, OFFER, REJECTED, or WITHDRAWN for status when it is clearly supported. Only use full_time, part_time, contract, or internship for employmentType when it is clearly supported. If existing draft fields are provided from earlier evidence, preserve them unless the new screenshot clearly adds or corrects them.",
+    ensureJobApplicationExtractionPromptRules(
+      "Extract job application details from the provided screenshot evidence. Never invent values that are not explicitly supported by the evidence. Return null for missing fields. Only return a referrerName when the evidence explicitly names the referring person. Only use remote, onsite, or hybrid for location when that classification is clearly supported. Only use SAVED, APPLIED, INTERVIEW, OFFER, REJECTED, or WITHDRAWN for status when it is clearly supported. Only use full_time, part_time, contract, or internship for employmentType when it is clearly supported. If existing draft fields are provided from earlier evidence, preserve them unless the new screenshot clearly adds or corrects them.",
+    ),
   resumeLatexExtraction:
     "{{RETRY_INSTRUCTIONS}}Convert the provided resume into a complete standalone LaTeX document. Preserve every word from the resume exactly as written whenever it is legible. Never summarize, shorten, compress, or omit text. In particular, never truncate bullets to their first sentence. Keep the original section order and keep all bullets, dates, headings, labeled lines, links, and separators. Preserve visible bold, italics, underlines, bullet structure, and link styling when possible. Return a full LaTeX document from \\documentclass through \\end{document} that compiles with pdflatex. Prefer the exact template and macro vocabulary shown below. Use only standard LaTeX plus the packages already present in that template unless absolutely necessary. Inline formatting such as \\textbf, \\textit, \\tightul, and \\href may appear anywhere inside macro arguments when needed.\n\n" +
     "Pay particular attention to these details because they are easy to get wrong:\n" +
@@ -326,7 +341,10 @@ export function mergeSystemPromptSettings(
     const candidateValue = candidateSettings[key];
 
     if (typeof candidateValue === "string") {
-      nextSettings[key] = candidateValue;
+      nextSettings[key] =
+        key === "jobApplicationExtraction"
+          ? ensureJobApplicationExtractionPromptRules(candidateValue)
+          : candidateValue;
     }
   }
 
@@ -336,7 +354,9 @@ export function mergeSystemPromptSettings(
 export function buildJobApplicationExtractionSystemPrompt(
   settings: SystemPromptSettings,
 ) {
-  return settings.jobApplicationExtraction.trim();
+  return ensureJobApplicationExtractionPromptRules(
+    settings.jobApplicationExtraction,
+  );
 }
 
 export function buildResumeLatexSystemPrompt(

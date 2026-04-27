@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildJobApplicationExtractionSystemPrompt,
   buildTailorResumePageCountCompactionPrompt,
   buildResumeLatexSystemPrompt,
   buildTailorResumeInterviewSystemPrompt,
@@ -24,6 +25,32 @@ test("mergeSystemPromptSettings preserves defaults for missing keys", () => {
   assert.equal(typeof mergedSettings.tailorResumeInterview, "string");
   assert.equal(typeof mergedSettings.tailorResumeRefinement, "string");
   assert.equal(typeof mergedSettings.tailorResumePageCountCompaction, "string");
+});
+
+test("job application extraction prompt encourages short team names in job titles", () => {
+  const prompt = buildJobApplicationExtractionSystemPrompt(
+    createDefaultSystemPromptSettings(),
+  );
+
+  assert.match(prompt, /Role \(Team\)/);
+  assert.match(prompt, /1-2 word parenthetical/i);
+  assert.match(prompt, /Software Engineer \(Quantum\)/);
+  assert.match(prompt, /plain role title with no parentheses/i);
+});
+
+test("mergeSystemPromptSettings keeps extraction prompt team-title guidance for saved prompts", () => {
+  const mergedSettings = mergeSystemPromptSettings({
+    jobApplicationExtraction: "Custom extraction instructions.",
+  });
+
+  assert.match(
+    mergedSettings.jobApplicationExtraction,
+    /Custom extraction instructions\./,
+  );
+  assert.match(
+    mergedSettings.jobApplicationExtraction,
+    /Software Engineer \(Quantum\)/,
+  );
 });
 
 test("buildResumeLatexSystemPrompt injects retry tokens", () => {
