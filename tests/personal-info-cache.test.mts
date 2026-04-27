@@ -72,3 +72,30 @@ test("personal info cache rejects entries without a user id", async () => {
     null,
   );
 });
+
+test("invalidates only the stale cached personal-info slices when sync versions change", async () => {
+  (globalThis as Record<string, unknown>).__DEBUG_UI__ = false;
+  const { invalidateChangedPersonalInfoSlices } = await import(
+    "../extension/src/personal-info-cache.ts"
+  );
+  const personalInfo = buildPersonalInfo();
+  const invalidated = invalidateChangedPersonalInfoSlices({
+    nextSyncState: {
+      applicationsVersion: 2,
+      tailoringVersion: 3,
+    },
+    personalInfo,
+  });
+
+  assert.deepEqual(invalidated.applications, []);
+  assert.equal(invalidated.applicationCount, 0);
+  assert.equal(invalidated.companyCount, 0);
+  assert.deepEqual(invalidated.activeTailorings, []);
+  assert.equal(invalidated.activeTailoring, null);
+  assert.deepEqual(invalidated.tailoredResumes, []);
+  assert.equal(invalidated.tailoringInterview, null);
+  assert.deepEqual(invalidated.tailoringInterviews, []);
+  assert.deepEqual(invalidated.originalResume, personalInfo.originalResume);
+  assert.deepEqual(invalidated.userMarkdown, personalInfo.userMarkdown);
+  assert.deepEqual(invalidated.syncState, personalInfo.syncState);
+});

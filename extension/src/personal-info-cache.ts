@@ -2,6 +2,7 @@ import {
   readPersonalInfoPayload,
   type PersonalInfoSummary,
 } from "./job-helper.ts";
+import { type UserSyncStateSnapshot } from "../../lib/sync-state.ts";
 
 export const PERSONAL_INFO_CACHE_STORAGE_KEY = "jobHelperPersonalInfoCache";
 
@@ -48,4 +49,40 @@ export function readPersonalInfoCacheEntry(value: unknown) {
     personalInfo: readPersonalInfoPayload(value.personalInfo),
     userId,
   } satisfies PersonalInfoCacheEntry;
+}
+
+export function invalidateChangedPersonalInfoSlices(input: {
+  nextSyncState: UserSyncStateSnapshot;
+  personalInfo: PersonalInfoSummary;
+}) {
+  const applicationsChanged =
+    input.personalInfo.syncState.applicationsVersion !==
+    input.nextSyncState.applicationsVersion;
+  const tailoringChanged =
+    input.personalInfo.syncState.tailoringVersion !==
+    input.nextSyncState.tailoringVersion;
+
+  if (!applicationsChanged && !tailoringChanged) {
+    return input.personalInfo;
+  }
+
+  return {
+    ...input.personalInfo,
+    ...(applicationsChanged
+      ? {
+          applicationCount: 0,
+          applications: [],
+          companyCount: 0,
+        }
+      : {}),
+    ...(tailoringChanged
+      ? {
+          activeTailoring: null,
+          activeTailorings: [],
+          tailoredResumes: [],
+          tailoringInterview: null,
+          tailoringInterviews: [],
+        }
+      : {}),
+  } satisfies PersonalInfoSummary;
 }

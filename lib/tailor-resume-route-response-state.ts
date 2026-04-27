@@ -448,76 +448,98 @@ export async function deleteLinkedDashboardArtifacts(input: {
 }> {
   return withTailorResumeProfileLock(input.userId, async () => {
     const latestState = await readTailorResumeProfileState(input.userId);
-    const impact = await resolveLinkedDashboardDeleteImpact({
-      applicationIds: input.applicationId ? [input.applicationId] : [],
-      rawProfile: latestState.rawProfile,
-      tailoredResumeIds: input.tailoredResumeId ? [input.tailoredResumeId] : [],
-      userId: input.userId,
-    });
-
-    if (impact.totalCount === 0) {
-      return {
-        impact,
-        lockedLinks: latestState.lockedLinks,
-        rawProfile: latestState.rawProfile,
-      };
-    }
-
-    await Promise.all(
-      impact.tailoredResumeIds.map((tailoredResumeId) =>
-        deleteTailoredResumePdf(input.userId, tailoredResumeId),
-      ),
-    );
-    await deleteDbTailoredResumes({
-      ids: [...impact.dbTailoredResumeIds, ...impact.tailoredResumeIds],
-      userId: input.userId,
-    });
-    await deleteJobApplications({
-      applicationIds: impact.applicationIds,
-      userId: input.userId,
-    });
-
-    const tailoredResumeIdSet = new Set(impact.tailoredResumeIds);
-    const interviewIdSet = new Set(impact.interviewIds);
-    const nextRawProfile: TailorResumeProfile = {
-      ...latestState.rawProfile,
-      tailoredResumes: latestState.rawProfile.tailoredResumes.filter(
-        (record) => !tailoredResumeIdSet.has(record.id),
-      ),
-      workspace:
-        interviewIdSet.size > 0
-          ? withTailorResumeWorkspaceInterviews(
-              latestState.rawProfile.workspace,
-              readTailorResumeWorkspaceInterviews(
-                latestState.rawProfile.workspace,
-              ).filter((interview) => !interviewIdSet.has(interview.id)),
-              new Date().toISOString(),
-            )
-          : latestState.rawProfile.workspace,
-    };
-
-    if (impact.tailoredResumeCount > 0 || interviewIdSet.size > 0) {
-      await writeTailorResumeProfile(input.userId, nextRawProfile);
-    }
-
-    await bumpUserSyncState({
-      applications: impact.applicationCount > 0,
-      tailoring: impact.tailoredResumeCount > 0 || interviewIdSet.size > 0,
-      userId: input.userId,
-    });
-
-    return {
-      impact: {
-        applicationCount: impact.applicationCount,
-        applicationIds: impact.applicationIds,
-        tailoredResumeCount: impact.tailoredResumeCount,
-        tailoredResumeIds: impact.tailoredResumeIds,
-        totalCount: impact.totalCount,
-      },
+    return deleteLinkedDashboardArtifactsWithinLockedProfile({
+      ...input,
       lockedLinks: latestState.lockedLinks,
-      rawProfile: nextRawProfile,
-    };
+      rawProfile: latestState.rawProfile,
+    });
   });
+}
+
+export async function deleteLinkedDashboardArtifactsWithinLockedProfile(input: {
+  applicationId?: string | null;
+  lockedLinks: TailorResumeLockedLinkRecord[];
+  rawProfile: TailorResumeProfile;
+  tailoredResumeId?: string | null;
+  userId: string;
+}): Promise<{
+  impact: LinkedDashboardDeleteImpact;
+  lockedLinks: TailorResumeLockedLinkRecord[];
+  rawProfile: TailorResumeProfile;
+}> {
+  const latestState = {
+    lockedLinks: input.lockedLinks,
+    rawProfile: input.rawProfile,
+  };
+  const impact = await resolveLinkedDashboardDeleteImpact({
+    applicationIds: input.applicationId ? [input.applicationId] : [],
+    rawProfile: latestState.rawProfile,
+    tailoredResumeIds: input.tailoredResumeId ? [input.tailoredResumeId] : [],
+    userId: input.userId,
+  });
+
+  if (impact.totalCount === 0) {
+    return {
+      impact,
+      lockedLinks: latestState.lockedLinks,
+      rawProfile: latestState.rawProfile,
+    };
+  }
+
+  await Promise.all(
+    impact.tailoredResumeIds.map((tailoredResumeId) =>
+      deleteTailoredResumePdf(input.userId, tailoredResumeId),
+    ),
+  );
+  await deleteDbTailoredResumes({
+    ids: [...impact.dbTailoredResumeIds, ...impact.tailoredResumeIds],
+    userId: input.userId,
+  });
+  await deleteJobApplications({
+    applicationIds: impact.applicationIds,
+    userId: input.userId,
+  });
+
+  const tailoredResumeIdSet = new Set(impact.tailoredResumeIds);
+  const interviewIdSet = new Set(impact.interviewIds);
+  const nextRawProfile: TailorResumeProfile = {
+    ...latestState.rawProfile,
+    tailoredResumes: latestState.rawProfile.tailoredResumes.filter(
+      (record) => !tailoredResumeIdSet.has(record.id),
+    ),
+    workspace:
+      interviewIdSet.size > 0
+        ? withTailorResumeWorkspaceInterviews(
+            latestState.rawProfile.workspace,
+            readTailorResumeWorkspaceInterviews(
+              latestState.rawProfile.workspace,
+            ).filter((interview) => !interviewIdSet.has(interview.id)),
+            new Date().toISOString(),
+          )
+        : latestState.rawProfile.workspace,
+  };
+
+  if (impact.tailoredResumeCount > 0 || interviewIdSet.size > 0) {
+    await writeTailorResumeProfile(input.userId, nextRawProfile);
+  }
+
+  await bumpUserSyncState({
+    applications: impact.applicationCount > 0,
+    tailoring: impact.tailoredResumeCount > 0 || interviewIdSet.size > 0,
+    userId: input.userId,
+  });
+
+  return {
+    impact: {
+      applicationCount: impact.applicationCount,
+      applicationIds: impact.applicationIds,
+      tailoredResumeCount: impact.tailoredResumeCount,
+      tailoredResumeIds: impact.tailoredResumeIds,
+      totalCount: impact.totalCount,
+    },
+    lockedLinks: latestState.lockedLinks,
+    rawProfile: nextRawProfile,
+  };
 }
 
 export async function deleteTailorResumeArtifacts(input: {
@@ -638,7 +660,7 @@ export async function deleteTailorResumeArtifacts(input: {
   });
 }
 
-async function cleanupInvalidTailorResumeArtifacts(userId: string) {
+export async function cleanupInvalidTailorResumeArtifacts(userId: string) {
   await withTailorResumeProfileLock(userId, async () => {
     const { rawProfile } = await readTailorResumeProfileState(userId);
     const activeRuns = await getPrismaClient().tailorResumeRun.findMany({
@@ -721,8 +743,6 @@ async function cleanupInvalidTailorResumeArtifacts(userId: string) {
 }
 
 export async function readTailorResumeResponseState(userId: string) {
-  await cleanupInvalidTailorResumeArtifacts(userId);
-
   const { profile, rawProfile } = await readTailorResumeProfileState(userId);
   const activeRuns = await findActiveTailorResumeRunsForUser({
     userId,

@@ -133,7 +133,7 @@ import {
 } from "@/lib/job-tracking-shared";
 import {
   deleteDbTailoredResumes,
-  deleteLinkedDashboardArtifacts,
+  deleteLinkedDashboardArtifactsWithinLockedProfile,
   deleteTailorResumeArtifacts,
   findActiveTailorResumeRun,
   readTailorResumeResponseState,
@@ -3844,7 +3844,9 @@ export async function PATCH(request: Request) {
       );
     }
 
-    const deleteResult = await deleteLinkedDashboardArtifacts({
+    const deleteResult = await deleteLinkedDashboardArtifactsWithinLockedProfile({
+      lockedLinks,
+      rawProfile,
       tailoredResumeId: tailoredResume.id,
       userId: session.user.id,
     });

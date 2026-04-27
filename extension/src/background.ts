@@ -27,6 +27,7 @@ import {
   readTailorResumeExistingTailoringState,
   readTailorResumeExistingTailoringStates,
   type TailorResumeGenerationStepSummary,
+  type PersonalInfoSummary,
   readTailorResumeProfileSummary,
   type TailorResumeRunRecord,
 } from "./job-helper";
@@ -43,6 +44,7 @@ import { findMatchingCurrentWindowTabForUrl } from "./browser-tab-targeting";
 import { buildCompletedTailoringMessage } from "./tailor-run-copy";
 import {
   buildPersonalInfoCacheEntry,
+  invalidateChangedPersonalInfoSlices,
   PERSONAL_INFO_CACHE_STORAGE_KEY,
   readPersonalInfoCacheEntry,
 } from "./personal-info-cache";
@@ -84,6 +86,8 @@ const activeTailorResumeAbortControllers = new Map<
 let personalInfoCacheRefreshPromise: Promise<{
   personalInfo: ReturnType<typeof readPersonalInfoPayload>;
 }> | null = null;
+const PERSONAL_INFO_REQUEST_TIMEOUT_MS = 8_000;
+const SYNC_STATE_REQUEST_TIMEOUT_MS = 4_000;
 
 async function configureSidePanelAction() {
   try {
@@ -1069,14 +1073,45 @@ async function readStoredPersonalInfoCache(userId: string) {
   return cacheEntry;
 }
 
+async function fetchWithTimeout(
+  input: {
+    errorMessage: string;
+    timeoutMs: number;
+    url: string | URL;
+  } & RequestInit,
+) {
+  const timeoutController = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => {
+    timeoutController.abort();
+  }, input.timeoutMs);
+
+  try {
+    return await fetch(input.url, {
+      ...input,
+      signal: timeoutController.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(input.errorMessage);
+    }
+
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+  }
+}
+
 async function fetchFreshPersonalInfoSummary(session: JobHelperAuthSession) {
   const personalInfoUrl = new URL(DEFAULT_TAILOR_RESUME_ENDPOINT);
   personalInfoUrl.searchParams.set("includeApplications", "1");
   personalInfoUrl.searchParams.set("applicationLimit", "12");
-  const tailorResumeResponse = await fetch(personalInfoUrl, {
+  const tailorResumeResponse = await fetchWithTimeout({
     cache: "no-store",
     credentials: "include",
+    errorMessage: "Timed out while loading your Job Helper info.",
     headers: authorizationHeaders(session),
+    timeoutMs: PERSONAL_INFO_REQUEST_TIMEOUT_MS,
+    url: personalInfoUrl,
   });
   const tailorResumePayload = await readJsonResponse(tailorResumeResponse);
 
@@ -1129,11 +1164,40 @@ function refreshSharedPersonalInfoCache(
   });
 }
 
+async function writeInvalidatedPersonalInfoCache(input: {
+  cachedPersonalInfo: PersonalInfoSummary;
+  nextSyncState: ReturnType<typeof readUserSyncStateSnapshot>;
+  userId: string;
+}) {
+  const invalidatedPersonalInfo = invalidateChangedPersonalInfoSlices({
+    nextSyncState: input.nextSyncState,
+    personalInfo: input.cachedPersonalInfo,
+  });
+
+  if (invalidatedPersonalInfo === input.cachedPersonalInfo) {
+    return {
+      personalInfo: input.cachedPersonalInfo,
+    };
+  }
+
+  await writeStoredPersonalInfoCache({
+    personalInfo: invalidatedPersonalInfo,
+    userId: input.userId,
+  });
+
+  return {
+    personalInfo: invalidatedPersonalInfo,
+  };
+}
+
 async function fetchSyncStateSummary(session: JobHelperAuthSession) {
-  const response = await fetch(DEFAULT_SYNC_STATE_ENDPOINT, {
+  const response = await fetchWithTimeout({
     cache: "no-store",
     credentials: "include",
+    errorMessage: "Timed out while reading sync state.",
     headers: authorizationHeaders(session),
+    timeoutMs: SYNC_STATE_REQUEST_TIMEOUT_MS,
+    url: DEFAULT_SYNC_STATE_ENDPOINT,
   });
   const payload = await readJsonResponse(response);
 
@@ -1167,7 +1231,20 @@ async function getPersonalInfoSummary() {
       };
     }
 
-    return refreshPersonalInfoCache(session);
+    try {
+      return await refreshPersonalInfoCache(session);
+    } catch (error) {
+      console.warn(
+        "Could not refresh shared personal info after a sync-state change; invalidating stale cache slices instead.",
+        error,
+      );
+
+      return writeInvalidatedPersonalInfoCache({
+        cachedPersonalInfo: cachedPersonalInfo.personalInfo,
+        nextSyncState: syncState,
+        userId: session.user.id,
+      });
+    }
   } catch (error) {
     const cachedAtTime = Date.parse(cachedPersonalInfo.cachedAt);
     const cacheAgeMs = Number.isFinite(cachedAtTime)
