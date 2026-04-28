@@ -9,7 +9,14 @@ export const defaultUserMarkdown = "# USER.md\n\n";
 
 export const CAPTURE_COMMAND_NAME = "capture_job_page";
 const fallbackAppBaseUrl = "http://localhost:3000";
-export const EXTENSION_DEBUG_UI_ENABLED = __DEBUG_UI__;
+const extensionEnv: Record<string, string | undefined> =
+  typeof import.meta !== "undefined" &&
+  typeof import.meta.env === "object" &&
+  import.meta.env !== null
+    ? (import.meta.env as Record<string, string | undefined>)
+    : {};
+export const EXTENSION_DEBUG_UI_ENABLED =
+  typeof __DEBUG_UI__ !== "undefined" ? __DEBUG_UI__ : false;
 
 function normalizeAppBaseUrl(value: string | undefined) {
   const trimmedValue = value?.trim();
@@ -26,7 +33,7 @@ function normalizeAppBaseUrl(value: string | undefined) {
 }
 
 export const DEFAULT_APP_BASE_URL = normalizeAppBaseUrl(
-  import.meta.env.VITE_JOB_HELPER_APP_BASE_URL,
+  extensionEnv.VITE_JOB_HELPER_APP_BASE_URL,
 );
 export const DEFAULT_DASHBOARD_URL = `${DEFAULT_APP_BASE_URL}/dashboard`;
 export const DEFAULT_SYNC_STATE_ENDPOINT = `${DEFAULT_APP_BASE_URL}/api/sync-state`;
