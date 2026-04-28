@@ -6986,73 +6986,37 @@ function App() {
                 </button>
 
                 <div className="tailored-resume-row-actions">
-                  {isUnarchivedSurface ? (
-                    <button
-                      aria-label={
-                        input.actionLabel === "archive"
-                          ? `Archive ${tailoredResume.displayName}`
-                          : `Restore ${tailoredResume.displayName}`
-                      }
-                      className="secondary-action compact-action tailored-resume-row-action-pill"
-                      disabled={isResumeActionDisabled}
-                      title={
-                        isActionPending
-                          ? input.actionLabel === "archive"
-                            ? "Archiving..."
-                            : "Restoring..."
-                          : input.actionLabel === "archive"
-                            ? "Archive"
-                            : "Restore"
-                      }
-                      type="button"
-                      onClick={() =>
-                        void setTailoredResumeArchivedState({
-                          archived: input.actionLabel === "archive",
-                          tailoredResumeId: tailoredResume.id,
-                        })
-                      }
-                    >
-                      {isActionPending
+                  <button
+                    aria-label={
+                      input.actionLabel === "archive"
+                        ? `Archive ${tailoredResume.displayName}`
+                        : `Restore ${tailoredResume.displayName}`
+                    }
+                    className="icon-action tailored-resume-row-action-icon"
+                    disabled={isResumeActionDisabled}
+                    title={
+                      isActionPending
                         ? input.actionLabel === "archive"
                           ? "Archiving..."
                           : "Restoring..."
                         : input.actionLabel === "archive"
                           ? "Archive"
-                          : "Restore"}
-                    </button>
-                  ) : (
-                    <button
-                      aria-label={
-                        input.actionLabel === "archive"
-                          ? `Archive ${tailoredResume.displayName}`
-                          : `Restore ${tailoredResume.displayName}`
-                      }
-                      className="icon-action tailored-resume-row-action-icon"
-                      disabled={isResumeActionDisabled}
-                      title={
-                        isActionPending
-                          ? input.actionLabel === "archive"
-                            ? "Archiving..."
-                            : "Restoring..."
-                          : input.actionLabel === "archive"
-                            ? "Archive"
-                            : "Restore"
-                      }
-                      type="button"
-                      onClick={() =>
-                        void setTailoredResumeArchivedState({
-                          archived: input.actionLabel === "archive",
-                          tailoredResumeId: tailoredResume.id,
-                        })
-                      }
-                    >
-                      {input.actionLabel === "archive" ? (
-                        <ArchiveTrayDownIcon />
-                      ) : (
-                        <ArchiveTrayUpIcon />
-                      )}
-                    </button>
-                  )}
+                          : "Restore"
+                    }
+                    type="button"
+                    onClick={() =>
+                      void setTailoredResumeArchivedState({
+                        archived: input.actionLabel === "archive",
+                        tailoredResumeId: tailoredResume.id,
+                      })
+                    }
+                  >
+                    {input.actionLabel === "archive" ? (
+                      <ArchiveTrayDownIcon />
+                    ) : (
+                      <ArchiveTrayUpIcon />
+                    )}
+                  </button>
                   <div
                     className="tailor-run-menu-shell tailored-resume-row-menu-shell"
                     ref={isMenuOpen ? tailoredResumeMenuRef : undefined}
