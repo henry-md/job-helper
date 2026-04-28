@@ -4,6 +4,7 @@ import {
   matchesTailorOverwritePageIdentity,
   resolveCompletedTailoringForPage,
   resolvePotentialTailorOverwrite,
+  resolvePotentialTailorOverwriteFromPersonalInfo,
 } from "../extension/src/tailor-overwrite-guard.ts";
 import { normalizeComparableUrl } from "../extension/src/comparable-job-url.ts";
 
@@ -113,6 +114,19 @@ test("returns a completed overwrite prompt when a saved tailored resume matches"
     tailoredResumeId: "tailored-123",
     updatedAt: "2026-04-25T15:10:00.000Z",
   });
+});
+
+test("resolves a cached completed overwrite match from personal info", () => {
+  const result = resolvePotentialTailorOverwriteFromPersonalInfo({
+    pageIdentity: buildPageIdentity(),
+    personalInfo: {
+      activeTailorings: [],
+      tailoredResumes: [buildTailoredResumeSummary()],
+    },
+  });
+
+  assert.equal(result?.kind, "completed");
+  assert.equal(result?.tailoredResumeId, "tailored-123");
 });
 
 test("returns the saved completed tailoring for the current page", () => {

@@ -869,6 +869,46 @@ function removeTailorRunArtifactsFromPersonalInfo(input: {
   };
 }
 
+function removeInFlightTailorRunFromPersonalInfo(input: {
+  jobUrl: string;
+  personalInfo: PersonalInfoSummary;
+  tailorRunId: string;
+}) {
+  const matchesActiveTailoring = (
+    activeTailoring: TailorResumeExistingTailoringState,
+  ) =>
+    activeTailoring.kind !== "completed" &&
+    ((input.tailorRunId && activeTailoring.id === input.tailorRunId) ||
+      (input.jobUrl && sameTailoringJobUrl(activeTailoring.jobUrl, input.jobUrl)));
+  const matchesTailoringInterview = (
+    tailoringInterview: TailorResumePendingInterviewSummary,
+  ) =>
+    (input.tailorRunId &&
+      tailoringInterview.tailorResumeRunId === input.tailorRunId) ||
+    (input.jobUrl &&
+      sameTailoringJobUrl(tailoringInterview.jobUrl, input.jobUrl));
+
+  return {
+    ...input.personalInfo,
+    activeTailoring:
+      input.personalInfo.activeTailoring &&
+      matchesActiveTailoring(input.personalInfo.activeTailoring)
+        ? null
+        : input.personalInfo.activeTailoring,
+    activeTailorings: input.personalInfo.activeTailorings.filter(
+      (activeTailoring) => !matchesActiveTailoring(activeTailoring),
+    ),
+    tailoringInterview:
+      input.personalInfo.tailoringInterview &&
+      matchesTailoringInterview(input.personalInfo.tailoringInterview)
+        ? null
+        : input.personalInfo.tailoringInterview,
+    tailoringInterviews: input.personalInfo.tailoringInterviews.filter(
+      (tailoringInterview) => !matchesTailoringInterview(tailoringInterview),
+    ),
+  };
+}
+
 function buildTailoringRunRecordFromExistingTailoring(input: {
   existingTailoring: TailorResumeExistingTailoringState;
   previousRun: TailorResumeRunRecord | null;
@@ -2406,23 +2446,6 @@ function App() {
     }
   }, []);
 
-  const applyAuthoritativePersonalInfo = useCallback(
-    (nextPersonalInfo: PersonalInfoSummary) => {
-      setPersonalInfoState({
-        personalInfo: nextPersonalInfo,
-        status: "ready",
-      });
-
-      if (authState.status === "signedIn") {
-        void persistPersonalInfoCacheEntry(
-          nextPersonalInfo,
-          authState.session.user.id,
-        );
-      }
-    },
-    [authState],
-  );
-
   const loadPersonalInfo = useCallback(
     async (options: { preserveCurrent?: boolean } = {}) => {
       if (!options.preserveCurrent) {
@@ -2747,6 +2770,141 @@ function App() {
       }
     },
     [readCurrentPageRegistryKey],
+  );
+
+  const clearTailorRegistryEntriesForMatch = useCallback(
+    async (match: {
+      pageIdentity?: {
+        canonicalUrl: string | null;
+        jobUrl: string | null;
+        pageUrl: string | null;
+      } | null;
+      pageKey?: string | null;
+      jobUrl?: string | null;
+    }) => {
+      const matchingRegistryKeys = new Set<string>([
+        ...collectTailorStorageRegistryKeys({
+          match,
+          readEntryKey: readTailorRunRecordRegistryKey,
+          readEntryUrls: (run) => [run.pageUrl],
+          registry: tailoringRunsByKey,
+        }),
+        ...collectTailorStorageRegistryKeys({
+          match,
+          readEntryKey: readTailorPreparationRegistryKey,
+          readEntryUrls: (preparation) => [preparation.pageUrl],
+          registry: tailorPreparationsByKey,
+        }),
+        ...collectTailorStorageRegistryKeys({
+          match,
+          readEntryKey: readExistingTailoringPromptRegistryKey,
+          readEntryUrls: (prompt) => [
+            prompt.jobUrl,
+            prompt.pageContext.canonicalUrl,
+            prompt.pageContext.url,
+          ],
+          registry: existingTailoringPromptsByKey,
+        }),
+      ]);
+
+      if (matchingRegistryKeys.size > 0) {
+        setTailoringRunsByKey((currentRegistry) =>
+          Object.fromEntries(
+            Object.entries(currentRegistry).filter(
+              ([registryKey]) => !matchingRegistryKeys.has(registryKey),
+            ),
+          ),
+        );
+        setTailorPreparationsByKey((currentRegistry) =>
+          Object.fromEntries(
+            Object.entries(currentRegistry).filter(
+              ([registryKey]) => !matchingRegistryKeys.has(registryKey),
+            ),
+          ),
+        );
+        setExistingTailoringPromptsByKey((currentRegistry) =>
+          Object.fromEntries(
+            Object.entries(currentRegistry).filter(
+              ([registryKey]) => !matchingRegistryKeys.has(registryKey),
+            ),
+          ),
+        );
+      }
+
+      try {
+        const result = await chrome.storage.local.get([
+          TAILORING_PREPARATIONS_STORAGE_KEY,
+          TAILORING_PROMPTS_STORAGE_KEY,
+          TAILORING_RUNS_STORAGE_KEY,
+        ]);
+        const nextEntries: Record<string, unknown> = {};
+        const storageKeysToRemove: string[] = [];
+        const pruneRegistry = <T,>(
+          storageKey: string,
+          input: {
+            parse: (candidate: unknown) => T | null;
+            readEntryKey: (entry: T, rawKey: string) => string | null;
+            readEntryUrls: (entry: T) => Array<string | null | undefined>;
+          },
+        ) => {
+          const prunedRegistry = pruneRawTailorStorageRegistry({
+            match,
+            parse: input.parse,
+            readEntryKey: input.readEntryKey,
+            readEntryUrls: input.readEntryUrls,
+            value: result[storageKey],
+          });
+
+          if (!prunedRegistry.changed) {
+            return;
+          }
+
+          if (prunedRegistry.value) {
+            nextEntries[storageKey] = prunedRegistry.value;
+          } else {
+            storageKeysToRemove.push(storageKey);
+          }
+        };
+
+        pruneRegistry(TAILORING_RUNS_STORAGE_KEY, {
+          parse: readStoredTailoringRunRecord,
+          readEntryKey: readTailorRunRecordRegistryKey,
+          readEntryUrls: (run) => [run.pageUrl],
+        });
+        pruneRegistry(TAILORING_PREPARATIONS_STORAGE_KEY, {
+          parse: readTailorResumePreparationState,
+          readEntryKey: readTailorPreparationRegistryKey,
+          readEntryUrls: (preparation) => [preparation.pageUrl],
+        });
+        pruneRegistry(TAILORING_PROMPTS_STORAGE_KEY, {
+          parse: readStoredExistingTailoringPrompt,
+          readEntryKey: readExistingTailoringPromptRegistryKey,
+          readEntryUrls: (prompt) => [
+            prompt.jobUrl,
+            prompt.pageContext.canonicalUrl,
+            prompt.pageContext.url,
+          ],
+        });
+
+        if (storageKeysToRemove.length > 0) {
+          await chrome.storage.local.remove(storageKeysToRemove);
+        }
+
+        if (Object.keys(nextEntries).length > 0) {
+          await chrome.storage.local.set(nextEntries);
+        }
+      } catch (error) {
+        console.error(
+          "Could not clear the local Tailor Resume registry entry.",
+          error,
+        );
+      }
+    },
+    [
+      existingTailoringPromptsByKey,
+      tailorPreparationsByKey,
+      tailoringRunsByKey,
+    ],
   );
 
   const showTailorPreparationOverlayOnActivePage = useCallback(
@@ -4812,8 +4970,8 @@ function App() {
         : currentState,
     );
 
-    await persistTailoringRun(nextRun);
-    await persistExistingTailoringPrompt(null);
+    await persistTailoringRun(nextRun, currentPageResolvedRegistryKey);
+    await persistExistingTailoringPrompt(null, currentPageResolvedRegistryKey);
     void loadPersonalInfo();
   }
 
@@ -4822,7 +4980,20 @@ function App() {
       return;
     }
 
-    await persistTailorPreparationState(null);
+    const existingTailoringId =
+      activeTailoring?.kind === "completed" ? null : activeTailoring?.id ?? null;
+    const jobUrl =
+      currentPageUrl ??
+      activeTailoring?.jobUrl ??
+      existingTailoringPrompt?.jobUrl ??
+      lastTailoringRun?.pageUrl ??
+      tailorPreparationState?.pageUrl ??
+      tailorInterview?.jobUrl ??
+      null;
+    const registryPageKey =
+      currentPageResolvedRegistryKey ??
+      buildTailorRunRegistryKey(jobUrl);
+
     setIsStoppingCurrentTailoring(true);
     setActiveTailoringOverrideState("idle");
     activeTailorRequestAbortControllerRef.current?.abort();
@@ -4837,55 +5008,50 @@ function App() {
     setTailorGenerationStep(null);
     setLastTailoringRun(null);
     setCaptureState("idle");
+    let nextPersonalInfo: PersonalInfoSummary | null = null;
     setPersonalInfoState((currentState) =>
       currentState.status === "ready"
         ? {
-            personalInfo: {
-              ...currentState.personalInfo,
-              activeTailoring: null,
-              activeTailorings: currentState.personalInfo.activeTailorings.filter(
-                (activeTailoring) =>
-                  !sameTailoringJobUrl(activeTailoring.jobUrl, currentPageUrl),
-              ),
-              tailoringInterview: null,
-              tailoringInterviews:
-                currentState.personalInfo.tailoringInterviews.filter(
-                  (tailoringInterview) =>
-                    !sameTailoringJobUrl(tailoringInterview.jobUrl, currentPageUrl),
-                ),
-            },
+            personalInfo: (nextPersonalInfo = removeInFlightTailorRunFromPersonalInfo(
+              {
+                jobUrl: jobUrl ?? "",
+                personalInfo: currentState.personalInfo,
+                tailorRunId: existingTailoringId ?? "",
+              },
+            )),
             status: "ready",
           }
         : currentState,
     );
 
+    if (nextPersonalInfo) {
+      lastReadyPersonalInfoRef.current = nextPersonalInfo;
+    }
+
     try {
-      await Promise.all([
-        persistExistingTailoringPrompt(null),
-        persistTailoringRun(null),
-        persistTailorPreparationState(null),
-      ]);
+      await clearTailorRegistryEntriesForMatch({
+        jobUrl,
+        pageIdentity: currentPageIdentity,
+        pageKey: registryPageKey,
+      });
     } catch (error) {
       console.error("Could not clear the active tailoring state.", error);
     }
 
+    setIsStoppingCurrentTailoring(false);
+
     try {
       const response = await chrome.runtime.sendMessage({
         payload: {
-          existingTailoringId:
-            activeTailoring?.kind === "completed" ? null : activeTailoring?.id ?? null,
-          jobUrl:
-            currentPageUrl ??
-            activeTailoring?.jobUrl ??
-            tailorInterview?.jobUrl ??
-            null,
-          pageKey: currentPageRegistryKey,
+          existingTailoringId,
+          jobUrl,
+          pageKey: registryPageKey,
         },
         type: "JOB_HELPER_CANCEL_CURRENT_TAILORING",
       });
 
       assertRuntimeResponseOk(response, "Unable to stop the current tailoring run.");
-      applyAuthoritativePersonalInfo(readPersonalInfoPayload(response));
+      void loadPersonalInfo({ preserveCurrent: true });
     } catch (error) {
       await loadPersonalInfo();
       setTailorInterviewError(
@@ -4893,8 +5059,6 @@ function App() {
           ? error.message
           : "Unable to stop the current tailoring run.",
       );
-    } finally {
-      setIsStoppingCurrentTailoring(false);
     }
   }
 
@@ -5554,19 +5718,28 @@ function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : fallbackMessage;
 
-      if (previousPersonalInfo) {
-        lastReadyPersonalInfoRef.current = previousPersonalInfo;
-        setPersonalInfoState({
-          personalInfo: previousPersonalInfo,
-          status: "ready",
-        });
-      }
+      if (
+        currentDelete.kind === "tailoredResume" &&
+        isMissingTailoredResumeErrorMessage(message)
+      ) {
+        await evictMissingTailoredResumeLocally(currentDelete.tailoredResumeId);
+        setPersonalDeleteError(null);
+        shouldRefreshPersonalInfo = true;
+      } else {
+        if (previousPersonalInfo) {
+          lastReadyPersonalInfoRef.current = previousPersonalInfo;
+          setPersonalInfoState({
+            personalInfo: previousPersonalInfo,
+            status: "ready",
+          });
+        }
 
-      setPendingPersonalDelete(currentDelete);
-      setPersonalDeleteError(message);
+        setPendingPersonalDelete(currentDelete);
+        setPersonalDeleteError(message);
 
-      if (currentDelete.kind === "tailoredResume") {
-        setTailoredResumeMutationError(message);
+        if (currentDelete.kind === "tailoredResume") {
+          setTailoredResumeMutationError(message);
+        }
       }
     } finally {
       setPersonalDeleteActionState("idle");
@@ -5687,35 +5860,105 @@ function App() {
     const tailoredResumeId = deleteTarget?.tailoredResumeId?.trim() ?? "";
     const jobUrl = deleteTarget?.jobUrl?.trim() ?? "";
     const tailorRunId = deleteTarget?.tailorRunId?.trim() ?? "";
+    const existingTailoringId =
+      currentPagePersonalInfoTailoring &&
+      currentPagePersonalInfoTailoring.kind !== "completed"
+        ? currentPagePersonalInfoTailoring.id
+        : existingTailoringPrompt &&
+            existingTailoringPrompt.existingTailoring.kind !== "completed"
+          ? existingTailoringPrompt.existingTailoring.id
+          : activeTailoring?.kind === "completed"
+            ? null
+            : activeTailoring?.id ?? null;
+    const cancelJobUrl =
+      jobUrl ||
+      currentPageUrl ||
+      currentPagePersonalInfoTailoring?.jobUrl ||
+      existingTailoringPrompt?.jobUrl ||
+      lastTailoringRun?.pageUrl ||
+      tailorPreparationState?.pageUrl ||
+      tailorInterview?.jobUrl ||
+      activeTailoring?.jobUrl ||
+      null;
+    const registryPageKey =
+      currentPageResolvedRegistryKey ??
+      buildTailorRunRegistryKey(cancelJobUrl);
+    const shouldRemoveSavedArtifacts = Boolean(tailoredResumeId);
+    const fallbackMessage = "Unable to delete the tailored resume.";
 
     setTailorRunMenuActionState("deleting");
     setTailorRunMenuError(null);
+    setIsTailorRunMenuOpen(false);
+    setActiveTailorRunDetailView(null);
+    setExistingTailoringPrompt(null);
+    setPendingTailoredResumeReviewEditId(null);
+    setTailoredResumePreviewState({ objectUrl: null, status: "idle" });
+    setTailoredResumeReviewState((currentState) =>
+      tailoredResumeId && currentState.record?.id === tailoredResumeId
+        ? { record: null, status: "idle" }
+        : currentState,
+    );
+    setTailorInterview(null);
+    setIsTailorInterviewOpen(false);
+    setDraftTailorInterviewAnswer("");
+    setPendingTailorInterviewAnswerMessage(null);
+    setIsTailorInterviewFinishPromptOpen(false);
+    setTailorInterviewError(null);
+    setTailorGenerationStep(null);
+    setLastTailoringRun(null);
+    setCaptureState("idle");
+    let previousPersonalInfo: PersonalInfoSummary | null = null;
+    let nextPersonalInfo: PersonalInfoSummary | null = null;
+    setPersonalInfoState((currentState) => {
+      if (currentState.status !== "ready") {
+        return currentState;
+      }
+
+      previousPersonalInfo = currentState.personalInfo;
+      nextPersonalInfo = shouldRemoveSavedArtifacts
+        ? removeTailorRunArtifactsFromPersonalInfo({
+            jobUrl,
+            personalInfo: currentState.personalInfo,
+            tailoredResumeId,
+            tailorRunId,
+          })
+        : removeInFlightTailorRunFromPersonalInfo({
+            jobUrl: cancelJobUrl ?? jobUrl,
+            personalInfo: currentState.personalInfo,
+            tailorRunId: tailorRunId || existingTailoringId || "",
+          });
+
+      return {
+        personalInfo: nextPersonalInfo,
+        status: "ready",
+      };
+    });
+
+    if (nextPersonalInfo) {
+      lastReadyPersonalInfoRef.current = nextPersonalInfo;
+    }
+
     let shouldRefreshPersonalInfo = false;
 
     try {
-      await persistTailorPreparationState(null);
       activeTailorRequestAbortControllerRef.current?.abort();
       activeTailorRequestAbortControllerRef.current = null;
       setActiveTailoringOverrideState("idle");
+      await clearTailorRegistryEntriesForMatch({
+        jobUrl: cancelJobUrl,
+        pageIdentity: currentPageIdentity,
+        pageKey: registryPageKey,
+      }).catch((error) => {
+        console.error("Could not clear the deleted tailoring run.", error);
+      });
 
       if (shouldCancelCurrentTailoring) {
-        setIsStoppingCurrentTailoring(true);
-
         try {
           const response = await chrome.runtime.sendMessage({
             payload: {
-              existingTailoringId:
-                tailorRunId ||
-                (activeTailoring?.kind === "completed"
-                  ? null
-                  : activeTailoring?.id ?? null),
-              jobUrl:
-                jobUrl ||
-                currentPageUrl ||
-                activeTailoring?.jobUrl ||
-                tailorInterview?.jobUrl ||
-                null,
-              pageKey: currentPageRegistryKey,
+              existingTailoringId: tailorRunId || existingTailoringId,
+              jobUrl: cancelJobUrl,
+              pageKey: registryPageKey,
             },
             type: "JOB_HELPER_CANCEL_CURRENT_TAILORING",
           });
@@ -5724,16 +5967,9 @@ function App() {
             response,
             "Unable to stop the current tailoring run.",
           );
-          applyAuthoritativePersonalInfo(readPersonalInfoPayload(response));
         } catch (error) {
           await loadPersonalInfo();
-          throw new Error(
-            error instanceof Error
-              ? error.message
-              : "Unable to stop the current tailoring run.",
-          );
-        } finally {
-          setIsStoppingCurrentTailoring(false);
+          throw error;
         }
       }
 
@@ -5746,61 +5982,27 @@ function App() {
         });
 
         if (!result.ok) {
-          throw new Error(
-            readTailorResumePayloadError(
-              result.payload,
-              "Unable to delete the tailored resume.",
-            ),
-          );
+          const message = readTailorResumePayloadError(result.payload, fallbackMessage);
+
+          if (isMissingTailoredResumeErrorMessage(message)) {
+            shouldRefreshPersonalInfo = true;
+          } else {
+            throw new Error(message);
+          }
         }
       }
-
-      setIsTailorRunMenuOpen(false);
-      setActiveTailorRunDetailView(null);
-      setExistingTailoringPrompt(null);
-      setPendingTailoredResumeReviewEditId(null);
-      setTailoredResumePreviewState({ objectUrl: null, status: "idle" });
-      setTailoredResumeReviewState((currentState) =>
-        tailoredResumeId && currentState.record?.id === tailoredResumeId
-          ? { record: null, status: "idle" }
-          : currentState,
-      );
-      setTailorInterview(null);
-      setIsTailorInterviewOpen(false);
-      setDraftTailorInterviewAnswer("");
-      setPendingTailorInterviewAnswerMessage(null);
-      setIsTailorInterviewFinishPromptOpen(false);
-      setTailorInterviewError(null);
-      setTailorGenerationStep(null);
-      setLastTailoringRun(null);
-      setCaptureState("idle");
-      setPersonalInfoState((currentState) =>
-        currentState.status === "ready"
-          ? {
-              personalInfo: removeTailorRunArtifactsFromPersonalInfo({
-                jobUrl,
-                personalInfo: currentState.personalInfo,
-                tailoredResumeId,
-                tailorRunId,
-              }),
-              status: "ready",
-            }
-          : currentState,
-      );
-
-      await Promise.all([
-        persistExistingTailoringPrompt(null),
-        persistTailoringRun(null),
-        persistTailorPreparationState(null),
-      ]).catch((error) => {
-        console.error("Could not clear the deleted tailoring run.", error);
-      });
       shouldRefreshPersonalInfo = true;
     } catch (error) {
+      if (previousPersonalInfo) {
+        lastReadyPersonalInfoRef.current = previousPersonalInfo;
+        setPersonalInfoState({
+          personalInfo: previousPersonalInfo,
+          status: "ready",
+        });
+      }
+
       setTailorRunMenuError(
-        error instanceof Error
-          ? error.message
-          : "Unable to delete the tailored resume.",
+        error instanceof Error ? error.message : fallbackMessage,
       );
     } finally {
       setTailorRunMenuActionState("idle");
@@ -5863,6 +6065,35 @@ function App() {
     setBackgroundTailorRunMenuActionCardId(card.id);
     setBackgroundTailorRunMenuError(null);
     setBackgroundTailorRunMenuErrorCardId(null);
+    setBackgroundTailorRunMenuId(null);
+    let previousPersonalInfo: PersonalInfoSummary | null = null;
+    let nextPersonalInfo: PersonalInfoSummary | null = null;
+    setPersonalInfoState((currentState) => {
+      if (currentState.status !== "ready") {
+        return currentState;
+      }
+
+      previousPersonalInfo = currentState.personalInfo;
+      nextPersonalInfo = removeInFlightTailorRunFromPersonalInfo({
+        jobUrl,
+        personalInfo: currentState.personalInfo,
+        tailorRunId: existingTailoringId,
+      });
+
+      return {
+        personalInfo: nextPersonalInfo,
+        status: "ready",
+      };
+    });
+
+    if (nextPersonalInfo) {
+      lastReadyPersonalInfoRef.current = nextPersonalInfo;
+    }
+
+    await clearTailorRegistryEntriesForMatch({
+      jobUrl,
+      pageKey: card.pageKey,
+    });
 
     try {
       const response = await chrome.runtime.sendMessage({
@@ -5874,9 +6105,16 @@ function App() {
         type: "JOB_HELPER_CANCEL_CURRENT_TAILORING",
       });
       assertRuntimeResponseOk(response, "Unable to stop the tailoring run.");
-      setBackgroundTailorRunMenuId(null);
-      applyAuthoritativePersonalInfo(readPersonalInfoPayload(response));
+      void loadPersonalInfo({ preserveCurrent: true });
     } catch (error) {
+      if (previousPersonalInfo) {
+        lastReadyPersonalInfoRef.current = previousPersonalInfo;
+        setPersonalInfoState({
+          personalInfo: previousPersonalInfo,
+          status: "ready",
+        });
+      }
+
       await loadPersonalInfo();
       setBackgroundTailorRunMenuErrorCardId(card.id);
       setBackgroundTailorRunMenuError(
@@ -5892,6 +6130,10 @@ function App() {
     const deleteTarget = card.deleteTarget;
     const jobUrl = deleteTarget?.jobUrl?.trim() || card.url?.trim() || "";
     const existingTailoringId = card.existingTailoringId?.trim() ?? "";
+    const tailoredResumeId = deleteTarget?.tailoredResumeId?.trim() ?? "";
+    const tailorRunId = deleteTarget?.tailorRunId?.trim() ?? "";
+    const shouldRemoveSavedArtifacts = Boolean(tailoredResumeId);
+    const fallbackMessage = "Unable to delete the tailored resume.";
 
     if (
       card.isCurrentPage ||
@@ -5905,7 +6147,43 @@ function App() {
     setBackgroundTailorRunMenuActionCardId(card.id);
     setBackgroundTailorRunMenuError(null);
     setBackgroundTailorRunMenuErrorCardId(null);
+    setBackgroundTailorRunMenuId(null);
     let shouldRefreshPersonalInfo = false;
+    let previousPersonalInfo: PersonalInfoSummary | null = null;
+    let nextPersonalInfo: PersonalInfoSummary | null = null;
+    setPersonalInfoState((currentState) => {
+      if (currentState.status !== "ready") {
+        return currentState;
+      }
+
+      previousPersonalInfo = currentState.personalInfo;
+      nextPersonalInfo = shouldRemoveSavedArtifacts
+        ? removeTailorRunArtifactsFromPersonalInfo({
+            jobUrl,
+            personalInfo: currentState.personalInfo,
+            tailoredResumeId,
+            tailorRunId,
+          })
+        : removeInFlightTailorRunFromPersonalInfo({
+            jobUrl,
+            personalInfo: currentState.personalInfo,
+            tailorRunId: tailorRunId || existingTailoringId,
+          });
+
+      return {
+        personalInfo: nextPersonalInfo,
+        status: "ready",
+      };
+    });
+
+    if (nextPersonalInfo) {
+      lastReadyPersonalInfoRef.current = nextPersonalInfo;
+    }
+
+    await clearTailorRegistryEntriesForMatch({
+      jobUrl,
+      pageKey: card.pageKey,
+    });
 
     try {
       if (jobUrl || existingTailoringId) {
@@ -5921,7 +6199,6 @@ function App() {
           cancelResponse,
           "Unable to stop the tailoring run before deleting it.",
         );
-        applyAuthoritativePersonalInfo(readPersonalInfoPayload(cancelResponse));
       }
 
       if (deleteTarget) {
@@ -5935,38 +6212,31 @@ function App() {
         });
 
         if (!result.ok) {
-          throw new Error(
-            readTailorResumePayloadError(
-              result.payload,
-              "Unable to delete the tailored resume.",
-            ),
-          );
+          const message = readTailorResumePayloadError(result.payload, fallbackMessage);
+
+          if (isMissingTailoredResumeErrorMessage(message)) {
+            shouldRefreshPersonalInfo = true;
+          } else {
+            throw new Error(message);
+          }
         }
       }
 
-      setBackgroundTailorRunMenuId(null);
       setActiveTailorRunDetailView(null);
-      setPersonalInfoState((currentState) =>
-        currentState.status === "ready"
-          ? {
-              personalInfo: removeTailorRunArtifactsFromPersonalInfo({
-                jobUrl,
-                personalInfo: currentState.personalInfo,
-                tailoredResumeId: deleteTarget?.tailoredResumeId?.trim() ?? "",
-                tailorRunId: deleteTarget?.tailorRunId?.trim() ?? "",
-              }),
-              status: "ready",
-            }
-          : currentState,
-      );
       shouldRefreshPersonalInfo = true;
     } catch (error) {
+      if (previousPersonalInfo) {
+        lastReadyPersonalInfoRef.current = previousPersonalInfo;
+        setPersonalInfoState({
+          personalInfo: previousPersonalInfo,
+          status: "ready",
+        });
+      }
+
       await loadPersonalInfo();
       setBackgroundTailorRunMenuErrorCardId(card.id);
       setBackgroundTailorRunMenuError(
-        error instanceof Error
-          ? error.message
-          : "Unable to delete the tailored resume.",
+        error instanceof Error ? error.message : fallbackMessage,
       );
     } finally {
       setBackgroundTailorRunMenuActionState("idle");
@@ -6654,7 +6924,6 @@ function App() {
           }`.trim()}
         >
           {input.resumes.map((tailoredResume) => {
-            const isUnarchivedSurface = input.actionLabel === "archive";
             const isCurrentPageMatch =
               input.highlightCurrentPage === true &&
               tailoredResumeMatchesCurrentPage(tailoredResume);
@@ -6967,12 +7236,114 @@ function App() {
     return reviewRecord;
   }
 
-  function syncTailoredResumeSummariesFromPayload(payload: unknown) {
-    const tailoredResumes = readTailoredResumeSummaries(payload);
+  const evictMissingTailoredResumeLocally = useCallback(
+    async (tailoredResumeId: string) => {
+      if (!tailoredResumeId) {
+        return;
+      }
 
-    if (tailoredResumes.length === 0) {
+      const matchingTailoredResume =
+        personalInfo?.tailoredResumes.find(
+          (tailoredResume) => tailoredResume.id === tailoredResumeId,
+        ) ?? null;
+      let nextPersonalInfo: PersonalInfoSummary | null = null;
+
+      setPersonalInfoState((currentState) =>
+        currentState.status === "ready"
+          ? {
+              personalInfo: (nextPersonalInfo = removeTailorRunArtifactsFromPersonalInfo(
+                {
+                  jobUrl: matchingTailoredResume?.jobUrl ?? "",
+                  personalInfo: currentState.personalInfo,
+                  tailoredResumeId,
+                  tailorRunId: "",
+                },
+              )),
+              status: "ready",
+            }
+          : currentState,
+      );
+
+      if (nextPersonalInfo) {
+        lastReadyPersonalInfoRef.current = nextPersonalInfo;
+
+        if (authState.status === "signedIn") {
+          void persistPersonalInfoCacheEntry(
+            nextPersonalInfo,
+            authState.session.user.id,
+          );
+        }
+      }
+
+      if (selectedTailoredResumeId === tailoredResumeId) {
+        setSelectedTailoredResumeId(null);
+        setActiveTailorRunDetailView(null);
+        setTailoredResumePreviewState({ objectUrl: null, status: "idle" });
+      }
+
+      if (tailoredResumeMenuId === tailoredResumeId) {
+        setTailoredResumeMenuId(null);
+        setTailoredResumeMenuPosition(null);
+      }
+
+      if (tailoredResumeMenuErrorResumeId === tailoredResumeId) {
+        setTailoredResumeMenuError(null);
+        setTailoredResumeMenuErrorResumeId(null);
+      }
+
+      setTailoredResumeMutationError(null);
+      setPendingPersonalDelete((currentDelete) =>
+        currentDelete?.kind === "tailoredResume" &&
+        currentDelete.tailoredResumeId === tailoredResumeId
+          ? null
+          : currentDelete,
+      );
+      setPersonalDeleteError(null);
+      setPendingTailoredResumeReviewEditId((currentId) =>
+        currentId === tailoredResumeId ? null : currentId,
+      );
+      setTailoredResumeReviewState((currentState) =>
+        currentState.record?.id === tailoredResumeId
+          ? { record: null, status: "idle" }
+          : currentState,
+      );
+
+      if (lastTailoringRun?.tailoredResumeId === tailoredResumeId) {
+        const pageKey = buildTailorRunRegistryKey(lastTailoringRun.pageUrl);
+
+        setTailorGenerationStep(null);
+        setLastTailoringRun(null);
+        setCaptureState((currentCaptureState) =>
+          currentCaptureState === "blocked" ? "blocked" : "idle",
+        );
+
+        try {
+          await persistTailoringRun(null, pageKey);
+        } catch (error) {
+          console.error(
+            "Could not clear a missing tailored resume run from local storage.",
+            error,
+          );
+        }
+      }
+    },
+    [
+      authState,
+      lastTailoringRun,
+      personalInfo,
+      persistTailoringRun,
+      selectedTailoredResumeId,
+      tailoredResumeMenuErrorResumeId,
+      tailoredResumeMenuId,
+    ],
+  );
+
+  function syncTailoredResumeSummariesFromPayload(payload: unknown) {
+    if (!payloadIncludesTailoredResumeSummaries(payload)) {
       return;
     }
+
+    const tailoredResumes = readTailoredResumeSummaries(payload);
 
     let nextPersonalInfo: PersonalInfoSummary | null = null;
     setPersonalInfoState((currentState) =>
@@ -7046,6 +7417,15 @@ function App() {
           : input.archived
             ? "Unable to archive the tailored resume."
             : "Unable to restore the tailored resume.";
+
+      if (isMissingTailoredResumeErrorMessage(message)) {
+        await evictMissingTailoredResumeLocally(input.tailoredResumeId);
+        await loadPersonalInfo({ preserveCurrent: true });
+
+        return {
+          ok: true as const,
+        };
+      }
 
       setTailoredResumeMutationError(message);
 

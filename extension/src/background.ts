@@ -48,7 +48,10 @@ import {
   PERSONAL_INFO_CACHE_STORAGE_KEY,
   readPersonalInfoCacheEntry,
 } from "./personal-info-cache";
-import { resolvePotentialTailorOverwrite } from "./tailor-overwrite-guard";
+import {
+  resolvePotentialTailorOverwrite,
+  resolvePotentialTailorOverwriteFromPersonalInfo,
+} from "./tailor-overwrite-guard";
 import {
   buildTailorRunRegistryKey,
   readTailorRunRegistryKeyFromPageContext,
@@ -384,6 +387,12 @@ function isAbortError(error: unknown) {
     error instanceof Error &&
     /abort/i.test(error.name || error.message || "")
   );
+}
+
+function throwIfTailorCaptureAborted(signal: AbortSignal) {
+  if (signal.aborted) {
+    throw new DOMException("The Tailor Resume start was aborted.", "AbortError");
+  }
 }
 
 async function patchTailorResume(
@@ -1266,11 +1275,17 @@ async function getSyncStateSummary() {
   return fetchSyncStateSummary(session);
 }
 
-async function loadTailorResumeOverwriteSummary(session: JobHelperAuthSession) {
+async function loadTailorResumeOverwriteSummary(
+  session: JobHelperAuthSession,
+  options: {
+    signal?: AbortSignal;
+  } = {},
+) {
   const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
     cache: "no-store",
     credentials: "include",
     headers: authorizationHeaders(session),
+    signal: options.signal,
   });
   const payload = await readJsonResponse(response);
 
@@ -1540,6 +1555,7 @@ async function runCaptureFlow(input: {
     }
 
     const readyTab = await waitForTabToFinishLoading(activeTab);
+    throwIfTailorCaptureAborted(abortController.signal);
     const tabId = readyTab.id;
 
     if (typeof tabId !== "number") {
@@ -1547,11 +1563,18 @@ async function runCaptureFlow(input: {
     }
 
     const authSession = await ensureJobHelperSession({ interactive: true });
+    throwIfTailorCaptureAborted(abortController.signal);
     const pageContext = await collectPageContext(tabId);
+    throwIfTailorCaptureAborted(abortController.signal);
     const jobDescription = buildJobDescriptionFromPageContext(pageContext);
     const jobUrl = readJobUrlFromPageContext(pageContext);
     pageKey =
       readTailorRunRegistryKeyFromPageContext(pageContext) ?? initialPageKey;
+    const pageIdentity = {
+      canonicalUrl: pageContext.canonicalUrl,
+      jobUrl,
+      pageUrl: pageContext.url,
+    };
 
     if (pageKey !== initialPageKey) {
       activeTailorResumeAbortControllers.delete(initialPageKey);
@@ -1578,24 +1601,71 @@ async function runCaptureFlow(input: {
     let overwriteSummary:
       | Awaited<ReturnType<typeof loadTailorResumeOverwriteSummary>>
       | null = null;
-
-    try {
-      overwriteSummary = await loadTailorResumeOverwriteSummary(authSession);
-    } catch (error) {
-      console.warn(
-        "Could not refresh Tailor Resume overwrite state before starting.",
-        error,
-      );
-    }
+    const cachedPersonalInfo =
+      (await readStoredPersonalInfoCache(authSession.user.id))?.personalInfo ?? null;
+    throwIfTailorCaptureAborted(abortController.signal);
 
     if (!input.overwriteExisting) {
+      const cachedExistingTailoring =
+        resolvePotentialTailorOverwriteFromPersonalInfo({
+          pageIdentity,
+          personalInfo: cachedPersonalInfo,
+        });
+      const cachedExistingTailoringMessage = buildExistingTailoringMessage(
+        cachedExistingTailoring,
+      );
+
+      if (cachedExistingTailoring && cachedExistingTailoringMessage) {
+        const record: TailorResumeRunRecord = {
+          capturedAt,
+          companyName: null,
+          endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
+          generationStep: null,
+          jobIdentifier: cachedExistingTailoring.jobIdentifier,
+          message: cachedExistingTailoringMessage,
+          pageTitle: pageContext.title || null,
+          pageUrl: pageContext.url || null,
+          positionTitle: null,
+          status: "error",
+          tailoredResumeError: null,
+          tailoredResumeId: null,
+        };
+
+        await persistTailorPreparationState(pageKey, null);
+        await persistResult(pageKey, record);
+        await persistExistingTailoringPrompt(pageKey, {
+          existingTailoring: cachedExistingTailoring,
+          jobDescription,
+          jobUrl,
+          pageContext,
+        });
+        await showOverlay(tabId, cachedExistingTailoringMessage, "info");
+        await openSidePanelForTab(readyTab);
+        return;
+      }
+
+      try {
+        overwriteSummary = await loadTailorResumeOverwriteSummary(authSession, {
+          signal: abortController.signal,
+        });
+      } catch (error) {
+        if (isAbortError(error)) {
+          throw error;
+        }
+
+        if (cachedPersonalInfo) {
+          throw new Error(
+            "Could not confirm whether this page already has tailoring. Try again in a moment.",
+          );
+        }
+
+        throw error;
+      }
+
+      throwIfTailorCaptureAborted(abortController.signal);
       const existingTailoring = resolvePotentialTailorOverwrite({
         activeTailorings: overwriteSummary?.activeTailorings ?? [],
-        pageIdentity: {
-          canonicalUrl: pageContext.canonicalUrl,
-          jobUrl,
-          pageUrl: pageContext.url,
-        },
+        pageIdentity,
         tailoredResumes: overwriteSummary?.tailoredResumes ?? [],
       });
       const existingTailoringMessage =
@@ -1631,6 +1701,7 @@ async function runCaptureFlow(input: {
       }
     }
 
+    throwIfTailorCaptureAborted(abortController.signal);
     await persistTailorPreparationState(pageKey, null);
     await persistExistingTailoringPrompt(pageKey, null);
     await persistResult(

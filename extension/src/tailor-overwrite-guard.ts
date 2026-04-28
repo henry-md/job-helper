@@ -1,4 +1,5 @@
 import type {
+  PersonalInfoSummary,
   TailorResumeExistingTailoringState,
   TailoredResumeSummary,
 } from "./job-helper.ts";
@@ -76,6 +77,23 @@ export function resolvePotentialTailorOverwrite(input: {
   return matchingTailoredResume
     ? buildCompletedExistingTailoringState(matchingTailoredResume)
     : null;
+}
+
+export function resolvePotentialTailorOverwriteFromPersonalInfo(input: {
+  pageIdentity: TailorOverwritePageIdentity;
+  personalInfo:
+    | Pick<PersonalInfoSummary, "activeTailorings" | "tailoredResumes">
+    | null;
+}) {
+  if (!input.personalInfo) {
+    return null;
+  }
+
+  return resolvePotentialTailorOverwrite({
+    activeTailorings: input.personalInfo.activeTailorings,
+    pageIdentity: input.pageIdentity,
+    tailoredResumes: input.personalInfo.tailoredResumes,
+  });
 }
 
 export function resolveCompletedTailoringForPage(input: {
