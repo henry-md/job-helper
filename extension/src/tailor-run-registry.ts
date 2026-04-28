@@ -39,7 +39,11 @@ export function readTailorRunRegistryKeyFromPageContext(
   });
 }
 
-export function readTailorRunRegistryKeyFromTab(tab: chrome.tabs.Tab | null) {
+export function readTailorRunRegistryKeyFromTab(
+  tab: {
+    url?: string | null;
+  } | null,
+) {
   return readTailorRunRegistryKeyFromPage({
     pageUrl: cleanText(tab?.url) || null,
   });
