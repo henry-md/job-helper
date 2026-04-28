@@ -1,0 +1,3 @@
+- Symptom: the extension Tailor tab could show an in-flight tailoring card while the lower unarchived area still looked empty or showed `0`, which made a live run feel missing from the user's active working set.
+- Root cause: the side panel rendered active Tailor Resume cards in a separate section and only let saved completed resumes drive the unarchived card content/count.
+- Fix: treat the Tailor tab itself as the unarchived surface by rendering active run cards and completed unarchived resumes inside the same card, removing the redundant `Unarchived resumes` heading, and only showing the empty state when neither active nor completed items exist.

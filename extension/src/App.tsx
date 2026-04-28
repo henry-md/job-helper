@@ -92,7 +92,14 @@ import {
   buildTailorRunRegistryKey,
   readTailorRunRegistryKeyFromPageContext,
 } from "./tailor-run-registry";
+import {
+  collectTailorStorageRegistryKeys,
+  findTailorStorageRegistryEntry,
+  normalizeTailorStorageRegistry,
+  pruneRawTailorStorageRegistry,
+} from "./tailor-storage-registry";
 import { buildTailoringRunsRefreshKey } from "./tailor-run-refresh";
+import { filterVisibleTailoredResumes } from "./tailored-resume-visibility";
 import {
   buildPersonalInfoCacheEntry,
   PERSONAL_INFO_CACHE_STORAGE_KEY,
@@ -406,6 +413,42 @@ function readStringPayloadValue(value: unknown, key: string) {
   return isRecord(value) && typeof value[key] === "string"
     ? value[key].trim()
     : "";
+}
+
+function payloadIncludesTailoredResumeSummaries(payload: unknown): boolean {
+  if (Array.isArray(payload)) {
+    return true;
+  }
+
+  if (!isRecord(payload)) {
+    return false;
+  }
+
+  if (Array.isArray(payload.tailoredResumes)) {
+    return true;
+  }
+
+  if (
+    isRecord(payload.profile) &&
+    Array.isArray(payload.profile.tailoredResumes)
+  ) {
+    return true;
+  }
+
+  if (isRecord(payload.personalInfo)) {
+    return payloadIncludesTailoredResumeSummaries(payload.personalInfo);
+  }
+
+  return false;
+}
+
+function isMissingTailoredResumeErrorMessage(message: string) {
+  const normalizedMessage = message.trim().toLowerCase();
+
+  return (
+    normalizedMessage.includes("tailored resume") &&
+    normalizedMessage.includes("could not be found")
+  );
 }
 
 function resolveTailoredResumeFromPayload(payload: unknown) {
@@ -1564,6 +1607,68 @@ type ExistingTailoringPromptState = {
 type ActiveTailoringOverrideState = "idle" | "overwriting";
 type TailorStorageRegistry<T> = Record<string, T>;
 
+function readTailorPreparationRegistryKey(
+  preparationState: TailorResumePreparationState,
+  rawKey: string,
+) {
+  return (
+    buildTailorRunRegistryKey(preparationState.pageUrl) ??
+    buildTailorRunRegistryKey(rawKey)
+  );
+}
+
+function readTailorRunRecordRegistryKey(
+  run: TailorResumeRunRecord,
+  rawKey: string,
+) {
+  return buildTailorRunRegistryKey(run.pageUrl) ?? buildTailorRunRegistryKey(rawKey);
+}
+
+function readExistingTailoringPromptRegistryKey(
+  prompt: ExistingTailoringPromptState,
+  rawKey: string,
+) {
+  return (
+    buildTailorRunRegistryKey(prompt.jobUrl) ??
+    readTailorRunRegistryKeyFromPageContext(prompt.pageContext) ??
+    buildTailorRunRegistryKey(rawKey)
+  );
+}
+
+function compareIsoTimestampStrings(left: string | null, right: string | null) {
+  return Date.parse(left || "") - Date.parse(right || "");
+}
+
+function compareTailorPreparationStates(
+  left: TailorResumePreparationState,
+  right: TailorResumePreparationState,
+) {
+  return compareIsoTimestampStrings(left.capturedAt, right.capturedAt);
+}
+
+function compareTailorRunRecords(
+  left: TailorResumeRunRecord,
+  right: TailorResumeRunRecord,
+) {
+  return compareIsoTimestampStrings(left.capturedAt, right.capturedAt);
+}
+
+function compareExistingTailoringPrompts(
+  left: ExistingTailoringPromptState,
+  right: ExistingTailoringPromptState,
+) {
+  return (
+    compareIsoTimestampStrings(
+      left.existingTailoring.updatedAt,
+      right.existingTailoring.updatedAt,
+    ) ||
+    compareIsoTimestampStrings(
+      left.existingTailoring.createdAt,
+      right.existingTailoring.createdAt,
+    )
+  );
+}
+
 function readCaptureStateFromTailoringRun(
   run: TailorResumeRunRecord | null,
 ): CaptureState | null {
@@ -1673,62 +1778,30 @@ function readStoredTailoringRunRecord(
 }
 
 function readStoredTailoringRunRegistry(value: unknown) {
-  if (!isRecord(value)) {
-    return {} as TailorStorageRegistry<TailorResumeRunRecord>;
-  }
-
-  const entries = Object.entries(value)
-    .map(([key, candidate]) => {
-      const run = readStoredTailoringRunRecord(candidate);
-      return run ? ([key, run] as const) : null;
-    })
-    .filter(
-      (
-        entry,
-      ): entry is readonly [string, TailorResumeRunRecord] => Boolean(entry),
-    );
-
-  return Object.fromEntries(entries) as TailorStorageRegistry<TailorResumeRunRecord>;
+  return normalizeTailorStorageRegistry({
+    compareEntries: compareTailorRunRecords,
+    parse: readStoredTailoringRunRecord,
+    readEntryKey: readTailorRunRecordRegistryKey,
+    value,
+  });
 }
 
 function readStoredTailorPreparationRegistry(value: unknown) {
-  if (!isRecord(value)) {
-    return {} as TailorStorageRegistry<TailorResumePreparationState>;
-  }
-
-  const entries = Object.entries(value)
-    .map(([key, candidate]) => {
-      const preparationState = readTailorResumePreparationState(candidate);
-      return preparationState ? ([key, preparationState] as const) : null;
-    })
-    .filter(
-      (
-        entry,
-      ): entry is readonly [string, TailorResumePreparationState] =>
-        Boolean(entry),
-    );
-
-  return Object.fromEntries(entries) as TailorStorageRegistry<TailorResumePreparationState>;
+  return normalizeTailorStorageRegistry({
+    compareEntries: compareTailorPreparationStates,
+    parse: readTailorResumePreparationState,
+    readEntryKey: readTailorPreparationRegistryKey,
+    value,
+  });
 }
 
 function readStoredExistingTailoringPromptRegistry(value: unknown) {
-  if (!isRecord(value)) {
-    return {} as TailorStorageRegistry<ExistingTailoringPromptState>;
-  }
-
-  const entries = Object.entries(value)
-    .map(([key, candidate]) => {
-      const prompt = readStoredExistingTailoringPrompt(candidate);
-      return prompt ? ([key, prompt] as const) : null;
-    })
-    .filter(
-      (
-        entry,
-      ): entry is readonly [string, ExistingTailoringPromptState] =>
-        Boolean(entry),
-    );
-
-  return Object.fromEntries(entries) as TailorStorageRegistry<ExistingTailoringPromptState>;
+  return normalizeTailorStorageRegistry({
+    compareEntries: compareExistingTailoringPrompts,
+    parse: readStoredExistingTailoringPrompt,
+    readEntryKey: readExistingTailoringPromptRegistryKey,
+    value,
+  });
 }
 
 function resolveTailorInterviewForPage(input: {
@@ -2409,20 +2482,56 @@ function App() {
         TAILORING_PREPARATIONS_STORAGE_KEY,
         TAILORING_PROMPTS_STORAGE_KEY,
       ]);
+      const tailoringRunsRegistry = readStoredTailoringRunRegistry(
+        result[TAILORING_RUNS_STORAGE_KEY],
+      );
+      const tailorPreparationsRegistry = readStoredTailorPreparationRegistry(
+        result[TAILORING_PREPARATIONS_STORAGE_KEY],
+      );
+      const tailoringPromptsRegistry = readStoredExistingTailoringPromptRegistry(
+        result[TAILORING_PROMPTS_STORAGE_KEY],
+      );
+      const nextStorageEntries: Record<string, unknown> = {};
+      const storageKeysToRemove: string[] = [];
 
-      setTailoringRunsByKey(
-        readStoredTailoringRunRegistry(result[TAILORING_RUNS_STORAGE_KEY]),
-      );
-      setTailorPreparationsByKey(
-        readStoredTailorPreparationRegistry(
-          result[TAILORING_PREPARATIONS_STORAGE_KEY],
-        ),
-      );
-      setExistingTailoringPromptsByKey(
-        readStoredExistingTailoringPromptRegistry(
-          result[TAILORING_PROMPTS_STORAGE_KEY],
-        ),
-      );
+      setTailoringRunsByKey(tailoringRunsRegistry.registry);
+      setTailorPreparationsByKey(tailorPreparationsRegistry.registry);
+      setExistingTailoringPromptsByKey(tailoringPromptsRegistry.registry);
+
+      if (tailoringRunsRegistry.changed) {
+        if (Object.keys(tailoringRunsRegistry.registry).length > 0) {
+          nextStorageEntries[TAILORING_RUNS_STORAGE_KEY] =
+            tailoringRunsRegistry.registry;
+        } else {
+          storageKeysToRemove.push(TAILORING_RUNS_STORAGE_KEY);
+        }
+      }
+
+      if (tailorPreparationsRegistry.changed) {
+        if (Object.keys(tailorPreparationsRegistry.registry).length > 0) {
+          nextStorageEntries[TAILORING_PREPARATIONS_STORAGE_KEY] =
+            tailorPreparationsRegistry.registry;
+        } else {
+          storageKeysToRemove.push(TAILORING_PREPARATIONS_STORAGE_KEY);
+        }
+      }
+
+      if (tailoringPromptsRegistry.changed) {
+        if (Object.keys(tailoringPromptsRegistry.registry).length > 0) {
+          nextStorageEntries[TAILORING_PROMPTS_STORAGE_KEY] =
+            tailoringPromptsRegistry.registry;
+        } else {
+          storageKeysToRemove.push(TAILORING_PROMPTS_STORAGE_KEY);
+        }
+      }
+
+      if (storageKeysToRemove.length > 0) {
+        await chrome.storage.local.remove(storageKeysToRemove);
+      }
+
+      if (Object.keys(nextStorageEntries).length > 0) {
+        await chrome.storage.local.set(nextStorageEntries);
+      }
     } catch (error) {
       console.error("Could not reload the Tailor Resume storage state.", error);
     }
@@ -2793,18 +2902,47 @@ function App() {
         pageUrl: currentPageContext.url,
       }
     : null;
+  const currentPageUrl = readJobPageIdentity(currentPageContext);
   const currentPageRegistryKey =
     readTailorRunRegistryKeyFromPageContext(currentPageContext);
+  const currentPageRegistryMatch = {
+    jobUrl: currentPageUrl,
+    pageIdentity: currentPageIdentity,
+    pageKey: currentPageRegistryKey,
+  };
+  const currentPageStoredTailoringRunEntry = findTailorStorageRegistryEntry({
+    match: currentPageRegistryMatch,
+    readEntryKey: readTailorRunRecordRegistryKey,
+    readEntryUrls: (run) => [run.pageUrl],
+    registry: tailoringRunsByKey,
+  });
   const currentPageStoredTailoringRun =
-    currentPageRegistryKey ? tailoringRunsByKey[currentPageRegistryKey] ?? null : null;
+    currentPageStoredTailoringRunEntry?.value ?? null;
+  const currentPageTailorPreparationEntry = findTailorStorageRegistryEntry({
+    match: currentPageRegistryMatch,
+    readEntryKey: readTailorPreparationRegistryKey,
+    readEntryUrls: (preparation) => [preparation.pageUrl],
+    registry: tailorPreparationsByKey,
+  });
   const currentPageTailorPreparationState =
-    currentPageRegistryKey
-      ? tailorPreparationsByKey[currentPageRegistryKey] ?? null
-      : null;
+    currentPageTailorPreparationEntry?.value ?? null;
+  const currentPageExistingTailoringPromptEntry = findTailorStorageRegistryEntry({
+    match: currentPageRegistryMatch,
+    readEntryKey: readExistingTailoringPromptRegistryKey,
+    readEntryUrls: (prompt) => [
+      prompt.jobUrl,
+      prompt.pageContext.canonicalUrl,
+      prompt.pageContext.url,
+    ],
+    registry: existingTailoringPromptsByKey,
+  });
   const currentPageExistingTailoringPrompt =
-    currentPageRegistryKey
-      ? existingTailoringPromptsByKey[currentPageRegistryKey] ?? null
-      : null;
+    currentPageExistingTailoringPromptEntry?.value ?? null;
+  const currentPageResolvedRegistryKey =
+    currentPageExistingTailoringPromptEntry?.key ??
+    currentPageStoredTailoringRunEntry?.key ??
+    currentPageTailorPreparationEntry?.key ??
+    currentPageRegistryKey;
   const currentPagePersonalInfoTailoring =
     currentPageIdentity && personalInfo
       ? resolveActiveTailoringForPage({
@@ -2819,7 +2957,6 @@ function App() {
           tailoringInterviews: personalInfo.tailoringInterviews,
         })
       : null;
-  const currentPageUrl = readJobPageIdentity(currentPageContext);
   const currentPageApplicationContext = currentPageContext
     ? buildTailorResumeApplicationContext(currentPageContext)
     : null;
@@ -2845,7 +2982,7 @@ function App() {
         currentPageIdentity?.jobUrl ?? null,
         currentPageIdentity?.canonicalUrl ?? null,
         currentPageIdentity?.pageUrl ?? null,
-        currentPageRegistryKey,
+        currentPageResolvedRegistryKey,
       ],
       tailoredResumes: unarchivedTailoredResumes,
     }) ??
@@ -2862,7 +2999,7 @@ function App() {
     currentPageApplicationContext,
     currentPageContext,
     currentPagePersonalInfoTailoring,
-    currentPageRegistryKey,
+    currentPageRegistryKey: currentPageResolvedRegistryKey,
     currentPageStoredTailoringRun,
     currentTailorPreparationState:
       currentPageTailorPreparationState ?? tailorPreparationState,
@@ -2870,7 +3007,7 @@ function App() {
   });
   const parallelTailorRunCards = buildParallelTailorRunCards({
     currentPageContext,
-    currentPageRegistryKey,
+    currentPageRegistryKey: currentPageResolvedRegistryKey,
     existingTailoringPromptsByKey,
     personalInfo,
     tailorPreparationsByKey,
@@ -2929,20 +3066,9 @@ function App() {
     activeTailoring?.kind === "completed"
       ? activeTailoring
       : currentPageCompletedTailoring;
-  const lastTailoringRunTailoredResumeId =
-    lastTailoringRun?.tailoredResumeId?.trim() || null;
-  const matchedLastTailoredResume =
-    lastTailoringRunTailoredResumeId && personalInfo
-      ? personalInfo.tailoredResumes.find(
-          (tailoredResume) =>
-            tailoredResume.id === lastTailoringRunTailoredResumeId,
-        ) ?? null
-      : null;
   const latestTailoredResumeId = resolveReviewableTailoredResumeId({
     completedTailoringId: completedTailoringForDisplay?.tailoredResumeId ?? null,
     currentPageTailoredResumeId: currentPageCompletedTailoredResume?.id ?? null,
-    lastTailoringRunTailoredResumeId,
-    matchedLastTailoredResume,
   });
   const topLevelTailoredResumeId =
     currentPageCompletedTailoredResume?.id ||
@@ -2965,81 +3091,14 @@ function App() {
     completedTailoringForDisplay?.companyName ?? null;
   const completedTailoringPositionTitle =
     completedTailoringForDisplay?.positionTitle ?? null;
-  const visibleUnarchivedTailoredResumes = unarchivedTailoredResumes;
-  const visibleCompletedTailoredResume =
-    (topLevelTailoredResumeId
-      ? visibleUnarchivedTailoredResumes.find(
-          (tailoredResume) => tailoredResume.id === topLevelTailoredResumeId,
-        ) ?? null
-      : null) ??
-    (latestTailoredResumeId && latestTailoredResumeId !== topLevelTailoredResumeId
-      ? visibleUnarchivedTailoredResumes.find(
-          (tailoredResume) => tailoredResume.id === latestTailoredResumeId,
-        ) ?? null
-      : null) ??
-    null;
-  const optimisticCompletedTailoredResumeId =
-    topLevelTailoredResumeId ?? latestTailoredResumeId;
-  const optimisticCompletedTailoredResumeTitle =
-    completedTailoringJobLabel ??
-    buildTailorRunIdentityDisplay({
-      companyName:
-        completedTailoringCompanyName ?? lastTailoringRun?.companyName ?? null,
-      positionTitle:
-        completedTailoringPositionTitle ?? lastTailoringRun?.positionTitle ?? null,
-    })?.label ??
-    buildTailoringJobLabel({
-      companyName:
-        completedTailoringCompanyName ?? lastTailoringRun?.companyName ?? null,
-      positionTitle:
-        completedTailoringPositionTitle ?? lastTailoringRun?.positionTitle ?? null,
-    });
-  const optimisticCompletedTailoredResumeTimestamp =
-    completedTailoringUpdatedAt ??
-    lastTailoringRun?.capturedAt ??
-    new Date().toISOString();
-  const optimisticCompletedTailoredResumeJobUrl =
-    completedTailoringForDisplay?.jobUrl ??
-    lastTailoringRun?.pageUrl ??
-    currentPageUrl ??
-    currentPageIdentity?.jobUrl ??
-    currentPageIdentity?.canonicalUrl ??
-    currentPageIdentity?.pageUrl ??
-    null;
-  const optimisticCompletedTailoredResume =
-    !visibleCompletedTailoredResume && optimisticCompletedTailoredResumeId
-      ? ({
-          applicationId: null,
-          archivedAt: null,
-          companyName:
-            completedTailoringCompanyName ?? lastTailoringRun?.companyName ?? null,
-          createdAt: optimisticCompletedTailoredResumeTimestamp,
-          displayName: optimisticCompletedTailoredResumeTitle,
-          id: optimisticCompletedTailoredResumeId,
-          jobIdentifier:
-            completedTailoringForDisplay?.jobIdentifier ??
-            lastTailoringRun?.jobIdentifier ??
-            null,
-          jobUrl: optimisticCompletedTailoredResumeJobUrl,
-          positionTitle:
-            completedTailoringPositionTitle ??
-            lastTailoringRun?.positionTitle ??
-            null,
-          status:
-            completedTailoringForDisplay?.status ??
-            (completedTailoringError ? "failed" : "ready"),
-          updatedAt: optimisticCompletedTailoredResumeTimestamp,
-        } satisfies TailoredResumeSummary)
-      : null;
-  const displayedUnarchivedTailoredResumes = optimisticCompletedTailoredResume
-    ? [
-        optimisticCompletedTailoredResume,
-        ...visibleUnarchivedTailoredResumes.filter(
-          (tailoredResume) =>
-            tailoredResume.id !== optimisticCompletedTailoredResume.id,
-        ),
-      ]
-    : visibleUnarchivedTailoredResumes;
+  const visibleUnarchivedTailoredResumes = filterVisibleTailoredResumes({
+    activeReferences: activeTailorRunCards.map((card) => ({
+      existingTailoringId: card.existingTailoringId,
+      url: card.url,
+    })),
+    resumes: unarchivedTailoredResumes,
+  });
+  const displayedUnarchivedTailoredResumes = visibleUnarchivedTailoredResumes;
   const shouldRenderUnarchivedResumeLibrary =
     authState.status !== "signedIn" ||
     personalInfoState.status !== "ready" ||
@@ -3394,8 +3453,7 @@ function App() {
   const shouldRenderLegacyTailorRunShell =
     shouldShowTailorRunShell &&
     !currentActiveTailorRunCard &&
-    !hasCurrentPageCompletedTailoring &&
-    !optimisticCompletedTailoredResumeId;
+    !hasCurrentPageCompletedTailoring;
   const hasUnarchivedTailorItems =
     displayedUnarchivedTailoredResumes.length > 0 ||
     activeTailorRunCards.length > 0 ||
@@ -4082,7 +4140,7 @@ function App() {
       setCaptureState((currentCaptureState) =>
         currentCaptureState === "blocked" ? "blocked" : "idle",
       );
-      void persistTailoringRun(null, currentPageRegistryKey).catch((error) => {
+      void persistTailoringRun(null, currentPageResolvedRegistryKey).catch((error) => {
         console.error(
           "Could not clear a completed tailoring run from local storage.",
           error,
@@ -4104,7 +4162,7 @@ function App() {
       console.error("Could not clear a stale tailoring run.", error);
     });
   }, [
-    currentPageRegistryKey,
+    currentPageResolvedRegistryKey,
     currentPageStoredTailoringRun,
     currentPagePersonalInfoTailoring,
     hasCurrentPageCompletedTailoring,
@@ -4419,11 +4477,8 @@ function App() {
         return;
       }
 
-      setTailoringRunsByKey(
-        readStoredTailoringRunRegistry(
-          changes[TAILORING_RUNS_STORAGE_KEY].newValue,
-        ),
-      );
+      void loadTailorStorageRegistries();
+      void loadSnapshot();
     }
 
     chrome.storage.onChanged.addListener(handleStorageChange);
@@ -4431,7 +4486,7 @@ function App() {
     return () => {
       chrome.storage.onChanged.removeListener(handleStorageChange);
     };
-  }, [loadTailorStorageRegistries]);
+  }, [loadSnapshot, loadTailorStorageRegistries]);
 
   useEffect(() => {
     function handleStorageChange(
@@ -4442,11 +4497,8 @@ function App() {
         return;
       }
 
-      setTailorPreparationsByKey(
-        readStoredTailorPreparationRegistry(
-          changes[TAILORING_PREPARATIONS_STORAGE_KEY].newValue,
-        ),
-      );
+      void loadTailorStorageRegistries();
+      void loadSnapshot();
     }
 
     chrome.storage.onChanged.addListener(handleStorageChange);
@@ -4454,7 +4506,7 @@ function App() {
     return () => {
       chrome.storage.onChanged.removeListener(handleStorageChange);
     };
-  }, []);
+  }, [loadSnapshot, loadTailorStorageRegistries]);
 
   useEffect(() => {
     function handleStorageChange(
@@ -4465,11 +4517,8 @@ function App() {
         return;
       }
 
-      setExistingTailoringPromptsByKey(
-        readStoredExistingTailoringPromptRegistry(
-          changes[TAILORING_PROMPTS_STORAGE_KEY].newValue,
-        ),
-      );
+      void loadTailorStorageRegistries();
+      void loadSnapshot();
     }
 
     chrome.storage.onChanged.addListener(handleStorageChange);
@@ -4477,7 +4526,7 @@ function App() {
     return () => {
       chrome.storage.onChanged.removeListener(handleStorageChange);
     };
-  }, []);
+  }, [loadSnapshot, loadTailorStorageRegistries]);
 
   useEffect(() => {
     setLastTailoringRun(currentPageStoredTailoringRun);

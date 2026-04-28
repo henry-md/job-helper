@@ -2,7 +2,7 @@ import {
   normalizeComparableUrl,
   readJobUrlFromPageContext,
   type JobPageContext,
-} from "./job-helper";
+} from "./job-helper.ts";
 
 function cleanText(value: string | null | undefined) {
   const normalizedValue = value?.replace(/\s+/g, " ").trim();

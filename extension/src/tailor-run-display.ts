@@ -29,11 +29,6 @@ type TailorRunPageApplicationContext = {
   jobTitle: string | null;
 };
 
-type TailorRunTailoredResumeSummary = {
-  archivedAt: string | null;
-  id: string;
-};
-
 export function shouldRenderTailorRunShell(input: {
   activeTailoringKind: TailorRunExistingTailoringKind | null;
   captureState: TailorRunCaptureState;
@@ -70,7 +65,11 @@ export function shouldRenderTailorRunShell(input: {
     return true;
   }
 
-  if (input.lastTailoringRunStatus) {
+  if (
+    input.lastTailoringRunStatus === "error" ||
+    input.lastTailoringRunStatus === "needs_input" ||
+    input.lastTailoringRunStatus === "running"
+  ) {
     return true;
   }
 
@@ -87,8 +86,6 @@ export function shouldRenderTailorRunShell(input: {
 export function resolveReviewableTailoredResumeId(input: {
   completedTailoringId: string | null;
   currentPageTailoredResumeId: string | null;
-  lastTailoringRunTailoredResumeId: string | null;
-  matchedLastTailoredResume: TailorRunTailoredResumeSummary | null;
 }) {
   if (input.completedTailoringId) {
     return input.completedTailoringId;
@@ -98,21 +95,7 @@ export function resolveReviewableTailoredResumeId(input: {
     return input.currentPageTailoredResumeId;
   }
 
-  const lastTailoringRunTailoredResumeId =
-    input.lastTailoringRunTailoredResumeId?.trim() ?? "";
-
-  if (!lastTailoringRunTailoredResumeId) {
-    return null;
-  }
-
-  if (
-    input.matchedLastTailoredResume?.id === lastTailoringRunTailoredResumeId &&
-    input.matchedLastTailoredResume.archivedAt
-  ) {
-    return null;
-  }
-
-  return lastTailoringRunTailoredResumeId;
+  return null;
 }
 
 export function resolveDisplayedTailorRunIdentity(input: {

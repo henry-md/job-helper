@@ -77,7 +77,7 @@ test("keeps a running tailoring visible even after switching tabs", () => {
   );
 });
 
-test("keeps a completed run visible even after switching tabs", () => {
+test("does not keep a completed run shell visible after switching tabs", () => {
   assert.equal(
     shouldRenderTailorRunShell({
       activeTailoringKind: null,
@@ -89,7 +89,7 @@ test("keeps a completed run visible even after switching tabs", () => {
       isTailorPreparationPending: false,
       lastTailoringRunStatus: "success",
     }),
-    true,
+    false,
   );
 });
 
@@ -109,28 +109,11 @@ test("keeps an errored run visible even after switching tabs", () => {
   );
 });
 
-test("reuses the last run tailored resume id before the saved list refreshes", () => {
+test("does not synthesize a completed tailored resume id from the last run", () => {
   assert.equal(
     resolveReviewableTailoredResumeId({
       completedTailoringId: null,
       currentPageTailoredResumeId: null,
-      lastTailoringRunTailoredResumeId: "resume_123",
-      matchedLastTailoredResume: null,
-    }),
-    "resume_123",
-  );
-});
-
-test("suppresses the last run tailored resume id once the saved list marks it archived", () => {
-  assert.equal(
-    resolveReviewableTailoredResumeId({
-      completedTailoringId: null,
-      currentPageTailoredResumeId: null,
-      lastTailoringRunTailoredResumeId: "resume_123",
-      matchedLastTailoredResume: {
-        archivedAt: "2026-04-26T17:55:00.000Z",
-        id: "resume_123",
-      },
     }),
     null,
   );
@@ -141,8 +124,6 @@ test("prefers the synced completed tailoring over the stale last run id", () => 
     resolveReviewableTailoredResumeId({
       completedTailoringId: "resume_synced",
       currentPageTailoredResumeId: null,
-      lastTailoringRunTailoredResumeId: "resume_123",
-      matchedLastTailoredResume: null,
     }),
     "resume_synced",
   );
