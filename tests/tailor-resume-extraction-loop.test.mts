@@ -396,9 +396,7 @@ test("runResumeLatexToolLoop returns the last draft plus the final error after t
   );
 });
 
-test("runResumeLatexToolLoop retries when link validation fails", async () => {
-  const linkFailure =
-    "Validated 1 extracted link, and 1 failed.\n- https://github.com/not-henry: Visible link text points to github.com/henry-md, but the href target was github.com/not-henry. Preserve the visible text, but do not invent a different destination.";
+test("runResumeLatexToolLoop keeps link validation warnings advisory", async () => {
   const requests: Array<{ previousResponseId?: string; input?: unknown }> = [];
   const responses = [
     {
@@ -448,7 +446,7 @@ test("runResumeLatexToolLoop retries when link validation fails", async () => {
     validateLatex: async (latexCode) => {
       if (latexCode.includes("not-henry")) {
         return {
-          error: linkFailure,
+          error: null,
           linkSummary: buildLinkSummary({
             failedCount: 1,
             passedCount: 0,
@@ -463,8 +461,8 @@ test("runResumeLatexToolLoop retries when link validation fails", async () => {
               url: "https://github.com/not-henry",
             },
           ],
-          ok: false as const,
-          previewPdf: null,
+          ok: true as const,
+          previewPdf: Buffer.from("pdf"),
         };
       }
 
@@ -489,25 +487,14 @@ test("runResumeLatexToolLoop retries when link validation fails", async () => {
     },
   });
 
-  assert.equal(result.attempts, 2);
+  assert.equal(result.attempts, 1);
   assert.deepEqual(result.attemptEvents, [
     {
       attempt: 1,
-      error: linkFailure,
+      error: null,
       linkSummary: buildLinkSummary({
         failedCount: 1,
         passedCount: 0,
-        totalCount: 1,
-      }),
-      outcome: "failed",
-      willRetry: true,
-    },
-    {
-      attempt: 2,
-      error: null,
-      linkSummary: buildLinkSummary({
-        failedCount: 0,
-        passedCount: 1,
         totalCount: 1,
       }),
       outcome: "succeeded",
@@ -517,53 +504,16 @@ test("runResumeLatexToolLoop retries when link validation fails", async () => {
   assert.deepEqual(
     result.linkSummary,
     buildLinkSummary({
-      failedCount: 0,
-      passedCount: 1,
-      totalCount: 1,
-    }),
-  );
-  assert.equal(
-    result.latexCode,
-    "\\href{https://github.com/henry-md}{\\tightul{github.com/henry-md}}",
-  );
-  assert.deepEqual(result.previewPdf, Buffer.from("pdf"));
-
-  const retryPayload = requests[1]?.input as {
-    attempt: number;
-    error: string;
-    failedLinks: Array<{ displayText: string | null; reason: string | null; url: string }>;
-    previousLatexCode: string | null;
-    previousModelOutput: string | null;
-    previousResumeLinks: Array<{ label: string; url: string | null }>;
-    linkSummary: { failedCount: number; passedCount: number; totalCount: number };
-    remainingAttempts: number;
-    retryType: string;
-  };
-
-  assert.equal(retryPayload.retryType, "validation_failure");
-  assert.equal(retryPayload.attempt, 1);
-  assert.equal(retryPayload.error, linkFailure);
-  assert.deepEqual(retryPayload.failedLinks, [
-    {
-      displayText: "github.com/henry-md",
-      reason:
-        "Visible link text points to github.com/henry-md, but the href target was github.com/not-henry. Preserve the visible text, but do not invent a different destination.",
-      url: "https://github.com/not-henry",
-    },
-  ]);
-  assert.equal(
-    retryPayload.previousLatexCode,
-    "\\href{https://github.com/not-henry}{\\tightul{github.com/henry-md}}",
-  );
-  assert.equal(retryPayload.previousModelOutput, null);
-  assert.deepEqual(retryPayload.previousResumeLinks, []);
-  assert.deepEqual(
-    retryPayload.linkSummary,
-    buildLinkSummary({
       failedCount: 1,
       passedCount: 0,
       totalCount: 1,
     }),
   );
-  assert.equal(retryPayload.remainingAttempts, 2);
+  assert.equal(
+    result.latexCode,
+    "\\href{https://github.com/not-henry}{\\tightul{github.com/henry-md}}",
+  );
+  assert.deepEqual(result.previewPdf, Buffer.from("pdf"));
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0]?.input, undefined);
 });

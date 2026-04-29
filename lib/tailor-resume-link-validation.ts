@@ -225,23 +225,6 @@ function buildLinkSummary(
   );
 }
 
-function buildFailedLinkValidationError(input: {
-  links: TailorResumeLinkValidationEntry[];
-  summary: TailorResumeLinkValidationSummary;
-}) {
-  const failedLinks = input.links.filter((link) => link.outcome === "failed");
-  const linkLabel = input.summary.totalCount === 1 ? "link" : "links";
-  const detailLines = failedLinks.map((link) => {
-    const reason = link.reason?.trim() || "The destination failed validation.";
-    return `- ${link.url}: ${reason}`;
-  });
-
-  return [
-    `Validated ${input.summary.totalCount} extracted ${linkLabel}, and ${input.summary.failedCount} failed.`,
-    ...detailLines,
-  ].join("\n");
-}
-
 function trimComparableText(value: string) {
   return value.trim().replace(/^[<(["']+/, "").replace(/[>),.\]"']+$/, "");
 }
@@ -302,7 +285,18 @@ function extractComparableDisplayUrl(value: string | null) {
 
   const trimmedValue = trimComparableText(value);
 
-  if (!trimmedValue || !/[./]/.test(trimmedValue)) {
+  if (!trimmedValue) {
+    return null;
+  }
+
+  // Only treat visible text as URL-like when it actually resembles a hostname or
+  // an explicit web URL. Labels such as "C/C++ Ray Tracing Engine" contain a
+  // slash but are still plain human-readable titles, not destinations.
+  const looksLikeDisplayUrl =
+    /^(https?:\/\/|www\.)/i.test(trimmedValue) ||
+    /^[a-z0-9-]+(\.[a-z0-9-]+)+([/:?#]|$)/i.test(trimmedValue);
+
+  if (!looksLikeDisplayUrl) {
     return null;
   }
 
@@ -659,19 +653,6 @@ export async function validateTailorResumeLatexDocument(
   try {
     const previewPdf = await compileLatex(latexCode);
     const linkValidation = await validateResumeLatexLinks(latexCode, fetchImpl);
-
-    if (linkValidation.linkSummary.failedCount > 0) {
-      return {
-        error: buildFailedLinkValidationError({
-          links: linkValidation.links,
-          summary: linkValidation.linkSummary,
-        }),
-        linkSummary: linkValidation.linkSummary,
-        links: linkValidation.links,
-        ok: false,
-        previewPdf: null,
-      };
-    }
 
     return {
       error: null,

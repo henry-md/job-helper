@@ -79,7 +79,7 @@ test("extractResumeLatexLinks preserves visible link text through nested styling
   ]);
 });
 
-test("validateTailorResumeLatexDocument fails when visible link text mismatches the href target", async () => {
+test("validateTailorResumeLatexDocument keeps visible-link mismatches advisory", async () => {
   let fetchCalls = 0;
 
   const result = await validateTailorResumeLatexDocument(
@@ -93,8 +93,10 @@ test("validateTailorResumeLatexDocument fails when visible link text mismatches 
     },
   );
 
-  assert.equal(result.ok, false);
+  assert.equal(result.ok, true);
   assert.equal(fetchCalls, 0);
+  assert.equal(result.error, null);
+  assert.deepEqual(result.previewPdf, Buffer.from("pdf"));
   assert.deepEqual(
     result.linkSummary,
     buildLinkSummary({
@@ -103,8 +105,9 @@ test("validateTailorResumeLatexDocument fails when visible link text mismatches 
       totalCount: 1,
     }),
   );
+  assert.equal(result.links[0]?.outcome, "failed");
   assert.match(
-    result.error ?? "",
+    result.links[0]?.reason ?? "",
     /Visible link text points to github\.com\/henry-md, but the href target was github\.com\/not-henry\./,
   );
 });
@@ -154,6 +157,38 @@ test("validateTailorResumeLatexDocument treats unreachable http links as unverif
     { method: "HEAD", url: "https://blocked.example/profile" },
     { method: "GET", url: "https://missing.example/role" },
     { method: "GET", url: "https://blocked.example/profile" },
+  ]);
+});
+
+test("validateTailorResumeLatexDocument does not misread slash-separated project titles as URLs", async () => {
+  const requests: Array<{ method: string; url: string }> = [];
+
+  const result = await validateTailorResumeLatexDocument(
+    String.raw`\href{https://github.com/henry-md/ray-tracer}{\tightul{\textbf{C/C++ Ray Tracing Engine}}}`,
+    {
+      compileLatex: async () => Buffer.from("pdf"),
+      fetchImpl: async (input, init) => {
+        requests.push({
+          method: String(init?.method ?? "GET"),
+          url: String(input),
+        });
+        return new Response(null, { status: 200 });
+      },
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.error, null);
+  assert.deepEqual(
+    result.linkSummary,
+    buildLinkSummary({
+      failedCount: 0,
+      passedCount: 1,
+      totalCount: 1,
+    }),
+  );
+  assert.deepEqual(requests, [
+    { method: "HEAD", url: "https://github.com/henry-md/ray-tracer" },
   ]);
 });
 
