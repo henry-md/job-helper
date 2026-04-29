@@ -390,11 +390,16 @@ async function persistPersonalInfoCacheEntry(
 }
 
 function buildTailoredResumePreviewUrl(input: {
+  highlights?: boolean;
   pdfUpdatedAt?: string | null;
   tailoredResumeId: string;
 }) {
   const url = new URL(DEFAULT_TAILOR_RESUME_PREVIEW_ENDPOINT);
   url.searchParams.set("tailoredResumeId", input.tailoredResumeId);
+
+  if (input.highlights) {
+    url.searchParams.set("highlights", "true");
+  }
 
   if (input.pdfUpdatedAt) {
     url.searchParams.set("updatedAt", input.pdfUpdatedAt);
@@ -6948,10 +6953,6 @@ function App() {
               <div
                 key={tailoredResume.id}
                 className={`tailored-resume-row-shell ${
-                  isUnarchivedSurface
-                    ? "tailored-resume-row-shell-unarchived"
-                    : ""
-                } ${
                   isCurrentPageMatch
                     ? "tailored-resume-row-shell-current-page"
                     : ""
