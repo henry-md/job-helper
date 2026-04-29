@@ -31,6 +31,7 @@ Current persistence nuance:
 - The same profile JSON also stores prompt template overrides for job extraction, resume-to-LaTeX generation, tailoring, and tailored-resume refinement, so the dashboard settings tab and the API routes read from one source of truth.
 - Tailor Resume locked links are the exception: they are persisted in Prisma (`TailorResumeLockedLink`) so lock state remains independent from raw LaTeX reparsing.
 - Tailor Resume user memory is also persisted in Prisma (`TailorResumeUserMemory`) as a DB-backed Markdown document exposed as `USER.md` in settings. The Step 2 interview receives it to avoid repetitive questions and can update it with transactionally validated markdown patch operations.
+- Verification-only seed nuance: the product still accepts PDF/image resume uploads, but the repo-local `/check` workflow for fresh isolated Tailor Resume accounts should prefer the canonical source LaTeX fixture and compile the matching backing PDF from that exact source instead of relying on PDF-to-LaTeX extraction. This keeps verification runs deterministic while still satisfying UI flows that expect a saved `resume` record.
 
 Verification safety:
 - This repo can now contain real user Tailor Resume data, not just disposable test fixtures.
