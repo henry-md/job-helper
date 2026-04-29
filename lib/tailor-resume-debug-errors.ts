@@ -44,6 +44,14 @@ export function formatTailorResumeDebugPayloadLabel(source: string) {
     : "Generated LaTeX";
 }
 
+export function normalizeTailorResumeDebugErrorSignature(error: string) {
+  return error
+    .replace(/segment [A-Za-z0-9_.-]+/g, "segment <id>")
+    .replace(/resume\.tex:\d+/g, "resume.tex:<line>")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 type ParsedTailorResumeInvalidReplacementStructuredChange = {
   latexCode: string;
   reason: string;

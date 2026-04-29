@@ -6,6 +6,7 @@ import {
   classifyTailorResumeDebugErrorSource,
   formatTailorResumeDebugErrorSource,
   formatTailorResumeDebugPayloadLabel,
+  normalizeTailorResumeDebugErrorSignature,
   parseTailorResumeInvalidReplacementPayload,
 } from "@/lib/tailor-resume-debug-errors";
 
@@ -113,6 +114,37 @@ export default async function DebugErrorsPage() {
       title: "Bad LaTeX Generations",
     },
   ].filter((group) => group.failures.length > 0);
+  const recurringFailureSignatures = [...(() => {
+    const signatureMap = new Map<
+      string,
+      {
+        count: number;
+        signature: string;
+        source: string;
+      }
+    >();
+
+    for (const failure of failures) {
+      const signature = normalizeTailorResumeDebugErrorSignature(failure.error);
+      const key = `${failure.source}::${signature}`;
+      const existingEntry = signatureMap.get(key);
+
+      if (existingEntry) {
+        existingEntry.count += 1;
+        continue;
+      }
+
+      signatureMap.set(key, {
+        count: 1,
+        signature,
+        source: failure.source,
+      });
+    }
+
+    return signatureMap.values();
+  })()]
+    .sort((left, right) => right.count - left.count)
+    .slice(0, 6);
 
   return (
     <main className="min-h-screen px-[clamp(1rem,2vw,2rem)] py-6">
@@ -130,6 +162,47 @@ export default async function DebugErrorsPage() {
               : `Showing the ${failures.length} most recent failures. Invalid replacement payloads are expanded into the original source block, the proposed replacement, and the structured response metadata so the failure is readable without digging through one large blob.`}
           </p>
         </section>
+
+        {recurringFailureSignatures.length > 0 ? (
+          <section className="space-y-4">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-semibold text-zinc-100">
+                  Recurring Failure Signatures
+                </h2>
+                <p className="mt-1 max-w-3xl text-sm leading-6 text-zinc-400">
+                  Repeated retries often come from one deterministic guardrail. This
+                  summary clusters the recent failures so the common cause is visible
+                  before you inspect each attempt.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-2">
+              {recurringFailureSignatures.map((signature) => (
+                <article
+                  key={`${signature.source}:${signature.signature}`}
+                  className="rounded-[24px] border border-white/10 bg-white/[0.03] p-4"
+                >
+                  <div className="flex flex-wrap gap-2">
+                    <MetadataChip label="count" value={signature.count} />
+                    <MetadataChip
+                      label="source"
+                      value={formatTailorResumeDebugErrorSource(signature.source)}
+                    />
+                  </div>
+                  <div className="mt-3">
+                    <CodeBlock
+                      maxHeightClass="max-h-[10rem]"
+                      tone="error"
+                      value={signature.signature}
+                    />
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         {failureGroups.length === 0 ? (
           <section className="rounded-[28px] border border-white/10 bg-white/[0.03] px-6 py-6 text-sm text-zinc-300">
