@@ -13,6 +13,11 @@ import {
   type TailorResumePlanningSnapshot,
 } from "./tailor-resume-planning.ts";
 import { getRetryAttemptsToGenerateLatexEdits } from "./tailor-resume-retry-config.ts";
+import {
+  formatTransientModelError,
+  isTransientModelError,
+  runWithTransientModelRetries,
+} from "./tailor-resume-transient-retry.ts";
 import { buildTailoredResumeBlockEdits } from "./tailor-resume-review.ts";
 import {
   normalizeTailorResumeLatex,
@@ -574,6 +579,34 @@ function buildTailoringImplementationInstructions(input: {
   );
 }
 
+async function runTailorResumeStepModelRequest<T>(input: {
+  attempt: number;
+  onStepEvent:
+    | ((event: TailorResumeGenerationStepEvent) => void | Promise<void>)
+    | undefined;
+  operation: () => Promise<T>;
+  readDurationMs: () => number;
+  stepNumber: number;
+  summary: string;
+}) {
+  return runWithTransientModelRetries({
+    operation: input.operation,
+    onRetry: async (retryEvent) => {
+      await emitTailorResumeGenerationStep(input.onStepEvent, {
+        attempt: input.attempt,
+        detail:
+          `The model request hit a transient network error (${retryEvent.message}). ` +
+          `Retrying automatically (${retryEvent.nextAttempt}/${retryEvent.maxAttempts}).`,
+        durationMs: input.readDurationMs(),
+        retrying: true,
+        status: "failed",
+        stepNumber: input.stepNumber,
+        summary: input.summary,
+      });
+    },
+  });
+}
+
 export function applyTailorResumeBlockChanges(input: {
   annotatedLatexCode: string;
   changes: TailoredResumeBlockChange[];
@@ -938,27 +971,65 @@ export async function planTailoredResume(input: {
       detail:
         attempt === 1
           ? "Starting the planning pass to decide which resume blocks should change."
-          : "Retrying the planning pass after the previous attempt failed validation.",
+          : "Retrying the planning pass after the previous attempt failed.",
       durationMs: Math.max(0, Date.now() - startedAt),
       retrying: attempt > 1,
       status: "running",
       stepNumber: 1,
       summary: "Generating plaintext edit outline",
     });
-    const response = await client.responses.create({
-      input: planInput,
-      instructions: planInstructions,
-      model,
-      text: {
-        verbosity: "low",
-        format: {
-          type: "json_schema",
-          name: "tailor_resume_edit_plan",
-          strict: true,
-          schema: tailorResumePlanSchema,
-        },
-      },
-    });
+    let response: Awaited<ReturnType<typeof client.responses.create>>;
+
+    try {
+      response = await runTailorResumeStepModelRequest({
+        attempt,
+        onStepEvent: input.onStepEvent,
+        operation: () =>
+          client.responses.create({
+            input: planInput,
+            instructions: planInstructions,
+            model,
+            text: {
+              verbosity: "low",
+              format: {
+                type: "json_schema",
+                name: "tailor_resume_edit_plan",
+                strict: true,
+                schema: tailorResumePlanSchema,
+              },
+            },
+          }),
+        readDurationMs: () => Math.max(0, Date.now() - startedAt),
+        stepNumber: 1,
+        summary: "Generating plaintext edit outline",
+      });
+    } catch (error) {
+      if (!isTransientModelError(error)) {
+        throw error;
+      }
+
+      lastError = formatTransientModelError(error);
+      await emitTailorResumeGenerationStep(input.onStepEvent, {
+        attempt,
+        detail: lastError,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        retrying: attempt < maxPlanningAttempts,
+        status: "failed",
+        stepNumber: 1,
+        summary: "Generating plaintext edit outline",
+      });
+      lastPlanningDebug = {
+        outputJson: null,
+        prompt: planningPrompt,
+        skippedReason: null,
+      };
+
+      if (attempt < maxPlanningAttempts) {
+        continue;
+      }
+
+      break;
+    }
 
     lastModel = (response as { model?: string }).model ?? model;
     const outputText = readOutputText(response);
@@ -1228,20 +1299,55 @@ export async function implementTailoredResumePlan(input: {
       stepNumber: 3,
       summary: "Generating block-scoped edits",
     });
-    const response = await client.responses.create({
-      input: implementationInput,
-      instructions: implementationInstructions,
-      model,
-      text: {
-        verbosity: "low",
-        format: {
-          type: "json_schema",
-          name: "tailor_resume_latex_implementation",
-          strict: true,
-          schema: tailorResumeImplementationSchema,
-        },
-      },
-    });
+    let response: Awaited<ReturnType<typeof client.responses.create>>;
+
+    try {
+      response = await runTailorResumeStepModelRequest({
+        attempt,
+        onStepEvent: input.onStepEvent,
+        operation: () =>
+          client.responses.create({
+            input: implementationInput,
+            instructions: implementationInstructions,
+            model,
+            text: {
+              verbosity: "low",
+              format: {
+                type: "json_schema",
+                name: "tailor_resume_latex_implementation",
+                strict: true,
+                schema: tailorResumeImplementationSchema,
+              },
+            },
+          }),
+        readDurationMs: () => Math.max(0, Date.now() - startedAt),
+        stepNumber: 3,
+        summary: "Generating block-scoped edits",
+      });
+    } catch (error) {
+      if (!isTransientModelError(error)) {
+        throw error;
+      }
+
+      completedImplementationAttempts = attempt;
+      lastError = formatTransientModelError(error);
+      implementationSkippedReason = null;
+      await emitTailorResumeGenerationStep(input.onStepEvent, {
+        attempt,
+        detail: lastError,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        retrying: attempt < maxTailoredResumeAttempts,
+        status: "failed",
+        stepNumber: 3,
+        summary: "Generating block-scoped edits",
+      });
+
+      if (attempt < maxTailoredResumeAttempts) {
+        continue;
+      }
+
+      break;
+    }
 
     completedImplementationAttempts = attempt;
     lastModel = (response as { model?: string }).model ?? model;

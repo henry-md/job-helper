@@ -6,6 +6,7 @@ import {
 } from "./system-prompt-settings.ts";
 import { resolveTailoredResumeCurrentEditLatexCode } from "./tailor-resume-edit-history.ts";
 import { getRetryAttemptsToGenerateLatexEdits } from "./tailor-resume-retry-config.ts";
+import { runWithTransientModelRetries } from "./tailor-resume-transient-retry.ts";
 import {
   formatTailoredResumeEditLabel,
   buildTailoredResumeBlockEdits,
@@ -349,19 +350,22 @@ export async function refineTailoredResume(input: {
       feedback,
       promptSettings: input.promptSettings,
     });
-    const response = await client.responses.create({
-      input: refinementInput,
-      instructions,
-      model,
-      text: {
-        verbosity: "low",
-        format: {
-          type: "json_schema",
-          name: "tailor_resume_refinement",
-          strict: true,
-          schema: refineTailoredResumeSchema,
-        },
-      },
+    const response = await runWithTransientModelRetries({
+      operation: () =>
+        client.responses.create({
+          input: refinementInput,
+          instructions,
+          model,
+          text: {
+            verbosity: "low",
+            format: {
+              type: "json_schema",
+              name: "tailor_resume_refinement",
+              strict: true,
+              schema: refineTailoredResumeSchema,
+            },
+          },
+        }),
     });
 
     lastModel = (response as { model?: string }).model ?? model;

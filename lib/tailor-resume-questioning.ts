@@ -16,6 +16,7 @@ import type {
   TailorResumePlanningBlock,
   TailorResumePlanningSnapshot,
 } from "./tailor-resume-planning.ts";
+import { runWithTransientModelRetries } from "./tailor-resume-transient-retry.ts";
 import {
   applyTailorResumeUserMarkdownPatch,
   defaultTailorResumeUserMarkdown,
@@ -901,15 +902,18 @@ export async function advanceTailorResumeQuestioning(input: {
       feedback,
       promptSettings: input.promptSettings,
     });
-    const response = await client.responses.create({
-      input: interviewInput,
-      instructions,
-      model,
-      tool_choice: "required",
-      tools: tailorResumeInterviewTools,
-      text: {
-        verbosity: "low",
-      },
+    const response = await runWithTransientModelRetries({
+      operation: () =>
+        client.responses.create({
+          input: interviewInput,
+          instructions,
+          model,
+          tool_choice: "required",
+          tools: tailorResumeInterviewTools,
+          text: {
+            verbosity: "low",
+          },
+        }),
     });
 
     let parsedResponse: TailorResumeInterviewResponse;

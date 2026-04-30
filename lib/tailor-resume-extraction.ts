@@ -15,6 +15,7 @@ import {
 import { buildTailorResumeLinkRecords } from "@/lib/tailor-resume-links";
 import { applyTailorResumeLinkOverridesWithSummary } from "@/lib/tailor-resume-link-overrides";
 import { getRetryAttemptsToGenerateLatexFromPdf } from "@/lib/tailor-resume-retry-config";
+import { runWithTransientModelRetries } from "@/lib/tailor-resume-transient-retry";
 import { tailorResumeLatexExample } from "@/lib/tailor-resume-latex-example";
 import { extractEmbeddedPdfLinks } from "@/lib/tailor-resume-pdf-links";
 import type {
@@ -237,18 +238,21 @@ export async function extractResumeLatexDocument(
               embeddedPdfLinks,
               knownLinks,
             });
-        const response = await client.responses.create({
-          model,
-          instructions: buildResumeLatexInstructions({
-            attempt,
-            maxAttempts: retryAttempts,
-            promptSettings: dependencies.promptSettings,
-          }),
-          input: responseInput,
-          parallel_tool_calls: false,
-          previous_response_id: retryInput ? undefined : previousResponseId,
-          tool_choice: "required",
-          tools: [resumeLatexValidationTool],
+        const response = await runWithTransientModelRetries({
+          operation: () =>
+            client.responses.create({
+              model,
+              instructions: buildResumeLatexInstructions({
+                attempt,
+                maxAttempts: retryAttempts,
+                promptSettings: dependencies.promptSettings,
+              }),
+              input: responseInput,
+              parallel_tool_calls: false,
+              previous_response_id: retryInput ? undefined : previousResponseId,
+              tool_choice: "required",
+              tools: [resumeLatexValidationTool],
+            }),
         });
 
         return {

@@ -21,6 +21,7 @@ import {
 import {
   getRetryAttemptsToGeneratePageCountCompaction,
 } from "./tailor-resume-retry-config.ts";
+import { runWithTransientModelRetries } from "./tailor-resume-transient-retry.ts";
 import { buildTailoredResumeBlockEdits } from "./tailor-resume-review.ts";
 import { stripTailorResumeSegmentIds } from "./tailor-resume-segmentation.ts";
 import { applyTailorResumeBlockChanges } from "./tailor-resume-tailoring.ts";
@@ -1050,18 +1051,21 @@ async function collectVerifiedCompactionCandidates(input: {
 
   for (let round = 1; round <= maxCompactionSelfCheckRounds; round += 1) {
     const response = mapCompactionResponse(
-      await input.client.responses.create({
-        input: responseInput,
-        instructions: buildCompactionInstructions(),
-        model: input.model,
-        parallel_tool_calls: false,
-        previous_response_id: previousResponseId,
-        tool_choice: "required",
-        tools: [
-          tailorResumeLineReductionTool,
-          tailorResumePageCountVerificationTool,
-          tailorResumeLineReductionSubmissionTool,
-        ],
+      await runWithTransientModelRetries({
+        operation: () =>
+          input.client.responses.create({
+            input: responseInput,
+            instructions: buildCompactionInstructions(),
+            model: input.model,
+            parallel_tool_calls: false,
+            previous_response_id: previousResponseId,
+            tool_choice: "required",
+            tools: [
+              tailorResumeLineReductionTool,
+              tailorResumePageCountVerificationTool,
+              tailorResumeLineReductionSubmissionTool,
+            ],
+          }),
       }),
     );
 
