@@ -5651,8 +5651,13 @@ function App() {
 
   async function handleTailorCurrentPage() {
     if (authState.status !== "signedIn") {
-      openTailorAuthPrompt();
-      return;
+      setActivePanelTab("tailor");
+      const nextAuthState = await connectGoogleAccount();
+
+      if (nextAuthState.status !== "signedIn") {
+        setIsTailorAuthPromptOpen(true);
+        return;
+      }
     }
 
     const preparingMessage = buildTailorResumePreparationMessage(false);
@@ -8719,23 +8724,40 @@ function App() {
     };
   }
 
-  async function handleSignIn() {
+  async function connectGoogleAccount(): Promise<AuthState> {
+    if (authActionState === "running") {
+      return authState;
+    }
+
     setAuthActionState("running");
 
     try {
       const response = await chrome.runtime.sendMessage({
         type: "JOB_HELPER_SIGN_IN",
       });
-      setAuthState(readAuthResponse(response));
+      const nextAuthState = readAuthResponse(response);
+      setAuthState(nextAuthState);
+
+      if (nextAuthState.status === "signedIn") {
+        setIsTailorAuthPromptOpen(false);
+      }
+
+      return nextAuthState;
     } catch (error) {
-      setAuthState({
+      const nextAuthState = {
         error:
           error instanceof Error ? error.message : "Could not connect to Google.",
         status: "error",
-      });
+      } satisfies AuthState;
+      setAuthState(nextAuthState);
+      return nextAuthState;
     } finally {
       setAuthActionState("idle");
     }
+  }
+
+  async function handleSignIn() {
+    await connectGoogleAccount();
   }
 
   async function handleSignOut() {

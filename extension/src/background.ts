@@ -87,6 +87,15 @@ type AuthStatus =
   | { session: JobHelperAuthSession; status: "signedIn" }
   | { status: "signedOut" };
 
+class JobHelperSignInError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 type TailorRunStorageRegistry<T> = Record<string, T>;
 
 const activeTailorResumeAbortControllers = new Map<
@@ -851,13 +860,23 @@ async function getAuthStatus(): Promise<AuthStatus> {
 
   if (!storedSession || !isAuthSessionFresh(storedSession)) {
     await clearStoredAuthSession();
-    return { status: "signedOut" };
+    const silentSession = await trySignInToJobHelperSilently();
+
+    return silentSession
+      ? { session: silentSession, status: "signedIn" }
+      : { status: "signedOut" };
   }
 
   const validatedSession = await validateStoredAuthSession(storedSession);
 
-  return validatedSession
-    ? { session: validatedSession, status: "signedIn" }
+  if (validatedSession) {
+    return { session: validatedSession, status: "signedIn" };
+  }
+
+  const silentSession = await trySignInToJobHelperSilently();
+
+  return silentSession
+    ? { session: silentSession, status: "signedIn" }
     : { status: "signedOut" };
 }
 
@@ -878,8 +897,19 @@ async function requestGoogleAccessToken(interactive: boolean) {
   return token;
 }
 
-async function signInToJobHelper() {
-  const accessToken = await requestGoogleAccessToken(true);
+async function removeCachedGoogleAccessToken(accessToken: string) {
+  if (!chrome.identity?.removeCachedAuthToken) {
+    return;
+  }
+
+  try {
+    await chrome.identity.removeCachedAuthToken({ token: accessToken });
+  } catch {
+    // Best effort only: the next request will still surface the auth error.
+  }
+}
+
+async function exchangeGoogleAccessTokenForJobHelperSession(accessToken: string) {
   const response = await fetch(EXTENSION_AUTH_GOOGLE_ENDPOINT, {
     body: JSON.stringify({ accessToken }),
     credentials: "include",
@@ -891,7 +921,10 @@ async function signInToJobHelper() {
   const payload = await readJsonResponse(response);
 
   if (!response.ok) {
-    throw new Error(readResponseError(payload, "Unable to connect Job Helper."));
+    throw new JobHelperSignInError(
+      readResponseError(payload, "Unable to connect Job Helper."),
+      response.status,
+    );
   }
 
   const session = readAuthSession(payload);
@@ -903,6 +936,39 @@ async function signInToJobHelper() {
   await writeStoredAuthSession(session);
 
   return session;
+}
+
+async function signInToJobHelper(input: { interactive?: boolean } = {}) {
+  const interactive = input.interactive ?? true;
+  const accessToken = await requestGoogleAccessToken(interactive);
+
+  try {
+    return await exchangeGoogleAccessTokenForJobHelperSession(accessToken);
+  } catch (error) {
+    await removeCachedGoogleAccessToken(accessToken);
+
+    if (!(error instanceof JobHelperSignInError) || error.status !== 401) {
+      throw error;
+    }
+
+    const retryAccessToken = await requestGoogleAccessToken(interactive);
+
+    try {
+      return await exchangeGoogleAccessTokenForJobHelperSession(retryAccessToken);
+    } catch (retryError) {
+      await removeCachedGoogleAccessToken(retryAccessToken);
+      throw retryError;
+    }
+  }
+}
+
+async function trySignInToJobHelperSilently() {
+  try {
+    return await signInToJobHelper({ interactive: false });
+  } catch {
+    await clearStoredAuthSession();
+    return null;
+  }
 }
 
 async function ensureJobHelperSession(input: { interactive: boolean }) {
@@ -918,11 +984,17 @@ async function ensureJobHelperSession(input: { interactive: boolean }) {
 
   await clearStoredAuthSession();
 
+  const silentSession = await trySignInToJobHelperSilently();
+
+  if (silentSession) {
+    return silentSession;
+  }
+
   if (!input.interactive) {
     throw new Error("Sign in to Job Helper from the extension first.");
   }
 
-  return signInToJobHelper();
+  return signInToJobHelper({ interactive: true });
 }
 
 async function signOutOfJobHelper() {
@@ -2181,7 +2253,7 @@ chrome.runtime.onMessage.addListener((
 
   if (typedMessage?.type === "JOB_HELPER_SIGN_IN") {
     return sendAsyncResponse(sendResponse, async () => ({
-      session: await signInToJobHelper(),
+      session: await signInToJobHelper({ interactive: true }),
       status: "signedIn",
     }));
   }
