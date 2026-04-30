@@ -4459,6 +4459,77 @@ export async function PATCH(request: Request) {
     });
   }
 
+  if ("action" in body && body.action === "archiveAllTailoredResumes") {
+    const nextUpdatedAt = new Date().toISOString();
+    const archiveTargetIds = rawProfile.tailoredResumes
+      .filter((record) => !record.archivedAt)
+      .map((record) => record.id);
+    const archiveTargetIdSet = new Set(archiveTargetIds);
+
+    const nextRawProfile: TailorResumeProfile =
+      archiveTargetIds.length === 0
+        ? rawProfile
+        : {
+            ...rawProfile,
+            tailoredResumes: rawProfile.tailoredResumes.map((record) =>
+              archiveTargetIdSet.has(record.id)
+                ? {
+                    ...record,
+                    archivedAt: nextUpdatedAt,
+                    updatedAt: nextUpdatedAt,
+                  }
+                : record,
+            ),
+          };
+
+    if (nextRawProfile !== rawProfile) {
+      await writeTailorResumeProfile(session.user.id, nextRawProfile);
+
+      const prisma = getPrismaClient();
+      await prisma.$transaction([
+        prisma.tailoredResume.updateMany({
+          data: {
+            archivedAt: new Date(nextUpdatedAt),
+          },
+          where: {
+            archivedAt: null,
+            profileRecordId: {
+              in: archiveTargetIds,
+            },
+            userId: session.user.id,
+          },
+        }),
+        prisma.userSyncState.upsert({
+          create: {
+            applicationsVersion: 0,
+            tailoringVersion: 1,
+            userId: session.user.id,
+          },
+          select: {
+            tailoringVersion: true,
+          },
+          update: {
+            tailoringVersion: {
+              increment: 1,
+            },
+          },
+          where: {
+            userId: session.user.id,
+          },
+        }),
+      ]);
+    }
+
+    return NextResponse.json({
+      archived: true,
+      archivedCount: archiveTargetIds.length,
+      profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
+        includeLockedOnly: true,
+      }),
+      tailoredResumeIds: archiveTargetIds,
+    });
+  }
+
   if ("action" in body && body.action === "ensureTailoredResumePreview") {
     const tailoredResumeId =
       "tailoredResumeId" in body && typeof body.tailoredResumeId === "string"

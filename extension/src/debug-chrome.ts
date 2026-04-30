@@ -109,8 +109,9 @@ function createMockTailoringRun(
   const isStep4Error = variant === "step4-error";
   const isStep4Retry = isStep4Error || variant === "step4-running";
 
-  return {
-    capturedAt: new Date("2026-04-21T23:10:00.000Z").toISOString(),
+	  return {
+	    applicationId: null,
+	    capturedAt: new Date("2026-04-21T23:10:00.000Z").toISOString(),
     companyName: "Acme AI",
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
     message:
@@ -136,9 +137,10 @@ function createMockTailoringRun(
     jobIdentifier: null,
     pageTitle: mockPageContext.title,
     pageUrl: mockPageContext.url,
-    positionTitle: "Senior Product Engineer",
-    status,
-    tailoredResumeError:
+	    positionTitle: "Senior Product Engineer",
+	    status,
+	    suppressedTailoredResumeId: null,
+	    tailoredResumeError:
       status === "error"
         ? isStep4Error
           ? "The model did not submit verified compaction candidates after 4 Step 4 tool rounds."
@@ -299,6 +301,7 @@ export function installDebugChromeRuntime() {
       mockTailoringRun?.status === "running"
         ? [
             {
+              applicationId: mockTailoringRun.applicationId,
               companyName: mockTailoringRun.companyName,
               createdAt: mockTailoringRun.capturedAt,
               id: "debug-active-tailoring",
@@ -631,6 +634,42 @@ export function installDebugChromeRuntime() {
               tailoringInterview: null,
             },
             tailoredResumeId: tailoredResumeId || null,
+          }),
+          {
+            headers: {
+              "Content-Type": "application/json",
+            },
+            status: 200,
+          },
+        );
+      }
+
+      if (action === "archiveAllTailoredResumes") {
+        const updatedAt = new Date().toISOString();
+        const archivedResumeIds = mockTailoredResumes
+          .filter((record) => !record.archivedAt)
+          .map((record) => record.id);
+        const archivedResumeIdSet = new Set(archivedResumeIds);
+
+        mockTailoredResumes = mockTailoredResumes.map((record) =>
+          archivedResumeIdSet.has(record.id)
+            ? {
+                ...record,
+                archivedAt: updatedAt,
+                updatedAt,
+              }
+            : record,
+        );
+
+        return new Response(
+          JSON.stringify({
+            archived: true,
+            archivedCount: archivedResumeIds.length,
+            profile: {
+              tailoredResumes: mockTailoredResumes,
+              tailoringInterview: null,
+            },
+            tailoredResumeIds: archivedResumeIds,
           }),
           {
             headers: {
