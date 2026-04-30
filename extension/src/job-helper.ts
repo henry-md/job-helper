@@ -118,6 +118,7 @@ export type TailorResumeApplicationContext = {
 };
 
 export type TailorResumeRunRecord = {
+  applicationId: string | null;
   capturedAt: string;
   endpoint: string;
   companyName: string | null;
@@ -129,6 +130,7 @@ export type TailorResumeRunRecord = {
   pageUrl: string | null;
   positionTitle: string | null;
   status: "error" | "needs_input" | "running" | "success";
+  suppressedTailoredResumeId: string | null;
   tailoredResumeError: string | null;
   tailoredResumeId: string | null;
 };
@@ -236,6 +238,7 @@ export type TailorResumeGenerationStepSummary = {
 
 export type TailorResumeExistingTailoringState =
   | {
+      applicationId: string | null;
       companyName: string | null;
       createdAt: string;
       id: string;
@@ -248,6 +251,7 @@ export type TailorResumeExistingTailoringState =
       updatedAt: string;
     }
   | {
+      applicationId: string | null;
       companyName: string | null;
       createdAt: string;
       id: string;
@@ -260,6 +264,7 @@ export type TailorResumeExistingTailoringState =
       updatedAt: string;
     }
   | {
+      applicationId: string | null;
       companyName: string | null;
       createdAt: string;
       displayName: string;
@@ -796,6 +801,7 @@ export function readTailorResumeExistingTailoringState(
     }
 
     return {
+      applicationId: readNullableString(existingTailoring.applicationId),
       companyName: readNullableString(existingTailoring.companyName),
       createdAt,
       id,
@@ -819,6 +825,7 @@ export function readTailorResumeExistingTailoringState(
     }
 
     return {
+      applicationId: readNullableString(existingTailoring.applicationId),
       companyName: readNullableString(existingTailoring.companyName),
       createdAt,
       id,
@@ -844,6 +851,7 @@ export function readTailorResumeExistingTailoringState(
     }
 
     return {
+      applicationId: readNullableString(existingTailoring.applicationId),
       companyName: readNullableString(existingTailoring.companyName),
       createdAt,
       displayName,

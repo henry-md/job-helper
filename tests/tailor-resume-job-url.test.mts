@@ -13,6 +13,7 @@ function buildTailoredResume(
   overrides: Partial<TailoredResumeRecord>,
 ): TailoredResumeRecord {
   return {
+    applicationId: overrides.applicationId,
     annotatedLatexCode: "% annotated",
     archivedAt: overrides.archivedAt ?? null,
     companyName: "OpenAI",
@@ -99,6 +100,17 @@ test("normalizeTailorResumeJobUrl matches Workday canonical and browser URL vari
   );
 });
 
+test("normalizeTailorResumeJobUrl matches Workday career-site aliases", () => {
+  assert.equal(
+    normalizeTailorResumeJobUrl(
+      "https://pae.wd1.myworkdayjobs.com/en-US/Amentum_Careers/job/Entry-Level-Software-Engineer_R0160036",
+    ),
+    normalizeTailorResumeJobUrl(
+      "https://pae.wd1.myworkdayjobs.com/en-US/2/job/US-VA-Dahlgren/Entry-Level-Software-Engineer_R0160036?source=extension",
+    ),
+  );
+});
+
 test("normalizeTailorResumeJobUrl keeps distinct Workday requisitions separate", () => {
   assert.notEqual(
     normalizeTailorResumeJobUrl(
@@ -135,6 +147,30 @@ test("dedupeTailoredResumesByJobUrl keeps the newest resume for a comparable job
       createdAt: "2026-04-20T12:05:00.000Z",
       id: "newer",
       jobUrl: "https://jobs.example.com/roles/123?utm_source=second",
+      updatedAt: "2026-04-20T12:05:00.000Z",
+    }),
+  ]);
+
+  assert.deepEqual(
+    records.map((record) => record.id),
+    ["newer"],
+  );
+});
+
+test("dedupeTailoredResumesByJobUrl keeps the newest resume for a shared application", () => {
+  const records = dedupeTailoredResumesByJobUrl([
+    buildTailoredResume({
+      applicationId: "app-123",
+      createdAt: "2026-04-20T12:00:00.000Z",
+      id: "older",
+      jobUrl: "https://jobs.example.com/roles/original",
+      updatedAt: "2026-04-20T12:00:00.000Z",
+    }),
+    buildTailoredResume({
+      applicationId: "app-123",
+      createdAt: "2026-04-20T12:05:00.000Z",
+      id: "newer",
+      jobUrl: "https://jobs.example.com/roles/replacement",
       updatedAt: "2026-04-20T12:05:00.000Z",
     }),
   ]);

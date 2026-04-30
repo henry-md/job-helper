@@ -29,23 +29,13 @@ function normalizeWorkdayJobPath(url: URL) {
     return;
   }
 
-  const localeSegment = pathSegments[0]?.toLowerCase();
-  const careerSiteSegments = pathSegments
-    .slice(1, jobSegmentIndex)
-    .map((segment) => segment.toLowerCase());
   const postingSegment = pathSegments.at(-1);
 
-  if (!localeSegment || !postingSegment) {
+  if (!postingSegment) {
     return;
   }
 
-  url.pathname = [
-    "",
-    localeSegment,
-    ...careerSiteSegments,
-    "job",
-    postingSegment,
-  ].join("/");
+  url.pathname = ["", "job", postingSegment].join("/");
 }
 
 export function normalizeTailorResumeJobUrl(
@@ -181,29 +171,35 @@ function readComparableTailoredResumeTime(record: TailoredResumeRecord) {
 export function dedupeTailoredResumesByJobUrl(
   tailoredResumes: TailoredResumeRecord[],
 ) {
-  const recordsByComparableUrl = new Map<string, TailoredResumeRecord>();
-  const recordsWithoutComparableUrl: TailoredResumeRecord[] = [];
+  const recordsByComparableKey = new Map<string, TailoredResumeRecord>();
+  const recordsWithoutComparableKey: TailoredResumeRecord[] = [];
 
   for (const record of tailoredResumes) {
+    const applicationId = record.applicationId?.trim();
     const normalizedJobUrl = normalizeTailorResumeJobUrl(record.jobUrl);
+    const comparableKey = applicationId
+      ? `application:${applicationId}`
+      : normalizedJobUrl
+        ? `url:${normalizedJobUrl}`
+        : null;
 
-    if (!normalizedJobUrl) {
-      recordsWithoutComparableUrl.push(record);
+    if (!comparableKey) {
+      recordsWithoutComparableKey.push(record);
       continue;
     }
 
-    const previousRecord = recordsByComparableUrl.get(normalizedJobUrl);
+    const previousRecord = recordsByComparableKey.get(comparableKey);
 
     if (
       !previousRecord ||
       readComparableTailoredResumeTime(record) >=
         readComparableTailoredResumeTime(previousRecord)
     ) {
-      recordsByComparableUrl.set(normalizedJobUrl, record);
+      recordsByComparableKey.set(comparableKey, record);
     }
   }
 
-  return [...recordsByComparableUrl.values(), ...recordsWithoutComparableUrl].sort(
+  return [...recordsByComparableKey.values(), ...recordsWithoutComparableKey].sort(
     (left, right) =>
       readComparableTailoredResumeTime(right) -
       readComparableTailoredResumeTime(left),

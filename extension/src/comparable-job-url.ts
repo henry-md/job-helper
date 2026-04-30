@@ -23,23 +23,13 @@ function normalizeWorkdayJobPath(parsedUrl: URL) {
     return;
   }
 
-  const localeSegment = pathSegments[0]?.toLowerCase();
-  const careerSiteSegments = pathSegments
-    .slice(1, jobSegmentIndex)
-    .map((segment) => segment.toLowerCase());
   const postingSegment = pathSegments.at(-1);
 
-  if (!localeSegment || !postingSegment) {
+  if (!postingSegment) {
     return;
   }
 
-  parsedUrl.pathname = [
-    "",
-    localeSegment,
-    ...careerSiteSegments,
-    "job",
-    postingSegment,
-  ].join("/");
+  parsedUrl.pathname = ["", "job", postingSegment].join("/");
 }
 
 export function normalizeComparableUrl(value: string | null | undefined) {

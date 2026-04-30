@@ -616,6 +616,7 @@ type TailorResumeApplicationContext = {
 };
 
 type TailoredResumeDbRecord = {
+  applicationId: string | null;
   archivedAt: Date | null;
   companyName: string | null;
   createdAt: Date;
@@ -729,6 +730,21 @@ function readExistingTailoringAction(body: Record<string, unknown>) {
     body.overwriteExistingTailoring === true
     ? "overwrite"
     : null;
+}
+
+function readOptionalBodyString(
+  body: Record<string, unknown>,
+  keys: string[],
+) {
+  for (const key of keys) {
+    const value = body[key];
+
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return null;
 }
 
 function buildExistingTailoringConflictResponse(input: {
@@ -1028,6 +1044,7 @@ function buildCompletedExistingTailoringState(
   tailoredResume: TailorResumeProfile["tailoredResumes"][number],
 ): TailorResumeExistingTailoringState {
   return {
+    applicationId: tailoredResume.applicationId ?? null,
     companyName: tailoredResume.companyName,
     createdAt: tailoredResume.createdAt,
     displayName: tailoredResume.displayName,
@@ -1047,6 +1064,7 @@ function buildDbCompletedExistingTailoringState(
   tailoredResume: TailoredResumeDbRecord,
 ): TailorResumeExistingTailoringState {
   return {
+    applicationId: tailoredResume.applicationId,
     companyName: tailoredResume.companyName,
     createdAt: tailoredResume.createdAt.toISOString(),
     displayName: tailoredResume.displayName,
@@ -1074,6 +1092,98 @@ async function findLatestDbTailoredResume(input: {
     orderBy: [{ createdAt: "desc" }, { updatedAt: "desc" }],
     where: {
       applicationId: input.applicationId,
+      userId: input.userId,
+    },
+  });
+}
+
+function collectOverwrittenProfileTailoredResumeIds(input: {
+  applicationIds: string[];
+  jobUrls: Array<string | null | undefined>;
+  profile: TailorResumeProfile;
+  tailoredResumeIds: string[];
+}) {
+  const applicationIds = new Set(uniqueNonEmptyStrings(input.applicationIds));
+  const tailoredResumeIds = new Set(uniqueNonEmptyStrings(input.tailoredResumeIds));
+  const normalizedJobUrls = new Set(
+    uniqueNonEmptyStrings(input.jobUrls.map(normalizeTailorResumeJobUrl)),
+  );
+
+  return input.profile.tailoredResumes
+    .filter((record) => {
+      if (tailoredResumeIds.has(record.id)) {
+        return true;
+      }
+
+      if (record.applicationId && applicationIds.has(record.applicationId)) {
+        return true;
+      }
+
+      const normalizedJobUrl = normalizeTailorResumeJobUrl(record.jobUrl);
+      return Boolean(normalizedJobUrl && normalizedJobUrls.has(normalizedJobUrl));
+    })
+    .map((record) => record.id);
+}
+
+async function findDbTailoredResumeOverwriteTargets(input: {
+  applicationIds: string[];
+  jobUrls: Array<string | null | undefined>;
+  tailoredResumeIds: string[];
+  userId: string;
+}) {
+  const applicationIds = uniqueNonEmptyStrings(input.applicationIds);
+  const tailoredResumeIds = uniqueNonEmptyStrings(input.tailoredResumeIds);
+  const jobUrlHashes = uniqueNonEmptyStrings(
+    input.jobUrls.map((jobUrl) => buildTailorResumeJobUrlHash(jobUrl ?? null)),
+  );
+  const orConditions = [
+    ...(applicationIds.length > 0
+      ? [
+          {
+            applicationId: {
+              in: applicationIds,
+            },
+          },
+        ]
+      : []),
+    ...(tailoredResumeIds.length > 0
+      ? [
+          {
+            id: {
+              in: tailoredResumeIds,
+            },
+          },
+          {
+            profileRecordId: {
+              in: tailoredResumeIds,
+            },
+          },
+        ]
+      : []),
+    ...(jobUrlHashes.length > 0
+      ? [
+          {
+            jobUrlHash: {
+              in: jobUrlHashes,
+            },
+          },
+        ]
+      : []),
+  ];
+
+  if (orConditions.length === 0) {
+    return [];
+  }
+
+  return getPrismaClient().tailoredResume.findMany({
+    select: {
+      applicationId: true,
+      id: true,
+      jobUrl: true,
+      profileRecordId: true,
+    },
+    where: {
+      OR: orConditions,
       userId: input.userId,
     },
   });
@@ -1588,6 +1698,14 @@ async function finalizeTailorResumeGeneration(input: {
 
   const tailoredResumeId = randomUUID();
   const tailoredResumeUpdatedAt = new Date().toISOString();
+  const shouldReplaceOverwrittenTailoredResumes = Boolean(
+    tailoringResult.previewPdf && !tailoringResult.validationError?.trim(),
+  );
+  const overwrittenTailoredResumeIds = uniqueNonEmptyStrings(
+    shouldReplaceOverwrittenTailoredResumes
+      ? (input.overwrittenTailoredResumeIds ?? [])
+      : [],
+  );
   const nextState = await withTailorResumeProfileLock(input.userId, async () => {
     const latestState = await readTailorResumeProfileState(input.userId);
     const runStillActive = await isTailorResumeRunStillActive({
@@ -1645,15 +1763,13 @@ async function finalizeTailorResumeGeneration(input: {
         updatedAt: tailoredResumeUpdatedAt,
       },
     });
-    const overwrittenTailoredResumeIds = new Set(
-      input.overwrittenTailoredResumeIds ?? [],
-    );
+    const overwrittenTailoredResumeIdSet = new Set(overwrittenTailoredResumeIds);
     const mergedRawProfileWithOverwrite =
-      overwrittenTailoredResumeIds.size > 0
+      overwrittenTailoredResumeIdSet.size > 0
         ? {
             ...mergedRawProfile,
             tailoredResumes: mergedRawProfile.tailoredResumes.filter(
-              (record) => !overwrittenTailoredResumeIds.has(record.id),
+              (record) => !overwrittenTailoredResumeIdSet.has(record.id),
             ),
           }
         : mergedRawProfile;
@@ -1721,8 +1837,18 @@ async function finalizeTailorResumeGeneration(input: {
       status: savedTailoredResume.status,
       userId: input.userId,
     });
+    await Promise.all(
+      overwrittenTailoredResumeIds.map((overwrittenTailoredResumeId) =>
+        deleteTailoredResumePdf(input.userId, overwrittenTailoredResumeId),
+      ),
+    );
     await deleteDbTailoredResumes({
-      ids: input.overwrittenDbTailoredResumeIds ?? [],
+      ids: uniqueNonEmptyStrings([
+        ...(shouldReplaceOverwrittenTailoredResumes
+          ? (input.overwrittenDbTailoredResumeIds ?? [])
+          : []),
+        ...overwrittenTailoredResumeIds,
+      ]),
       userId: input.userId,
     });
     const savedTailoredResumeHasGenerationFailure = Boolean(
@@ -1770,6 +1896,20 @@ async function handleTailorResumeGeneration(
         userId,
       );
       const existingTailoringAction = readExistingTailoringAction(body);
+      const overwriteTargetApplicationId =
+        existingTailoringAction === "overwrite"
+          ? readOptionalBodyString(body, [
+              "existingTailoringApplicationId",
+              "overwrittenApplicationId",
+            ])
+          : null;
+      const overwriteTargetTailoredResumeId =
+        existingTailoringAction === "overwrite"
+          ? readOptionalBodyString(body, [
+              "existingTailoringTailoredResumeId",
+              "overwrittenTailoredResumeId",
+            ])
+          : null;
       const jobDescription =
         typeof body.jobDescription === "string"
           ? body.jobDescription
@@ -1929,22 +2069,72 @@ async function handleTailorResumeGeneration(
 
       await writeTailorResumeProfileAndMarkChanged(userId, nextRawProfile);
 
+      const overwriteApplicationIds =
+        existingTailoringAction === "overwrite"
+          ? uniqueNonEmptyStrings([
+              application?.id,
+              overwriteTargetApplicationId,
+              existingDbTailoredResume?.applicationId,
+              existingTailoredResume?.applicationId,
+            ])
+          : [];
+      const overwriteTailoredResumeIds =
+        existingTailoringAction === "overwrite"
+          ? uniqueNonEmptyStrings([
+              overwriteTargetTailoredResumeId,
+              existingDbTailoredResume?.id,
+              existingDbTailoredResume?.profileRecordId,
+              existingTailoredResume?.id,
+            ])
+          : [];
+      const overwriteJobUrls =
+        existingTailoringAction === "overwrite"
+          ? [
+              jobUrlResult.jobUrl,
+              existingDbTailoredResume?.jobUrl,
+              existingTailoredResume?.jobUrl,
+            ]
+          : [];
+      const dbOverwriteTargets =
+        existingTailoringAction === "overwrite"
+          ? await findDbTailoredResumeOverwriteTargets({
+              applicationIds: overwriteApplicationIds,
+              jobUrls: overwriteJobUrls,
+              tailoredResumeIds: overwriteTailoredResumeIds,
+              userId,
+            })
+          : [];
+      const profileOverwriteTargetIds =
+        existingTailoringAction === "overwrite"
+          ? collectOverwrittenProfileTailoredResumeIds({
+              applicationIds: uniqueNonEmptyStrings([
+                ...overwriteApplicationIds,
+                ...dbOverwriteTargets.map((record) => record.applicationId),
+              ]),
+              jobUrls: [
+                ...overwriteJobUrls,
+                ...dbOverwriteTargets.map((record) => record.jobUrl),
+              ],
+              profile: nextRawProfile,
+              tailoredResumeIds: uniqueNonEmptyStrings([
+                ...overwriteTailoredResumeIds,
+                ...dbOverwriteTargets.map((record) => record.id),
+                ...dbOverwriteTargets.map((record) => record.profileRecordId),
+              ]),
+            })
+          : [];
+
       return {
         applicationId: application?.id ?? null,
         kind: "ready",
         jobDescription,
         jobUrl: jobUrlResult.jobUrl,
         lockedLinks,
-        overwrittenDbTailoredResumeIds:
-          existingDbTailoredResume && existingTailoringAction === "overwrite"
-            ? [existingDbTailoredResume.id]
-            : [],
-        overwrittenTailoredResumeIds:
-          existingTailoredResume && existingTailoringAction === "overwrite"
-            ? [existingTailoredResume.id]
-            : existingDbTailoredResume && existingTailoringAction === "overwrite"
-              ? [existingDbTailoredResume.profileRecordId]
-              : [],
+        overwrittenDbTailoredResumeIds: uniqueNonEmptyStrings([
+          ...dbOverwriteTargets.map((record) => record.id),
+          ...dbOverwriteTargets.map((record) => record.profileRecordId),
+        ]),
+        overwrittenTailoredResumeIds: profileOverwriteTargetIds,
         rawProfile: nextRawProfile,
         runId,
       };

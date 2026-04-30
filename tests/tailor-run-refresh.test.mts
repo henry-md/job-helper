@@ -3,6 +3,7 @@ import test from "node:test";
 import { buildTailoringRunsRefreshKey } from "../extension/src/tailor-run-refresh.ts";
 
 function buildRun(overrides: Partial<{
+  applicationId: string | null;
   capturedAt: string;
   generationStep: {
     attempt: number | null;
@@ -16,10 +17,12 @@ function buildRun(overrides: Partial<{
   message: string;
   pageUrl: string | null;
   status: "error" | "needs_input" | "running" | "success";
+  suppressedTailoredResumeId: string | null;
   tailoredResumeError: string | null;
   tailoredResumeId: string | null;
 }> = {}) {
   return {
+    applicationId: overrides.applicationId ?? null,
     capturedAt: overrides.capturedAt ?? "2026-04-26T12:00:00.000Z",
     companyName: "OpenAI",
     endpoint: "http://localhost:1285/api/tailor-resume",
@@ -30,6 +33,7 @@ function buildRun(overrides: Partial<{
     pageUrl: overrides.pageUrl ?? "https://jobs.example.com/roles/1",
     positionTitle: "Research Engineer",
     status: overrides.status ?? "running",
+    suppressedTailoredResumeId: overrides.suppressedTailoredResumeId ?? null,
     tailoredResumeError: overrides.tailoredResumeError ?? null,
     tailoredResumeId: overrides.tailoredResumeId ?? null,
   };

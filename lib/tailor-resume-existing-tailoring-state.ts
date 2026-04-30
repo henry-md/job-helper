@@ -7,6 +7,7 @@ import type {
 
 export type TailorResumeExistingTailoringState =
   | {
+      applicationId: string | null;
       companyName: string | null;
       createdAt: string;
       id: string;
@@ -19,6 +20,7 @@ export type TailorResumeExistingTailoringState =
       updatedAt: string;
     }
   | {
+      applicationId: string | null;
       companyName: string | null;
       createdAt: string;
       id: string;
@@ -31,6 +33,7 @@ export type TailorResumeExistingTailoringState =
       updatedAt: string;
     }
   | {
+      applicationId: string | null;
       companyName: string | null;
       createdAt: string;
       displayName: string;
@@ -131,6 +134,40 @@ function dedupeExistingTailoringsByJobUrl(
   ];
 }
 
+function dedupeExistingTailoringsByApplicationId(
+  activeTailorings: TailorResumeExistingTailoringState[],
+) {
+  const activeTailoringsByApplicationId = new Map<
+    string,
+    TailorResumeExistingTailoringState
+  >();
+  const activeTailoringsWithoutApplicationId: TailorResumeExistingTailoringState[] =
+    [];
+
+  for (const activeTailoring of activeTailorings) {
+    const applicationId = activeTailoring.applicationId?.trim();
+
+    if (!applicationId) {
+      activeTailoringsWithoutApplicationId.push(activeTailoring);
+      continue;
+    }
+
+    const previousTailoring = activeTailoringsByApplicationId.get(applicationId);
+
+    if (
+      !previousTailoring ||
+      compareExistingTailoringPreference(activeTailoring, previousTailoring) >= 0
+    ) {
+      activeTailoringsByApplicationId.set(applicationId, activeTailoring);
+    }
+  }
+
+  return [
+    ...activeTailoringsByApplicationId.values(),
+    ...activeTailoringsWithoutApplicationId,
+  ];
+}
+
 export function buildTailorResumeRunStepEvent(
   run: TailorResumeDbRunRecord,
 ): TailorResumeGenerationStepEvent | null {
@@ -166,6 +203,7 @@ export function buildActiveRunExistingTailoringState(
   run: TailorResumeDbRunRecord,
 ): TailorResumeExistingTailoringState {
   return {
+    applicationId: run.applicationId,
     companyName: run.application.company.name,
     createdAt: run.createdAt.toISOString(),
     id: run.id,
@@ -186,6 +224,7 @@ export function buildPendingInterviewExistingTailoringState(
   const questioningSummary = tailoringInterview.planningResult.questioningSummary;
 
   return {
+    applicationId: run?.applicationId ?? tailoringInterview.applicationId,
     companyName: tailoringInterview.planningResult.companyName || null,
     createdAt: run?.createdAt.toISOString() ?? tailoringInterview.createdAt,
     id: run?.id ?? tailoringInterview.tailorResumeRunId ?? tailoringInterview.id,
@@ -232,7 +271,9 @@ export function buildActiveTailoringStates(input: {
     activeTailorings.push(buildActiveRunExistingTailoringState(run));
   }
 
-  return dedupeExistingTailoringsByJobUrl(activeTailorings).sort(
+  return dedupeExistingTailoringsByJobUrl(
+    dedupeExistingTailoringsByApplicationId(activeTailorings),
+  ).sort(
     (left, right) => {
       const createdAtDifference =
         Date.parse(right.createdAt || "") - Date.parse(left.createdAt || "");
@@ -329,6 +370,7 @@ export function readTailorResumeExistingTailoringState(
     }
 
     return {
+      applicationId: readNullableString(existingTailoring.applicationId),
       companyName: readNullableString(existingTailoring.companyName),
       createdAt,
       id,
@@ -350,6 +392,7 @@ export function readTailorResumeExistingTailoringState(
     }
 
     return {
+      applicationId: readNullableString(existingTailoring.applicationId),
       companyName: readNullableString(existingTailoring.companyName),
       createdAt,
       id,
@@ -375,6 +418,7 @@ export function readTailorResumeExistingTailoringState(
     }
 
     return {
+      applicationId: readNullableString(existingTailoring.applicationId),
       companyName: readNullableString(existingTailoring.companyName),
       createdAt,
       displayName,
@@ -412,7 +456,9 @@ export function readTailorResumeExistingTailoringStates(value: unknown) {
     );
 
   if (parsedActiveTailorings.length > 0) {
-    return dedupeExistingTailoringsByJobUrl(parsedActiveTailorings).sort((left, right) => {
+    return dedupeExistingTailoringsByJobUrl(
+      dedupeExistingTailoringsByApplicationId(parsedActiveTailorings),
+    ).sort((left, right) => {
       const createdAtDifference =
         Date.parse(right.createdAt || "") - Date.parse(left.createdAt || "");
 

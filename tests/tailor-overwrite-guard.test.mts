@@ -25,6 +25,7 @@ function buildPageIdentity(
 
 function buildActiveTailoring(
   overrides: Partial<{
+    applicationId: string | null;
     createdAt: string;
     id: string;
     jobDescription: string;
@@ -43,6 +44,7 @@ function buildActiveTailoring(
   }> = {},
 ) {
   return {
+    applicationId: "app-123",
     createdAt: "2026-04-25T15:00:00.000Z",
     id: "run-123",
     jobDescription: "Role text",
@@ -57,8 +59,10 @@ function buildActiveTailoring(
 
 function buildTailoredResumeSummary(
   overrides: Partial<{
+    applicationId: string | null;
     archivedAt: string | null;
     companyName: string | null;
+    createdAt: string;
     displayName: string;
     id: string;
     jobIdentifier: string | null;
@@ -69,8 +73,10 @@ function buildTailoredResumeSummary(
   }> = {},
 ) {
   return {
+    applicationId: "app-123",
     archivedAt: null,
     companyName: "Example Corp",
+    createdAt: "2026-04-25T15:10:00.000Z",
     displayName: "Example Corp - Software Engineer",
     id: "tailored-123",
     jobIdentifier: "Software Engineer",
@@ -101,8 +107,9 @@ test("returns a completed overwrite prompt when a saved tailored resume matches"
   });
 
   assert.deepEqual(result, {
+    applicationId: "app-123",
     companyName: "Example Corp",
-    createdAt: undefined,
+    createdAt: "2026-04-25T15:10:00.000Z",
     displayName: "Example Corp - Software Engineer",
     error: null,
     id: "tailored-123",
@@ -203,6 +210,17 @@ test("normalizeComparableUrl matches Workday canonical URLs to query-bearing bro
     ),
     normalizeComparableUrl(
       "https://pae.wd1.myworkdayjobs.com/en-US/amentum_careers/job/US-VA-Dahlgren/Entry-Level-Software-Engineer_R0160036?utm_source=Simplify&ref=Simplify",
+    ),
+  );
+});
+
+test("normalizeComparableUrl matches Workday career-site aliases", () => {
+  assert.equal(
+    normalizeComparableUrl(
+      "https://pae.wd1.myworkdayjobs.com/en-US/Amentum_Careers/job/Entry-Level-Software-Engineer_R0160036",
+    ),
+    normalizeComparableUrl(
+      "https://pae.wd1.myworkdayjobs.com/en-US/2/job/US-VA-Dahlgren/Entry-Level-Software-Engineer_R0160036?source=extension",
     ),
   );
 });
