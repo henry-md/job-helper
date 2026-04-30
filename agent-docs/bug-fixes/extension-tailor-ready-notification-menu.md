@@ -1,0 +1,3 @@
+- Symptom: the extension could render the idle "Ready to tailor this page" page-status copy inside the Tailor Resume run/card shell, which gave it the same overflow menu as saved or active tailored resumes.
+- Root cause: current-page readiness was treated like Tailor Resume artifact state, so archive/delete-style run actions could appear on a notification that does not own a resume or run.
+- Fix: render idle page readiness with a separate dismissible notification component, and keep that notification state out of the legacy Tailor Resume run shell and its action menu.

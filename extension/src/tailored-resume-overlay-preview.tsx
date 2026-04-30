@@ -621,7 +621,7 @@ export default function TailoredResumeOverlayPreview({
     "error" | "idle" | "loading" | "ready"
   >("idle");
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [containerWidth, setContainerWidth] = useState(0);
+  const [containerSize, setContainerSize] = useState({ height: 0, width: 0 });
 
   useEffect(() => {
     const element = containerRef.current;
@@ -632,7 +632,10 @@ export default function TailoredResumeOverlayPreview({
 
     const resizeObserver = new ResizeObserver((entries) => {
       const entry = entries[0];
-      setContainerWidth(entry?.contentRect.width ?? 0);
+      setContainerSize({
+        height: entry?.contentRect.height ?? 0,
+        width: entry?.contentRect.width ?? 0,
+      });
     });
 
     resizeObserver.observe(element);
@@ -746,13 +749,22 @@ export default function TailoredResumeOverlayPreview({
 
   const pageScale = useMemo(() => {
     const firstPageWidth = loadedPages[0]?.baseWidth;
+    const firstPageHeight = loadedPages[0]?.baseHeight;
 
-    if (!firstPageWidth || !containerWidth) {
+    if (
+      !firstPageWidth ||
+      !firstPageHeight ||
+      !containerSize.width ||
+      !containerSize.height
+    ) {
       return 1;
     }
 
-    return Math.max(0.4, (containerWidth - 8) / firstPageWidth);
-  }, [containerWidth, loadedPages]);
+    const widthScale = (containerSize.width - 8) / firstPageWidth;
+    const heightScale = (containerSize.height - 8) / firstPageHeight;
+
+    return Math.max(0.15, Math.min(widthScale, heightScale));
+  }, [containerSize, loadedPages]);
 
   return (
     <div className="tailored-preview-overlay-root">

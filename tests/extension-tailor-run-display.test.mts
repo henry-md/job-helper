@@ -5,6 +5,7 @@ import {
   resolveDisplayedTailorRunIdentity,
   resolveReviewableTailoredResumeId,
   shouldRenderLegacyTailorRunShell,
+  shouldRenderTailorPageNotification,
   shouldRenderTailorRunShell,
 } from "../extension/src/tailor-run-display.ts";
 
@@ -164,6 +165,63 @@ test("keeps completed current-page resumes on the row surface without a prompt",
       hasCurrentPageExistingTailoringPrompt: false,
       hasCurrentPageRunCard: false,
       shouldShowTailorRunShell: true,
+    }),
+    false,
+  );
+});
+
+test("shows a dismissible page notification for ready pages with no tailoring state", () => {
+  assert.equal(
+    shouldRenderTailorPageNotification({
+      activeTailoringKind: null,
+      captureState: "idle",
+      hasCurrentPageRunCard: false,
+      hasExistingTailoringPrompt: false,
+      hasPageCaptureFailureRun: false,
+      hasTailorInterview: false,
+      isStoppingCurrentTailoring: false,
+      isTailorPreparationPending: false,
+      lastTailoringRunStatus: null,
+      pageStatus: "ready",
+      showTailoredPreview: false,
+    }),
+    true,
+  );
+});
+
+test("does not show the page notification when a tailoring run owns the state", () => {
+  assert.equal(
+    shouldRenderTailorPageNotification({
+      activeTailoringKind: null,
+      captureState: "idle",
+      hasCurrentPageRunCard: true,
+      hasExistingTailoringPrompt: false,
+      hasPageCaptureFailureRun: false,
+      hasTailorInterview: false,
+      isStoppingCurrentTailoring: false,
+      isTailorPreparationPending: false,
+      lastTailoringRunStatus: "running",
+      pageStatus: "ready",
+      showTailoredPreview: false,
+    }),
+    false,
+  );
+});
+
+test("does not show the page notification for completed resume previews", () => {
+  assert.equal(
+    shouldRenderTailorPageNotification({
+      activeTailoringKind: "completed",
+      captureState: "idle",
+      hasCurrentPageRunCard: false,
+      hasExistingTailoringPrompt: false,
+      hasPageCaptureFailureRun: false,
+      hasTailorInterview: false,
+      isStoppingCurrentTailoring: false,
+      isTailorPreparationPending: false,
+      lastTailoringRunStatus: null,
+      pageStatus: "ready",
+      showTailoredPreview: true,
     }),
     false,
   );

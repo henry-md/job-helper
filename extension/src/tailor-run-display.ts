@@ -19,6 +19,8 @@ type TailorRunExistingTailoringKind =
   | "completed"
   | "pending_interview";
 
+type TailorRunPageStatus = "error" | "idle" | "loading" | "ready";
+
 type TailorRunIdentityFields = {
   companyName: string | null;
   positionTitle: string | null;
@@ -115,6 +117,36 @@ export function shouldRenderLegacyTailorRunShell(input: {
   }
 
   return !input.hasCurrentPageCompletedTailoring;
+}
+
+export function shouldRenderTailorPageNotification(input: {
+  activeTailoringKind: TailorRunExistingTailoringKind | null;
+  captureState: TailorRunCaptureState;
+  hasCurrentPageRunCard: boolean;
+  hasExistingTailoringPrompt: boolean;
+  hasPageCaptureFailureRun: boolean;
+  hasTailorInterview: boolean;
+  isStoppingCurrentTailoring: boolean;
+  isTailorPreparationPending: boolean;
+  lastTailoringRunStatus: TailorRunStatus | null;
+  pageStatus: TailorRunPageStatus;
+  showTailoredPreview: boolean;
+}) {
+  if (
+    input.activeTailoringKind ||
+    input.hasCurrentPageRunCard ||
+    input.hasExistingTailoringPrompt ||
+    input.hasPageCaptureFailureRun ||
+    input.hasTailorInterview ||
+    input.isStoppingCurrentTailoring ||
+    input.isTailorPreparationPending ||
+    input.lastTailoringRunStatus ||
+    input.showTailoredPreview
+  ) {
+    return false;
+  }
+
+  return input.pageStatus === "ready" && input.captureState === "idle";
 }
 
 export function resolveReviewableTailoredResumeId(input: {

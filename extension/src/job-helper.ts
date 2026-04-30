@@ -17,6 +17,10 @@ const extensionEnv: Record<string, string | undefined> =
     : {};
 export const EXTENSION_DEBUG_UI_ENABLED =
   typeof __DEBUG_UI__ !== "undefined" ? __DEBUG_UI__ : false;
+export const EXTENSION_TOP_LEVEL_AI_CHAT_HIDDEN =
+  typeof __HIDE_TOP_LVL_AI_CHAT__ !== "undefined"
+    ? __HIDE_TOP_LVL_AI_CHAT__
+    : false;
 
 function normalizeAppBaseUrl(value: string | undefined) {
   const trimmedValue = value?.trim();

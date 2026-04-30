@@ -34,6 +34,7 @@ function buildCompletedExistingTailoringState(
   tailoredResume: TailoredResumeSummary,
 ): TailorResumeExistingTailoringState {
   return {
+    applicationId: tailoredResume.applicationId,
     companyName: tailoredResume.companyName,
     createdAt: tailoredResume.createdAt,
     displayName: tailoredResume.displayName,

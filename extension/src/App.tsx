@@ -29,6 +29,7 @@ import {
   DEFAULT_TAILOR_RESUME_ENDPOINT,
   DEFAULT_TAILOR_RESUME_PREVIEW_ENDPOINT,
   EXTENSION_DEBUG_UI_ENABLED,
+  EXTENSION_TOP_LEVEL_AI_CHAT_HIDDEN,
   EXISTING_TAILORING_STORAGE_KEY,
   LAST_TAILORING_STORAGE_KEY,
   normalizeComparableUrl,
@@ -80,6 +81,7 @@ import {
   resolveDisplayedTailorRunIdentity,
   resolveReviewableTailoredResumeId,
   shouldRenderLegacyTailorRunShell as resolveShouldRenderLegacyTailorRunShell,
+  shouldRenderTailorPageNotification,
   shouldRenderTailorRunShell,
 } from "./tailor-run-display";
 import { buildCompletedTailoringMessage } from "./tailor-run-copy";
@@ -95,6 +97,7 @@ import {
   resolveActiveTailoringForPage,
   matchesTailorOverwritePageIdentity,
 } from "./tailor-overwrite-guard";
+import DismissibleNotification from "./dismissible-notification";
 import {
   buildTailorRunRegistryKey,
   readTailorRunRegistryKeyFromPageContext,
@@ -606,6 +609,23 @@ function buildTailoredResumePreviewUrl(input: {
   return url.toString();
 }
 
+function buildPdfPreviewFrameUrl(objectUrl: string) {
+  return `${objectUrl}#toolbar=1&navpanes=0&view=Fit`;
+}
+
+function buildTailoredResumeDownloadName(
+  record: TailoredResumeReviewRecord | null,
+) {
+  const baseName =
+    record?.displayName
+      ?.trim()
+      .replace(/[\\/:*?"<>|]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/[ .-]+$/g, "") || "tailored-resume";
+
+  return `${baseName}.pdf`;
+}
+
 function readTailorResumePayloadError(value: unknown, fallbackMessage: string) {
   return isRecord(value) && typeof value.error === "string" && value.error.trim()
     ? value.error
@@ -747,6 +767,7 @@ function buildTailoringRunRecord(input: {
     input.positionTitle?.trim() || pageApplicationContext?.jobTitle || null;
 
   return {
+    applicationId: null,
     capturedAt: input.capturedAt ?? new Date().toISOString(),
     companyName,
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
@@ -2440,6 +2461,16 @@ function CloseIcon() {
   );
 }
 
+function DownloadIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 4v10" />
+      <path d="m7.5 10 4.5 4.5L16.5 10" />
+      <path d="M5 19h14" />
+    </svg>
+  );
+}
+
 function ArrowLeftIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -2486,15 +2517,6 @@ function ArchiveTrayUpIcon() {
       <path d="M6.8 12v5.25c0 .97.78 1.75 1.75 1.75h6.9c.97 0 1.75-.78 1.75-1.75V12" />
       <path d="M12 14V9" />
       <path d="m9.8 11.2 2.2-2.2 2.2 2.2" />
-    </svg>
-  );
-}
-
-function SettingsIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M4.5 12a7.5 7.5 0 0 1 .165-1.575L3.323 9.393a.75.75 0 0 1-.165-.982l1.5-2.598a.75.75 0 0 1 .92-.33l1.581.638A7.5 7.5 0 0 1 9 4.935l.24-1.677a.75.75 0 0 1 .742-.633h3.036a.75.75 0 0 1 .742.633L14 4.935a7.5 7.5 0 0 1 1.84 1.186l1.581-.638a.75.75 0 0 1 .92.33l1.5 2.598a.75.75 0 0 1-.165.982l-1.342 1.032c.11.514.165 1.041.165 1.575s-.055 1.061-.165 1.575l1.342 1.032a.75.75 0 0 1 .165.982l-1.5 2.598a.75.75 0 0 1-.92.33l-1.581-.638A7.5 7.5 0 0 1 14 19.065l-.24 1.677a.75.75 0 0 1-.742.633H9.982a.75.75 0 0 1-.742-.633L9 19.065a7.5 7.5 0 0 1-1.84-1.186l-1.581.638a.75.75 0 0 1-.92-.33l-1.5-2.598a.75.75 0 0 1 .165-.982l1.342-1.032A7.5 7.5 0 0 1 4.5 12Z" />
-      <path d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
     </svg>
   );
 }
@@ -4167,6 +4189,32 @@ function App() {
     isTailoredPreviewDiffHighlightingEnabled &&
     canToggleTailoredPreviewDiffHighlighting;
   const showTailoredPreview = Boolean(latestTailoredResumeId);
+  const tailorPageNotificationKey = [
+    authState.status === "signedIn" ? "ready" : "auth",
+    currentPageResolvedRegistryKey ??
+      normalizeComparableUrl(currentPageUrl) ??
+      currentPageContext?.title ??
+      "unknown-page",
+  ].join(":");
+  const shouldOfferTailorPageNotification = shouldRenderTailorPageNotification({
+    activeTailoringKind: activeTailoring?.kind ?? null,
+    captureState,
+    hasCurrentPageRunCard: Boolean(currentActiveTailorRunCard),
+    hasExistingTailoringPrompt: Boolean(existingTailoringPrompt),
+    hasPageCaptureFailureRun: Boolean(pageCaptureFailureRun),
+    hasTailorInterview: Boolean(tailorInterview),
+    isStoppingCurrentTailoring,
+    isTailorPreparationPending,
+    lastTailoringRunStatus: pageCaptureFailureRun
+      ? null
+      : lastTailoringRun?.status ?? null,
+    pageStatus: state.status,
+    showTailoredPreview,
+  });
+  const shouldShowTailorPageNotification =
+    shouldOfferTailorPageNotification &&
+    !isShowingArchivedTailoredResumes &&
+    !dismissedTailorPageNotificationKeys.has(tailorPageNotificationKey);
   const showTopLevelTailoredWebAction = true;
   const previewButtonLabel = "Preview";
   const quickReviewButtonLabel = "Review edits";
@@ -4179,7 +4227,7 @@ function App() {
   const shouldShowTailorRunTimestamp = Boolean(
     showTailoredPreview && tailoredRunSavedAtLabel,
   );
-  const showTailorRunMenu = true;
+  const showTailorRunMenu = !shouldOfferTailorPageNotification;
   const showRegenerateTailorRunAction =
     showTailoredPreview && Boolean(displayedTailorRunUrl);
   const tailorRunDeleteTarget: TailorRunDeleteTarget | null =
@@ -4286,7 +4334,7 @@ function App() {
       hasCurrentPageExistingTailoringPrompt: Boolean(existingTailoringPrompt),
       hasCurrentPageRunCard: Boolean(currentActiveTailorRunCard),
       shouldShowTailorRunShell,
-    });
+    }) && !shouldOfferTailorPageNotification;
   const shouldShowLegacyTailorRunElapsedTime =
     shouldRenderLegacyTailorRunShell &&
     statusDisplayState === "loading" &&
@@ -4312,6 +4360,7 @@ function App() {
         })
       : null;
   const hasUnarchivedTailorItems =
+    shouldShowTailorPageNotification ||
     displayedUnarchivedTailoredResumes.length > 0 ||
     activeTailorRunCards.length > 0 ||
     Boolean(pageCaptureFailureRun) ||
@@ -4323,6 +4372,7 @@ function App() {
   const unarchivedTailorDisplayCount =
     displayedUnarchivedTailoredResumes.length +
     activeTailorRunCards.length +
+    (shouldShowTailorPageNotification ? 1 : 0) +
     (pageCaptureFailureRun ? 1 : 0) +
     (shouldRenderLegacyTailorRunShell &&
     displayedUnarchivedTailoredResumes.length === 0 &&
@@ -4540,6 +4590,18 @@ function App() {
     }
 
     setIsTailorInterviewFinishPromptOpen(false);
+  }
+
+  function dismissTailorPageNotification(notificationKey: string) {
+    setDismissedTailorPageNotificationKeys((currentKeys) => {
+      if (currentKeys.has(notificationKey)) {
+        return currentKeys;
+      }
+
+      const nextKeys = new Set(currentKeys);
+      nextKeys.add(notificationKey);
+      return nextKeys;
+    });
   }
 
   const revealTailorInterview = useCallback(
@@ -7748,6 +7810,132 @@ function App() {
     });
   }
 
+  function renderTailorPageNotification() {
+    if (!shouldShowTailorPageNotification || !tailorRunMessage) {
+      return null;
+    }
+
+    return (
+      <DismissibleNotification
+        detail={tailorRunDetail}
+        title={tailorRunMessage}
+        tone={authState.status === "signedIn" ? "info" : "warning"}
+        onDismiss={() => dismissTailorPageNotification(tailorPageNotificationKey)}
+      />
+    );
+  }
+
+  function renderTailoredResumeArchiveControls() {
+    return (
+      <div className="tailored-resume-archive-controls">
+        <div
+          aria-label="Resume archive filter"
+          className="tailored-resume-filter-toggle"
+          role="group"
+        >
+          <button
+            aria-pressed={!isShowingArchivedTailoredResumes}
+            className={`tailored-resume-filter-option ${
+              !isShowingArchivedTailoredResumes
+                ? "tailored-resume-filter-option-active"
+                : ""
+            }`.trim()}
+            type="button"
+            onClick={() => setTailoredResumeArchiveFilter("unarchived")}
+          >
+            Unarchived
+          </button>
+          <button
+            aria-pressed={isShowingArchivedTailoredResumes}
+            className={`tailored-resume-filter-option ${
+              isShowingArchivedTailoredResumes
+                ? "tailored-resume-filter-option-active"
+                : ""
+            }`.trim()}
+            type="button"
+            onClick={() => setTailoredResumeArchiveFilter("archived")}
+          >
+            Archived
+          </button>
+        </div>
+        <button
+          className="secondary-action compact-action tailored-resume-archive-all-action"
+          disabled={!canArchiveAllTailoredResumes}
+          title="Archive every unarchived saved resume"
+          type="button"
+          onClick={() => void archiveAllTailoredResumes()}
+        >
+          {isArchivingAllTailoredResumes ? "Archiving..." : "Archive all"}
+        </button>
+      </div>
+    );
+  }
+
+  function renderSelectedTailoredResumeLibrarySurface() {
+    if (isShowingArchivedTailoredResumes) {
+      return shouldRenderArchivedResumeEmptySurface ? (
+        <DocumentEmptySurface
+          count={archivedTailoredResumes.length}
+          message="No archived tailored resumes yet."
+          title="Archived resumes"
+        />
+      ) : (
+        <section
+          aria-label="Archived tailored resumes"
+          className="tailor-resume-library-surface"
+        >
+          <div className="tailored-resume-card-stack">
+            {renderTailoredResumeLibrary({
+              actionLabel: "restore",
+              emptyMessage: "No archived tailored resumes yet.",
+              flush: true,
+              resumes: archivedTailoredResumes,
+              title: "Archived tailored resume",
+            })}
+          </div>
+        </section>
+      );
+    }
+
+    return shouldRenderUnarchivedResumeEmptySurface ? (
+      <DocumentEmptySurface
+        count={unarchivedTailorDisplayCount}
+        message="No active or completed tailored resumes yet."
+        title="Tailor Resume"
+      />
+    ) : (
+      <section
+        aria-label="Active and completed tailored resumes"
+        className="tailor-resume-library-surface"
+      >
+        <div className="tailored-resume-card-stack">
+          {renderTailorPageNotification()}
+          {renderPageCaptureFailureNotice()}
+          {legacyTailorRunShell}
+          {activeTailorRunCards.length > 0 ? (
+            <section
+              aria-label="Active tailoring runs"
+              className="active-tailor-run-stack"
+            >
+              {activeTailorRunCards.map((card) => renderActiveTailorRunCard(card))}
+            </section>
+          ) : null}
+
+          {shouldRenderUnarchivedResumeLibrary
+            ? renderTailoredResumeLibrary({
+                actionLabel: "archive",
+                emptyMessage: "No active or completed tailored resumes yet.",
+                flush: true,
+                highlightCurrentPage: true,
+                resumes: displayedUnarchivedTailoredResumes,
+                title: "Saved tailored resume",
+              })
+            : null}
+        </div>
+      </section>
+    );
+  }
+
   function renderTailoredResumeLibrary(input: {
     actionLabel: "archive" | "restore";
     emptyMessage: string;
@@ -8586,6 +8774,13 @@ function App() {
   function renderTailoredPreviewSurface() {
     const isShowingHighlightedPreview =
       shouldShowTailoredPreviewDiffHighlighting;
+    const previewDownloadUrl =
+      tailoredResumePreviewState.status === "ready"
+        ? tailoredResumePreviewState.objectUrl
+        : null;
+    const previewDownloadName = buildTailoredResumeDownloadName(
+      activeTailoredResumeReviewRecord,
+    );
 
     return (
       <div className="tailor-run-detail-page-body tailor-run-detail-page-body-preview">
@@ -8599,31 +8794,44 @@ function App() {
                 grainy static image.
               </p>
             </div>
-            {canToggleTailoredPreviewDiffHighlighting ? (
+            {previewDownloadUrl || canToggleTailoredPreviewDiffHighlighting ? (
               <div className="tailored-preview-toolbar-actions">
-                <button
-                  aria-pressed={isShowingHighlightedPreview}
-                  className={`secondary-action compact-action tailored-preview-highlight-toggle ${
-                    isShowingHighlightedPreview
-                      ? "tailored-preview-highlight-toggle-active"
-                      : ""
-                  }`.trim()}
-                  onClick={() =>
-                    setIsTailoredPreviewDiffHighlightingEnabled(
-                      (currentValue) => !currentValue,
-                    )
-                  }
-                  title={
-                    isShowingHighlightedPreview
-                      ? "Show the clean rendered PDF."
-                      : "Show the rendered PDF with diff highlights."
-                  }
-                  type="button"
-                >
-                  {isShowingHighlightedPreview
-                    ? "Hide diff highlighting"
-                    : "Show diff highlighting"}
-                </button>
+                {previewDownloadUrl ? (
+                  <a
+                    className="secondary-action compact-action tailored-preview-download-action"
+                    download={previewDownloadName}
+                    href={previewDownloadUrl}
+                    title="Download tailored resume PDF"
+                  >
+                    <DownloadIcon />
+                    <span>Download</span>
+                  </a>
+                ) : null}
+                {canToggleTailoredPreviewDiffHighlighting ? (
+                  <button
+                    aria-pressed={isShowingHighlightedPreview}
+                    className={`secondary-action compact-action tailored-preview-highlight-toggle ${
+                      isShowingHighlightedPreview
+                        ? "tailored-preview-highlight-toggle-active"
+                        : ""
+                    }`.trim()}
+                    onClick={() =>
+                      setIsTailoredPreviewDiffHighlightingEnabled(
+                        (currentValue) => !currentValue,
+                      )
+                    }
+                    title={
+                      isShowingHighlightedPreview
+                        ? "Show the clean rendered PDF."
+                        : "Show the rendered PDF with diff highlights."
+                    }
+                    type="button"
+                  >
+                    {isShowingHighlightedPreview
+                      ? "Hide diff highlighting"
+                      : "Show diff highlighting"}
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -8664,7 +8872,9 @@ function App() {
                 ) : tailoredResumePreviewState.status === "ready" ? (
                   <iframe
                     className="resume-preview-frame"
-                    src={tailoredResumePreviewState.objectUrl}
+                    src={buildPdfPreviewFrameUrl(
+                      tailoredResumePreviewState.objectUrl,
+                    )}
                     title="Tailored resume preview"
                   />
                 ) : (
@@ -9033,27 +9243,6 @@ function App() {
     );
   }
 
-  if (isSettingsViewOpen) {
-    return (
-      <main className="side-panel-shell side-panel-shell-detail">
-        <div className="panel-detail-header">
-          <button
-            className="panel-back-link"
-            type="button"
-            onClick={closeSettingsView}
-            aria-label="Back from settings"
-            title="Back"
-          >
-            <ArrowLeftIcon />
-          </button>
-          <p className="panel-detail-title">Settings</p>
-        </div>
-
-        {renderSettingsSurface()}
-      </main>
-    );
-  }
-
   if (showFullscreenTailorRunDetail) {
     return (
       <main className="side-panel-shell side-panel-shell-detail">
@@ -9132,24 +9321,12 @@ function App() {
               aria-current={activePanelTab === tab.id ? "page" : undefined}
               className={`panel-tab ${activePanelTab === tab.id ? "panel-tab-active" : ""}`}
               type="button"
-              onClick={() => setActivePanelTab(tab.id)}
+              onClick={() => handlePanelTabClick(tab.id)}
             >
               {tab.label}
             </button>
           ))}
         </nav>
-
-        <div className="panel-topbar-actions">
-          <button
-            aria-label="Open settings"
-            className="secondary-action panel-settings-button"
-            disabled={authActionState === "running"}
-            type="button"
-            onClick={openSettingsView}
-          >
-            <SettingsIcon />
-          </button>
-        </div>
       </div>
 
       {activePanelTab === "tailor" ? (
@@ -9200,7 +9377,7 @@ function App() {
               <button
                 className="secondary-action compact-action top-web-action"
                 aria-label="Open tailored resume on web"
-                disabled={authActionState === "running"}
+                disabled={dashboardOpenActionState === "running"}
                 type="button"
                 onClick={() =>
                   void handleOpenTailoredResumeOnWeb(topLevelTailoredResumeId)
@@ -9212,44 +9389,8 @@ function App() {
             ) : null}
           </div>
 
-          {shouldRenderUnarchivedResumeEmptySurface ? (
-            <DocumentEmptySurface
-              count={unarchivedTailorDisplayCount}
-              message="No active or completed tailored resumes yet."
-              title="Tailor Resume"
-            />
-          ) : (
-            <section
-              aria-label="Active and completed tailored resumes"
-              className="tailor-unarchived-surface"
-            >
-              <div className="tailored-resume-card-stack">
-                {renderPageCaptureFailureNotice()}
-                {legacyTailorRunShell}
-                {activeTailorRunCards.length > 0 ? (
-                  <section
-                    aria-label="Active tailoring runs"
-                    className="active-tailor-run-stack"
-                  >
-                    {activeTailorRunCards.map((card) =>
-                      renderActiveTailorRunCard(card),
-                    )}
-                  </section>
-                ) : null}
-
-                {shouldRenderUnarchivedResumeLibrary
-                  ? renderTailoredResumeLibrary({
-                      actionLabel: "archive",
-                      emptyMessage: "No active or completed tailored resumes yet.",
-                      flush: true,
-                      highlightCurrentPage: true,
-                      resumes: displayedUnarchivedTailoredResumes,
-                      title: "Saved tailored resume",
-                    })
-                  : null}
-              </div>
-            </section>
-          )}
+          {renderTailoredResumeArchiveControls()}
+          {renderSelectedTailoredResumeLibrarySurface()}
 
           {tailorInterview && isTailorInterviewOpen ? (
             <section
@@ -9411,27 +9552,8 @@ function App() {
             </div>
           ) : null}
         </>
-      ) : activePanelTab === "archived" ? (
-        shouldRenderArchivedResumeEmptySurface ? (
-          <DocumentEmptySurface
-            count={archivedTailoredResumes.length}
-            message="No archived tailored resumes yet."
-            title="Archived resumes"
-          />
-        ) : (
-          <section className="snapshot-card tailored-resume-card">
-            <div className="card-heading-row">
-              <h2>Archived resumes</h2>
-              <span>{archivedTailoredResumes.length}</span>
-            </div>
-            {renderTailoredResumeLibrary({
-              actionLabel: "restore",
-              emptyMessage: "No archived tailored resumes yet.",
-              resumes: archivedTailoredResumes,
-              title: "Archived tailored resume",
-            })}
-          </section>
-        )
+      ) : activePanelTab === "settings" ? (
+        renderSettingsSurface()
       ) : activePanelTab === "applications" ? (
         shouldRenderApplicationsEmptySurface ? (
           <DocumentEmptySurface
@@ -9440,7 +9562,7 @@ function App() {
             title="Tracked apps"
           />
         ) : (
-          <section className="snapshot-card applications-card">
+          <section className="applications-surface">
             <div className="card-heading-row">
               <h2>Tracked apps</h2>
               <span>{personalInfo?.applicationCount ?? 0}</span>
@@ -9520,111 +9642,117 @@ function App() {
           </section>
         </div>
       ) : null}
-      <div className={`chat-dock ${isChatOpen ? "chat-dock-open" : ""}`}>
-        {isChatOpen ? (
-          <section className="chat-panel" aria-label="Job page chat">
-            <header className="chat-header">
-              <div className="chat-title-group">
-                <p>Job Chat</p>
-                <span title={chatPageLabel}>{chatPageLabel}</span>
-              </div>
-              <div className="chat-header-actions">
-                <button
-                  aria-label="Delete chat for this URL"
-                  className="icon-action"
-                  disabled={!canDeleteChat}
-                  title="Delete chat for this URL"
-                  type="button"
-                  onClick={() => void handleDeleteChat()}
-                >
-                  <TrashIcon />
-                </button>
-                <button
-                  aria-label="Close chat"
-                  className="icon-action"
-                  type="button"
-                  onClick={() => setIsChatOpen(false)}
-                >
-                  <CloseIcon />
-                </button>
-              </div>
-            </header>
-
-            <div className="chat-tip">
-              This chat sees the current job page, your resume, and USER.md.
-            </div>
-
-            <div className="chat-messages" aria-live="polite">
-              {authState.status !== "signedIn" ? (
-                <p className="chat-placeholder">Connect Google to start chatting.</p>
-              ) : state.status !== "ready" ? (
-                <p className="chat-placeholder">Open a regular job page to chat.</p>
-              ) : chatStatus === "loading" ? (
-                <p className="chat-placeholder">Loading chat...</p>
-              ) : chatStatus === "error" && chatMessages.length === 0 ? (
-                <p className="chat-placeholder">{chatError}</p>
-              ) : chatMessages.length === 0 ? (
-                <p className="chat-placeholder">
-                  Ask whether this role is worth applying to, where your resume
-                  matches, or what the posting really requires.
-                </p>
-              ) : (
-                chatMessages.map((message) => (
-                  <article
-                    key={message.id}
-                    className={`chat-message chat-message-${message.role}`}
+      {EXTENSION_TOP_LEVEL_AI_CHAT_HIDDEN ? null : (
+        <div className={`chat-dock ${isChatOpen ? "chat-dock-open" : ""}`}>
+          {isChatOpen ? (
+            <section className="chat-panel" aria-label="Job page chat">
+              <header className="chat-header">
+                <div className="chat-title-group">
+                  <p>Job Chat</p>
+                  <span title={chatPageLabel}>{chatPageLabel}</span>
+                </div>
+                <div className="chat-header-actions">
+                  <button
+                    aria-label="Delete chat for this URL"
+                    className="icon-action"
+                    disabled={!canDeleteChat}
+                    title="Delete chat for this URL"
+                    type="button"
+                    onClick={() => void handleDeleteChat()}
                   >
-                    <div className="chat-message-role">
-                      {message.role === "assistant" ? "Job Helper" : "You"}
-                    </div>
-                    <ChatMessageMarkdown
-                      content={message.content}
-                      toolCalls={message.toolCalls}
-                    />
-                  </article>
-                ))
-              )}
-              {chatError && chatMessages.length > 0 ? (
-                <p className="chat-inline-error">{chatError}</p>
-              ) : null}
-              <div ref={chatMessagesEndRef} />
-            </div>
+                    <TrashIcon />
+                  </button>
+                  <button
+                    aria-label="Close chat"
+                    className="icon-action"
+                    type="button"
+                    onClick={() => setIsChatOpen(false)}
+                  >
+                    <CloseIcon />
+                  </button>
+                </div>
+              </header>
 
-            <form className="chat-form" onSubmit={handleChatFormSubmit}>
-              <textarea
-                aria-label="Message Job Helper"
-                disabled={
-                  authState.status !== "signedIn" ||
-                  chatSendStatus === "streaming"
-                }
-                placeholder="Ask about this job"
-                rows={2}
-                value={chatInput}
-                onChange={(event) => setChatInput(event.target.value)}
-                onKeyDown={handleChatInputKeyDown}
-              />
-              <button
-                aria-label="Send message"
-                className="chat-send-action"
-                disabled={!canSendChat}
-                type="submit"
-              >
-                <SendIcon />
-              </button>
-            </form>
-          </section>
-        ) : (
-          <button
-            aria-label="Open job chat"
-            className="chat-launcher"
-            title="Open job chat"
-            type="button"
-            onClick={() => setIsChatOpen(true)}
-          >
-            <ChatBubbleIcon />
-          </button>
-        )}
-      </div>
+              <div className="chat-tip">
+                This chat sees the current job page, your resume, and USER.md.
+              </div>
+
+              <div className="chat-messages" aria-live="polite">
+                {authState.status !== "signedIn" ? (
+                  <p className="chat-placeholder">
+                    Connect Google to start chatting.
+                  </p>
+                ) : state.status !== "ready" ? (
+                  <p className="chat-placeholder">
+                    Open a regular job page to chat.
+                  </p>
+                ) : chatStatus === "loading" ? (
+                  <p className="chat-placeholder">Loading chat...</p>
+                ) : chatStatus === "error" && chatMessages.length === 0 ? (
+                  <p className="chat-placeholder">{chatError}</p>
+                ) : chatMessages.length === 0 ? (
+                  <p className="chat-placeholder">
+                    Ask whether this role is worth applying to, where your resume
+                    matches, or what the posting really requires.
+                  </p>
+                ) : (
+                  chatMessages.map((message) => (
+                    <article
+                      key={message.id}
+                      className={`chat-message chat-message-${message.role}`}
+                    >
+                      <div className="chat-message-role">
+                        {message.role === "assistant" ? "Job Helper" : "You"}
+                      </div>
+                      <ChatMessageMarkdown
+                        content={message.content}
+                        toolCalls={message.toolCalls}
+                      />
+                    </article>
+                  ))
+                )}
+                {chatError && chatMessages.length > 0 ? (
+                  <p className="chat-inline-error">{chatError}</p>
+                ) : null}
+                <div ref={chatMessagesEndRef} />
+              </div>
+
+              <form className="chat-form" onSubmit={handleChatFormSubmit}>
+                <textarea
+                  aria-label="Message Job Helper"
+                  disabled={
+                    authState.status !== "signedIn" ||
+                    chatSendStatus === "streaming"
+                  }
+                  placeholder="Ask about this job"
+                  rows={2}
+                  value={chatInput}
+                  onChange={(event) => setChatInput(event.target.value)}
+                  onKeyDown={handleChatInputKeyDown}
+                />
+                <button
+                  aria-label="Send message"
+                  className="chat-send-action"
+                  disabled={!canSendChat}
+                  type="submit"
+                >
+                  <SendIcon />
+                </button>
+              </form>
+            </section>
+          ) : (
+            <button
+              aria-label="Open job chat"
+              className="chat-launcher"
+              title="Open job chat"
+              type="button"
+              onClick={() => setIsChatOpen(true)}
+            >
+              <ChatBubbleIcon />
+            </button>
+          )}
+        </div>
+      )}
     </main>
   );
 }

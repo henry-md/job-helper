@@ -31,6 +31,11 @@ export default defineConfig(({ mode }) => {
       __DEBUG_UI__: JSON.stringify(
         isTruthyEnvValue(env.DEBUG_UI ?? env.VITE_DEBUG_UI),
       ),
+      __HIDE_TOP_LVL_AI_CHAT__: JSON.stringify(
+        isTruthyEnvValue(
+          env.HIDE_TOP_LVL_AI_CHAT ?? env.VITE_HIDE_TOP_LVL_AI_CHAT,
+        ),
+      ),
     },
     server: {
       fs: {
