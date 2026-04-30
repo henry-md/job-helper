@@ -6,8 +6,18 @@ import {
 
 type OverlayTone = "error" | "info" | "success" | "warning";
 
+type TailoredResumeBadgePayload = {
+  badgeKey?: string;
+  displayName?: string;
+  jobUrl?: string;
+};
+
+const resumeBadgeRootId = "job-helper-tailored-resume-badge";
+const resumeBadgeDismissedStorageKey =
+  "jobHelperDismissedTailoredResumeBadges";
 let overlayTimeoutId: number | null = null;
 let lastShortcutAt = 0;
+let dismissedResumeBadgeKeys = readDismissedResumeBadgeKeys();
 
 function cleanText(value: string | null | undefined, maxLength = 0) {
   const collapsed = (value ?? "").replace(/\s+/g, " ").trim();
@@ -323,6 +333,177 @@ function showOverlay(text: string, tone: OverlayTone) {
   }, 1_750);
 }
 
+function readDismissedResumeBadgeKeys() {
+  try {
+    const value = window.sessionStorage.getItem(resumeBadgeDismissedStorageKey);
+    const parsed = value ? JSON.parse(value) : [];
+
+    if (Array.isArray(parsed)) {
+      return new Set(
+        parsed
+          .map((item) => (typeof item === "string" ? item.trim() : ""))
+          .filter(Boolean),
+      );
+    }
+  } catch {
+    // Session storage is a convenience only; dismissal still works in memory.
+  }
+
+  return new Set<string>();
+}
+
+function writeDismissedResumeBadgeKeys() {
+  try {
+    window.sessionStorage.setItem(
+      resumeBadgeDismissedStorageKey,
+      JSON.stringify([...dismissedResumeBadgeKeys].slice(-40)),
+    );
+  } catch {
+    // Ignore pages that block session storage.
+  }
+}
+
+function rememberDismissedResumeBadgeKey(badgeKey: string) {
+  dismissedResumeBadgeKeys.add(badgeKey);
+
+  if (dismissedResumeBadgeKeys.size > 40) {
+    dismissedResumeBadgeKeys = new Set([...dismissedResumeBadgeKeys].slice(-40));
+  }
+
+  writeDismissedResumeBadgeKeys();
+}
+
+function hideTailoredResumeBadge() {
+  document.getElementById(resumeBadgeRootId)?.remove();
+}
+
+function styleElement(
+  element: HTMLElement,
+  styles: Partial<CSSStyleDeclaration>,
+) {
+  Object.assign(element.style, styles);
+}
+
+function ensureTailoredResumeBadgeRoot() {
+  const existingBadge = document.getElementById(resumeBadgeRootId);
+
+  if (existingBadge instanceof HTMLDivElement) {
+    return existingBadge;
+  }
+
+  const badge = document.createElement("div");
+  badge.id = resumeBadgeRootId;
+  badge.setAttribute("role", "status");
+  badge.setAttribute("aria-live", "polite");
+  styleElement(badge, {
+    alignItems: "start",
+    backdropFilter: "blur(18px)",
+    background:
+      "linear-gradient(180deg, rgba(24, 24, 27, 0.97), rgba(5, 5, 7, 0.95))",
+    border: "1px solid rgba(52, 211, 153, 0.24)",
+    borderRadius: "16px",
+    boxShadow:
+      "inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 55px rgba(0, 0, 0, 0.28)",
+    color: "#f4f4f5",
+    display: "grid",
+    fontFamily: '"DM Sans", Inter, "Segoe UI", ui-sans-serif, system-ui, sans-serif',
+    gap: "12px",
+    gridTemplateColumns: "minmax(0, 1fr) 28px",
+    letterSpacing: "0",
+    maxWidth: "calc(100vw - 32px)",
+    padding: "13px 13px 13px 15px",
+    pointerEvents: "auto",
+    position: "fixed",
+    right: "16px",
+    top: "16px",
+    width: "min(360px, calc(100vw - 32px))",
+    zIndex: "2147483647",
+  });
+  document.documentElement.appendChild(badge);
+
+  return badge;
+}
+
+function showTailoredResumeBadge(payload: TailoredResumeBadgePayload) {
+  const badgeKey =
+    cleanText(payload.badgeKey, 220) ||
+    cleanText(payload.jobUrl, 220) ||
+    cleanText(payload.displayName, 220);
+
+  if (!badgeKey || dismissedResumeBadgeKeys.has(badgeKey)) {
+    return;
+  }
+
+  const displayName = cleanText(payload.displayName, 160);
+  const badge = ensureTailoredResumeBadgeRoot();
+  const content = document.createElement("div");
+  const eyebrow = document.createElement("div");
+  const title = document.createElement("div");
+  const detail = document.createElement("div");
+  const closeButton = document.createElement("button");
+
+  badge.dataset.jobHelperBadgeKey = badgeKey;
+  styleElement(content, {
+    display: "grid",
+    gap: "5px",
+    minWidth: "0",
+  });
+  styleElement(eyebrow, {
+    color: "#6ee7b7",
+    fontSize: "10px",
+    fontWeight: "800",
+    letterSpacing: "0.22em",
+    lineHeight: "1.2",
+    textTransform: "uppercase",
+  });
+  styleElement(title, {
+    color: "#f4f4f5",
+    fontSize: "14px",
+    fontWeight: "750",
+    lineHeight: "1.25",
+  });
+  styleElement(detail, {
+    color: "#a1a1aa",
+    fontSize: "12px",
+    lineHeight: "1.35",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  });
+  styleElement(closeButton, {
+    alignItems: "center",
+    appearance: "none",
+    background: "rgba(244, 244, 245, 0.06)",
+    border: "1px solid rgba(244, 244, 245, 0.1)",
+    borderRadius: "999px",
+    color: "#e4e4e7",
+    cursor: "pointer",
+    display: "inline-flex",
+    font: "700 14px/1 Inter, ui-sans-serif, system-ui, sans-serif",
+    height: "28px",
+    justifyContent: "center",
+    margin: "0",
+    padding: "0",
+    width: "28px",
+  });
+
+  eyebrow.textContent = "Resume ready";
+  title.textContent = "Resume already generated";
+  detail.textContent =
+    displayName || "Job Helper has a saved tailored resume for this tab.";
+  closeButton.type = "button";
+  closeButton.textContent = "x";
+  closeButton.setAttribute("aria-label", "Dismiss resume badge");
+  closeButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    rememberDismissedResumeBadgeKey(badgeKey);
+    hideTailoredResumeBadge();
+  });
+
+  content.append(eyebrow, title, detail);
+  badge.replaceChildren(content, closeButton);
+}
+
 function isEditableTarget(target: EventTarget | null) {
   return (
     target instanceof HTMLElement &&
@@ -376,7 +557,13 @@ chrome.runtime.onMessage.addListener((
 ) => {
   const typedMessage =
     typeof message === "object" && message !== null
-      ? (message as { payload?: { text?: string; tone?: OverlayTone }; type?: string })
+      ? (message as {
+          payload?: TailoredResumeBadgePayload & {
+            text?: string;
+            tone?: OverlayTone;
+          };
+          type?: string;
+        })
       : null;
 
   if (typedMessage?.type === "JOB_HELPER_SHOW_OVERLAY") {
@@ -385,6 +572,18 @@ chrome.runtime.onMessage.addListener((
         "Job Helper is working on this page",
       typedMessage.payload?.tone ?? "info",
     );
+    sendResponse({ ok: true });
+    return;
+  }
+
+  if (typedMessage?.type === "JOB_HELPER_SHOW_TAILORED_RESUME_BADGE") {
+    showTailoredResumeBadge(typedMessage.payload ?? {});
+    sendResponse({ ok: true });
+    return;
+  }
+
+  if (typedMessage?.type === "JOB_HELPER_HIDE_TAILORED_RESUME_BADGE") {
+    hideTailoredResumeBadge();
     sendResponse({ ok: true });
     return;
   }

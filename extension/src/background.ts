@@ -57,6 +57,7 @@ import {
   resolvePotentialTailorOverwrite,
   resolvePotentialTailorOverwriteFromPersonalInfo,
 } from "./tailor-overwrite-guard";
+import { resolveTailoredResumeTabBadge } from "./tailored-resume-tab-badge";
 import {
   buildTailorRunRegistryKey,
   readTailorRunRegistryKeyFromPageContext,
@@ -69,6 +70,7 @@ import {
 type OverlayTone = "error" | "info" | "success" | "warning";
 
 type TailorResumeSummary = {
+  applicationId: string | null;
   companyName: string | null;
   id: string | null;
   jobIdentifier: string | null;
@@ -96,6 +98,13 @@ let personalInfoCacheRefreshPromise: Promise<{
 }> | null = null;
 const PERSONAL_INFO_REQUEST_TIMEOUT_MS = 8_000;
 const SYNC_STATE_REQUEST_TIMEOUT_MS = 4_000;
+const TAILORED_RESUME_BADGE_CHECK_DEBOUNCE_MS = 250;
+let tailoredResumeBadgeCheckSequence = 0;
+const scheduledTailoredResumeBadgeChecks = new Map<
+  number,
+  ReturnType<typeof globalThis.setTimeout>
+>();
+const latestTailoredResumeBadgeCheckByTabId = new Map<number, number>();
 
 async function configureSidePanelAction() {
   try {
@@ -178,6 +187,7 @@ function readLatestTailoredResume(payload: Record<string, unknown>) {
   }
 
   return {
+    applicationId: tailoredResume.applicationId,
     companyName: tailoredResume.companyName,
     id: tailoredResume.id,
     jobIdentifier: tailoredResume.jobIdentifier,
@@ -201,10 +211,12 @@ function buildSuccessMessage(record: TailorResumeRunRecord) {
 }
 
 function buildRunningTailoringRunRecord(input: {
+  applicationId?: string | null;
   capturedAt: string;
   message?: string;
   pageContext?: JobPageContext | null;
   step?: TailorResumeGenerationStepSummary | null;
+  suppressedTailoredResumeId?: string | null;
   tab: chrome.tabs.Tab | null;
 }) {
   const pageApplicationContext = input.pageContext
@@ -212,6 +224,7 @@ function buildRunningTailoringRunRecord(input: {
     : null;
 
   return {
+    applicationId: input.applicationId?.trim() || null,
     capturedAt: input.capturedAt,
     companyName: pageApplicationContext?.companyName ?? null,
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
@@ -223,6 +236,7 @@ function buildRunningTailoringRunRecord(input: {
     pageUrl: input.pageContext?.url || cleanText(input.tab?.url) || null,
     positionTitle: pageApplicationContext?.jobTitle ?? null,
     status: "running",
+    suppressedTailoredResumeId: input.suppressedTailoredResumeId?.trim() || null,
     tailoredResumeError: null,
     tailoredResumeId: null,
   } satisfies TailorResumeRunRecord;
@@ -240,6 +254,7 @@ function buildFailedTailoringRunRecord(input: {
     : null;
 
   return {
+    applicationId: null,
     capturedAt: input.capturedAt,
     companyName: pageApplicationContext?.companyName ?? null,
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
@@ -250,6 +265,7 @@ function buildFailedTailoringRunRecord(input: {
     pageUrl: input.pageContext?.url || cleanText(input.tab?.url) || null,
     positionTitle: pageApplicationContext?.jobTitle ?? null,
     status: "error",
+    suppressedTailoredResumeId: null,
     tailoredResumeError: input.message,
     tailoredResumeId: null,
   } satisfies TailorResumeRunRecord;
@@ -312,6 +328,178 @@ async function showOverlay(tabId: number, text: string, tone: OverlayTone) {
       // Some pages like chrome:// do not allow script injection.
     }
   }
+}
+
+async function sendTailoredResumeBadgeMessage(
+  tabId: number,
+  message:
+    | {
+        payload: {
+          badgeKey: string;
+          displayName: string;
+          jobUrl: string | null;
+        };
+        type: "JOB_HELPER_SHOW_TAILORED_RESUME_BADGE";
+      }
+    | { type: "JOB_HELPER_HIDE_TAILORED_RESUME_BADGE" },
+) {
+  try {
+    await chrome.tabs.sendMessage(tabId, message);
+  } catch {
+    // Some pages do not allow content scripts or have not finished injecting.
+  }
+}
+
+function isHttpTabUrl(value: string | null | undefined) {
+  const trimmedValue = cleanText(value);
+
+  if (!trimmedValue) {
+    return false;
+  }
+
+  try {
+    const url = new URL(trimmedValue);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+async function readTailoredResumeBadgePageIdentity(tab: chrome.tabs.Tab) {
+  const tabUrl = cleanText(tab.url) || cleanText(tab.pendingUrl) || null;
+  const tabId = tab.id;
+
+  if (typeof tabId === "number" && tab.status === "complete") {
+    try {
+      const pageContext = await collectPageContext(tabId);
+      const jobUrl = readJobUrlFromPageContext(pageContext);
+
+      return {
+        canonicalUrl: cleanText(pageContext.canonicalUrl) || null,
+        jobUrl,
+        pageUrl: cleanText(pageContext.url) || tabUrl,
+      };
+    } catch {
+      // Fall back to Chrome's tab URL; URL matching still handles most job pages.
+    }
+  }
+
+  return {
+    canonicalUrl: null,
+    jobUrl: tabUrl,
+    pageUrl: tabUrl,
+  };
+}
+
+function shouldIgnoreTailoredResumeBadgeCheckError(error: unknown) {
+  const message =
+    error instanceof Error ? error.message.trim().toLowerCase() : "";
+
+  return (
+    message === "failed to fetch" ||
+    message === "load failed" ||
+    message === "networkerror when attempting to fetch resource." ||
+    message.includes("sign in to job helper") ||
+    message.includes("no active tab was found")
+  );
+}
+
+async function refreshTailoredResumeBadgeForTab(
+  tab: chrome.tabs.Tab,
+  checkSequence: number,
+) {
+  const tabId = tab.id;
+
+  if (typeof tabId !== "number") {
+    return;
+  }
+
+  const latestTab = await chrome.tabs.get(tabId).catch(() => tab);
+
+  if (latestTailoredResumeBadgeCheckByTabId.get(tabId) !== checkSequence) {
+    return;
+  }
+
+  if (!latestTab.active) {
+    return;
+  }
+
+  const tabUrl = cleanText(latestTab.url) || cleanText(latestTab.pendingUrl);
+
+  if (!isHttpTabUrl(tabUrl)) {
+    await sendTailoredResumeBadgeMessage(tabId, {
+      type: "JOB_HELPER_HIDE_TAILORED_RESUME_BADGE",
+    });
+    return;
+  }
+
+  const pageIdentity = await readTailoredResumeBadgePageIdentity(latestTab);
+
+  if (
+    !isHttpTabUrl(pageIdentity.pageUrl) &&
+    !isHttpTabUrl(pageIdentity.jobUrl) &&
+    !isHttpTabUrl(pageIdentity.canonicalUrl)
+  ) {
+    await sendTailoredResumeBadgeMessage(tabId, {
+      type: "JOB_HELPER_HIDE_TAILORED_RESUME_BADGE",
+    });
+    return;
+  }
+
+  const { personalInfo } = await getPersonalInfoSummary();
+
+  if (latestTailoredResumeBadgeCheckByTabId.get(tabId) !== checkSequence) {
+    return;
+  }
+
+  const badge = resolveTailoredResumeTabBadge({
+    activeTailorings: personalInfo.activeTailorings,
+    pageIdentity,
+    tailoredResumes: personalInfo.tailoredResumes,
+  });
+
+  if (!badge) {
+    await sendTailoredResumeBadgeMessage(tabId, {
+      type: "JOB_HELPER_HIDE_TAILORED_RESUME_BADGE",
+    });
+    return;
+  }
+
+  await sendTailoredResumeBadgeMessage(tabId, {
+    payload: badge,
+    type: "JOB_HELPER_SHOW_TAILORED_RESUME_BADGE",
+  });
+}
+
+function scheduleTailoredResumeBadgeCheck(tab: chrome.tabs.Tab | null) {
+  if (!tab || typeof tab.id !== "number") {
+    return;
+  }
+
+  const tabId = tab.id;
+  const targetTab = tab;
+  const previousTimeout = scheduledTailoredResumeBadgeChecks.get(tabId);
+
+  if (previousTimeout) {
+    globalThis.clearTimeout(previousTimeout);
+  }
+
+  const checkSequence = (tailoredResumeBadgeCheckSequence += 1);
+  latestTailoredResumeBadgeCheckByTabId.set(tabId, checkSequence);
+
+  const timeout = globalThis.setTimeout(() => {
+    scheduledTailoredResumeBadgeChecks.delete(tabId);
+    void refreshTailoredResumeBadgeForTab(targetTab, checkSequence).catch((error) => {
+      if (!shouldIgnoreTailoredResumeBadgeCheckError(error)) {
+        console.warn("Could not check this tab for a tailored resume.", error);
+      }
+      void sendTailoredResumeBadgeMessage(tabId, {
+        type: "JOB_HELPER_HIDE_TAILORED_RESUME_BADGE",
+      });
+    });
+  }, TAILORED_RESUME_BADGE_CHECK_DEBOUNCE_MS);
+
+  scheduledTailoredResumeBadgeChecks.set(tabId, timeout);
 }
 
 async function collectPageContext(tabId: number) {
@@ -1344,6 +1532,8 @@ async function tailorResumeForTab(input: {
   capturedAt: string;
   jobDescription: string;
   jobUrl: string | null;
+  overwriteTargetApplicationId?: string | null;
+  overwriteTargetTailoredResumeId?: string | null;
   overwriteExisting?: boolean;
   pageKey: string;
   pageContext: JobPageContext;
@@ -1355,6 +1545,8 @@ async function tailorResumeForTab(input: {
     capturedAt,
     jobDescription,
     jobUrl,
+    overwriteTargetApplicationId,
+    overwriteTargetTailoredResumeId,
     overwriteExisting,
     pageKey,
     pageContext,
@@ -1384,7 +1576,21 @@ async function tailorResumeForTab(input: {
         action: "tailor",
         applicationContext: buildTailorResumeApplicationContext(pageContext),
         ...(overwriteExisting
-          ? { existingTailoringAction: "overwrite" }
+          ? {
+              existingTailoringAction: "overwrite",
+              ...(overwriteTargetApplicationId?.trim()
+                ? {
+                    existingTailoringApplicationId:
+                      overwriteTargetApplicationId.trim(),
+                  }
+                : {}),
+              ...(overwriteTargetTailoredResumeId?.trim()
+                ? {
+                    existingTailoringTailoredResumeId:
+                      overwriteTargetTailoredResumeId.trim(),
+                  }
+                : {}),
+            }
           : {}),
         jobDescription,
         jobUrl,
@@ -1396,16 +1602,18 @@ async function tailorResumeForTab(input: {
             return;
           }
 
-          latestStepEvent = stepEvent;
-          requestSharedPersonalInfoRefresh();
-          void persistResult(
-            pageKey,
-            buildRunningTailoringRunRecord({
-              capturedAt,
-              pageContext,
-              step: stepEvent,
-              tab: readyTab,
-            }),
+              latestStepEvent = stepEvent;
+              requestSharedPersonalInfoRefresh();
+              void persistResult(
+                pageKey,
+                buildRunningTailoringRunRecord({
+                  applicationId: overwriteTargetApplicationId,
+                  capturedAt,
+                  pageContext,
+                  step: stepEvent,
+                  suppressedTailoredResumeId: overwriteTargetTailoredResumeId,
+                  tab: readyTab,
+                }),
           );
         },
         signal: abortController.signal,
@@ -1446,6 +1654,7 @@ async function tailorResumeForTab(input: {
 
     if (existingTailoring && existingTailoringMessage) {
       const record: TailorResumeRunRecord = {
+        applicationId: existingTailoring.applicationId,
         capturedAt,
         companyName: null,
         endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
@@ -1456,6 +1665,7 @@ async function tailorResumeForTab(input: {
         pageUrl: pageContext.url || null,
         positionTitle: null,
         status: "error",
+        suppressedTailoredResumeId: null,
         tailoredResumeError: null,
         tailoredResumeId: null,
       };
@@ -1504,6 +1714,7 @@ async function tailorResumeForTab(input: {
 
   if (payload.tailoringStatus === "needs_user_input" || activeInterview) {
     const record: TailorResumeRunRecord = {
+      applicationId: activeInterview?.applicationId ?? overwriteTargetApplicationId ?? null,
       capturedAt,
       companyName: activeInterview?.companyName ?? null,
       endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
@@ -1514,6 +1725,7 @@ async function tailorResumeForTab(input: {
       pageUrl: pageContext.url || null,
       positionTitle: activeInterview?.positionTitle ?? null,
       status: "needs_input",
+      suppressedTailoredResumeId: overwriteTargetTailoredResumeId?.trim() || null,
       tailoredResumeError: null,
       tailoredResumeId: null,
     };
@@ -1534,6 +1746,7 @@ async function tailorResumeForTab(input: {
       ? payload.tailoredResumeError
       : null;
   const record: TailorResumeRunRecord = {
+    applicationId: latestTailoredResume?.applicationId ?? null,
     capturedAt,
     companyName: latestTailoredResume?.companyName ?? null,
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
@@ -1547,6 +1760,7 @@ async function tailorResumeForTab(input: {
       latestTailoredResume?.status === "ready" && !tailoredResumeError
         ? "success"
         : "error",
+    suppressedTailoredResumeId: null,
     tailoredResumeError,
     tailoredResumeId: latestTailoredResume?.id ?? null,
   };
@@ -1571,12 +1785,15 @@ async function tailorResumeForTab(input: {
   );
 
   if (latestTailoredResume?.id) {
+    scheduleTailoredResumeBadgeCheck(activeTab);
     await openSidePanelForTab(activeTab);
   }
 }
 
 async function runCaptureFlow(input: {
   openSidePanel?: boolean;
+  overwriteTargetApplicationId?: string | null;
+  overwriteTargetTailoredResumeId?: string | null;
   overwriteExisting?: boolean;
   tab?: chrome.tabs.Tab;
 } = {}) {
@@ -1687,6 +1904,7 @@ async function runCaptureFlow(input: {
 
       if (cachedExistingTailoring && cachedExistingTailoringMessage) {
         const record: TailorResumeRunRecord = {
+          applicationId: cachedExistingTailoring.applicationId,
           capturedAt,
           companyName: null,
           endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
@@ -1697,6 +1915,7 @@ async function runCaptureFlow(input: {
           pageUrl: pageContext.url || null,
           positionTitle: null,
           status: "error",
+          suppressedTailoredResumeId: null,
           tailoredResumeError: null,
           tailoredResumeId: null,
         };
@@ -1743,6 +1962,7 @@ async function runCaptureFlow(input: {
 
       if (existingTailoring && existingTailoringMessage) {
         const record: TailorResumeRunRecord = {
+          applicationId: existingTailoring.applicationId,
           capturedAt,
           companyName: null,
           endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
@@ -1753,6 +1973,7 @@ async function runCaptureFlow(input: {
           pageUrl: pageContext.url || null,
           positionTitle: null,
           status: "error",
+          suppressedTailoredResumeId: null,
           tailoredResumeError: null,
           tailoredResumeId: null,
         };
@@ -1777,8 +1998,10 @@ async function runCaptureFlow(input: {
     await persistResult(
       pageKey,
       buildRunningTailoringRunRecord({
+        applicationId: input.overwriteTargetApplicationId,
         capturedAt,
         pageContext,
+        suppressedTailoredResumeId: input.overwriteTargetTailoredResumeId,
         tab: readyTab,
       }),
     );
@@ -1796,6 +2019,8 @@ async function runCaptureFlow(input: {
       capturedAt,
       jobDescription,
       jobUrl,
+      overwriteTargetApplicationId: input.overwriteTargetApplicationId,
+      overwriteTargetTailoredResumeId: input.overwriteTargetTailoredResumeId,
       overwriteExisting: input.overwriteExisting,
       pageKey,
       pageContext,
@@ -1822,6 +2047,7 @@ async function runCaptureFlow(input: {
     }
 
     const record: TailorResumeRunRecord = {
+      applicationId: null,
       capturedAt,
       companyName: null,
       endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
@@ -1833,6 +2059,7 @@ async function runCaptureFlow(input: {
       pageUrl: cleanText(activeTab?.url) || null,
       positionTitle: null,
       status: "error",
+      suppressedTailoredResumeId: null,
       tailoredResumeError: null,
       tailoredResumeId: null,
     };
@@ -1878,6 +2105,27 @@ chrome.commands.onCommand.addListener((command) => {
   void runCaptureFlow({ openSidePanel: true });
 });
 
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  void chrome.tabs
+    .get(activeInfo.tabId)
+    .then((tab) => scheduleTailoredResumeBadgeCheck(tab))
+    .catch(() => undefined);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!tab.active || (changeInfo.status !== "complete" && !changeInfo.url)) {
+    return;
+  }
+
+  if (changeInfo.url) {
+    void sendTailoredResumeBadgeMessage(tabId, {
+      type: "JOB_HELPER_HIDE_TAILORED_RESUME_BADGE",
+    });
+  }
+
+  scheduleTailoredResumeBadgeCheck(tab);
+});
+
 function sendAsyncResponse(
   sendResponse: (response?: unknown) => void,
   handler: () => Promise<object>,
@@ -1909,6 +2157,14 @@ chrome.runtime.onMessage.addListener((
   if (typedMessage?.type === "JOB_HELPER_TRIGGER_CAPTURE") {
     void runCaptureFlow({
       openSidePanel: true,
+      overwriteTargetApplicationId: readPayloadString(
+        typedMessage.payload,
+        "existingTailoringApplicationId",
+      ),
+      overwriteTargetTailoredResumeId: readPayloadString(
+        typedMessage.payload,
+        "existingTailoringTailoredResumeId",
+      ),
       overwriteExisting: readPayloadBoolean(
         typedMessage.payload,
         "overwriteExisting",
