@@ -4,9 +4,9 @@
   "private": true,
   "packageManager": "pnpm@9.15.9",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p ${PORT:-1285}",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p ${PORT:-1285}",
     "lint": "eslint",
     "test:tailor-resume": "node --experimental-strip-types --test tests/*.test.mts",
     "postinstall": "prisma generate",

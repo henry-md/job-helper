@@ -18,7 +18,7 @@ npm run build
 4. Load `/Users/Henry/Developer/job-helper/extension/dist` as an unpacked extension.
 5. Keep the Vite dev server running while you work.
 
-The extension dev server is pinned to `http://localhost:5186`. If `npm run dev` is not running, Chrome will show a service-worker fetch error because the dev loader imports the background script from that local server.
+The extension dev server is pinned to `http://localhost:5186`. If `npm run dev` is not running, Chrome will show a service-worker fetch error because the dev loader imports the background script from that local server. The app API and OAuth origin the extension talks to is `http://localhost:1285`.
 
 Side panel and content-script changes hot-update automatically. Background-script and manifest changes trigger an extension reload, so source edits no longer require manually rebuilding and reloading the extension.
 
@@ -51,7 +51,7 @@ client id for the extension itself:
 
 ```bash
 GOOGLE_EXTENSION_CLIENT_ID=your-chrome-extension-client-id.apps.googleusercontent.com
-VITE_JOB_HELPER_APP_BASE_URL=http://localhost:3000
+VITE_JOB_HELPER_APP_BASE_URL=http://localhost:1285
 DEBUG_UI=true # optional: enables the side-panel Debug tab
 # Optional, but useful if you need a stable unpacked extension id.
 CHROME_EXTENSION_PUBLIC_KEY=...

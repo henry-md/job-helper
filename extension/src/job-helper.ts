@@ -8,7 +8,7 @@ export { normalizeComparableUrl } from "./comparable-job-url.ts";
 export const defaultUserMarkdown = "# USER.md\n\n";
 
 export const CAPTURE_COMMAND_NAME = "capture_job_page";
-const fallbackAppBaseUrl = "http://localhost:3000";
+const fallbackAppBaseUrl = "http://localhost:1285";
 const extensionEnv: Record<string, string | undefined> =
   typeof import.meta !== "undefined" &&
   typeof import.meta.env === "object" &&

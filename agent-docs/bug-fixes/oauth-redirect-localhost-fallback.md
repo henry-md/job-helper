@@ -8,4 +8,4 @@ Root cause:
 Fix:
 - Replace the browser `next-auth/react` sign-in/sign-out helpers with same-origin POSTs to `/api/auth/*` so the browser never hardcodes localhost.
 - Normalize the auth origin in `auth.ts` and turn on trusted-host resolution in production so OAuth callback URLs use the real deployed host.
-- Keep local `/check` support on `http://127.0.0.1:3000` by leaving the local session-seeding flow unchanged.
+- Keep local `/check` support on the configured local app origin by leaving the local session-seeding flow unchanged.

@@ -20,14 +20,14 @@ test("normalizeAuthOrigin keeps explicit origins and upgrades bare hosts to http
 });
 
 test("isLocalhostOrigin recognizes common local auth hosts", () => {
-  assert.equal(isLocalhostOrigin("http://localhost:3000"), true);
-  assert.equal(isLocalhostOrigin("http://127.0.0.1:3000"), true);
+  assert.equal(isLocalhostOrigin("http://localhost:1285"), true);
+  assert.equal(isLocalhostOrigin("http://127.0.0.1:1285"), true);
   assert.equal(isLocalhostOrigin("https://job-helper.example.com"), false);
 });
 
 test("resolveAuthOrigin prefers the deployed host over a stale localhost NEXTAUTH_URL in production", () => {
   const resolvedOrigin = resolveAuthOrigin({
-    NEXTAUTH_URL: "http://localhost:3000",
+    NEXTAUTH_URL: "http://localhost:1285",
     NODE_ENV: "production",
     RAILWAY_PUBLIC_DOMAIN: "job-helper.up.railway.app",
   });
