@@ -9,11 +9,15 @@ import { buildNormalizedJobUrlHash } from "@/lib/job-url-hash";
 import type {
   JobApplicationExtraction,
 } from "@/lib/job-application-types";
-import { toJobApplicationRecord } from "@/lib/job-application-records";
+import {
+  filterVisibleJobApplicationsByUrl,
+  toJobApplicationRecord,
+} from "@/lib/job-application-records";
 import {
   normalizeCompanyName,
   resolveAppliedAt,
 } from "@/lib/job-tracking-shared";
+import { normalizeTailorResumeJobUrl } from "@/lib/tailor-resume-job-url";
 import {
   assertSupportedImageFile,
   persistJobScreenshot,
@@ -87,6 +91,55 @@ function readApplicationListLimit(request: Request) {
   return Math.min(Math.max(parsedLimit, 1), 100);
 }
 
+async function findExistingApplicationByJobUrl(input: {
+  jobUrl: string | null;
+  jobUrlHash: string | null;
+  prisma: ReturnType<typeof getPrismaClient>;
+  userId: string;
+}) {
+  const normalizedJobUrl = normalizeTailorResumeJobUrl(input.jobUrl);
+
+  if (!normalizedJobUrl || !input.jobUrlHash) {
+    return null;
+  }
+
+  const exactHashMatch = await input.prisma.jobApplication.findUnique({
+    select: {
+      id: true,
+    },
+    where: {
+      userId_jobUrlHash: {
+        jobUrlHash: input.jobUrlHash,
+        userId: input.userId,
+      },
+    },
+  });
+
+  if (exactHashMatch) {
+    return exactHashMatch;
+  }
+
+  const candidates = await input.prisma.jobApplication.findMany({
+    select: {
+      id: true,
+      jobUrl: true,
+    },
+    where: {
+      jobUrl: {
+        not: null,
+      },
+      userId: input.userId,
+    },
+  });
+
+  return (
+    candidates.find(
+      (candidate) =>
+        normalizeTailorResumeJobUrl(candidate.jobUrl) === normalizedJobUrl,
+    ) ?? null
+  );
+}
+
 export async function GET(request: Request) {
   const session = await getApiSession(request);
 
@@ -98,10 +151,7 @@ export async function GET(request: Request) {
   const limit = readApplicationListLimit(request);
 
   try {
-    const [applicationCount, applications, companyCount] = await Promise.all([
-      prisma.jobApplication.count({
-        where: { userId: session.user.id },
-      }),
+    const [applications, companyCount] = await Promise.all([
       prisma.jobApplication.findMany({
         include: {
           company: true,
@@ -113,7 +163,6 @@ export async function GET(request: Request) {
           },
         },
         orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-        ...(limit === null ? {} : { take: limit }),
         where: { userId: session.user.id },
       }),
       prisma.company.count({
@@ -127,10 +176,13 @@ export async function GET(request: Request) {
         },
       }),
     ]);
+    const visibleApplications = filterVisibleJobApplicationsByUrl(applications);
+    const limitedApplications =
+      limit === null ? visibleApplications : visibleApplications.slice(0, limit);
 
     return NextResponse.json({
-      applicationCount,
-      applications: applications.map(toJobApplicationRecord),
+      applicationCount: visibleApplications.length,
+      applications: limitedApplications.map(toJobApplicationRecord),
       companyCount,
     });
   } catch (error) {
@@ -267,37 +319,61 @@ export async function POST(request: Request) {
       },
     });
 
-    const application = await prisma.jobApplication.create({
-      data: {
-        userId: session.user.id,
-        companyId: company.id,
-        title: normalizedJobTitle,
-        status: normalizedStatus,
-        location: normalizedLocation,
-        onsiteDaysPerWeek: persistedOnsiteDaysPerWeek,
-        referrerId: referrerRecord?.id ?? null,
-        jobUrl: normalizedJobUrl,
-        jobUrlHash: buildNormalizedJobUrlHash(normalizedJobUrl),
-        salaryRange: normalizedSalary.text,
-        salaryMinimum: normalizedSalary.minimum,
-        salaryMaximum: normalizedSalary.maximum,
-        employmentType: normalizedEmploymentType,
-        teamOrDepartment: normalizedTeamOrDepartment,
-        recruiterContact: referrerRecord?.recruiterContact ?? normalizedRecruiterContact,
-        notes: normalizedNotes,
-        hasReferral: Boolean(referrerRecord),
-        jobDescription: normalizedJobDescription,
-        appliedAt: resolveAppliedAt(normalizedAppliedAt),
-      },
-      include: {
-        company: true,
-        screenshots: {
-          orderBy: {
-            createdAt: "asc",
-          },
-        },
-      },
+    const normalizedJobUrlHash = buildNormalizedJobUrlHash(normalizedJobUrl);
+    const existingApplication = await findExistingApplicationByJobUrl({
+      jobUrl: normalizedJobUrl,
+      jobUrlHash: normalizedJobUrlHash,
+      prisma,
+      userId: session.user.id,
     });
+    const applicationData = {
+      userId: session.user.id,
+      companyId: company.id,
+      title: normalizedJobTitle,
+      status: normalizedStatus,
+      location: normalizedLocation,
+      onsiteDaysPerWeek: persistedOnsiteDaysPerWeek,
+      referrerId: referrerRecord?.id ?? null,
+      jobUrl: normalizedJobUrl,
+      jobUrlHash: normalizedJobUrlHash,
+      salaryRange: normalizedSalary.text,
+      salaryMinimum: normalizedSalary.minimum,
+      salaryMaximum: normalizedSalary.maximum,
+      employmentType: normalizedEmploymentType,
+      teamOrDepartment: normalizedTeamOrDepartment,
+      recruiterContact: referrerRecord?.recruiterContact ?? normalizedRecruiterContact,
+      notes: normalizedNotes,
+      hasReferral: Boolean(referrerRecord),
+      jobDescription: normalizedJobDescription,
+      appliedAt: resolveAppliedAt(normalizedAppliedAt),
+    };
+
+    const application = existingApplication
+      ? await prisma.jobApplication.update({
+          where: {
+            id: existingApplication.id,
+          },
+          data: applicationData,
+          include: {
+            company: true,
+            screenshots: {
+              orderBy: {
+                createdAt: "asc",
+              },
+            },
+          },
+        })
+      : await prisma.jobApplication.create({
+          data: applicationData,
+          include: {
+            company: true,
+            screenshots: {
+              orderBy: {
+                createdAt: "asc",
+              },
+            },
+          },
+        });
 
     await Promise.all(
       screenshotFiles.map((screenshotFile, index) => {

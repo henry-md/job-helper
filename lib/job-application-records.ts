@@ -1,8 +1,9 @@
 import type {
   JobApplicationRecord,
   ReferrerOption,
-} from "@/lib/job-application-types";
-import { normalizeCompanyName } from "@/lib/job-tracking-shared";
+} from "./job-application-types.ts";
+import { normalizeCompanyName } from "./job-tracking-shared.ts";
+import { normalizeTailorResumeJobUrl } from "./tailor-resume-job-url.ts";
 
 export function countDistinctApplicationCompanies(
   applications: Array<{ company: { name: string } }>,
@@ -11,7 +12,28 @@ export function countDistinctApplicationCompanies(
     applications
       .map((application) => normalizeCompanyName(application.company.name))
       .filter((name) => name.length > 0),
-  ).size;
+    ).size;
+}
+
+export function filterVisibleJobApplicationsByUrl<
+  T extends { jobUrl: string | null },
+>(applications: T[]) {
+  const seenComparableUrls = new Set<string>();
+
+  return applications.filter((application) => {
+    const comparableUrl = normalizeTailorResumeJobUrl(application.jobUrl);
+
+    if (!comparableUrl) {
+      return true;
+    }
+
+    if (seenComparableUrls.has(comparableUrl)) {
+      return false;
+    }
+
+    seenComparableUrls.add(comparableUrl);
+    return true;
+  });
 }
 
 export function toJobApplicationRecord(application: {

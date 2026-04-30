@@ -71,7 +71,10 @@ import { buildTailorResumePlanningSnapshot } from "@/lib/tailor-resume-planning"
 import { applyTailorResumePageCountFailure } from "@/lib/tailor-resume-page-count-failure";
 import { advanceTailorResumeQuestioning } from "@/lib/tailor-resume-questioning";
 import { refineTailoredResume } from "@/lib/tailor-resume-refinement";
-import { buildTailorResumeRunStepUpdate } from "@/lib/tailor-resume-run-step";
+import {
+  buildTailorResumeRunStepUpdate,
+  buildTailorResumeTerminalFailureStepEvent,
+} from "@/lib/tailor-resume-run-step";
 import {
   buildTailorResumeAttemptFailureMessage,
   formatTailorResumeStepError,
@@ -126,7 +129,10 @@ import {
   deletePersistedUserResume,
   persistUserResume,
 } from "@/lib/job-tracking";
-import { toJobApplicationRecord } from "@/lib/job-application-records";
+import {
+  filterVisibleJobApplicationsByUrl,
+  toJobApplicationRecord,
+} from "@/lib/job-application-records";
 import {
   normalizeCompanyName,
   resolveAppliedAt,
@@ -262,10 +268,7 @@ async function readApplicationSummaryPayload(input: {
   userId: string;
 }) {
   const prisma = getPrismaClient();
-  const [applicationCount, applications, companyCount] = await Promise.all([
-    prisma.jobApplication.count({
-      where: { userId: input.userId },
-    }),
+  const [applications, companyCount] = await Promise.all([
     prisma.jobApplication.findMany({
       include: {
         company: true,
@@ -277,7 +280,6 @@ async function readApplicationSummaryPayload(input: {
         },
       },
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-      take: input.limit,
       where: { userId: input.userId },
     }),
     prisma.company.count({
@@ -291,10 +293,12 @@ async function readApplicationSummaryPayload(input: {
       },
     }),
   ]);
+  const visibleApplications = filterVisibleJobApplicationsByUrl(applications);
+  const limitedApplications = visibleApplications.slice(0, input.limit);
 
   return {
-    applicationCount,
-    applications: applications.map(toJobApplicationRecord),
+    applicationCount: visibleApplications.length,
+    applications: limitedApplications.map(toJobApplicationRecord),
     companyCount,
   };
 }
@@ -913,6 +917,36 @@ async function ensureTailorResumeJobApplication(input: {
     jobDescription: input.jobDescription,
     jobUrl: normalizedJobUrl,
   });
+  const existingApplicationByHash = await prisma.jobApplication.findUnique({
+    select: {
+      id: true,
+    },
+    where: {
+      userId_jobUrlHash: {
+        jobUrlHash,
+        userId: input.userId,
+      },
+    },
+  });
+  const existingApplicationByComparableUrl = existingApplicationByHash
+    ? null
+    : (
+        await prisma.jobApplication.findMany({
+          select: {
+            id: true,
+            jobUrl: true,
+          },
+          where: {
+            jobUrl: {
+              not: null,
+            },
+            userId: input.userId,
+          },
+        })
+      ).find(
+        (application) =>
+          normalizeTailorResumeJobUrl(application.jobUrl) === normalizedJobUrl,
+      ) ?? null;
   const company = await prisma.company.upsert({
     where: {
       userId_normalizedName: {
@@ -929,37 +963,38 @@ async function ensureTailorResumeJobApplication(input: {
       name: applicationDraft.companyName,
     },
   });
-  const application = await prisma.jobApplication.upsert({
-    where: {
-      userId_jobUrlHash: {
-        jobUrlHash,
-        userId: input.userId,
-      },
-    },
-    create: {
-      appliedAt: resolveAppliedAt(null),
-      companyId: company.id,
-      employmentType: applicationDraft.employmentType,
-      jobDescription: input.jobDescription,
-      jobUrl: normalizedJobUrl,
-      jobUrlHash,
-      location: applicationDraft.location,
-      status: "SAVED",
-      title: applicationDraft.jobTitle,
-      userId: input.userId,
-    },
-    update: {
-      companyId: company.id,
-      employmentType: applicationDraft.employmentType,
-      jobDescription: input.jobDescription,
-      jobUrl: normalizedJobUrl,
-      location: applicationDraft.location,
-      title: applicationDraft.jobTitle,
-    },
-    select: {
-      id: true,
-    },
-  });
+  const applicationData = {
+    companyId: company.id,
+    employmentType: applicationDraft.employmentType,
+    jobDescription: input.jobDescription,
+    jobUrl: normalizedJobUrl,
+    jobUrlHash,
+    location: applicationDraft.location,
+    title: applicationDraft.jobTitle,
+  };
+  const existingApplication =
+    existingApplicationByHash ?? existingApplicationByComparableUrl;
+  const application = existingApplication
+    ? await prisma.jobApplication.update({
+        data: applicationData,
+        select: {
+          id: true,
+        },
+        where: {
+          id: existingApplication.id,
+        },
+      })
+    : await prisma.jobApplication.create({
+        data: {
+          ...applicationData,
+          appliedAt: resolveAppliedAt(null),
+          status: "SAVED",
+          userId: input.userId,
+        },
+        select: {
+          id: true,
+        },
+      });
 
   await markApplicationsChanged(input.userId);
 
@@ -1134,6 +1169,60 @@ async function updateTailorResumeRunStatus(input: {
   if (updatedRuns.count > 0) {
     await markTailoringChanged(input.userId);
   }
+}
+
+function readTailorResumeBackendErrorMessage(
+  error: unknown,
+  fallbackMessage: string,
+) {
+  return error instanceof Error && error.message.trim()
+    ? error.message
+    : fallbackMessage;
+}
+
+async function failTailorResumeRunAfterBackendError(input: {
+  error: unknown;
+  fallbackMessage: string;
+  fallbackStepNumber: number;
+  fallbackSummary: string;
+  lastStepEvent: TailorResumeGenerationStepEvent | null;
+  onStepEvent: (event: TailorResumeGenerationStepEvent) => void | Promise<void>;
+  runId: string | null;
+  status?: number;
+  tailoredResumeDurationMs?: number;
+  userId: string;
+  userMarkdown?: TailorResumeUserMarkdownState;
+}) {
+  const stepNumber = input.lastStepEvent?.stepNumber ?? input.fallbackStepNumber;
+  const failureMessage = formatTailorResumeStepError(
+    stepNumber,
+    readTailorResumeBackendErrorMessage(input.error, input.fallbackMessage),
+  );
+  const failureStepEvent = buildTailorResumeTerminalFailureStepEvent({
+    detail: failureMessage,
+    fallbackStepNumber: input.fallbackStepNumber,
+    fallbackSummary: input.fallbackSummary,
+    previousStepEvent: input.lastStepEvent,
+  });
+
+  await input.onStepEvent(failureStepEvent);
+  await updateTailorResumeRunStatus({
+    error: failureMessage,
+    runId: input.runId,
+    status: "FAILED",
+    userId: input.userId,
+  });
+
+  return NextResponse.json(
+    {
+      error: failureMessage,
+      ...(input.tailoredResumeDurationMs !== undefined
+        ? { tailoredResumeDurationMs: input.tailoredResumeDurationMs }
+        : {}),
+      ...(input.userMarkdown ? { userMarkdown: input.userMarkdown } : {}),
+    },
+    { status: input.status ?? 500 },
+  );
 }
 
 async function isTailorResumeRunStillActive(input: {
@@ -1338,7 +1427,7 @@ async function finalizeTailorResumeGeneration(input: {
             thesis: tailoringResult.thesis,
           });
 
-          tailoringResult = {
+          const compactedTailoringResult = {
             ...tailoringResult,
             annotatedLatexCode: compactionResult.annotatedLatexCode,
             edits: compactionResult.edits,
@@ -1350,6 +1439,12 @@ async function finalizeTailorResumeGeneration(input: {
             previewPdf: compactionResult.previewPdf,
             validationError: compactionResult.validationError,
           };
+          tailoringResult = compactionResult.validationError
+            ? applyTailorResumePageCountFailure(
+                compactedTailoringResult,
+                compactionResult.validationError,
+              )
+            : compactedTailoringResult;
         } catch (error) {
           tailoringResult = applyTailorResumePageCountFailure(
             tailoringResult,
@@ -1467,9 +1562,10 @@ async function finalizeTailorResumeGeneration(input: {
       });
     }
 
+    const failureStepNumber = tailoringResult.previewPdf ? 4 : 3;
     const failureMessage = buildTailorResumeAttemptFailureMessage({
       attempts: tailoringResult.attempts,
-      stepNumber: 3,
+      stepNumber: failureStepNumber,
       validationError: tailoringResult.validationError,
     });
 
@@ -1864,7 +1960,9 @@ async function handleTailorResumeGeneration(
     runId: preparation.runId,
   });
 
+  let lastStepEvent: TailorResumeGenerationStepEvent | null = null;
   const handleStepEvent = async (event: TailorResumeGenerationStepEvent) => {
+    lastStepEvent = event;
     logTailorResumeDiagnostic({
       action: "tailor",
       message: "Tailoring step event.",
@@ -1879,7 +1977,8 @@ async function handleTailorResumeGeneration(
     await options.onStepEvent?.(event);
   };
 
-  const normalizedBaseLatex = normalizeAnnotatedLatexState(
+  try {
+    const normalizedBaseLatex = normalizeAnnotatedLatexState(
     preparation.rawProfile.latex.code,
     new Date().toISOString(),
   );
@@ -2230,25 +2329,37 @@ async function handleTailorResumeGeneration(
     userMarkdown: userMarkdownForImplementation,
   });
 
-  return finalizeTailorResumeGeneration({
-    applicationId: preparation.applicationId,
-    generationSourceAnnotatedLatex,
-    generationSourceSnapshot,
-    jobDescription: preparation.jobDescription,
-    jobUrl: preparation.jobUrl,
-    lockedLinks: preparation.lockedLinks,
-    normalizedBaseLatex,
-    onStepEvent: handleStepEvent,
-    overwrittenDbTailoredResumeIds: preparation.overwrittenDbTailoredResumeIds,
-    overwrittenTailoredResumeIds: preparation.overwrittenTailoredResumeIds,
-    processedBaseSavedLinkUpdateCount: processedBaseAnnotatedLatex.updatedCount,
-    processedBaseSavedLinkUpdates: processedBaseAnnotatedLatex.updatedLinks,
-    rawProfile: preparation.rawProfile,
-    runId: preparation.runId,
-    tailoringResult,
-    userId,
-    userMarkdown: userMarkdownAfterQuestioning ?? userMarkdownForImplementation,
-  });
+    return finalizeTailorResumeGeneration({
+      applicationId: preparation.applicationId,
+      generationSourceAnnotatedLatex,
+      generationSourceSnapshot,
+      jobDescription: preparation.jobDescription,
+      jobUrl: preparation.jobUrl,
+      lockedLinks: preparation.lockedLinks,
+      normalizedBaseLatex,
+      onStepEvent: handleStepEvent,
+      overwrittenDbTailoredResumeIds: preparation.overwrittenDbTailoredResumeIds,
+      overwrittenTailoredResumeIds: preparation.overwrittenTailoredResumeIds,
+      processedBaseSavedLinkUpdateCount: processedBaseAnnotatedLatex.updatedCount,
+      processedBaseSavedLinkUpdates: processedBaseAnnotatedLatex.updatedLinks,
+      rawProfile: preparation.rawProfile,
+      runId: preparation.runId,
+      tailoringResult,
+      userId,
+      userMarkdown: userMarkdownAfterQuestioning ?? userMarkdownForImplementation,
+    });
+  } catch (error) {
+    return failTailorResumeRunAfterBackendError({
+      error,
+      fallbackMessage: "Unable to tailor the resume.",
+      fallbackStepNumber: 1,
+      fallbackSummary: "Generating plaintext edit outline",
+      lastStepEvent,
+      onStepEvent: handleStepEvent,
+      runId: preparation.runId,
+      userId,
+    });
+  }
 }
 
 async function handleAdvanceTailorResumeInterview(
@@ -2327,7 +2438,9 @@ async function handleAdvanceTailorResumeInterview(
     runId: preparation.runId,
   });
 
+  let lastStepEvent: TailorResumeGenerationStepEvent | null = null;
   const handleStepEvent = async (event: TailorResumeGenerationStepEvent) => {
+    lastStepEvent = event;
     logTailorResumeDiagnostic({
       action: "advanceTailorResumeInterview",
       interviewId,
@@ -2343,7 +2456,8 @@ async function handleAdvanceTailorResumeInterview(
     await options.onStepEvent?.(event);
   };
 
-  const nextConversation = [
+  try {
+    const nextConversation = [
     ...preparation.tailoringInterview.conversation,
     buildTailorResumeConversationMessage({
       role: "user",
@@ -2661,18 +2775,32 @@ async function handleAdvanceTailorResumeInterview(
     userId,
   });
 
-  return NextResponse.json({
-    profile: mergeTailorResumeProfileWithLockedLinks(
-      nextState.rawProfile,
-      nextState.lockedLinks,
-      {
-        includeLockedOnly: true,
-      },
-    ),
-    tailoredResumeDurationMs: accumulatedModelDurationMs,
-    tailoringStatus: "needs_user_input" as const,
-    userMarkdown: userMarkdownAfterQuestioning,
-  });
+    return NextResponse.json({
+      profile: mergeTailorResumeProfileWithLockedLinks(
+        nextState.rawProfile,
+        nextState.lockedLinks,
+        {
+          includeLockedOnly: true,
+        },
+      ),
+      tailoredResumeDurationMs: accumulatedModelDurationMs,
+      tailoringStatus: "needs_user_input" as const,
+      userMarkdown: userMarkdownAfterQuestioning,
+    });
+  } catch (error) {
+    return failTailorResumeRunAfterBackendError({
+      error,
+      fallbackMessage: "Unable to continue the tailoring follow-up questions.",
+      fallbackStepNumber: 2,
+      fallbackSummary: "Continuing the follow-up questions",
+      lastStepEvent,
+      onStepEvent: handleStepEvent,
+      runId: preparation.runId,
+      tailoredResumeDurationMs:
+        preparation.tailoringInterview.accumulatedModelDurationMs,
+      userId,
+    });
+  }
 }
 
 async function handleCompleteTailorResumeInterview(
@@ -2775,7 +2903,9 @@ async function handleCompleteTailorResumeInterview(
     runId: preparation.runId,
   });
 
+  let lastStepEvent: TailorResumeGenerationStepEvent | null = null;
   const handleStepEvent = async (event: TailorResumeGenerationStepEvent) => {
+    lastStepEvent = event;
     logTailorResumeDiagnostic({
       action: "completeTailorResumeInterview",
       interviewId,
@@ -2790,18 +2920,34 @@ async function handleCompleteTailorResumeInterview(
     });
     await options.onStepEvent?.(event);
   };
-  const userMarkdown = await readTailorResumeUserMarkdown(userId);
 
-  return completeTailorResumeInterviewAndFinalize({
-    applicationId: preparation.applicationId,
-    lockedLinks: preparation.lockedLinks,
-    onStepEvent: handleStepEvent,
-    rawProfile: preparation.rawProfile,
-    runId: preparation.runId,
-    tailoringInterview: preparation.tailoringInterview,
-    userId,
-    userMarkdown,
-  });
+  try {
+    const userMarkdown = await readTailorResumeUserMarkdown(userId);
+
+    return completeTailorResumeInterviewAndFinalize({
+      applicationId: preparation.applicationId,
+      lockedLinks: preparation.lockedLinks,
+      onStepEvent: handleStepEvent,
+      rawProfile: preparation.rawProfile,
+      runId: preparation.runId,
+      tailoringInterview: preparation.tailoringInterview,
+      userId,
+      userMarkdown,
+    });
+  } catch (error) {
+    return failTailorResumeRunAfterBackendError({
+      error,
+      fallbackMessage: "Unable to finish the tailored resume.",
+      fallbackStepNumber: 3,
+      fallbackSummary: "Generating block-scoped edits",
+      lastStepEvent,
+      onStepEvent: handleStepEvent,
+      runId: preparation.runId,
+      tailoredResumeDurationMs:
+        preparation.tailoringInterview.accumulatedModelDurationMs,
+      userId,
+    });
+  }
 }
 
 async function handleCancelTailorResumeInterview(userId: string) {

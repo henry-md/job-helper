@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  dedupeTailoredResumesByJobUrl,
   findTailoredResumeByJobUrl,
   normalizeTailorResumeJobUrl,
   readTailorResumeJobUrlFromDescription,
@@ -56,7 +57,7 @@ function buildTailoredResume(
       jobDescriptionFocus: "Focus",
       resumeChanges: "Changes",
     },
-    updatedAt: "2026-04-20T12:00:00.000Z",
+    updatedAt: overrides.updatedAt ?? "2026-04-20T12:00:00.000Z",
   };
 }
 
@@ -87,6 +88,28 @@ test("normalizeTailorResumeJobUrl treats http and https variants as the same pos
   );
 });
 
+test("normalizeTailorResumeJobUrl matches Workday canonical and browser URL variants", () => {
+  assert.equal(
+    normalizeTailorResumeJobUrl(
+      "https://pae.wd1.myworkdayjobs.com/en-US/Amentum_Careers/job/Entry-Level-Software-Engineer_R0160036",
+    ),
+    normalizeTailorResumeJobUrl(
+      "https://pae.wd1.myworkdayjobs.com/en-US/amentum_careers/job/US-VA-Dahlgren/Entry-Level-Software-Engineer_R0160036?utm_source=Simplify&ref=Simplify",
+    ),
+  );
+});
+
+test("normalizeTailorResumeJobUrl keeps distinct Workday requisitions separate", () => {
+  assert.notEqual(
+    normalizeTailorResumeJobUrl(
+      "https://pae.wd1.myworkdayjobs.com/en-US/amentum_careers/job/US-VA-Dahlgren/Entry-Level-Software-Engineer_R0160036?utm_source=Simplify&ref=Simplify",
+    ),
+    normalizeTailorResumeJobUrl(
+      "https://pae.wd1.myworkdayjobs.com/en-US/amentum_careers/job/US-VA-Dahlgren/Entry-Level-Software-Engineer_R0160035?utm_source=Simplify&ref=Simplify",
+    ),
+  );
+});
+
 test("readTailorResumeJobUrlFromDescription prefers canonical URL lines", () => {
   assert.equal(
     readTailorResumeJobUrlFromDescription(
@@ -97,6 +120,28 @@ test("readTailorResumeJobUrlFromDescription prefers canonical URL lines", () => 
       ].join("\n"),
     ),
     "https://jobs.example.com/roles/123",
+  );
+});
+
+test("dedupeTailoredResumesByJobUrl keeps the newest resume for a comparable job URL", () => {
+  const records = dedupeTailoredResumesByJobUrl([
+    buildTailoredResume({
+      createdAt: "2026-04-20T12:00:00.000Z",
+      id: "older",
+      jobUrl: "https://jobs.example.com/roles/123?utm_source=first",
+      updatedAt: "2026-04-20T12:00:00.000Z",
+    }),
+    buildTailoredResume({
+      createdAt: "2026-04-20T12:05:00.000Z",
+      id: "newer",
+      jobUrl: "https://jobs.example.com/roles/123?utm_source=second",
+      updatedAt: "2026-04-20T12:05:00.000Z",
+    }),
+  ]);
+
+  assert.deepEqual(
+    records.map((record) => record.id),
+    ["newer"],
   );
 });
 

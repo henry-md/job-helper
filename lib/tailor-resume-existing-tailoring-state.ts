@@ -1,4 +1,5 @@
 import type { TailorResumeDbRunRecord } from "./tailor-resume-route-response-state.ts";
+import { normalizeTailorResumeJobUrl } from "./tailor-resume-job-url.ts";
 import type {
   TailorResumeGenerationStepEvent,
   TailorResumePendingInterview,
@@ -58,6 +59,76 @@ function readString(value: unknown) {
 
 function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function readExistingTailoringTime(value: TailorResumeExistingTailoringState) {
+  const updatedAt = Date.parse(value.updatedAt);
+
+  if (Number.isFinite(updatedAt)) {
+    return updatedAt;
+  }
+
+  const createdAt = Date.parse(value.createdAt);
+  return Number.isFinite(createdAt) ? createdAt : 0;
+}
+
+function readExistingTailoringPriority(value: TailorResumeExistingTailoringState) {
+  if (value.kind === "pending_interview") {
+    return 3;
+  }
+
+  if (value.kind === "active_generation") {
+    return 2;
+  }
+
+  return 1;
+}
+
+function compareExistingTailoringPreference(
+  left: TailorResumeExistingTailoringState,
+  right: TailorResumeExistingTailoringState,
+) {
+  const priorityDifference =
+    readExistingTailoringPriority(left) - readExistingTailoringPriority(right);
+
+  if (priorityDifference !== 0) {
+    return priorityDifference;
+  }
+
+  return readExistingTailoringTime(left) - readExistingTailoringTime(right);
+}
+
+function dedupeExistingTailoringsByJobUrl(
+  activeTailorings: TailorResumeExistingTailoringState[],
+) {
+  const activeTailoringsByJobUrl = new Map<
+    string,
+    TailorResumeExistingTailoringState
+  >();
+  const activeTailoringsWithoutJobUrl: TailorResumeExistingTailoringState[] = [];
+
+  for (const activeTailoring of activeTailorings) {
+    const normalizedJobUrl = normalizeTailorResumeJobUrl(activeTailoring.jobUrl);
+
+    if (!normalizedJobUrl) {
+      activeTailoringsWithoutJobUrl.push(activeTailoring);
+      continue;
+    }
+
+    const previousTailoring = activeTailoringsByJobUrl.get(normalizedJobUrl);
+
+    if (
+      !previousTailoring ||
+      compareExistingTailoringPreference(activeTailoring, previousTailoring) >= 0
+    ) {
+      activeTailoringsByJobUrl.set(normalizedJobUrl, activeTailoring);
+    }
+  }
+
+  return [
+    ...activeTailoringsByJobUrl.values(),
+    ...activeTailoringsWithoutJobUrl,
+  ];
 }
 
 export function buildTailorResumeRunStepEvent(
@@ -161,7 +232,7 @@ export function buildActiveTailoringStates(input: {
     activeTailorings.push(buildActiveRunExistingTailoringState(run));
   }
 
-  return activeTailorings.sort(
+  return dedupeExistingTailoringsByJobUrl(activeTailorings).sort(
     (left, right) => {
       const createdAtDifference =
         Date.parse(right.createdAt || "") - Date.parse(left.createdAt || "");
@@ -341,7 +412,7 @@ export function readTailorResumeExistingTailoringStates(value: unknown) {
     );
 
   if (parsedActiveTailorings.length > 0) {
-    return parsedActiveTailorings.sort((left, right) => {
+    return dedupeExistingTailoringsByJobUrl(parsedActiveTailorings).sort((left, right) => {
       const createdAtDifference =
         Date.parse(right.createdAt || "") - Date.parse(left.createdAt || "");
 

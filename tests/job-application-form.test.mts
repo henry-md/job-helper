@@ -6,6 +6,7 @@ import {
   parseJobApplicationDraftContext,
   validateJobApplicationScreenshotFile,
 } from "../lib/job-application-form.ts";
+import { filterVisibleJobApplicationsByUrl } from "../lib/job-application-records.ts";
 
 test("createEmptyJobApplicationDraft returns a fresh default draft", () => {
   const firstDraft = createEmptyJobApplicationDraft();
@@ -62,6 +63,31 @@ test("parseJobApplicationDraftContext reuses shared draft field parsing", () => 
     status: "INTERVIEW",
     teamOrDepartment: "",
   });
+});
+
+test("filterVisibleJobApplicationsByUrl hides duplicate comparable job URLs", () => {
+  const visibleApplications = filterVisibleJobApplicationsByUrl([
+    {
+      id: "newer",
+      jobUrl:
+        "https://pae.wd1.myworkdayjobs.com/en-US/amentum_careers/job/US-VA-Dahlgren/Entry-Level-Software-Engineer_R0160036?utm_source=Simplify&ref=Simplify",
+    },
+    {
+      id: "older",
+      jobUrl:
+        "https://pae.wd1.myworkdayjobs.com/en-US/Amentum_Careers/job/Entry-Level-Software-Engineer_R0160036",
+    },
+    {
+      id: "neighboring-requisition",
+      jobUrl:
+        "https://pae.wd1.myworkdayjobs.com/en-US/amentum_careers/job/US-VA-Dahlgren/Entry-Level-Software-Engineer_R0160035?utm_source=Simplify&ref=Simplify",
+    },
+  ]);
+
+  assert.deepEqual(
+    visibleApplications.map((application) => application.id),
+    ["newer", "neighboring-requisition"],
+  );
 });
 
 test("normalizeJobApplicationWriteInput normalizes valid payloads", () => {

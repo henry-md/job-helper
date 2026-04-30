@@ -9,6 +9,39 @@ const COMPARABLE_URL_QUERY_PARAM_ALLOWLIST = new Set([
   "reqid",
 ]);
 
+function normalizeWorkdayJobPath(parsedUrl: URL) {
+  if (!parsedUrl.hostname.toLowerCase().endsWith(".myworkdayjobs.com")) {
+    return;
+  }
+
+  const pathSegments = parsedUrl.pathname.split("/").filter(Boolean);
+  const jobSegmentIndex = pathSegments.findIndex(
+    (segment) => segment.toLowerCase() === "job",
+  );
+
+  if (jobSegmentIndex < 1 || jobSegmentIndex >= pathSegments.length - 1) {
+    return;
+  }
+
+  const localeSegment = pathSegments[0]?.toLowerCase();
+  const careerSiteSegments = pathSegments
+    .slice(1, jobSegmentIndex)
+    .map((segment) => segment.toLowerCase());
+  const postingSegment = pathSegments.at(-1);
+
+  if (!localeSegment || !postingSegment) {
+    return;
+  }
+
+  parsedUrl.pathname = [
+    "",
+    localeSegment,
+    ...careerSiteSegments,
+    "job",
+    postingSegment,
+  ].join("/");
+}
+
 export function normalizeComparableUrl(value: string | null | undefined) {
   const trimmedValue = value?.trim();
 
@@ -23,7 +56,9 @@ export function normalizeComparableUrl(value: string | null | undefined) {
       // Treat http/https variants of the same posting as one comparable URL.
       parsedUrl.protocol = "https:";
     }
+    parsedUrl.hostname = parsedUrl.hostname.toLowerCase();
     parsedUrl.pathname = parsedUrl.pathname.replace(/\/+$/, "") || "/";
+    normalizeWorkdayJobPath(parsedUrl);
     const comparableQueryEntries = [...parsedUrl.searchParams.entries()]
       .map(([key, entryValue]) => [key.toLowerCase(), entryValue.trim()] as const)
       .filter(

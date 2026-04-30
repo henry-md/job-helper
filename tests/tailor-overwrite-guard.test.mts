@@ -196,6 +196,28 @@ test("normalizeComparableUrl preserves stable job id query params", () => {
   );
 });
 
+test("normalizeComparableUrl matches Workday canonical URLs to query-bearing browser tabs", () => {
+  assert.equal(
+    normalizeComparableUrl(
+      "https://pae.wd1.myworkdayjobs.com/en-US/Amentum_Careers/job/Entry-Level-Software-Engineer_R0160036",
+    ),
+    normalizeComparableUrl(
+      "https://pae.wd1.myworkdayjobs.com/en-US/amentum_careers/job/US-VA-Dahlgren/Entry-Level-Software-Engineer_R0160036?utm_source=Simplify&ref=Simplify",
+    ),
+  );
+});
+
+test("normalizeComparableUrl keeps neighboring Workday requisitions separate", () => {
+  assert.notEqual(
+    normalizeComparableUrl(
+      "https://pae.wd1.myworkdayjobs.com/en-US/amentum_careers/job/US-VA-Dahlgren/Entry-Level-Software-Engineer_R0160036?utm_source=Simplify&ref=Simplify",
+    ),
+    normalizeComparableUrl(
+      "https://pae.wd1.myworkdayjobs.com/en-US/amentum_careers/job/US-VA-Dahlgren/Entry-Level-Software-Engineer_R0160035?utm_source=Simplify&ref=Simplify",
+    ),
+  );
+});
+
 test("does not treat different pid-based career pages as the same job", () => {
   assert.equal(
     matchesTailorOverwritePageIdentity({

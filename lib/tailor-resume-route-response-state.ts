@@ -1,6 +1,9 @@
 import { buildNormalizedJobUrlHash } from "./job-url-hash.ts";
 import { deletePersistedJobScreenshot } from "./job-tracking.ts";
-import { normalizeTailorResumeJobUrl } from "./tailor-resume-job-url.ts";
+import {
+  dedupeTailoredResumesByJobUrl,
+  normalizeTailorResumeJobUrl,
+} from "./tailor-resume-job-url.ts";
 import { readTailorResumeProfileState } from "./tailor-resume-profile-state.ts";
 import {
   deleteTailoredResumePdf,
@@ -87,6 +90,17 @@ function uniqueNormalizedJobUrls(values: Array<string | null | undefined>) {
   return uniqueNonEmptyStrings(
     values.map((value) => normalizeTailorResumeJobUrl(value)),
   );
+}
+
+function withDedupedTailoredResumes(profile: TailorResumeProfile) {
+  const tailoredResumes = dedupeTailoredResumesByJobUrl(profile.tailoredResumes);
+
+  return tailoredResumes.length === profile.tailoredResumes.length
+    ? profile
+    : {
+        ...profile,
+        tailoredResumes,
+      };
 }
 
 export async function findActiveTailorResumeRun(input: {
@@ -751,7 +765,7 @@ export async function readTailorResumeResponseState(userId: string) {
   return {
     activeRun: activeRuns[0] ?? null,
     activeRuns,
-    profile,
+    profile: withDedupedTailoredResumes(profile),
     rawProfile,
   };
 }

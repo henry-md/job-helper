@@ -15,6 +15,39 @@ const comparableQueryParamAllowlist = new Set([
   "reqid",
 ]);
 
+function normalizeWorkdayJobPath(url: URL) {
+  if (!url.hostname.toLowerCase().endsWith(".myworkdayjobs.com")) {
+    return;
+  }
+
+  const pathSegments = url.pathname.split("/").filter(Boolean);
+  const jobSegmentIndex = pathSegments.findIndex(
+    (segment) => segment.toLowerCase() === "job",
+  );
+
+  if (jobSegmentIndex < 1 || jobSegmentIndex >= pathSegments.length - 1) {
+    return;
+  }
+
+  const localeSegment = pathSegments[0]?.toLowerCase();
+  const careerSiteSegments = pathSegments
+    .slice(1, jobSegmentIndex)
+    .map((segment) => segment.toLowerCase());
+  const postingSegment = pathSegments.at(-1);
+
+  if (!localeSegment || !postingSegment) {
+    return;
+  }
+
+  url.pathname = [
+    "",
+    localeSegment,
+    ...careerSiteSegments,
+    "job",
+    postingSegment,
+  ].join("/");
+}
+
 export function normalizeTailorResumeJobUrl(
   value: string | null | undefined,
 ) {
@@ -35,6 +68,7 @@ export function normalizeTailorResumeJobUrl(
     url.protocol = "https:";
     url.hostname = url.hostname.toLowerCase();
     url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+    normalizeWorkdayJobPath(url);
     const comparableQueryEntries = [...url.searchParams.entries()]
       .map(([key, entryValue]) => [key.toLowerCase(), entryValue.trim()] as const)
       .filter(
@@ -130,5 +164,48 @@ export function findTailoredResumeByJobUrl(
     tailoredResumes.find(
       (record) => normalizeTailorResumeJobUrl(record.jobUrl) === normalizedJobUrl,
     ) ?? null
+  );
+}
+
+function readComparableTailoredResumeTime(record: TailoredResumeRecord) {
+  const updatedAt = Date.parse(record.updatedAt);
+
+  if (Number.isFinite(updatedAt)) {
+    return updatedAt;
+  }
+
+  const createdAt = Date.parse(record.createdAt);
+  return Number.isFinite(createdAt) ? createdAt : 0;
+}
+
+export function dedupeTailoredResumesByJobUrl(
+  tailoredResumes: TailoredResumeRecord[],
+) {
+  const recordsByComparableUrl = new Map<string, TailoredResumeRecord>();
+  const recordsWithoutComparableUrl: TailoredResumeRecord[] = [];
+
+  for (const record of tailoredResumes) {
+    const normalizedJobUrl = normalizeTailorResumeJobUrl(record.jobUrl);
+
+    if (!normalizedJobUrl) {
+      recordsWithoutComparableUrl.push(record);
+      continue;
+    }
+
+    const previousRecord = recordsByComparableUrl.get(normalizedJobUrl);
+
+    if (
+      !previousRecord ||
+      readComparableTailoredResumeTime(record) >=
+        readComparableTailoredResumeTime(previousRecord)
+    ) {
+      recordsByComparableUrl.set(normalizedJobUrl, record);
+    }
+  }
+
+  return [...recordsByComparableUrl.values(), ...recordsWithoutComparableUrl].sort(
+    (left, right) =>
+      readComparableTailoredResumeTime(right) -
+      readComparableTailoredResumeTime(left),
   );
 }

@@ -543,7 +543,7 @@ export function buildJobDescriptionFromPageContext(pageContext: JobPageContext) 
 }
 
 export function readJobUrlFromPageContext(pageContext: JobPageContext) {
-  return pageContext.canonicalUrl.trim() || pageContext.url.trim() || null;
+  return pageContext.url.trim() || pageContext.canonicalUrl.trim() || null;
 }
 
 export function buildTailorResumePreparationState(input: {

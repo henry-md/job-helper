@@ -6,6 +6,7 @@ import { parseDashboardRouteState } from "@/lib/dashboard-route-state";
 import { createDefaultSystemPromptSettings } from "@/lib/system-prompt-settings";
 import {
   countDistinctApplicationCompanies,
+  filterVisibleJobApplicationsByUrl,
   toJobApplicationRecord,
   toReferrerOption,
 } from "@/lib/job-application-records";
@@ -44,11 +45,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const databaseStatus = await (async () => {
     try {
       const prisma = getPrismaClient();
-      const [applicationCount, applications, companies, people] =
+      const [applications, companies, people] =
         await Promise.all([
-          prisma.jobApplication.count({
-            where: { userId: session.user.id },
-          }),
           prisma.jobApplication.findMany({
             where: { userId: session.user.id },
             include: {
@@ -72,17 +70,20 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             orderBy: { name: "asc" },
           }),
         ]);
-      const companyCount = countDistinctApplicationCompanies(applications);
+      const visibleApplications = filterVisibleJobApplicationsByUrl(applications);
+      const companyCount = countDistinctApplicationCompanies(visibleApplications);
 
       return {
         ok: true,
         detail:
-          applicationCount === 0
+          visibleApplications.length === 0
             ? "Connected"
-            : `Tracking ${applicationCount} application${applicationCount === 1 ? "" : "s"}`,
-        applicationCount,
+            : `Tracking ${visibleApplications.length} application${
+                visibleApplications.length === 1 ? "" : "s"
+              }`,
+        applicationCount: visibleApplications.length,
         companyCount,
-        applications: applications.map(toJobApplicationRecord),
+        applications: visibleApplications.map(toJobApplicationRecord),
         companies: companies as CompanyOption[],
         people: people.map(toReferrerOption),
       };

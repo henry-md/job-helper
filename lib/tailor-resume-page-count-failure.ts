@@ -7,13 +7,6 @@ export function applyTailorResumePageCountFailure(
 ): GenerateTailoredResumeResult {
   const normalizedError = formatTailorResumeStepError(4, errorMessage);
 
-  if (result.previewPdf) {
-    return {
-      ...result,
-      validationError: normalizedError,
-    };
-  }
-
   return {
     ...result,
     outcome: "generation_failure",

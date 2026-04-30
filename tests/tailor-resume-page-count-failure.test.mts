@@ -54,14 +54,14 @@ function buildGenerationResult(
   };
 }
 
-test("page-count compaction failure keeps a previewable tailored draft reviewable", () => {
+test("page-count compaction failure hard-fails even with a preview PDF", () => {
   const result = buildGenerationResult();
   const updated = applyTailorResumePageCountFailure(
     result,
     "No proposed compaction candidate reduced its block's measured rendered line count.",
   );
 
-  assert.equal(updated.outcome, "success");
+  assert.equal(updated.outcome, "generation_failure");
   assert.equal(
     updated.validationError,
     "Step 4: No proposed compaction candidate reduced its block's measured rendered line count.",
