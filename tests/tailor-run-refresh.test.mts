@@ -4,22 +4,33 @@ import { buildTailoringRunsRefreshKey } from "../extension/src/tailor-run-refres
 
 function buildRun(overrides: Partial<{
   capturedAt: string;
+  generationStep: {
+    attempt: number | null;
+    detail: string | null;
+    retrying: boolean;
+    status: "failed" | "running" | "skipped" | "succeeded";
+    stepCount: number;
+    stepNumber: number;
+    summary: string;
+  } | null;
+  message: string;
   pageUrl: string | null;
   status: "error" | "needs_input" | "running" | "success";
+  tailoredResumeError: string | null;
   tailoredResumeId: string | null;
 }> = {}) {
   return {
     capturedAt: overrides.capturedAt ?? "2026-04-26T12:00:00.000Z",
     companyName: "OpenAI",
-    endpoint: "http://localhost:3000/api/tailor-resume",
-    generationStep: null,
+    endpoint: "http://localhost:1285/api/tailor-resume",
+    generationStep: overrides.generationStep ?? null,
     jobIdentifier: null,
-    message: "Tailoring...",
+    message: overrides.message ?? "Tailoring...",
     pageTitle: "Job posting",
     pageUrl: overrides.pageUrl ?? "https://jobs.example.com/roles/1",
     positionTitle: "Research Engineer",
     status: overrides.status ?? "running",
-    tailoredResumeError: null,
+    tailoredResumeError: overrides.tailoredResumeError ?? null,
     tailoredResumeId: overrides.tailoredResumeId ?? null,
   };
 }
@@ -59,6 +70,37 @@ test("buildTailoringRunsRefreshKey changes when another tab's run status changes
       pageUrl: "https://jobs.example.com/roles/2",
       status: "success",
       tailoredResumeId: "tailored-2",
+    }),
+  });
+
+  assert.notEqual(before, after);
+});
+
+test("buildTailoringRunsRefreshKey changes when a running step starts retrying", () => {
+  const before = buildTailoringRunsRefreshKey({
+    "https://jobs.example.com/roles/1": buildRun({
+      generationStep: {
+        attempt: 1,
+        detail: "Starting the planning pass.",
+        retrying: false,
+        status: "running",
+        stepCount: 4,
+        stepNumber: 1,
+        summary: "Generating plaintext edit outline",
+      },
+    }),
+  });
+  const after = buildTailoringRunsRefreshKey({
+    "https://jobs.example.com/roles/1": buildRun({
+      generationStep: {
+        attempt: 2,
+        detail: "Retrying after the previous attempt failed validation.",
+        retrying: true,
+        status: "running",
+        stepCount: 4,
+        stepNumber: 1,
+        summary: "Generating plaintext edit outline",
+      },
     }),
   });
 

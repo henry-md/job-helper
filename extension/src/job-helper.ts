@@ -121,6 +121,7 @@ export type TailorResumeRunRecord = {
   capturedAt: string;
   endpoint: string;
   companyName: string | null;
+  failureKind?: "page_capture" | null;
   generationStep?: TailorResumeGenerationStepSummary | null;
   jobIdentifier: string | null;
   message: string;

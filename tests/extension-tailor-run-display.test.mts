@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  formatTailorRunElapsedTime,
   resolveDisplayedTailorRunIdentity,
   resolveReviewableTailoredResumeId,
+  shouldRenderLegacyTailorRunShell,
   shouldRenderTailorRunShell,
 } from "../extension/src/tailor-run-display.ts";
 
@@ -25,6 +27,56 @@ test("prefers stored active-run identity over the current tab metadata", () => {
     label: "OpenAI — Research Engineer",
     title: "OpenAI — Research Engineer",
   });
+});
+
+test("formats loading elapsed time from zero seconds", () => {
+  const startedAtTime = Date.parse("2026-04-29T19:52:18.000Z");
+
+  assert.equal(
+    formatTailorRunElapsedTime({
+      nowTime: startedAtTime,
+      startedAtTime,
+    }),
+    "0:00",
+  );
+});
+
+test("formats loading elapsed time with single and double digit minutes", () => {
+  const startedAtTime = Date.parse("2026-04-29T19:52:18.000Z");
+
+  assert.equal(
+    formatTailorRunElapsedTime({
+      nowTime: startedAtTime + 9 * 60 * 1000 + 5 * 1000,
+      startedAtTime,
+    }),
+    "9:05",
+  );
+  assert.equal(
+    formatTailorRunElapsedTime({
+      nowTime: startedAtTime + 10 * 60 * 1000,
+      startedAtTime,
+    }),
+    "10:00",
+  );
+});
+
+test("clamps missing or future loading elapsed time to zero", () => {
+  const nowTime = Date.parse("2026-04-29T19:52:18.000Z");
+
+  assert.equal(
+    formatTailorRunElapsedTime({
+      nowTime,
+      startedAtTime: 0,
+    }),
+    "0:00",
+  );
+  assert.equal(
+    formatTailorRunElapsedTime({
+      nowTime,
+      startedAtTime: nowTime + 1000,
+    }),
+    "0:00",
+  );
 });
 
 test("falls back to the current tab only before a run has stored identity", () => {
@@ -88,6 +140,30 @@ test("does not keep a completed run shell visible after switching tabs", () => {
       isStoppingCurrentTailoring: false,
       isTailorPreparationPending: false,
       lastTailoringRunStatus: "success",
+    }),
+    false,
+  );
+});
+
+test("keeps the legacy shell mounted for a current-page overwrite prompt", () => {
+  assert.equal(
+    shouldRenderLegacyTailorRunShell({
+      hasCurrentPageCompletedTailoring: true,
+      hasCurrentPageExistingTailoringPrompt: true,
+      hasCurrentPageRunCard: false,
+      shouldShowTailorRunShell: true,
+    }),
+    true,
+  );
+});
+
+test("keeps completed current-page resumes on the row surface without a prompt", () => {
+  assert.equal(
+    shouldRenderLegacyTailorRunShell({
+      hasCurrentPageCompletedTailoring: true,
+      hasCurrentPageExistingTailoringPrompt: false,
+      hasCurrentPageRunCard: false,
+      shouldShowTailorRunShell: true,
     }),
     false,
   );

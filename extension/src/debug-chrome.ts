@@ -151,8 +151,10 @@ function createMockTailoringRun(
 function createMockTailoredResumes() {
   return [
     {
+      applicationId: null,
       archivedAt: null as string | null,
       companyName: "Microsoft",
+      createdAt: new Date("2026-04-21T23:17:00.000Z").toISOString(),
       displayName: "Microsoft - Software Engineer",
       id: "debug-tailored-resume",
       jobIdentifier: null,

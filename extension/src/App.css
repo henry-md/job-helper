@@ -38,6 +38,7 @@ body {
 .side-panel-shell {
   position: relative;
   display: flex;
+  height: 100vh;
   min-height: 100vh;
   width: 100%;
   flex-direction: column;
@@ -1209,6 +1210,42 @@ button:disabled {
     0 18px 60px rgba(0, 0, 0, 0.24);
 }
 
+.page-capture-error-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border-color: rgba(251, 113, 133, 0.28);
+  background:
+    linear-gradient(180deg, rgba(127, 29, 29, 0.24), rgba(24, 24, 27, 0.88));
+}
+
+.page-capture-error-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.page-capture-error-title,
+.page-capture-error-message {
+  margin: 0;
+}
+
+.page-capture-error-title {
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 760;
+  line-height: 1.25;
+}
+
+.page-capture-error-message {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 560;
+  line-height: 1.4;
+  white-space: normal;
+}
+
 .tailor-run-preparing-overlay {
   position: absolute;
   inset: 6px;
@@ -1458,6 +1495,31 @@ button:disabled {
 
 .tailor-progress-step-focus {
   gap: 4px;
+}
+
+.tailor-progress-step-with-elapsed {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+}
+
+.tailor-progress-step-with-elapsed .tailor-progress-step-topline,
+.tailor-progress-step-with-elapsed .tailor-progress-step-label {
+  grid-column: 1;
+}
+
+.tailor-progress-step-elapsed {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  min-width: 5ch;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  line-height: 1;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .tailor-progress-copy {
@@ -1756,9 +1818,10 @@ button:disabled {
 }
 
 .tailored-preview-stage {
-  display: grid;
+  display: flex;
   min-height: 0;
   flex: 1 1 auto;
+  flex-direction: column;
   gap: 12px;
 }
 
@@ -1792,8 +1855,47 @@ button:disabled {
   line-height: 1.5;
 }
 
+.tailored-preview-toolbar-actions {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .tailored-preview-highlight-toggle {
   flex: 0 0 auto;
+}
+
+.tailored-preview-error-banner {
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid rgba(251, 113, 133, 0.2);
+  border-radius: 14px;
+  color: #ffe4e6;
+  background:
+    linear-gradient(180deg, rgba(251, 113, 133, 0.11), rgba(127, 29, 29, 0.12));
+}
+
+.tailored-preview-error-banner p {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1.4;
+}
+
+.tailored-preview-error-banner pre {
+  max-height: 96px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: rgba(255, 228, 230, 0.8);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .tailored-preview-highlight-toggle-active {
@@ -2403,18 +2505,16 @@ button:disabled {
   position: relative;
   z-index: 1;
   display: grid;
+  min-height: 0;
   flex: 1 1 auto;
-  align-content: start;
-  gap: 14px;
+  grid-template-rows: minmax(0, 1fr);
   padding-top: 2px;
 }
 
-.tailor-unarchived-surface .card-heading-row {
-  padding: 0 2px;
-}
-
 .tailored-resume-card-stack {
-  display: grid;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
   gap: 12px;
 }
 
@@ -2441,6 +2541,16 @@ button:disabled {
 
 .tailored-resume-list-flush {
   margin-top: 0;
+}
+
+.tailor-unarchived-surface .tailored-resume-list {
+  align-content: start;
+  min-height: 0;
+  max-height: none;
+}
+
+.tailor-unarchived-surface .tailored-resume-list-flush {
+  flex: 1 1 auto;
 }
 
 .tailored-resume-row-shell {
@@ -3008,7 +3118,7 @@ button:disabled {
   position: fixed;
   right: 14px;
   bottom: 14px;
-  z-index: 30;
+  z-index: 90;
   display: flex;
   max-width: calc(100vw - 28px);
   justify-content: flex-end;

@@ -59,7 +59,12 @@ import {
   type TailoredResumeSummary,
   type TrackedApplicationSummary,
 } from "./job-helper";
-import { collectPageContextFromTab } from "./page-context";
+import {
+  PAGE_CONTEXT_UNAVAILABLE_MESSAGE,
+  collectPageContextFromTab,
+  formatPageContextErrorMessage,
+  isPageContextConnectionError,
+} from "./page-context";
 import TailoredResumeOverlayPreview from "./tailored-resume-overlay-preview";
 import TailoredResumeQuickReview from "./tailored-resume-quick-review";
 import {
@@ -71,8 +76,10 @@ import {
   readTailorRunDisplayUrl,
 } from "./tailor-run-identity";
 import {
+  formatTailorRunElapsedTime,
   resolveDisplayedTailorRunIdentity,
   resolveReviewableTailoredResumeId,
+  shouldRenderLegacyTailorRunShell as resolveShouldRenderLegacyTailorRunShell,
   shouldRenderTailorRunShell,
 } from "./tailor-run-display";
 import { buildCompletedTailoringMessage } from "./tailor-run-copy";
@@ -173,12 +180,15 @@ type PersonalDeleteImpact = {
 
 type ActiveTailorRunCard = {
   deleteTarget: TailorRunDeleteTarget | null;
+  detail: string | null;
   existingTailoringId: string | null;
   id: string;
   isCurrentPage: boolean;
+  message: string | null;
   pageKey: string | null;
   sortTime: number;
-  statusDisplayState: "loading" | "ready" | "warning";
+  statusDisplayState: "error" | "loading" | "ready" | "warning";
+  startedAtTime: number;
   step: TailorRunProgressStep;
   title: string;
   url: string | null;
@@ -311,14 +321,7 @@ function readAuthResponse(value: unknown): AuthState {
 }
 
 function getSnapshotErrorMessage(error: unknown) {
-  const message =
-    error instanceof Error ? error.message : "Failed to read the active page.";
-
-  if (message.includes("Receiving end does not exist")) {
-    return "Open a regular job page to inspect it here.";
-  }
-
-  return message;
+  return formatPageContextErrorMessage(error);
 }
 
 function isAbortError(error: unknown) {
@@ -530,6 +533,7 @@ function buildTailorInterviewPreview(
 function buildTailoringRunRecord(input: {
   capturedAt?: string;
   companyName: string | null;
+  failureKind?: TailorResumeRunRecord["failureKind"];
   generationStep?: TailorResumeGenerationStepSummary | null;
   jobIdentifier?: string | null;
   message: string;
@@ -551,6 +555,7 @@ function buildTailoringRunRecord(input: {
     capturedAt: input.capturedAt ?? new Date().toISOString(),
     companyName,
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
+    failureKind: input.failureKind ?? null,
     generationStep: input.generationStep ?? null,
     jobIdentifier: input.jobIdentifier || null,
     message: input.message,
@@ -583,6 +588,18 @@ function isStaleTailoringRun(run: TailorResumeRunRecord | null) {
   }
 
   return Date.now() - capturedAt > STALE_TAILORING_RUN_MAX_AGE_MS;
+}
+
+function isPageCaptureFailureRun(run: TailorResumeRunRecord | null) {
+  if (!run || run.status !== "error") {
+    return false;
+  }
+
+  return (
+    run.failureKind === "page_capture" ||
+    run.message === PAGE_CONTEXT_UNAVAILABLE_MESSAGE ||
+    isPageContextConnectionError(run.message)
+  );
 }
 
 function sameTailoringJobUrl(left: string | null, right: string | null) {
@@ -1106,6 +1123,28 @@ function buildTailorRunProgressStepsFromGenerationStep(
   }) satisfies TailorRunProgressStep[];
 }
 
+function buildFailedTailorRunProgressSteps(
+  step: TailorResumeGenerationStepSummary | null,
+): TailorRunProgressStep[] {
+  return buildTailorRunProgressStepsFromGenerationStep(
+    step
+      ? {
+          ...step,
+          retrying: false,
+          status: "failed",
+        }
+      : {
+          attempt: null,
+          detail: null,
+          retrying: false,
+          status: "failed",
+          stepCount: 4,
+          stepNumber: 1,
+          summary: "Plan targeted edits",
+        },
+  );
+}
+
 function readTailorRunProgressSteps(input: {
   captureState: CaptureState;
   existingTailoring: TailorResumeExistingTailoringState | null;
@@ -1151,10 +1190,10 @@ function readTailorRunProgressSteps(input: {
 
   if (
     input.lastTailoringRun?.status === "error" &&
-    input.lastTailoringRun.generationStep
+    !isPageCaptureFailureRun(input.lastTailoringRun)
   ) {
-    return buildTailorRunProgressStepsFromGenerationStep(
-      input.lastTailoringRun.generationStep,
+    return buildFailedTailorRunProgressSteps(
+      input.lastTailoringRun.generationStep ?? null,
     );
   }
 
@@ -1259,11 +1298,20 @@ function buildActiveTailorRunCardFromRun(input: {
     url: string | null;
   };
 }): ActiveTailorRunCard | null {
-  if (input.run.status !== "running" && input.run.status !== "needs_input") {
+  if (isPageCaptureFailureRun(input.run)) {
+    return null;
+  }
+
+  if (
+    input.run.status !== "running" &&
+    input.run.status !== "needs_input" &&
+    input.run.status !== "error"
+  ) {
     return null;
   }
 
   const url = input.run.pageUrl ?? input.titleFallback?.url ?? null;
+  const startedAtTime = readActiveTailorRunSortTime(input.run.capturedAt);
 
   return {
     deleteTarget: buildTailorRunDeleteTarget({
@@ -1271,13 +1319,23 @@ function buildActiveTailorRunCardFromRun(input: {
       tailoredResumeId: input.run.tailoredResumeId ?? null,
       tailorRunId: null,
     }),
+    detail:
+      input.run.status === "error"
+        ? input.run.tailoredResumeError?.trim() || input.run.message
+        : null,
     existingTailoringId: null,
     id: input.id,
     isCurrentPage: input.isCurrentPage ?? false,
+    message: input.run.status === "error" ? "Failed generation" : null,
     pageKey: input.pageKey ?? null,
-    sortTime: readActiveTailorRunSortTime(input.run.capturedAt),
+    sortTime: startedAtTime,
     statusDisplayState:
-      input.run.status === "needs_input" ? "ready" : "loading",
+      input.run.status === "needs_input"
+        ? "ready"
+        : input.run.status === "error"
+          ? "error"
+          : "loading",
+    startedAtTime,
     step: readActiveTailorRunStep({
       captureState: readCaptureStateFromTailoringRun(input.run) ?? "idle",
       existingTailoring: null,
@@ -1331,6 +1389,7 @@ function buildActiveTailorRunCardFromExistingTailoring(input: {
   }
 
   const url = input.existingTailoring.jobUrl ?? nextCard.url;
+  const startedAtTime = readExistingTailoringSortTime(input.existingTailoring);
 
   return {
     ...nextCard,
@@ -1340,10 +1399,11 @@ function buildActiveTailorRunCardFromExistingTailoring(input: {
       tailorRunId: input.existingTailoring.id,
     }),
     existingTailoringId: input.existingTailoring.id,
-    sortTime: readExistingTailoringSortTime(input.existingTailoring),
+    sortTime: startedAtTime,
     statusDisplayState:
       input.statusDisplayState ??
       (input.existingTailoring.kind === "pending_interview" ? "ready" : "loading"),
+    startedAtTime,
     url,
   };
 }
@@ -1363,6 +1423,7 @@ function buildActiveTailorRunCardFromPreparation(input: {
 }): ActiveTailorRunCard {
   const url =
     input.preparation.pageUrl ?? input.run?.pageUrl ?? input.titleFallback?.url ?? null;
+  const startedAtTime = readActiveTailorRunSortTime(input.preparation.capturedAt);
 
   return {
     deleteTarget: buildTailorRunDeleteTarget({
@@ -1370,12 +1431,15 @@ function buildActiveTailorRunCardFromPreparation(input: {
       tailoredResumeId: null,
       tailorRunId: null,
     }),
+    detail: null,
     existingTailoringId: null,
     id: input.id,
     isCurrentPage: input.isCurrentPage ?? false,
+    message: null,
     pageKey: input.pageKey ?? null,
-    sortTime: readActiveTailorRunSortTime(input.preparation.capturedAt),
+    sortTime: startedAtTime,
     statusDisplayState: "loading",
+    startedAtTime,
     step: readActiveTailorRunStep({
       captureState: "running",
       existingTailoring: null,
@@ -1587,6 +1651,60 @@ function buildParallelTailorRunCards(input: {
   return cards;
 }
 
+function readActiveTailorRunCardPreference(card: ActiveTailorRunCard) {
+  return [
+    card.isCurrentPage ? 1 : 0,
+    card.existingTailoringId ? 1 : 0,
+    card.statusDisplayState === "loading" ? 1 : 0,
+    card.sortTime,
+  ] as const;
+}
+
+function compareActiveTailorRunCardPreference(
+  left: ActiveTailorRunCard,
+  right: ActiveTailorRunCard,
+) {
+  const leftPreference = readActiveTailorRunCardPreference(left);
+  const rightPreference = readActiveTailorRunCardPreference(right);
+
+  for (let index = 0; index < leftPreference.length; index += 1) {
+    const difference = leftPreference[index] - rightPreference[index];
+
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+
+  return 0;
+}
+
+function dedupeActiveTailorRunCards(cards: ActiveTailorRunCard[]) {
+  const cardsByComparableUrl = new Map<string, ActiveTailorRunCard>();
+  const cardsWithoutComparableUrl: ActiveTailorRunCard[] = [];
+
+  for (const card of cards) {
+    const comparableUrl = normalizeComparableUrl(card.url);
+
+    if (!comparableUrl) {
+      cardsWithoutComparableUrl.push(card);
+      continue;
+    }
+
+    const previousCard = cardsByComparableUrl.get(comparableUrl);
+
+    if (
+      !previousCard ||
+      compareActiveTailorRunCardPreference(card, previousCard) >= 0
+    ) {
+      cardsByComparableUrl.set(comparableUrl, card);
+    }
+  }
+
+  return [...cardsByComparableUrl.values(), ...cardsWithoutComparableUrl].sort(
+    (left, right) => right.sortTime - left.sortTime,
+  );
+}
+
 function readJobPageIdentity(pageContext: JobPageContext | null) {
   if (!pageContext) {
     return null;
@@ -1639,6 +1757,7 @@ type TailorRunMenuActionState =
   | "goingToTab"
   | "idle"
   | "regenerating";
+type BackgroundTailorRunActionState = "deleting" | "goingToTab" | "stopping";
 type TailoredResumeMenuActionState = "goingToTab" | "idle";
 
 type ExistingTailoringPromptState = {
@@ -1717,7 +1836,7 @@ function compareExistingTailoringPrompts(
 function readCaptureStateFromTailoringRun(
   run: TailorResumeRunRecord | null,
 ): CaptureState | null {
-  if (!run) {
+  if (!run || isPageCaptureFailureRun(run)) {
     return null;
   }
 
@@ -1804,6 +1923,7 @@ function readStoredTailoringRunRecord(
       typeof value.endpoint === "string"
         ? value.endpoint
         : DEFAULT_TAILOR_RESUME_ENDPOINT,
+    failureKind: value.failureKind === "page_capture" ? "page_capture" : null,
     generationStep: readTailorResumeGenerationStepSummary(value.generationStep),
     jobIdentifier:
       typeof value.jobIdentifier === "string" ? value.jobIdentifier : null,
@@ -2280,14 +2400,15 @@ function App() {
   );
   const [backgroundTailorRunMenuId, setBackgroundTailorRunMenuId] =
     useState<string | null>(null);
-  const [backgroundTailorRunMenuActionState, setBackgroundTailorRunMenuActionState] =
-    useState<"deleting" | "goingToTab" | "idle" | "stopping">("idle");
-  const [backgroundTailorRunMenuActionCardId, setBackgroundTailorRunMenuActionCardId] =
-    useState<string | null>(null);
+  const [backgroundTailorRunActionStates, setBackgroundTailorRunActionStates] =
+    useState<Record<string, BackgroundTailorRunActionState>>({});
   const [backgroundTailorRunMenuError, setBackgroundTailorRunMenuError] =
     useState<string | null>(null);
   const [backgroundTailorRunMenuErrorCardId, setBackgroundTailorRunMenuErrorCardId] =
     useState<string | null>(null);
+  const [tailorRunElapsedNow, setTailorRunElapsedNow] = useState(() =>
+    Date.now(),
+  );
   const [selectedTailoredResumeId, setSelectedTailoredResumeId] =
     useState<string | null>(null);
   const [tailoredResumeMenuId, setTailoredResumeMenuId] =
@@ -3176,10 +3297,10 @@ function App() {
     tailorPreparationsByKey,
     tailoringRunsByKey,
   });
-  const activeTailorRunCards = [
+  const activeTailorRunCards = dedupeActiveTailorRunCards([
     ...(currentActiveTailorRunCard ? [currentActiveTailorRunCard] : []),
     ...parallelTailorRunCards,
-  ].sort((left, right) => right.sortTime - left.sortTime);
+  ]);
   const isSuppressingActiveTailoringHydration =
     activeTailoringOverrideState === "overwriting" || isStoppingCurrentTailoring;
   const isTailorPreparationPending =
@@ -3221,6 +3342,11 @@ function App() {
     isFinishingTailorInterview;
   const lastTailoringRunMessage = lastTailoringRun?.message?.trim() || null;
   const lastTailoringRunError = lastTailoringRun?.tailoredResumeError?.trim() || null;
+  const pageCaptureFailureRun = isPageCaptureFailureRun(currentPageStoredTailoringRun)
+    ? currentPageStoredTailoringRun
+    : isPageCaptureFailureRun(lastTailoringRun)
+      ? lastTailoringRun
+      : null;
   const activeTailoring =
     existingTailoringPrompt?.existingTailoring ??
     currentPagePersonalInfoTailoring ??
@@ -3369,7 +3495,9 @@ function App() {
     hasTailorInterview: Boolean(tailorInterview),
     isStoppingCurrentTailoring,
     isTailorPreparationPending,
-    lastTailoringRunStatus: lastTailoringRun?.status ?? null,
+    lastTailoringRunStatus: pageCaptureFailureRun
+      ? null
+      : lastTailoringRun?.status ?? null,
   });
   const shouldUseOptimisticTailorRunIdentity =
     Boolean(existingTailoringPrompt) ||
@@ -3476,6 +3604,8 @@ function App() {
     tailoredResumeReviewState.record?.id === focusedTailoredResumeId
       ? tailoredResumeReviewState.record
       : null;
+  const activeTailoredResumeError =
+    activeTailoredResumeReviewRecord?.error?.trim() || null;
   const tailoredPreviewHighlightQueries = useMemo(() => {
     if (!activeTailoredResumeReviewRecord?.annotatedLatexCode) {
       return [];
@@ -3614,12 +3744,40 @@ function App() {
   const isTailorRunShellOverlayActive =
     Boolean(existingTailoringPrompt) || isTailorPreparationPending;
   const shouldRenderLegacyTailorRunShell =
-    shouldShowTailorRunShell &&
-    !currentActiveTailorRunCard &&
-    !hasCurrentPageCompletedTailoring;
+    resolveShouldRenderLegacyTailorRunShell({
+      hasCurrentPageCompletedTailoring,
+      hasCurrentPageExistingTailoringPrompt: Boolean(existingTailoringPrompt),
+      hasCurrentPageRunCard: Boolean(currentActiveTailorRunCard),
+      shouldShowTailorRunShell,
+    });
+  const shouldShowLegacyTailorRunElapsedTime =
+    shouldRenderLegacyTailorRunShell &&
+    statusDisplayState === "loading" &&
+    shouldShowTailorRunFocusedStep;
+  const hasLoadingTailorRunTimer =
+    activeTailorRunCards.some(
+      (card) => card.statusDisplayState === "loading",
+    ) || shouldShowLegacyTailorRunElapsedTime;
+  const legacyTailorRunElapsedStartTime = readActiveTailorRunSortTime(
+    tailorPreparationState?.capturedAt ??
+      (activeTailoring?.kind === "active_generation"
+        ? activeTailoring.createdAt
+        : null) ??
+      (lastTailoringRun?.status === "running"
+        ? lastTailoringRun.capturedAt
+        : null),
+  );
+  const legacyTailorRunElapsedTimeLabel =
+    shouldShowLegacyTailorRunElapsedTime
+      ? formatTailorRunElapsedTime({
+          nowTime: tailorRunElapsedNow,
+          startedAtTime: legacyTailorRunElapsedStartTime,
+        })
+      : null;
   const hasUnarchivedTailorItems =
     displayedUnarchivedTailoredResumes.length > 0 ||
     activeTailorRunCards.length > 0 ||
+    Boolean(pageCaptureFailureRun) ||
     shouldRenderLegacyTailorRunShell;
   const shouldRenderUnarchivedResumeEmptySurface =
     authState.status === "signedIn" &&
@@ -3628,6 +3786,7 @@ function App() {
   const unarchivedTailorDisplayCount =
     displayedUnarchivedTailoredResumes.length +
     activeTailorRunCards.length +
+    (pageCaptureFailureRun ? 1 : 0) +
     (shouldRenderLegacyTailorRunShell &&
     displayedUnarchivedTailoredResumes.length === 0 &&
     activeTailorRunCards.length === 0
@@ -3641,6 +3800,21 @@ function App() {
     activePanelTab === "tailor" &&
     isTailorAuthPromptOpen &&
     authState.status !== "signedIn";
+
+  useEffect(() => {
+    if (!hasLoadingTailorRunTimer) {
+      return;
+    }
+
+    const updateElapsedTime = () => setTailorRunElapsedNow(Date.now());
+
+    updateElapsedTime();
+    const intervalId = window.setInterval(updateElapsedTime, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [hasLoadingTailorRunTimer]);
 
   useEffect(() => {
     if (!isTailorRunMenuOpen) {
@@ -3687,7 +3861,7 @@ function App() {
     }
 
     const handleMouseDown = (event: MouseEvent) => {
-      if (backgroundTailorRunMenuActionState !== "idle") {
+      if (backgroundTailorRunActionStates[backgroundTailorRunMenuId]) {
         return;
       }
 
@@ -3697,7 +3871,7 @@ function App() {
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (backgroundTailorRunMenuActionState !== "idle") {
+      if (backgroundTailorRunActionStates[backgroundTailorRunMenuId]) {
         return;
       }
 
@@ -3713,7 +3887,7 @@ function App() {
       window.removeEventListener("mousedown", handleMouseDown);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [backgroundTailorRunMenuActionState, backgroundTailorRunMenuId]);
+  }, [backgroundTailorRunActionStates, backgroundTailorRunMenuId]);
 
   useEffect(() => {
     if (
@@ -6024,13 +6198,15 @@ function App() {
     if (
       card.isCurrentPage ||
       !targetUrl ||
-      backgroundTailorRunMenuActionState !== "idle"
+      backgroundTailorRunActionStates[card.id]
     ) {
       return;
     }
 
-    setBackgroundTailorRunMenuActionState("goingToTab");
-    setBackgroundTailorRunMenuActionCardId(card.id);
+    setBackgroundTailorRunActionStates((currentStates) => ({
+      ...currentStates,
+      [card.id]: "goingToTab",
+    }));
     setBackgroundTailorRunMenuError(null);
     setBackgroundTailorRunMenuErrorCardId(null);
 
@@ -6049,8 +6225,11 @@ function App() {
         error instanceof Error ? error.message : "Could not open that job tab.",
       );
     } finally {
-      setBackgroundTailorRunMenuActionState("idle");
-      setBackgroundTailorRunMenuActionCardId(null);
+      setBackgroundTailorRunActionStates((currentStates) => {
+        const nextStates = { ...currentStates };
+        delete nextStates[card.id];
+        return nextStates;
+      });
     }
   }
 
@@ -6060,14 +6239,16 @@ function App() {
 
     if (
       card.isCurrentPage ||
-      backgroundTailorRunMenuActionState !== "idle" ||
+      backgroundTailorRunActionStates[card.id] ||
       (!jobUrl && !existingTailoringId)
     ) {
       return;
     }
 
-    setBackgroundTailorRunMenuActionState("stopping");
-    setBackgroundTailorRunMenuActionCardId(card.id);
+    setBackgroundTailorRunActionStates((currentStates) => ({
+      ...currentStates,
+      [card.id]: "stopping",
+    }));
     setBackgroundTailorRunMenuError(null);
     setBackgroundTailorRunMenuErrorCardId(null);
     setBackgroundTailorRunMenuId(null);
@@ -6126,8 +6307,11 @@ function App() {
         error instanceof Error ? error.message : "Unable to stop the tailoring run.",
       );
     } finally {
-      setBackgroundTailorRunMenuActionState("idle");
-      setBackgroundTailorRunMenuActionCardId(null);
+      setBackgroundTailorRunActionStates((currentStates) => {
+        const nextStates = { ...currentStates };
+        delete nextStates[card.id];
+        return nextStates;
+      });
     }
   }
 
@@ -6142,14 +6326,16 @@ function App() {
 
     if (
       card.isCurrentPage ||
-      backgroundTailorRunMenuActionState !== "idle" ||
+      backgroundTailorRunActionStates[card.id] ||
       (!deleteTarget && !jobUrl && !existingTailoringId)
     ) {
       return;
     }
 
-    setBackgroundTailorRunMenuActionState("deleting");
-    setBackgroundTailorRunMenuActionCardId(card.id);
+    setBackgroundTailorRunActionStates((currentStates) => ({
+      ...currentStates,
+      [card.id]: "deleting",
+    }));
     setBackgroundTailorRunMenuError(null);
     setBackgroundTailorRunMenuErrorCardId(null);
     setBackgroundTailorRunMenuId(null);
@@ -6244,8 +6430,11 @@ function App() {
         error instanceof Error ? error.message : fallbackMessage,
       );
     } finally {
-      setBackgroundTailorRunMenuActionState("idle");
-      setBackgroundTailorRunMenuActionCardId(null);
+      setBackgroundTailorRunActionStates((currentStates) => {
+        const nextStates = { ...currentStates };
+        delete nextStates[card.id];
+        return nextStates;
+      });
     }
 
     if (shouldRefreshPersonalInfo) {
@@ -6255,16 +6444,16 @@ function App() {
 
   const renderActiveTailorRunCard = (card: ActiveTailorRunCard) => {
     const isCurrentCard = card.isCurrentPage;
+    const backgroundActionState = backgroundTailorRunActionStates[card.id] ?? null;
     const isMenuOpen = isCurrentCard
       ? isTailorRunMenuOpen
       : backgroundTailorRunMenuId === card.id;
     const isMenuBusy = isCurrentCard
       ? tailorRunMenuActionState !== "idle"
-      : backgroundTailorRunMenuActionState !== "idle";
+      : Boolean(backgroundActionState);
     const isStopBusy = isCurrentCard
       ? isStoppingCurrentTailoring
-      : backgroundTailorRunMenuActionState === "stopping" &&
-        backgroundTailorRunMenuActionCardId === card.id;
+      : backgroundActionState === "stopping";
     const showMenuError = isCurrentCard
       ? tailorRunMenuError
       : backgroundTailorRunMenuErrorCardId === card.id
@@ -6272,9 +6461,7 @@ function App() {
         : null;
     const menuActionStateLabel = isCurrentCard
       ? tailorRunMenuActionState
-      : backgroundTailorRunMenuActionCardId === card.id
-        ? backgroundTailorRunMenuActionState
-        : "idle";
+      : backgroundActionState ?? "idle";
     const attemptBadgeLabel = readTailorResumeProgressAttemptBadgeLabel({
       attempt: card.step.attempt,
       status: card.step.status,
@@ -6283,6 +6470,14 @@ function App() {
       label: card.step.label,
       status: card.step.status,
     });
+    const elapsedTimeLabel =
+      card.statusDisplayState === "loading"
+        ? formatTailorRunElapsedTime({
+            nowTime: tailorRunElapsedNow,
+            startedAtTime: card.startedAtTime,
+          })
+        : null;
+    const canStopCard = card.statusDisplayState !== "error";
 
     return (
       <section
@@ -6303,23 +6498,25 @@ function App() {
               </p>
             </div>
             <div className="tailor-run-meta-badges">
-              <button
-                className="secondary-action compact-action"
-                disabled={
-                  isCurrentCard
-                    ? isStoppingCurrentTailoring ||
-                      tailorRunMenuActionState !== "idle"
-                    : isMenuBusy
-                }
-                type="button"
-                onClick={() =>
-                  isCurrentCard
-                    ? void stopCurrentTailoring()
-                    : void handleStopBackgroundTailorRun(card)
-                }
-              >
-                {isStopBusy ? "Stopping..." : "Stop run"}
-              </button>
+              {canStopCard ? (
+                <button
+                  className="secondary-action compact-action"
+                  disabled={
+                    isCurrentCard
+                      ? isStoppingCurrentTailoring ||
+                        tailorRunMenuActionState !== "idle"
+                      : isMenuBusy
+                  }
+                  type="button"
+                  onClick={() =>
+                    isCurrentCard
+                      ? void stopCurrentTailoring()
+                      : void handleStopBackgroundTailorRun(card)
+                  }
+                >
+                  {isStopBusy ? "Stopping..." : "Stop run"}
+                </button>
+              ) : null}
               <div
                 className="tailor-run-menu-shell"
                 ref={isCurrentCard && isMenuOpen
@@ -6400,7 +6597,9 @@ function App() {
                   ? "step"
                   : undefined
               }
-              className={`tailor-progress-step tailor-progress-step-${card.step.status} tailor-progress-step-focus`}
+              className={`tailor-progress-step tailor-progress-step-${card.step.status} tailor-progress-step-focus ${
+                elapsedTimeLabel ? "tailor-progress-step-with-elapsed" : ""
+              }`.trim()}
               title={`Step ${card.step.stepNumber}: ${card.step.label} (${formatTailorResumeProgressStatusLabel({
                 attempt: card.step.attempt,
                 status: card.step.status,
@@ -6417,8 +6616,27 @@ function App() {
                 ) : null}
               </span>
               <span className="tailor-progress-step-label">{stepLabel}</span>
+              {elapsedTimeLabel ? (
+                <span
+                  aria-label={`Loading for ${elapsedTimeLabel}`}
+                  className="tailor-progress-step-elapsed"
+                  title={`Loading for ${elapsedTimeLabel}`}
+                >
+                  {elapsedTimeLabel}
+                </span>
+              ) : null}
             </div>
           </div>
+          {card.message || card.detail ? (
+            <div className="tailor-progress-copy">
+              {card.message ? (
+                <p className="tailor-progress-message">{card.message}</p>
+              ) : null}
+              {card.detail ? (
+                <p className="tailor-progress-detail">{card.detail}</p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </section>
     );
@@ -6715,7 +6933,11 @@ function App() {
                       ? "step"
                       : undefined
                   }
-                  className={`tailor-progress-step tailor-progress-step-${compactTailorRunStep.status} tailor-progress-step-focus`}
+                  className={`tailor-progress-step tailor-progress-step-${compactTailorRunStep.status} tailor-progress-step-focus ${
+                    legacyTailorRunElapsedTimeLabel
+                      ? "tailor-progress-step-with-elapsed"
+                      : ""
+                  }`.trim()}
                   title={`Step ${compactTailorRunStep.stepNumber}: ${compactTailorRunStep.label} (${formatTailorResumeProgressStatusLabel({
                     attempt: compactTailorRunStep.attempt,
                     status: compactTailorRunStep.status,
@@ -6734,6 +6956,15 @@ function App() {
                   <span className="tailor-progress-step-label">
                     {compactTailorRunStepLabel}
                   </span>
+                  {legacyTailorRunElapsedTimeLabel ? (
+                    <span
+                      aria-label={`Loading for ${legacyTailorRunElapsedTimeLabel}`}
+                      className="tailor-progress-step-elapsed"
+                      title={`Loading for ${legacyTailorRunElapsedTimeLabel}`}
+                    >
+                      {legacyTailorRunElapsedTimeLabel}
+                    </span>
+                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -7602,39 +7833,50 @@ function App() {
     return (
       <div className="tailor-run-detail-page-body tailor-run-detail-page-body-preview">
         <div className="tailored-preview-stage">
-          {canToggleTailoredPreviewDiffHighlighting ? (
-            <div className="tailored-preview-toolbar">
-              <div className="tailored-preview-toolbar-copy">
-                <p className="tailored-preview-toolbar-label">Rendered PDF</p>
-                <p className="tailored-preview-toolbar-description">
-                  Highlights are painted on the clean PDF render, so the
-                  highlighted view keeps the same page count without becoming a
-                  grainy static image.
-                </p>
+          <div className="tailored-preview-toolbar">
+            <div className="tailored-preview-toolbar-copy">
+              <p className="tailored-preview-toolbar-label">Rendered PDF</p>
+              <p className="tailored-preview-toolbar-description">
+                Highlights are painted on the clean PDF render, so the
+                highlighted view keeps the same page count without becoming a
+                grainy static image.
+              </p>
+            </div>
+            {canToggleTailoredPreviewDiffHighlighting ? (
+              <div className="tailored-preview-toolbar-actions">
+                <button
+                  aria-pressed={isShowingHighlightedPreview}
+                  className={`secondary-action compact-action tailored-preview-highlight-toggle ${
+                    isShowingHighlightedPreview
+                      ? "tailored-preview-highlight-toggle-active"
+                      : ""
+                  }`.trim()}
+                  onClick={() =>
+                    setIsTailoredPreviewDiffHighlightingEnabled(
+                      (currentValue) => !currentValue,
+                    )
+                  }
+                  title={
+                    isShowingHighlightedPreview
+                      ? "Show the clean rendered PDF."
+                      : "Show the rendered PDF with diff highlights."
+                  }
+                  type="button"
+                >
+                  {isShowingHighlightedPreview
+                    ? "Hide diff highlighting"
+                    : "Show diff highlighting"}
+                </button>
               </div>
-              <button
-                aria-pressed={isShowingHighlightedPreview}
-                className={`secondary-action compact-action tailored-preview-highlight-toggle ${
-                  isShowingHighlightedPreview
-                    ? "tailored-preview-highlight-toggle-active"
-                    : ""
-                }`.trim()}
-                onClick={() =>
-                  setIsTailoredPreviewDiffHighlightingEnabled(
-                    (currentValue) => !currentValue,
-                  )
-                }
-                title={
-                  isShowingHighlightedPreview
-                    ? "Show the clean rendered PDF."
-                    : "Show the rendered PDF with diff highlights."
-                }
-                type="button"
-              >
-                {isShowingHighlightedPreview
-                  ? "Hide diff highlighting"
-                  : "Show diff highlighting"}
-              </button>
+            ) : null}
+          </div>
+          {activeTailoredResumeError ? (
+            <div className="tailored-preview-error-banner" role="alert">
+              <p>
+                This tailored resume failed generation and should not be used as
+                a final PDF.
+              </p>
+              <pre>{activeTailoredResumeError}</pre>
             </div>
           ) : null}
           <div className="resume-preview-shell tailored-preview-shell tailor-run-fullscreen-preview">
@@ -8005,6 +8247,35 @@ function App() {
     );
   }
 
+  function renderPageCaptureFailureNotice() {
+    if (!pageCaptureFailureRun) {
+      return null;
+    }
+
+    const message = formatPageContextErrorMessage(pageCaptureFailureRun.message);
+
+    return (
+      <section
+        aria-label="Page capture issue"
+        className="snapshot-card page-capture-error-card"
+        role="alert"
+      >
+        <div className="page-capture-error-copy">
+          <p className="page-capture-error-title">Could not read this page</p>
+          <p className="page-capture-error-message">{message}</p>
+        </div>
+        <button
+          className="secondary-action compact-action"
+          disabled={isStoppingCurrentTailoring}
+          type="button"
+          onClick={() => void stopCurrentTailoring()}
+        >
+          {isStoppingCurrentTailoring ? "Clearing..." : "Dismiss"}
+        </button>
+      </section>
+    );
+  }
+
   if (isSettingsViewOpen) {
     return (
       <main className="side-panel-shell side-panel-shell-detail">
@@ -8188,15 +8459,15 @@ function App() {
             <DocumentEmptySurface
               count={unarchivedTailorDisplayCount}
               message="No active or completed tailored resumes yet."
-              title="Unarchived resumes"
+              title="Tailor Resume"
             />
           ) : (
-            <section className="tailor-unarchived-surface">
-              <div className="card-heading-row">
-                <h2>Unarchived resumes</h2>
-                <span>{unarchivedTailorDisplayCount}</span>
-              </div>
+            <section
+              aria-label="Active and completed tailored resumes"
+              className="tailor-unarchived-surface"
+            >
               <div className="tailored-resume-card-stack">
+                {renderPageCaptureFailureNotice()}
                 {legacyTailorRunShell}
                 {activeTailorRunCards.length > 0 ? (
                   <section

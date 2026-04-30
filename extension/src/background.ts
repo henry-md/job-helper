@@ -35,7 +35,12 @@ import {
   haveUserSyncStateChanged,
   readUserSyncStateSnapshot,
 } from "../../lib/sync-state.ts";
-import { collectPageContextFromTab } from "./page-context";
+import {
+  PAGE_CONTEXT_UNAVAILABLE_MESSAGE,
+  collectPageContextFromTab,
+  formatPageContextErrorMessage,
+  isPageContextConnectionError,
+} from "./page-context";
 import {
   isNdjsonResponse,
   readTailorResumeGenerationStream,
@@ -219,6 +224,33 @@ function buildRunningTailoringRunRecord(input: {
     positionTitle: pageApplicationContext?.jobTitle ?? null,
     status: "running",
     tailoredResumeError: null,
+    tailoredResumeId: null,
+  } satisfies TailorResumeRunRecord;
+}
+
+function buildFailedTailoringRunRecord(input: {
+  capturedAt: string;
+  message: string;
+  pageContext?: JobPageContext | null;
+  step?: TailorResumeGenerationStepSummary | null;
+  tab: chrome.tabs.Tab | null;
+}) {
+  const pageApplicationContext = input.pageContext
+    ? buildTailorResumeApplicationContext(input.pageContext)
+    : null;
+
+  return {
+    capturedAt: input.capturedAt,
+    companyName: pageApplicationContext?.companyName ?? null,
+    endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
+    generationStep: input.step ?? null,
+    jobIdentifier: null,
+    message: input.message,
+    pageTitle: input.pageContext?.title || cleanText(input.tab?.title) || null,
+    pageUrl: input.pageContext?.url || cleanText(input.tab?.url) || null,
+    positionTitle: pageApplicationContext?.jobTitle ?? null,
+    status: "error",
+    tailoredResumeError: input.message,
     tailoredResumeId: null,
   } satisfies TailorResumeRunRecord;
 }
@@ -1343,37 +1375,63 @@ async function tailorResumeForTab(input: {
     throw new Error("The active tab does not expose an id.");
   }
 
-  const result = await patchTailorResume(
-    {
-      action: "tailor",
-      applicationContext: buildTailorResumeApplicationContext(pageContext),
-      ...(overwriteExisting
-        ? { existingTailoringAction: "overwrite" }
-        : {}),
-      jobDescription,
-      jobUrl,
-    },
-    authSession,
-    {
-      onStepEvent: (stepEvent) => {
-        if (activeTailorResumeAbortControllers.get(pageKey) !== abortController) {
-          return;
-        }
+  let latestStepEvent: TailorResumeGenerationStepSummary | null = null;
+  let result: Awaited<ReturnType<typeof patchTailorResume>>;
 
-        requestSharedPersonalInfoRefresh();
-        void persistResult(
-          pageKey,
-          buildRunningTailoringRunRecord({
-            capturedAt,
-            pageContext,
-            step: stepEvent,
-            tab: readyTab,
-          }),
-        );
+  try {
+    result = await patchTailorResume(
+      {
+        action: "tailor",
+        applicationContext: buildTailorResumeApplicationContext(pageContext),
+        ...(overwriteExisting
+          ? { existingTailoringAction: "overwrite" }
+          : {}),
+        jobDescription,
+        jobUrl,
       },
-      signal: abortController.signal,
-    },
-  );
+      authSession,
+      {
+        onStepEvent: (stepEvent) => {
+          if (activeTailorResumeAbortControllers.get(pageKey) !== abortController) {
+            return;
+          }
+
+          latestStepEvent = stepEvent;
+          requestSharedPersonalInfoRefresh();
+          void persistResult(
+            pageKey,
+            buildRunningTailoringRunRecord({
+              capturedAt,
+              pageContext,
+              step: stepEvent,
+              tab: readyTab,
+            }),
+          );
+        },
+        signal: abortController.signal,
+      },
+    );
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+
+    const message =
+      error instanceof Error ? error.message : "Failed to tailor the resume.";
+    const record = buildFailedTailoringRunRecord({
+      capturedAt,
+      message,
+      pageContext,
+      step: latestStepEvent,
+      tab: readyTab,
+    });
+
+    await persistResult(pageKey, record);
+    refreshSharedPersonalInfoCache(authSession, "the tailoring run failed");
+    await showOverlay(tabId, message, "error");
+    await openSidePanelForTab(activeTab);
+    return;
+  }
   const payload = result.payload;
 
   if (!result.ok) {
@@ -1418,11 +1476,23 @@ async function tailorResumeForTab(input: {
       return;
     }
 
-    throw new Error(
+    const message =
       typeof payload.error === "string"
         ? payload.error
-        : "The Tailor Resume endpoint returned an error.",
-    );
+        : "The Tailor Resume endpoint returned an error.";
+    const record = buildFailedTailoringRunRecord({
+      capturedAt,
+      message,
+      pageContext,
+      step: latestStepEvent,
+      tab: readyTab,
+    });
+
+    await persistResult(pageKey, record);
+    refreshSharedPersonalInfoCache(authSession, "the tailoring run failed");
+    await showOverlay(tabId, message, "error");
+    await openSidePanelForTab(activeTab);
+    return;
   }
 
   if (typeof payload.profile !== "object" || payload.profile === null) {
@@ -1735,8 +1805,15 @@ async function runCaptureFlow(input: {
       return;
     }
 
-    const message =
-      error instanceof Error ? error.message : "Failed to tailor the resume.";
+    const message = formatPageContextErrorMessage(
+      error,
+      "Failed to tailor the resume.",
+    );
+    const failureKind =
+      isPageContextConnectionError(error) ||
+      message === PAGE_CONTEXT_UNAVAILABLE_MESSAGE
+        ? "page_capture"
+        : null;
     activeTab = activeTab ?? (await getActiveTab().catch(() => null));
     const targetPageKey = pageKey ?? initialPageKey;
 
@@ -1748,6 +1825,7 @@ async function runCaptureFlow(input: {
       capturedAt,
       companyName: null,
       endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
+      failureKind,
       generationStep: null,
       jobIdentifier: null,
       message,

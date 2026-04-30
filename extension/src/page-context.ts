@@ -11,8 +11,39 @@ type PageContextResponse = {
   snapshot?: unknown;
 };
 
+export const PAGE_CONTEXT_UNAVAILABLE_MESSAGE =
+  "Open a regular job page to inspect it here.";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function readErrorMessage(error: unknown, fallbackMessage: string) {
+  return error instanceof Error
+    ? error.message
+    : typeof error === "string"
+      ? error
+      : fallbackMessage;
+}
+
+export function isPageContextConnectionError(error: unknown) {
+  const message = readErrorMessage(error, "").toLowerCase();
+
+  return (
+    message.includes("receiving end does not exist") ||
+    message.includes("could not establish connection")
+  );
+}
+
+export function formatPageContextErrorMessage(
+  error: unknown,
+  fallbackMessage = "Failed to read the active page.",
+) {
+  if (isPageContextConnectionError(error)) {
+    return PAGE_CONTEXT_UNAVAILABLE_MESSAGE;
+  }
+
+  return readErrorMessage(error, fallbackMessage);
 }
 
 function isStringArray(value: unknown) {
@@ -103,9 +134,13 @@ export async function collectPageContextFromTab(
     try {
       await injectContentScript(tabId);
     } catch {
-      throw firstError;
+      throw new Error(formatPageContextErrorMessage(firstError));
     }
   }
 
-  return requestPageContext(tabId, messageType);
+  try {
+    return await requestPageContext(tabId, messageType);
+  } catch (secondError) {
+    throw new Error(formatPageContextErrorMessage(secondError));
+  }
 }

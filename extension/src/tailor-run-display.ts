@@ -29,6 +29,23 @@ type TailorRunPageApplicationContext = {
   jobTitle: string | null;
 };
 
+export function formatTailorRunElapsedTime(input: {
+  nowTime: number;
+  startedAtTime: number;
+}) {
+  const elapsedMs =
+    Number.isFinite(input.nowTime) &&
+    Number.isFinite(input.startedAtTime) &&
+    input.startedAtTime > 0
+      ? Math.max(0, input.nowTime - input.startedAtTime)
+      : 0;
+  const totalSeconds = Math.floor(elapsedMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
 export function shouldRenderTailorRunShell(input: {
   activeTailoringKind: TailorRunExistingTailoringKind | null;
   captureState: TailorRunCaptureState;
@@ -81,6 +98,23 @@ export function shouldRenderTailorRunShell(input: {
   }
 
   return false;
+}
+
+export function shouldRenderLegacyTailorRunShell(input: {
+  hasCurrentPageCompletedTailoring: boolean;
+  hasCurrentPageExistingTailoringPrompt: boolean;
+  hasCurrentPageRunCard: boolean;
+  shouldShowTailorRunShell: boolean;
+}) {
+  if (!input.shouldShowTailorRunShell || input.hasCurrentPageRunCard) {
+    return false;
+  }
+
+  if (input.hasCurrentPageExistingTailoringPrompt) {
+    return true;
+  }
+
+  return !input.hasCurrentPageCompletedTailoring;
 }
 
 export function resolveReviewableTailoredResumeId(input: {
