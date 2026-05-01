@@ -20,6 +20,7 @@ import {
   type TailorResumeGenerationProgressNotification,
   type TailorResumeGenerationProgressStep,
 } from "@/components/tailor-resume-generation-progress";
+import TailoredResumeInteractivePreview from "@/components/tailored-resume-interactive-preview";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -58,12 +59,16 @@ import type { TailorResumeUserMarkdownState } from "@/lib/tailor-resume-user-mem
 type TailorResumeWorkspaceProps = {
   debugUiEnabled: boolean;
   initialProfile: TailorResumeProfile;
+  linkReviewUiEnabled?: boolean;
   onReviewTailoredResume?: (tailoredResumeId: string) => void;
+  onSourceResumeEditRequestHandled?: () => void;
   onTailoredResumesChange?: (
     tailoredResumes: TailorResumeProfile["tailoredResumes"],
   ) => void;
   onUserMarkdownChange?: (userMarkdown: TailorResumeUserMarkdownState) => void;
   openAIReady: boolean;
+  sourceOnly?: boolean;
+  sourceResumeEditRequestKey?: number;
 };
 
 type TailorResumeStepId = "base" | "job";
@@ -649,10 +654,14 @@ function resolveInitialOpenTailorResumeStep(
 export default function TailorResumeWorkspace({
   debugUiEnabled,
   initialProfile,
+  linkReviewUiEnabled = false,
   onReviewTailoredResume,
+  onSourceResumeEditRequestHandled,
   onTailoredResumesChange,
   onUserMarkdownChange,
   openAIReady,
+  sourceOnly = false,
+  sourceResumeEditRequestKey = 0,
 }: TailorResumeWorkspaceProps) {
   const fileInputId = useId();
   const jobDescriptionExtensionNudgeDescriptionId = useId();
@@ -671,6 +680,7 @@ export default function TailorResumeWorkspace({
   const isTailorInterviewSubmitInFlightRef = useRef(false);
   const hasShownJobDescriptionExtensionNudgeRef = useRef(false);
   const lastAutoOpenedLinkReviewRef = useRef(initialProfile.extraction.updatedAt);
+  const lastHandledSourceResumeEditRequestKeyRef = useRef(0);
   const lastSeenTailorInterviewFinishRequestRef = useRef<string | null>(null);
   const dismissedTailorInterviewFinishRequestRef = useRef<string | null>(null);
   const tailorInterviewMessagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -696,6 +706,9 @@ export default function TailorResumeWorkspace({
   const [isPreviewMounted, setIsPreviewMounted] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isPreviewFrameLoading, setIsPreviewFrameLoading] = useState(false);
+  const handlePreviewRenderSettled = useCallback(() => {
+    setIsPreviewFrameLoading(false);
+  }, []);
   const [isSavingJobDescription, setIsSavingJobDescription] = useState(false);
   const [isSavingLatex, setIsSavingLatex] = useState(false);
   const [isSavingLinks, setIsSavingLinks] = useState(false);
@@ -713,9 +726,12 @@ export default function TailorResumeWorkspace({
   const [isUpdatingBaseResumeStep, setIsUpdatingBaseResumeStep] = useState(false);
   const [isUploadingResume, setIsUploadingResume] = useState(false);
   const [isWideLayout, setIsWideLayout] = useState(false);
+  const [compactResumePane, setCompactResumePane] = useState<
+    "latex" | "rendered"
+  >("latex");
   const [openTailorResumeStep, setOpenTailorResumeStep] =
     useState<TailorResumeStepId | null>(() =>
-      resolveInitialOpenTailorResumeStep(initialProfile),
+      sourceOnly ? "base" : resolveInitialOpenTailorResumeStep(initialProfile),
     );
   const [activeLatexView, setActiveLatexView] = useState<"annotated" | "source">(
     "source",
@@ -725,9 +741,9 @@ export default function TailorResumeWorkspace({
   const [jobDescriptionState, setJobDescriptionState] = useState<
     "dirty" | "idle" | "saved" | "saving"
   >("idle");
-  const [latexState, setLatexState] = useState<"idle" | "saved" | "saving">(
-    "idle",
-  );
+  const [latexState, setLatexState] = useState<
+    "dirty" | "idle" | "saved" | "saving"
+  >("idle");
   const [tailorResumeGenerationProgress, setTailorResumeGenerationProgress] =
     useState<TailorResumeGenerationProgressState>(() =>
       createTailorResumeProgressState(),
@@ -787,28 +803,32 @@ export default function TailorResumeWorkspace({
   const hasUnsavedJobDescriptionChanges =
     draftJobDescription !== lastSavedJobDescriptionRef.current;
   const isBaseResumeStepOpen =
-    openTailorResumeStep === "base" && !isBaseResumeStepComplete;
+    sourceOnly || (openTailorResumeStep === "base" && !isBaseResumeStepComplete);
   const isJobStepOpen =
-    openTailorResumeStep === "job" && isBaseResumeStepComplete;
+    !sourceOnly && openTailorResumeStep === "job" && isBaseResumeStepComplete;
   const isJobStepBlockedByBaseStep = !isBaseResumeStepComplete;
   const hasUnfinishedJobStepWork =
-    hasUnsavedJobDescriptionChanges ||
-    hasTailoringInterview ||
-    isSavingJobDescription ||
-    isTailoringResume;
+    !sourceOnly &&
+    (hasUnsavedJobDescriptionChanges ||
+      hasTailoringInterview ||
+      isSavingJobDescription ||
+      isTailoringResume);
   const isBaseResumeBlockedByJobStep =
-    isBaseResumeStepComplete &&
-    (isJobStepOpen || hasUnfinishedJobStepWork);
-  const baseResumeBlockedByJobStepMessage = hasUnfinishedJobStepWork
-    ? "Finish or discard the current job-tailoring step before editing the base resume."
-    : "Finish or collapse Step 2 before editing the base resume.";
+    !sourceOnly && isBaseResumeStepComplete && hasUnfinishedJobStepWork;
+  const baseResumeBlockedByJobStepMessage =
+    "Finish or discard the current job-tailoring step before editing the base resume.";
   const isJobDescriptionLocked =
     isJobStepBlockedByBaseStep || hasTailoringInterview;
-  const editorDisabled = isUploadingResume || isBaseResumeBlockedByJobStep;
+  const editorDisabled =
+    isUploadingResume ||
+    isBaseResumeBlockedByJobStep ||
+    (sourceOnly && isSavingLatex);
   const displayedLatexCode =
     debugUiEnabled && activeLatexView === "annotated"
       ? profile.annotatedLatex.code
       : draftLatexCode;
+  const hasUnsavedLatexChanges =
+    draftLatexCode !== lastSavedLatexCodeRef.current;
   const previewPdfUrl = buildPreviewPdfUrl(profile.latex.pdfUpdatedAt);
   const previewError =
     profile.latex.status === "failed"
@@ -823,6 +843,10 @@ export default function TailorResumeWorkspace({
   const showEditorLoadingOverlay = isUploadingResume;
   const showPreviewLoadingOverlay =
     isSavingLatex || isUploadingResume || isPreviewFrameLoading;
+  const isSourceResumeSaveDisabled =
+    isSavingLatex ||
+    !hasUnsavedLatexChanges ||
+    draftLatexCode.trim().length === 0;
   useEffect(() => {
     setIsPreviewMounted(true);
   }, []);
@@ -888,7 +912,10 @@ export default function TailorResumeWorkspace({
     setIsSubmittingTailorInterviewAnswer(false);
     setIsTailoringResume(false);
     setIsUpdatingBaseResumeStep(false);
-    setOpenTailorResumeStep(resolveInitialOpenTailorResumeStep(initialProfile));
+    setCompactResumePane("latex");
+    setOpenTailorResumeStep(
+      sourceOnly ? "base" : resolveInitialOpenTailorResumeStep(initialProfile),
+    );
     setActiveLatexView("source");
     setTailorResumeGenerationProgress(createTailorResumeProgressState());
     setDraftTailorInterviewAnswer("");
@@ -899,7 +926,7 @@ export default function TailorResumeWorkspace({
       initialProfile.jobDescription.trim().length > 0 ? "saved" : "idle",
     );
     setLatexState("idle");
-  }, [initialProfile]);
+  }, [initialProfile, sourceOnly]);
 
   useEffect(() => {
     if (!tailoringInterview) {
@@ -967,6 +994,7 @@ export default function TailorResumeWorkspace({
 
   useEffect(() => {
     if (
+      !linkReviewUiEnabled ||
       profile.extraction.status !== "ready" ||
       !profile.extraction.updatedAt ||
       editableLinks.length === 0 ||
@@ -979,6 +1007,7 @@ export default function TailorResumeWorkspace({
     setIsLinkEditorOpen(true);
   }, [
     editableLinks.length,
+    linkReviewUiEnabled,
     profile.extraction.status,
     profile.extraction.updatedAt,
   ]);
@@ -1265,6 +1294,25 @@ export default function TailorResumeWorkspace({
   }, []);
 
   useEffect(() => {
+    if (sourceOnly) {
+      if (isLatexSaveInFlightRef.current || latexState === "saving") {
+        return;
+      }
+
+      if (draftLatexCode === lastSavedLatexCodeRef.current) {
+        pendingLatexCodeRef.current = null;
+        setIsSavingLatex(false);
+        setLatexState(draftLatexCode.trim().length > 0 ? "saved" : "idle");
+        return;
+      }
+
+      pendingLatexCodeRef.current =
+        draftLatexCode.trim().length > 0 ? draftLatexCode : null;
+      setIsSavingLatex(false);
+      setLatexState(draftLatexCode.trim().length > 0 ? "dirty" : "idle");
+      return;
+    }
+
     if (draftLatexCode === lastSavedLatexCodeRef.current) {
       if (latexState === "saving") {
         setIsSavingLatex(false);
@@ -1284,7 +1332,34 @@ export default function TailorResumeWorkspace({
     setIsSavingLatex(true);
     setLatexState("saving");
     void flushPendingLatexSave();
-  }, [draftLatexCode, latexState, flushPendingLatexSave]);
+  }, [draftLatexCode, latexState, flushPendingLatexSave, sourceOnly]);
+
+  function cancelLatexEdits() {
+    const savedLatexCode = lastSavedLatexCodeRef.current;
+
+    pendingLatexCodeRef.current = null;
+    latestDraftLatexCodeRef.current = savedLatexCode;
+    setDraftLatexCode(savedLatexCode);
+    setIsSavingLatex(false);
+    setLatexState(savedLatexCode.trim().length > 0 ? "saved" : "idle");
+  }
+
+  async function saveLatexEdits() {
+    if (!hasUnsavedLatexChanges) {
+      setLatexState(draftLatexCode.trim().length > 0 ? "saved" : "idle");
+      return;
+    }
+
+    if (draftLatexCode.trim().length === 0) {
+      toast.error("Paste some LaTeX before saving.", {
+        id: latexSaveToastId,
+      });
+      return;
+    }
+
+    pendingLatexCodeRef.current = draftLatexCode;
+    await flushPendingLatexSave();
+  }
 
   useEffect(() => {
     if (!isPreviewOpen) {
@@ -1417,17 +1492,22 @@ export default function TailorResumeWorkspace({
       setDraftLatexCode(resolvedLatexCode);
       setDraftLinkLocks(buildLinkLockDrafts(payload.profile.links));
       setDraftLinkUrls(buildLinkUrlDrafts(payload.profile.links));
-      setIsLinkEditorOpen(hasActiveResumeLinks(payload.profile));
+      setIsLinkEditorOpen(
+        linkReviewUiEnabled && hasActiveResumeLinks(payload.profile),
+      );
+      setCompactResumePane("latex");
       setOpenTailorResumeStep("base");
       lastSavedLatexCodeRef.current = resolvedLatexCode;
       latestDraftLatexCodeRef.current = resolvedLatexCode;
       if (!streamedAttemptEvents) {
         showExtractionAttemptToasts(payload.extractionAttempts ?? []);
       }
-      showLinkValidationSummaryToast(
-        payload.linkValidationSummary,
-        payload.linkValidationLinks,
-      );
+      if (linkReviewUiEnabled) {
+        showLinkValidationSummaryToast(
+          payload.linkValidationSummary,
+          payload.linkValidationLinks,
+        );
+      }
       showSavedLinkUpdateToast(
         payload.savedLinkUpdateCount,
         payload.savedLinkUpdates,
@@ -1572,15 +1652,19 @@ export default function TailorResumeWorkspace({
       setDraftLatexCode(resolvedLatexCode);
       setDraftLinkLocks(buildLinkLockDrafts(payload.profile.links));
       setDraftLinkUrls(buildLinkUrlDrafts(payload.profile.links));
-      setIsLinkEditorOpen(hasActiveResumeLinks(payload.profile));
+      setIsLinkEditorOpen(
+        linkReviewUiEnabled && hasActiveResumeLinks(payload.profile),
+      );
       lastSavedLatexCodeRef.current = resolvedLatexCode;
       latestDraftLatexCodeRef.current = resolvedLatexCode;
       showExtractionAttemptToasts(payload.extractionAttempts ?? []);
-      showLinkValidationSummaryToast(
-        payload.linkValidationSummary,
-        payload.linkValidationLinks,
-        (payload.extractionAttempts?.length ?? 0) * 140,
-      );
+      if (linkReviewUiEnabled) {
+        showLinkValidationSummaryToast(
+          payload.linkValidationSummary,
+          payload.linkValidationLinks,
+          (payload.extractionAttempts?.length ?? 0) * 140,
+        );
+      }
       showSavedLinkUpdateToast(
         payload.savedLinkUpdateCount,
         payload.savedLinkUpdates,
@@ -1625,7 +1709,7 @@ export default function TailorResumeWorkspace({
     }
   }
 
-  async function setBaseResumeStepComplete(nextValue: boolean) {
+  const setBaseResumeStepComplete = useCallback(async (nextValue: boolean) => {
     if (!resume || isUpdatingBaseResumeStep) {
       return;
     }
@@ -1673,7 +1757,51 @@ export default function TailorResumeWorkspace({
     } finally {
       setIsUpdatingBaseResumeStep(false);
     }
-  }
+  }, [
+    baseResumeBlockedByJobStepMessage,
+    isBaseResumeBlockedByJobStep,
+    isUpdatingBaseResumeStep,
+    resume,
+  ]);
+
+  const openSourceResumeEditor = useCallback(() => {
+    if (!resume) {
+      setOpenTailorResumeStep("base");
+      toast("Upload a base resume before editing source LaTeX.", {
+        id: latexSaveToastId,
+      });
+      return;
+    }
+
+    setActiveLatexView("source");
+    setCompactResumePane("latex");
+
+    if (isBaseResumeStepComplete) {
+      void setBaseResumeStepComplete(false);
+      return;
+    }
+
+    setOpenTailorResumeStep("base");
+  }, [isBaseResumeStepComplete, resume, setBaseResumeStepComplete]);
+
+  useEffect(() => {
+    if (
+      sourceResumeEditRequestKey === 0 ||
+      lastHandledSourceResumeEditRequestKeyRef.current ===
+        sourceResumeEditRequestKey
+    ) {
+      return;
+    }
+
+    lastHandledSourceResumeEditRequestKeyRef.current =
+      sourceResumeEditRequestKey;
+    openSourceResumeEditor();
+    onSourceResumeEditRequestHandled?.();
+  }, [
+    onSourceResumeEditRequestHandled,
+    openSourceResumeEditor,
+    sourceResumeEditRequestKey,
+  ]);
 
   function toggleBaseResumeStep() {
     if (!resume) {
@@ -2418,12 +2546,17 @@ export default function TailorResumeWorkspace({
               </pre>
             </div>
           ) : previewPdfUrl ? (
-            <div className="h-full min-h-[320px] w-full rounded-[1.25rem] sm:min-h-[500px]">
-              <iframe
-                className="relative z-0 h-full min-h-[320px] w-full rounded-[1.25rem] bg-white sm:min-h-[500px]"
-                onLoad={() => setIsPreviewFrameLoading(false)}
-                src={previewPdfUrl}
-                title="Compiled resume preview"
+            <div className="h-full min-h-[320px] w-full overflow-hidden rounded-[1.25rem] bg-white sm:min-h-[500px]">
+              <TailoredResumeInteractivePreview
+                displayName="source resume"
+                focusKey={null}
+                focusMatchKey={null}
+                focusQuery={null}
+                focusRequest={0}
+                highlightQueries={[]}
+                onPageSnapshot={handlePreviewRenderSettled}
+                onRenderFailure={handlePreviewRenderSettled}
+                pdfUrl={previewPdfUrl}
               />
             </div>
           ) : (
@@ -2440,6 +2573,37 @@ export default function TailorResumeWorkspace({
         </div>
       </div>
     </section>
+  );
+
+  const compactResumePaneToggle = (
+    <div className="mb-3 flex justify-end">
+      <div className="grid w-full grid-cols-2 rounded-full border border-white/10 bg-black/20 p-1 sm:w-auto">
+        <button
+          aria-pressed={compactResumePane === "latex"}
+          className={`rounded-full px-3 py-2 text-[11px] uppercase tracking-[0.18em] transition ${
+            compactResumePane === "latex"
+              ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+          onClick={() => setCompactResumePane("latex")}
+          type="button"
+        >
+          LaTeX
+        </button>
+        <button
+          aria-pressed={compactResumePane === "rendered"}
+          className={`rounded-full px-3 py-2 text-[11px] uppercase tracking-[0.18em] transition ${
+            compactResumePane === "rendered"
+              ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+          onClick={() => setCompactResumePane("rendered")}
+          type="button"
+        >
+          Rendered
+        </button>
+      </div>
+    </div>
   );
 
   return (
@@ -2459,103 +2623,83 @@ export default function TailorResumeWorkspace({
           <div className="flex flex-wrap items-start justify-between gap-4 px-4 py-4 sm:px-5 sm:py-5">
             <div>
               <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                Step 1
+                {sourceOnly ? "Config" : "Step 1"}
               </p>
               <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-                Review the base resume
+                {sourceOnly ? "Source resume" : "Review the base resume"}
               </h2>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">
-                Start in the split-screen editor, confirm the LaTeX and preview
-                look right, then mark this step complete to collapse it before
-                tailoring for a specific job.
+                {sourceOnly
+                  ? "Edit the LaTeX source and review the compiled resume used by the Chrome extension."
+                  : "Start in the split-screen editor, confirm the LaTeX and preview look right, then mark this step complete to collapse it before tailoring for a specific job."}
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <StatusPill>
-                {isUpdatingBaseResumeStep
-                  ? "Updating..."
-                  : isBaseResumeStepComplete
-                    ? "Completed"
-                    : !isBaseResumeStepOpen
-                      ? "Collapsed"
-                    : isSavingLatex
-                      ? "Saving edits..."
-                      : latexState === "saved"
-                        ? "Ready"
-                        : "In progress"}
-              </StatusPill>
-              {isBaseResumeStepOpen && hasEditableOrPendingLinks ? (
+              {sourceOnly ? null : (
+                <StatusPill>
+                  {isUpdatingBaseResumeStep
+                    ? "Updating..."
+                    : isBaseResumeStepComplete
+                      ? "Completed"
+                      : !isBaseResumeStepOpen
+                        ? "Collapsed"
+                      : isSavingLatex
+                        ? "Saving edits..."
+                        : latexState === "saved"
+                          ? "Ready"
+                          : "In progress"}
+                </StatusPill>
+              )}
+              {isBaseResumeStepOpen ? (
+                <label
+                  className={`inline-flex items-center rounded-full px-3 py-2 text-[11px] uppercase tracking-[0.2em] transition ${
+                    !openAIReady || isUploadingResume || isBaseResumeBlockedByJobStep
+                      ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
+                      : "cursor-pointer border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
+                  }`}
+                  htmlFor={
+                    !openAIReady || isUploadingResume || isBaseResumeBlockedByJobStep
+                      ? undefined
+                      : fileInputId
+                  }
+                >
+                  {isUploadingResume ? "Saving..." : "Re-upload"}
+                </label>
+              ) : null}
+
+              {sourceOnly ? null : (
                 <button
-                  aria-label={`Review links. ${visibleLinkCount} link${visibleLinkCount === 1 ? "" : "s"} currently listed.`}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-[0.2em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
-                  onClick={() => setIsLinkEditorOpen(true)}
+                  className={`rounded-full px-3 py-2 text-[11px] uppercase tracking-[0.2em] transition ${
+                    isUpdatingBaseResumeStep ||
+                    (isBaseResumeStepComplete && isBaseResumeBlockedByJobStep)
+                      ? "cursor-wait border border-white/10 bg-white/5 text-zinc-500"
+                      : isBaseResumeStepComplete || !isBaseResumeStepOpen
+                        ? "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
+                        : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
+                  }`}
+                  disabled={
+                    isUpdatingBaseResumeStep ||
+                    (isBaseResumeStepComplete && isBaseResumeBlockedByJobStep)
+                  }
+                  onClick={() =>
+                    isBaseResumeStepOpen
+                      ? void setBaseResumeStepComplete(true)
+                      : toggleBaseResumeStep()
+                  }
                   type="button"
                 >
-                  <span>Review links</span>
-                  <span className="inline-flex min-w-5 items-center justify-center rounded-full border border-emerald-300/20 bg-emerald-400/10 px-1.5 py-0.5 text-[10px] font-semibold tracking-normal text-emerald-200">
-                    {visibleLinkCount}
-                  </span>
+                  {isUpdatingBaseResumeStep
+                    ? "Updating..."
+                    : isBaseResumeStepComplete && isBaseResumeBlockedByJobStep
+                      ? "Tailoring active"
+                    : isBaseResumeStepComplete
+                      ? "Edit source LaTeX"
+                    : !isBaseResumeStepOpen
+                      ? "Open step"
+                      : "Mark complete"}
                 </button>
-              ) : null}
-
-              {isBaseResumeStepOpen ? (
-                <>
-                  <button
-                    className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-[0.2em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10"
-                    onClick={() => setIsPreviewOpen(true)}
-                    type="button"
-                  >
-                    View source
-                  </button>
-
-                  <label
-                    className={`inline-flex items-center rounded-full px-3 py-2 text-[11px] uppercase tracking-[0.2em] transition ${
-                      !openAIReady || isUploadingResume || isBaseResumeBlockedByJobStep
-                        ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
-                        : "cursor-pointer border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
-                    }`}
-                    htmlFor={
-                      !openAIReady || isUploadingResume || isBaseResumeBlockedByJobStep
-                        ? undefined
-                        : fileInputId
-                    }
-                  >
-                    {isUploadingResume ? "Saving..." : "Re-upload"}
-                  </label>
-                </>
-              ) : null}
-
-              <button
-                className={`rounded-full px-3 py-2 text-[11px] uppercase tracking-[0.2em] transition ${
-                  isUpdatingBaseResumeStep ||
-                  (isBaseResumeStepComplete && isBaseResumeBlockedByJobStep)
-                    ? "cursor-wait border border-white/10 bg-white/5 text-zinc-500"
-                    : isBaseResumeStepComplete || !isBaseResumeStepOpen
-                      ? "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/20 hover:bg-white/10"
-                      : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
-                }`}
-                disabled={
-                  isUpdatingBaseResumeStep ||
-                  (isBaseResumeStepComplete && isBaseResumeBlockedByJobStep)
-                }
-                onClick={() =>
-                  isBaseResumeStepOpen
-                    ? void setBaseResumeStepComplete(true)
-                    : toggleBaseResumeStep()
-                }
-                type="button"
-              >
-                {isUpdatingBaseResumeStep
-                  ? "Updating..."
-                  : isBaseResumeStepComplete && isBaseResumeBlockedByJobStep
-                    ? "Step 2 active"
-                  : isBaseResumeStepComplete
-                    ? "Edit again"
-                  : !isBaseResumeStepOpen
-                    ? "Open step"
-                    : "Mark complete"}
-              </button>
+              )}
             </div>
           </div>
 
@@ -2590,10 +2734,36 @@ export default function TailorResumeWorkspace({
                 </section>
               ) : (
                 <section className="grid gap-[clamp(0.75rem,1.2vh,1rem)] pt-1">
-                  {editorPanelContent}
-                  {previewPanelContent}
+                  {compactResumePaneToggle}
+                  {compactResumePane === "latex"
+                    ? editorPanelContent
+                    : previewPanelContent}
                 </section>
               )}
+              {sourceOnly ? (
+                <div className="mt-4 flex flex-col-reverse gap-2 border-t border-white/8 pt-4 sm:flex-row sm:justify-end">
+                  <button
+                    className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={isSavingLatex || !hasUnsavedLatexChanges}
+                    onClick={cancelLatexEdits}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className={`rounded-full px-4 py-2.5 text-sm font-medium transition ${
+                      isSourceResumeSaveDisabled
+                        ? "cursor-not-allowed border border-white/10 bg-white/[0.04] text-zinc-500"
+                        : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
+                    }`}
+                    disabled={isSourceResumeSaveDisabled}
+                    onClick={() => void saveLatexEdits()}
+                    type="button"
+                  >
+                    {isSavingLatex ? "Saving..." : "Save"}
+                  </button>
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="border-t border-white/8 px-4 pb-4 pt-4 sm:px-5 sm:pb-5">
@@ -2634,10 +2804,12 @@ export default function TailorResumeWorkspace({
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
               <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                Step 1
+                {sourceOnly ? "Config" : "Step 1"}
               </p>
               <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-                Upload and review your base resume
+                {sourceOnly
+                  ? "Upload your source resume"
+                  : "Upload and review your base resume"}
               </h2>
             </div>
 
@@ -2659,13 +2831,15 @@ export default function TailorResumeWorkspace({
             </div>
           ) : (
             <div className="mt-5 rounded-[1.35rem] border border-dashed border-white/12 bg-black/15 p-6 text-sm leading-6 text-zinc-400">
-              Upload a PDF or image to start editing the LaTeX and preview.
+              {sourceOnly
+                ? "Upload a PDF or image to extract editable LaTeX and render the preview."
+                : "Upload a PDF or image to start editing the LaTeX and preview."}
             </div>
           )}
         </section>
       )}
 
-      {resume ? (
+      {!sourceOnly && resume ? (
         <>
           <section
             className={`glass-panel soft-ring flex flex-col rounded-[1.5rem] p-4 sm:p-5 ${
@@ -3173,7 +3347,10 @@ export default function TailorResumeWorkspace({
           )
         : null}
 
-      {isPreviewMounted && isLinkEditorOpen && hasEditableOrPendingLinks
+      {linkReviewUiEnabled &&
+      isPreviewMounted &&
+      isLinkEditorOpen &&
+      hasEditableOrPendingLinks
         ? createPortal(
             <div
               className="fixed inset-0 z-[190] flex bg-black/82 px-4 py-6 backdrop-blur-sm sm:px-6"

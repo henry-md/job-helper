@@ -38,6 +38,66 @@ function readNormalizedAnnotatedLatex(latexCode: string) {
   return normalizeTailorResumeLatex(latexCode).annotatedLatex;
 }
 
+function resolveBlockScopedSourceReplacementLatex(input: {
+  replacementLatexCode: string;
+  segmentId: string;
+}):
+  | {
+      latexCode: string;
+      ok: true;
+    }
+  | {
+      ok: false;
+      reason: "empty_replacement" | "multiple_replacement_segments";
+    } {
+  const normalizedReplacementLatexCode = normalizeStoredBlockLatex(
+    input.replacementLatexCode,
+  );
+
+  if (!normalizedReplacementLatexCode.trim()) {
+    return {
+      ok: false,
+      reason: "empty_replacement",
+    };
+  }
+
+  const normalizedReplacement = normalizeTailorResumeLatex(
+    normalizedReplacementLatexCode,
+  );
+
+  if (normalizedReplacement.segmentCount <= 1) {
+    return {
+      latexCode: normalizedReplacementLatexCode,
+      ok: true,
+    };
+  }
+
+  const replacementBlock = readAnnotatedTailorResumeBlocks(
+    normalizedReplacement.annotatedLatex,
+  ).find((block) => block.id === input.segmentId);
+
+  if (!replacementBlock) {
+    return {
+      ok: false,
+      reason: "multiple_replacement_segments",
+    };
+  }
+
+  const blockLatexCode = normalizeStoredBlockLatex(replacementBlock.latexCode);
+
+  if (!blockLatexCode.trim()) {
+    return {
+      ok: false,
+      reason: "empty_replacement",
+    };
+  }
+
+  return {
+    latexCode: blockLatexCode,
+    ok: true,
+  };
+}
+
 export function resolveTailoredResumeCurrentEditLatexCode(
   edit: Pick<
     TailoredResumeBlockEditRecord,
@@ -247,23 +307,19 @@ export function applyTailoredResumeEditToSourceLatex(input: {
   }
 
   const normalizedBeforeLatexCode = normalizeStoredBlockLatex(input.beforeLatexCode);
-  const normalizedReplacementLatexCode = normalizeStoredBlockLatex(
-    input.replacementLatexCode,
-  );
+  const replacement = resolveBlockScopedSourceReplacementLatex({
+    replacementLatexCode: input.replacementLatexCode,
+    segmentId: input.segmentId,
+  });
 
-  if (!normalizedReplacementLatexCode.trim()) {
+  if (!replacement.ok) {
     return {
       ok: false,
-      reason: "empty_replacement",
+      reason: replacement.reason,
     };
   }
 
-  if (normalizeTailorResumeLatex(normalizedReplacementLatexCode).segmentCount > 1) {
-    return {
-      ok: false,
-      reason: "multiple_replacement_segments",
-    };
-  }
+  const normalizedReplacementLatexCode = replacement.latexCode;
 
   const normalizedCurrentLatexCode = normalizeStoredBlockLatex(sourceBlock.latexCode);
 

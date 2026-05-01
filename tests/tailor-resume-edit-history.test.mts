@@ -12,6 +12,7 @@ import { tailorResumeLatexExample } from "../lib/tailor-resume-latex-example.ts"
 import {
   normalizeTailorResumeLatex,
   readAnnotatedTailorResumeBlocks,
+  stripTailorResumeSegmentIds,
 } from "../lib/tailor-resume-segmentation.ts";
 
 function findBlockBySnippet(annotatedLatexCode: string, snippet: string) {
@@ -241,6 +242,51 @@ test("applying a tailored edit to source latex replaces the matching source bloc
     result.latexCode,
     /Created full-stack dashboard for project management/,
   );
+});
+
+test("applying a tailored edit to source latex extracts the selected block from a full document replacement", () => {
+  const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
+  const sourceBlock = findBlockBySnippet(
+    normalized.annotatedLatex,
+    "Created full-stack dashboard for project management",
+  );
+  const unrelatedBlock = findBlockBySnippet(
+    normalized.annotatedLatex,
+    "Led \\textbf{SEO} improvements",
+  );
+  const fullTailoredAnnotatedLatex = replaceBlockInAnnotatedLatex({
+    annotatedLatexCode: replaceBlockInAnnotatedLatex({
+      annotatedLatexCode: normalized.annotatedLatex,
+      replacementLatexCode:
+        "\\resumeitem{Added explicit open-source collaboration bullet}",
+      segmentId: sourceBlock.id,
+    }),
+    replacementLatexCode:
+      "\\resumeitem{This unrelated full-document change must not land}",
+    segmentId: unrelatedBlock.id,
+  });
+  const result = applyTailoredResumeEditToSourceLatex({
+    beforeLatexCode: sourceBlock.latexCode,
+    replacementLatexCode: stripTailorResumeSegmentIds(fullTailoredAnnotatedLatex),
+    segmentId: sourceBlock.id,
+    sourceLatexCode: tailorResumeLatexExample,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.changed, true);
+  assert.match(
+    result.latexCode,
+    /Added explicit open-source collaboration bullet/,
+  );
+  assert.doesNotMatch(
+    result.latexCode,
+    /Created full-stack dashboard for project management/,
+  );
+  assert.doesNotMatch(
+    result.latexCode,
+    /This unrelated full-document change must not land/,
+  );
+  assert.match(result.latexCode, /Led \\textbf\{SEO\} improvements/);
 });
 
 test("applying a tailored edit to source latex refuses stale source blocks", () => {
