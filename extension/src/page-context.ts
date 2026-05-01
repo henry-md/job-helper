@@ -12,7 +12,7 @@ type PageContextResponse = {
 };
 
 export const PAGE_CONTEXT_UNAVAILABLE_MESSAGE =
-  "Open a regular job page to inspect it here.";
+  "Could not read this page. Refresh the tab, then try again.";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;

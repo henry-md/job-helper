@@ -110,7 +110,6 @@ import {
   resolveActiveTailoringForPage,
   matchesTailorOverwritePageIdentity,
 } from "./tailor-overwrite-guard";
-import DismissibleNotification from "./dismissible-notification";
 import {
   buildTailorRunRegistryKey,
   readTailorRunRegistryKeyFromPageContext,
@@ -626,19 +625,6 @@ function buildTailoredResumePreviewUrl(input: {
 
 function buildPdfPreviewFrameUrl(objectUrl: string) {
   return `${objectUrl}#toolbar=1&navpanes=0&view=Fit`;
-}
-
-function buildTailoredResumeDownloadName(
-  record: TailoredResumeReviewRecord | null,
-) {
-  const baseName =
-    record?.displayName
-      ?.trim()
-      .replace(/[\\/:*?"<>|]/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/[ .-]+$/g, "") || "tailored-resume";
-
-  return `${baseName}.pdf`;
 }
 
 function readTailorResumePayloadError(value: unknown, fallbackMessage: string) {
@@ -2549,16 +2535,6 @@ function CloseIcon() {
   );
 }
 
-function DownloadIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M12 4v10" />
-      <path d="m7.5 10 4.5 4.5L16.5 10" />
-      <path d="M5 19h14" />
-    </svg>
-  );
-}
-
 function ArrowLeftIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -4231,11 +4207,7 @@ function App() {
                 }),
                 tailoredResumeError: lastTailoringRunError,
               })
-            : !lastTailoringRun && state.status === "ready"
-              ? authState.status === "signedIn"
-                ? "Ready to tailor this page."
-                : "Connect Google to tailor this page."
-              : statusMessage;
+            : statusMessage;
   const tailorRunDetail =
     activeTailoring?.kind === "active_generation"
       ? buildLiveTailorResumeStatusDetail(activeTailoring.lastStep)
@@ -4243,9 +4215,7 @@ function App() {
         ? buildExistingTailoringTitle(activeTailoring)
         : completedTailoringError
           ? completedTailoringError
-          : !lastTailoringRun && state.status === "ready"
-            ? currentPageContext?.title?.trim() || null
-            : statusDetail;
+          : statusDetail;
   const activeTailoredResumeReviewRecord =
     focusedTailoredResumeId &&
     tailoredResumeReviewState.record?.id === focusedTailoredResumeId
@@ -4277,32 +4247,6 @@ function App() {
     isTailoredPreviewDiffHighlightingEnabled &&
     canToggleTailoredPreviewDiffHighlighting;
   const showTailoredPreview = Boolean(latestTailoredResumeId);
-  const tailorPageNotificationKey = [
-    authState.status === "signedIn" ? "ready" : "auth",
-    currentPageResolvedRegistryKey ??
-      normalizeComparableUrl(currentPageUrl) ??
-      currentPageContext?.title ??
-      "unknown-page",
-  ].join(":");
-  const shouldOfferTailorPageNotification = shouldRenderTailorPageNotification({
-    activeTailoringKind: activeTailoring?.kind ?? null,
-    captureState,
-    hasCurrentPageRunCard: Boolean(currentActiveTailorRunCard),
-    hasExistingTailoringPrompt: Boolean(existingTailoringPrompt),
-    hasPageCaptureFailureRun: Boolean(pageCaptureFailureRun),
-    hasTailorInterview: Boolean(tailorInterview),
-    isStoppingCurrentTailoring,
-    isTailorPreparationPending,
-    lastTailoringRunStatus: pageCaptureFailureRun
-      ? null
-      : lastTailoringRun?.status ?? null,
-    pageStatus: state.status,
-    showTailoredPreview,
-  });
-  const shouldShowTailorPageNotification =
-    shouldOfferTailorPageNotification &&
-    !isShowingArchivedTailoredResumes &&
-    !dismissedTailorPageNotificationKeys.has(tailorPageNotificationKey);
   const showTopLevelTailoredWebAction = true;
   const previewButtonLabel = "Preview";
   const quickReviewButtonLabel = "Review edits";
@@ -8918,6 +8862,10 @@ function App() {
           {displayedApplications.map((application) => {
             const isDeleteDisabled =
               authActionState === "running" || isDeletingPersonalItem;
+            const applicationDisplay = buildJobApplicationDisplayParts({
+              companyName: application.companyName,
+              jobTitle: application.jobTitle,
+            });
 
             return (
               <div
@@ -8932,11 +8880,10 @@ function App() {
                 >
                   <span className="application-main">
                     <span className="application-title">
-                      {application.jobTitle}
+                      {applicationDisplay.companyName}
                     </span>
                     <span className="application-meta">
-                      {application.companyName}
-                      {application.location ? ` - ${application.location}` : ""}
+                      {applicationDisplay.positionName}
                     </span>
                   </span>
                   <span className="application-side">
@@ -9534,44 +9481,31 @@ function App() {
                 grainy static image.
               </p>
             </div>
-            {previewDownloadUrl || canToggleTailoredPreviewDiffHighlighting ? (
+            {canToggleTailoredPreviewDiffHighlighting ? (
               <div className="tailored-preview-toolbar-actions">
-                {previewDownloadUrl ? (
-                  <a
-                    className="secondary-action compact-action tailored-preview-download-action"
-                    download={previewDownloadName}
-                    href={previewDownloadUrl}
-                    title="Download tailored resume PDF"
-                  >
-                    <DownloadIcon />
-                    <span>Download</span>
-                  </a>
-                ) : null}
-                {canToggleTailoredPreviewDiffHighlighting ? (
-                  <button
-                    aria-pressed={isShowingHighlightedPreview}
-                    className={`secondary-action compact-action tailored-preview-highlight-toggle ${
-                      isShowingHighlightedPreview
-                        ? "tailored-preview-highlight-toggle-active"
-                        : ""
-                    }`.trim()}
-                    onClick={() =>
-                      setIsTailoredPreviewDiffHighlightingEnabled(
-                        (currentValue) => !currentValue,
-                      )
-                    }
-                    title={
-                      isShowingHighlightedPreview
-                        ? "Show the clean rendered PDF."
-                        : "Show the rendered PDF with diff highlights."
-                    }
-                    type="button"
-                  >
-                    {isShowingHighlightedPreview
-                      ? "Hide diff highlighting"
-                      : "Show diff highlighting"}
-                  </button>
-                ) : null}
+                <button
+                  aria-pressed={isShowingHighlightedPreview}
+                  className={`secondary-action compact-action tailored-preview-highlight-toggle ${
+                    isShowingHighlightedPreview
+                      ? "tailored-preview-highlight-toggle-active"
+                      : ""
+                  }`.trim()}
+                  onClick={() =>
+                    setIsTailoredPreviewDiffHighlightingEnabled(
+                      (currentValue) => !currentValue,
+                    )
+                  }
+                  title={
+                    isShowingHighlightedPreview
+                      ? "Show the clean rendered PDF."
+                      : "Show the rendered PDF with diff highlights."
+                  }
+                  type="button"
+                >
+                  {isShowingHighlightedPreview
+                    ? "Hide diff highlighting"
+                    : "Show diff highlighting"}
+                </button>
               </div>
             ) : null}
           </div>
@@ -9751,6 +9685,90 @@ function App() {
               </button>
             )}
           </div>
+        </section>
+
+        <section className="snapshot-card settings-card">
+          <div className="settings-section-heading">
+            <p className="settings-section-eyebrow">Tailor Runs</p>
+          </div>
+          <div className="settings-toggle-row">
+            <div className="settings-toggle-copy">
+              <p className="settings-toggle-title">Progress time</p>
+              <p className="settings-toggle-description">
+                Choose whether running cards show total runtime or per-step
+                timings.
+              </p>
+            </div>
+            <div
+              aria-label="Tailor run progress time display"
+              className="panel-detail-toggle-group settings-time-toggle-group"
+            >
+              {(["specific", "aggregate"] as const).map((mode) => (
+                <button
+                  aria-pressed={tailorRunTimeDisplayMode === mode}
+                  className={`panel-detail-toggle ${
+                    tailorRunTimeDisplayMode === mode
+                      ? "panel-detail-toggle-active"
+                      : ""
+                  }`.trim()}
+                  key={mode}
+                  type="button"
+                  onClick={() => void updateTailorRunTimeDisplayMode(mode)}
+                >
+                  {mode === "specific" ? "Specific" : "Aggregate"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="settings-toggle-row settings-toggle-row-keyword">
+            <div className="settings-toggle-copy">
+              <p className="settings-toggle-title">Coverage percentage basis</p>
+              <p className="settings-toggle-description">
+                Low-priority terms are always tracked and shown. Choose which
+                tracked terms calculate the popup percentage.
+              </p>
+            </div>
+            <div
+              aria-label="Coverage percentage basis"
+              className="panel-detail-toggle-group settings-keyword-toggle-group"
+            >
+              {[
+                { includeLowPriorityTerms: false, label: "High priority" },
+                { includeLowPriorityTerms: true, label: "All tracked" },
+              ].map((option) => (
+                <button
+                  aria-pressed={
+                    includeLowPriorityTermsInKeywordCoverage ===
+                    option.includeLowPriorityTerms
+                  }
+                  className={`panel-detail-toggle ${
+                    includeLowPriorityTermsInKeywordCoverage ===
+                    option.includeLowPriorityTerms
+                      ? "panel-detail-toggle-active"
+                      : ""
+                  }`.trim()}
+                  disabled={
+                    authState.status !== "signedIn" ||
+                    isSavingKeywordCoverageSetting
+                  }
+                  key={option.label}
+                  type="button"
+                  onClick={() =>
+                    void updateKeywordCoveragePriorityScope(
+                      option.includeLowPriorityTerms,
+                    )
+                  }
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {keywordCoverageSettingError ? (
+            <p className="settings-inline-error">
+              {keywordCoverageSettingError}
+            </p>
+          ) : null}
         </section>
 
         <section className="snapshot-card resume-preview-card settings-card">
@@ -10071,6 +10089,8 @@ function App() {
 
       {activePanelTab === "tailor" ? (
         <>
+          {renderTailoredResumeArchiveControls()}
+
           <div
             className={`action-grid ${
               showTopLevelTailoredWebAction ? "action-grid-split" : ""
@@ -10129,7 +10149,6 @@ function App() {
             ) : null}
           </div>
 
-          {renderTailoredResumeArchiveControls()}
           {renderSelectedTailoredResumeLibrarySurface()}
 
           {tailorInterview && isTailorInterviewOpen ? (
