@@ -91,6 +91,16 @@ function readApplicationListLimit(request: Request) {
   return Math.min(Math.max(parsedLimit, 1), 100);
 }
 
+function readIncludeArchivedFlag(request: Request) {
+  const includeArchived = new URL(request.url).searchParams.get("includeArchived");
+
+  return (
+    includeArchived === "1" ||
+    includeArchived === "true" ||
+    includeArchived === "yes"
+  );
+}
+
 async function findExistingApplicationByJobUrl(input: {
   jobUrl: string | null;
   jobUrlHash: string | null;
@@ -149,6 +159,10 @@ export async function GET(request: Request) {
 
   const prisma = getPrismaClient();
   const limit = readApplicationListLimit(request);
+  const includeArchived = readIncludeArchivedFlag(request);
+  const applicationWhere = includeArchived
+    ? { userId: session.user.id }
+    : { archivedAt: null, userId: session.user.id };
 
   try {
     const [applications, companyCount] = await Promise.all([
@@ -163,13 +177,13 @@ export async function GET(request: Request) {
           },
         },
         orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-        where: { userId: session.user.id },
+        where: applicationWhere,
       }),
       prisma.company.count({
         where: {
           applications: {
             some: {
-              userId: session.user.id,
+              ...applicationWhere,
             },
           },
           userId: session.user.id,
@@ -345,6 +359,7 @@ export async function POST(request: Request) {
       notes: normalizedNotes,
       hasReferral: Boolean(referrerRecord),
       jobDescription: normalizedJobDescription,
+      archivedAt: null,
       appliedAt: resolveAppliedAt(normalizedAppliedAt),
     };
 

@@ -38,6 +38,7 @@ export function filterVisibleJobApplicationsByUrl<
 
 export function toJobApplicationRecord(application: {
   appliedAt: Date;
+  archivedAt: Date | null;
   company: { name: string };
   createdAt: Date;
   employmentType: string | null;
@@ -60,6 +61,7 @@ export function toJobApplicationRecord(application: {
 }): JobApplicationRecord {
   return {
     appliedAt: application.appliedAt.toISOString().slice(0, 10),
+    archivedAt: application.archivedAt?.toISOString() ?? null,
     companyName: application.company.name,
     createdAt: application.createdAt.toISOString(),
     employmentType: (application.employmentType as JobApplicationRecord["employmentType"]) ?? "",

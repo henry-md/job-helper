@@ -4,6 +4,7 @@ import { normalizeJobApplicationWriteInput } from "@/lib/job-application-form";
 import { getPrismaClient } from "@/lib/prisma";
 import { bumpUserSyncState } from "@/lib/user-sync-state";
 import { buildNormalizedJobUrlHash } from "@/lib/job-url-hash";
+import { toJobApplicationRecord } from "@/lib/job-application-records";
 import {
   normalizeCompanyName,
   resolveAppliedAt,
@@ -23,6 +24,71 @@ export async function PATCH(
 
   const { applicationId } = await context.params;
   const body = (await request.json()) as Record<string, unknown>;
+  const prisma = getPrismaClient();
+
+  if (body.action === "setArchivedState") {
+    const archived =
+      typeof body.archived === "boolean" ? body.archived : null;
+
+    if (archived === null) {
+      return NextResponse.json(
+        { error: "Provide whether the application should be archived." },
+        { status: 400 },
+      );
+    }
+
+    try {
+      const existingApplication = await prisma.jobApplication.findFirst({
+        where: {
+          id: applicationId,
+          userId: session.user.id,
+        },
+      });
+
+      if (!existingApplication) {
+        return NextResponse.json(
+          { error: "Application not found." },
+          { status: 404 },
+        );
+      }
+
+      const nextArchivedAt = archived
+        ? existingApplication.archivedAt ?? new Date()
+        : null;
+      const application = await prisma.jobApplication.update({
+        where: { id: existingApplication.id },
+        data: {
+          archivedAt: nextArchivedAt,
+        },
+        include: {
+          company: true,
+          referrer: {
+            include: {
+              company: true,
+            },
+          },
+        },
+      });
+
+      await bumpUserSyncState({
+        applications: true,
+        userId: session.user.id,
+      });
+
+      return NextResponse.json({
+        application: toJobApplicationRecord(application),
+      });
+    } catch (error) {
+      const detail =
+        error instanceof Error
+          ? error.message
+          : archived
+            ? "Failed to archive the application."
+            : "Failed to restore the application.";
+
+      return NextResponse.json({ error: detail }, { status: 500 });
+    }
+  }
 
   const jobTitle =
     typeof body.jobTitle === "string" ? body.jobTitle.trim() : "";
@@ -95,8 +161,6 @@ export async function PATCH(
     status: normalizedStatus,
     teamOrDepartment: normalizedTeamOrDepartment,
   } = normalizedInput.value;
-
-  const prisma = getPrismaClient();
 
   try {
     let referrerRecord: { id: string; recruiterContact: string | null } | null = null;

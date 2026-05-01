@@ -98,6 +98,7 @@ export type JobApplicationDraft = {
 
 export type JobApplicationRecord = {
   appliedAt: string;
+  archivedAt: string | null;
   companyName: string;
   createdAt: string;
   id: string;
