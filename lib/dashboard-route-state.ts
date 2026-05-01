@@ -1,4 +1,4 @@
-export type DashboardTabId = "new" | "settings" | "tailor";
+export type DashboardTabId = "config" | "saved" | "settings";
 
 export type DashboardRouteState = {
   tab: DashboardTabId;
@@ -19,13 +19,15 @@ export function parseDashboardRouteState(input?: {
   tailoredResumeId?: string | null | undefined;
 }): DashboardRouteState {
   const tab =
-    input?.tab === "new"
-      ? "new"
-      : input?.tab === "settings"
-        ? "settings"
-        : "tailor";
+    input?.tab === "settings"
+      ? "settings"
+      : input?.tab === "saved" ||
+          input?.tab === "tailor" ||
+          input?.tab === "new"
+        ? "saved"
+        : "config";
   const tailoredResumeId =
-    tab === "tailor"
+    tab === "saved"
       ? normalizeRouteParamValue(input?.tailoredResumeId)
       : null;
 
@@ -54,11 +56,11 @@ export function buildDashboardHref(input: {
   });
   const searchParams = new URLSearchParams();
 
-  if (routeState.tab === "new" || routeState.tab === "settings") {
+  if (routeState.tab === "saved" || routeState.tab === "settings") {
     searchParams.set("tab", routeState.tab);
   }
 
-  if (routeState.tab === "tailor" && routeState.tailoredResumeId) {
+  if (routeState.tab === "saved" && routeState.tailoredResumeId) {
     searchParams.set("tailoredResumeId", routeState.tailoredResumeId);
   }
 

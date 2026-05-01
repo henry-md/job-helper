@@ -5,10 +5,8 @@ import { authOptions } from "@/auth";
 import { parseDashboardRouteState } from "@/lib/dashboard-route-state";
 import { createDefaultSystemPromptSettings } from "@/lib/system-prompt-settings";
 import {
-  countDistinctApplicationCompanies,
   filterVisibleJobApplicationsByUrl,
   toJobApplicationRecord,
-  toReferrerOption,
 } from "@/lib/job-application-records";
 import { getPrismaClient } from "@/lib/prisma";
 import { buildActiveTailoringStates } from "@/lib/tailor-resume-existing-tailoring-state";
@@ -16,7 +14,6 @@ import { readTailorResumeResponseState } from "@/lib/tailor-resume-route-respons
 import { readTailorResumeUserMarkdown } from "@/lib/tailor-resume-user-memory";
 import { readTailorResumeWorkspaceInterviews } from "@/lib/tailor-resume-workspace-interviews";
 import { readUserSyncStateSnapshotForUser } from "@/lib/user-sync-state";
-import type { CompanyOption, ReferrerOption } from "@/lib/job-application-types";
 import {
   emptyTailorResumeProfile,
   type TailorResumeProfile,
@@ -45,33 +42,19 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const databaseStatus = await (async () => {
     try {
       const prisma = getPrismaClient();
-      const [applications, companies, people] =
-        await Promise.all([
-          prisma.jobApplication.findMany({
-            where: { userId: session.user.id },
+      const applications = await prisma.jobApplication.findMany({
+        where: { userId: session.user.id },
+        include: {
+          company: true,
+          referrer: {
             include: {
               company: true,
-              referrer: {
-                include: {
-                  company: true,
-                },
-              },
             },
-            orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-          }),
-          prisma.company.findMany({
-            where: { userId: session.user.id },
-            orderBy: { name: "asc" },
-            select: { id: true, name: true },
-          }),
-          prisma.person.findMany({
-            where: { userId: session.user.id },
-            include: { company: { select: { id: true, name: true } } },
-            orderBy: { name: "asc" },
-          }),
-        ]);
+          },
+        },
+        orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+      });
       const visibleApplications = filterVisibleJobApplicationsByUrl(applications);
-      const companyCount = countDistinctApplicationCompanies(visibleApplications);
 
       return {
         ok: true,
@@ -82,10 +65,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                 visibleApplications.length === 1 ? "" : "s"
               }`,
         applicationCount: visibleApplications.length,
-        companyCount,
         applications: visibleApplications.map(toJobApplicationRecord),
-        companies: companies as CompanyOption[],
-        people: people.map(toReferrerOption),
       };
     } catch (error) {
       return {
@@ -95,10 +75,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             ? error.message
             : "Unable to connect to Postgres.",
         applicationCount: 0,
-        companyCount: 0,
         applications: [],
-        companies: [] as CompanyOption[],
-        people: [] as ReferrerOption[],
       };
     }
   })();
@@ -138,14 +115,17 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   );
   const openAIReady =
     testOpenAIResponseEnabled || Boolean(process.env.OPENAI_API_KEY);
-  const extractionModel = process.env.OPENAI_JOB_EXTRACTION_MODEL ?? "gpt-5-mini";
-  const uploadDisabled = !databaseStatus.ok || !openAIReady;
   const statusMessage = params?.error
     ? {
         tone: "error" as const,
         text: params.error,
       }
-    : null;
+    : !databaseStatus.ok
+      ? {
+          tone: "error" as const,
+          text: databaseStatus.detail,
+        }
+      : null;
   const initialDashboardRouteState = parseDashboardRouteState({
     tab: params?.tab,
     tailoredResumeId: params?.tailoredResumeId,
@@ -156,14 +136,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       <div className="mx-auto flex w-full max-w-[1800px] flex-col gap-[clamp(0.75rem,1.2vh,1rem)] sm:h-full sm:min-h-full">
         <section className="flex flex-1 flex-col gap-[clamp(0.75rem,1.2vh,1rem)] sm:min-h-0">
           <DashboardWorkspace
-            applicationCount={databaseStatus.applicationCount}
             applications={databaseStatus.applications}
-            companyCount={databaseStatus.companyCount}
-            companyOptions={databaseStatus.companies}
             defaultPromptSettings={createDefaultSystemPromptSettings()}
-            disabled={uploadDisabled}
-            extractionModel={extractionModel}
-            referrerOptions={databaseStatus.people}
             statusMessage={statusMessage}
             initialSyncState={initialSyncState}
             initialActiveTailorings={tailorResumeState.activeTailorings}

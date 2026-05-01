@@ -3,28 +3,30 @@
 import { FileText, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { tailorResumeGenerationSettingDefinitions, tailorResumePromptFieldDefinitions } from "@/lib/tailor-resume-settings-metadata";
+import {
+  tailorResumeGenerationSettingDefinitions,
+  tailorResumePromptFieldDefinitions,
+} from "@/lib/tailor-resume-settings-metadata";
 import { buildTailoredResumeHighlightedPreviewUrl } from "@/lib/tailored-resume-preview-url";
-import type { TailorResumeProfile, TailoredResumeRecord } from "@/lib/tailor-resume-types";
-import type { TailorResumeUserMarkdownState } from "@/lib/tailor-resume-user-memory";
+import type {
+  TailorResumeProfile,
+  TailoredResumeRecord,
+} from "@/lib/tailor-resume-types";
 
 type PromptSettingsWorkspaceProps = {
   defaultPromptValues: TailorResumeProfile["promptSettings"]["values"];
   initialGenerationSettings: TailorResumeProfile["generationSettings"];
   initialPromptSettings: TailorResumeProfile["promptSettings"];
-  profile: TailorResumeProfile;
-  initialUserMarkdown: TailorResumeUserMarkdownState;
-  onUserMarkdownChange?: (userMarkdown: TailorResumeUserMarkdownState) => void;
   tailoredResumes: TailorResumeProfile["tailoredResumes"];
 };
 
 type PromptSettingsResponse = {
   error?: string;
   profile?: TailorResumeProfile;
-  userMarkdown?: TailorResumeUserMarkdownState;
 };
 
-type GenerationSettingKey = (typeof tailorResumeGenerationSettingDefinitions)[number]["key"];
+type GenerationSettingKey =
+  (typeof tailorResumeGenerationSettingDefinitions)[number]["key"];
 type PromptFieldKey = (typeof tailorResumePromptFieldDefinitions)[number]["key"];
 
 function formatSavedAt(value: string | null) {
@@ -49,14 +51,6 @@ function buildPromptPreviewPdfUrl(record: TailoredResumeRecord | null) {
 
   const baseUrl = buildTailoredResumeHighlightedPreviewUrl(record);
   return `${baseUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
-}
-
-function buildBaseResumePreviewPdfUrl(updatedAt: string | null) {
-  if (!updatedAt) {
-    return null;
-  }
-
-  return `/api/tailor-resume/preview?updatedAt=${encodeURIComponent(updatedAt)}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
 }
 
 function compareTailoredResumeUpdatedAt(
@@ -228,9 +222,6 @@ export default function PromptSettingsWorkspace({
   defaultPromptValues,
   initialGenerationSettings,
   initialPromptSettings,
-  profile,
-  initialUserMarkdown,
-  onUserMarkdownChange,
   tailoredResumes,
 }: PromptSettingsWorkspaceProps) {
   const [generationSettings, setGenerationSettings] = useState(
@@ -242,14 +233,6 @@ export default function PromptSettingsWorkspace({
   const [draftPromptValues, setDraftPromptValues] = useState(
     initialPromptSettings.values,
   );
-  const [savedUserMarkdown, setSavedUserMarkdown] =
-    useState(initialUserMarkdown);
-  const [draftUserMarkdown, setDraftUserMarkdown] = useState(
-    initialUserMarkdown.markdown,
-  );
-  const [isOriginalResumeOpen, setIsOriginalResumeOpen] = useState(false);
-  const [isSavingUserMarkdown, setIsSavingUserMarkdown] = useState(false);
-  const [isUserMarkdownOpen, setIsUserMarkdownOpen] = useState(false);
   const [isSystemPromptsOpen, setIsSystemPromptsOpen] = useState(false);
   const [openPromptKeys, setOpenPromptKeys] = useState<
     Partial<Record<PromptFieldKey, boolean>>
@@ -271,17 +254,10 @@ export default function PromptSettingsWorkspace({
     setDraftPromptValues(initialPromptSettings.values);
   }, [initialPromptSettings]);
 
-  useEffect(() => {
-    setSavedUserMarkdown(initialUserMarkdown);
-    setDraftUserMarkdown(initialUserMarkdown.markdown);
-  }, [initialUserMarkdown]);
-
   const unsavedPromptCount = tailorResumePromptFieldDefinitions.filter(
     ({ key }) => draftPromptValues[key] !== savedPromptSettings.values[key],
   ).length;
-  const isUserMarkdownChanged = draftUserMarkdown !== savedUserMarkdown.markdown;
   const hasUnsavedChanges = unsavedPromptCount > 0;
-  const hasAnyUnsavedChanges = hasUnsavedChanges || isUserMarkdownChanged;
   const latestTailoredResume = useMemo(() => {
     if (tailoredResumes.length === 0) {
       return null;
@@ -289,20 +265,6 @@ export default function PromptSettingsWorkspace({
 
     return [...tailoredResumes].sort(compareTailoredResumeUpdatedAt)[0] ?? null;
   }, [tailoredResumes]);
-  const originalResumePreviewUrl = useMemo(
-    () => buildBaseResumePreviewPdfUrl(profile.latex.pdfUpdatedAt),
-    [profile.latex.pdfUpdatedAt],
-  );
-  const originalResumeFilename =
-    profile.resume?.originalFilename?.trim() || "No resume uploaded yet";
-  const originalResumePreviewSummary = profile.resume
-    ? originalResumePreviewUrl
-      ? "View the compiled original-resume preview that tailoring uses as its starting point."
-      : profile.latex.error
-        ? "A resume is uploaded, but the latest preview is unavailable until the LaTeX compiles cleanly again."
-        : "A resume is uploaded, but a preview PDF is not available yet."
-    : "Upload a base resume in the Tailor Resume tab to review it here later.";
-
   function isPromptChanged(key: PromptFieldKey) {
     return draftPromptValues[key] !== savedPromptSettings.values[key];
   }
@@ -445,59 +407,6 @@ export default function PromptSettingsWorkspace({
     }
   }
 
-  function applySavedUserMarkdown(nextUserMarkdown: TailorResumeUserMarkdownState) {
-    setSavedUserMarkdown(nextUserMarkdown);
-    setDraftUserMarkdown(nextUserMarkdown.markdown);
-    onUserMarkdownChange?.(nextUserMarkdown);
-  }
-
-  function cancelUserMarkdownEdits() {
-    setDraftUserMarkdown(savedUserMarkdown.markdown);
-    setIsUserMarkdownOpen(false);
-  }
-
-  async function saveUserMarkdown() {
-    if (!isUserMarkdownChanged) {
-      setIsUserMarkdownOpen(false);
-      return;
-    }
-
-    setIsSavingUserMarkdown(true);
-
-    try {
-      const response = await fetch("/api/tailor-resume", {
-        body: JSON.stringify({
-          action: "saveUserMarkdown",
-          markdown: draftUserMarkdown,
-          updatedAt: savedUserMarkdown.updatedAt,
-        }),
-        headers: {
-          "Content-Type": "application/json",
-        },
-        method: "PATCH",
-      });
-      const payload = (await response.json()) as PromptSettingsResponse;
-
-      if (!response.ok || !payload.userMarkdown) {
-        if (payload.userMarkdown) {
-          applySavedUserMarkdown(payload.userMarkdown);
-        }
-
-        throw new Error(payload.error ?? "Unable to save USER.md.");
-      }
-
-      applySavedUserMarkdown(payload.userMarkdown);
-      setIsUserMarkdownOpen(false);
-      toast.success("Saved USER.md.");
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Unable to save USER.md.",
-      );
-    } finally {
-      setIsSavingUserMarkdown(false);
-    }
-  }
-
   return (
     <section className="glass-panel soft-ring flex min-h-0 flex-col rounded-[1.5rem] p-4 sm:p-5">
       <div className="flex flex-col gap-4 border-b border-white/8 pb-4">
@@ -524,170 +433,12 @@ export default function PromptSettingsWorkspace({
           <span className="rounded-full border border-white/10 px-3 py-1">
             {hasUnsavedChanges
               ? `${unsavedPromptCount} unsaved prompt${unsavedPromptCount === 1 ? "" : "s"}`
-              : hasAnyUnsavedChanges
-                ? "USER.md unsaved"
-                : "All changes saved"}
+              : "All changes saved"}
           </span>
         </div>
       </div>
 
       <div className="mt-5 overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto sm:pr-1">
-        <section className="mb-4 overflow-hidden rounded-[1.35rem] border border-white/8 bg-black/20">
-          <button
-            aria-controls="original-resume-panel"
-            aria-expanded={isOriginalResumeOpen}
-            className="flex w-full items-start justify-between gap-4 px-4 py-4 text-left transition hover:bg-white/[0.03] sm:px-5"
-            onClick={() => setIsOriginalResumeOpen((currentValue) => !currentValue)}
-            type="button"
-          >
-            <div className="min-w-0 flex-1">
-              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                Base Resume
-              </p>
-              <div className="mt-2 flex flex-wrap items-center gap-3">
-                <h3 className="text-base font-semibold text-zinc-100">
-                  Original Resume Preview
-                </h3>
-                <span className="max-w-full truncate rounded-full border border-white/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                  {originalResumeFilename}
-                </span>
-              </div>
-              <p className="mt-2 text-sm leading-6 text-zinc-400">
-                {originalResumePreviewSummary} This section starts collapsed by
-                default to keep settings tidy.
-              </p>
-            </div>
-            <span
-              aria-hidden="true"
-              className={`shrink-0 pt-1 text-zinc-400 transition-transform ${
-                isOriginalResumeOpen ? "rotate-180" : ""
-              }`}
-            >
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 20 20">
-                <path
-                  d="m5 7.5 5 5 5-5"
-                  stroke="currentColor"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="1.7"
-                />
-              </svg>
-            </span>
-          </button>
-
-          {isOriginalResumeOpen ? (
-            <div
-              className="border-t border-white/8 px-4 py-4 sm:px-5"
-              id="original-resume-panel"
-            >
-              {originalResumePreviewUrl ? (
-                <div className="overflow-hidden rounded-[1.1rem] border border-white/10 bg-zinc-950/80">
-                  <iframe
-                    className="h-[32rem] w-full border-0 bg-white"
-                    src={originalResumePreviewUrl}
-                    title="Original resume preview"
-                  />
-                </div>
-              ) : (
-                <div className="rounded-[1.1rem] border border-dashed border-white/10 bg-zinc-950/55 px-4 py-6 text-sm leading-6 text-zinc-400">
-                  {profile.resume
-                    ? profile.latex.error ??
-                      "No preview PDF is available for the current base resume yet."
-                    : "No base resume has been uploaded yet."}
-                </div>
-              )}
-            </div>
-          ) : null}
-        </section>
-
-        <section className="mb-4 overflow-hidden rounded-[1.35rem] border border-white/8 bg-black/20">
-          <button
-            aria-controls="user-markdown-panel"
-            aria-expanded={isUserMarkdownOpen}
-            className="flex w-full items-start justify-between gap-4 px-4 py-4 text-left transition hover:bg-white/[0.03] sm:px-5"
-            onClick={() => setIsUserMarkdownOpen((currentValue) => !currentValue)}
-            type="button"
-          >
-            <div className="min-w-0 flex-1">
-              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                User Memory
-              </p>
-              <div className="mt-2 flex flex-wrap items-center gap-3">
-                <h3 className="text-base font-semibold text-zinc-100">
-                  USER.md
-                </h3>
-                <span className="rounded-full border border-white/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                  {draftUserMarkdown.length.toLocaleString()} chars
-                </span>
-                {isUserMarkdownChanged ? (
-                  <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-amber-200">
-                    Unsaved
-                  </span>
-                ) : null}
-              </div>
-              <p className="mt-2 text-sm leading-6 text-zinc-400">
-                Durable resume context used by the tailoring follow-up step and
-                by non-interactive tailoring when questions are disabled. This
-                section starts collapsed by default to keep settings tidy.
-              </p>
-            </div>
-            <span
-              aria-hidden="true"
-              className={`shrink-0 pt-1 text-zinc-400 transition-transform ${
-                isUserMarkdownOpen ? "rotate-180" : ""
-              }`}
-            >
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 20 20">
-                <path
-                  d="m5 7.5 5 5 5-5"
-                  stroke="currentColor"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="1.7"
-                />
-              </svg>
-            </span>
-          </button>
-
-          {isUserMarkdownOpen ? (
-            <div
-              className="border-t border-white/8 px-4 py-4 sm:px-5"
-              id="user-markdown-panel"
-            >
-              <textarea
-                className="min-h-[280px] w-full resize-y rounded-[1.1rem] border border-white/10 bg-zinc-950/75 px-4 py-4 font-mono text-[12px] leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-300/45"
-                onChange={(event) => setDraftUserMarkdown(event.target.value)}
-                readOnly={isSavingUserMarkdown}
-                spellCheck={false}
-                value={draftUserMarkdown}
-              />
-
-              <div className="mt-4 flex flex-wrap gap-2">
-                <button
-                  className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={isSavingUserMarkdown}
-                  onClick={cancelUserMarkdownEdits}
-                  type="button"
-                >
-                  Cancel
-                </button>
-                <button
-                  className={`rounded-full px-4 py-2.5 text-sm font-medium transition ${
-                    isSavingUserMarkdown
-                      ? "cursor-wait border border-white/10 bg-white/[0.04] text-zinc-500"
-                      : "border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/35 hover:bg-emerald-400/15"
-                  }`}
-                  disabled={isSavingUserMarkdown}
-                  onClick={() => void saveUserMarkdown()}
-                  type="button"
-                >
-                  {isSavingUserMarkdown ? "Saving..." : "Save"}
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </section>
-
         <section className="rounded-[1.35rem] border border-white/8 bg-black/20 p-4 sm:p-5">
           <div className="max-w-3xl">
             <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">

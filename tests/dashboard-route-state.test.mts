@@ -6,21 +6,32 @@ import {
   parseDashboardRouteStateFromSearchParams,
 } from "../lib/dashboard-route-state.ts";
 
-test("dashboard route state defaults to the tailor-resume workspace", () => {
+test("dashboard route state defaults to the config workspace", () => {
   assert.deepEqual(parseDashboardRouteState(), {
-    tab: "tailor",
+    tab: "config",
     tailoredResumeId: null,
   });
 });
 
-test("dashboard route state keeps a tailored resume review id only on the tailor tab", () => {
+test("dashboard route state keeps a tailored resume review id only on the saved tab", () => {
   assert.deepEqual(
     parseDashboardRouteState({
-      tab: "tailor",
+      tab: "saved",
       tailoredResumeId: " tailored-123 ",
     }),
     {
+      tab: "saved",
+      tailoredResumeId: "tailored-123",
+    },
+  );
+
+  assert.deepEqual(
+    parseDashboardRouteState({
       tab: "tailor",
+      tailoredResumeId: "tailored-123",
+    }),
+    {
+      tab: "saved",
       tailoredResumeId: "tailored-123",
     },
   );
@@ -28,10 +39,9 @@ test("dashboard route state keeps a tailored resume review id only on the tailor
   assert.deepEqual(
     parseDashboardRouteState({
       tab: "new",
-      tailoredResumeId: "tailored-123",
     }),
     {
-      tab: "new",
+      tab: "saved",
       tailoredResumeId: null,
     },
   );
@@ -57,24 +67,24 @@ test("dashboard route state reads review state from URL search params", () => {
       }),
     ),
     {
-      tab: "tailor",
+      tab: "saved",
       tailoredResumeId: "tailored-456",
     },
   );
 });
 
 test("dashboard href builder creates stable deep links for tailor review state", () => {
-  assert.equal(buildDashboardHref({ tab: "tailor" }), "/dashboard");
-  assert.equal(buildDashboardHref({ tab: "new" }), "/dashboard?tab=new");
+  assert.equal(buildDashboardHref({ tab: "config" }), "/dashboard");
+  assert.equal(buildDashboardHref({ tab: "saved" }), "/dashboard?tab=saved");
   assert.equal(
     buildDashboardHref({ tab: "settings" }),
     "/dashboard?tab=settings",
   );
   assert.equal(
     buildDashboardHref({
-      tab: "tailor",
+      tab: "saved",
       tailoredResumeId: "tailored-789",
     }),
-    "/dashboard?tailoredResumeId=tailored-789",
+    "/dashboard?tab=saved&tailoredResumeId=tailored-789",
   );
 });
