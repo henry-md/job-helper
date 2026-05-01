@@ -75,6 +75,12 @@ export const tailorResumeGenerationSettingDefinitions = [
     key: "preventPageCountIncrease",
     title: "Edits should not increase page count",
   },
+  {
+    description:
+      "Low-priority terms are always tracked and shown. This only chooses whether the displayed coverage percentage is calculated from high-priority terms or all tracked terms.",
+    key: "includeLowPriorityTermsInKeywordCoverage",
+    title: "Coverage percentage uses all tracked terms",
+  },
 ] as const satisfies ReadonlyArray<{
   description: string;
   key: keyof TailorResumeGenerationSettings;

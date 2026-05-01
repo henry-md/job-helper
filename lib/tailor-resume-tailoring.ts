@@ -28,6 +28,7 @@ import type {
   TailorResumeGenerationStepEvent,
   TailorResumeLinkRecord,
   TailoredResumeBlockEditRecord,
+  TailoredResumeEmphasizedTechnology,
   TailoredResumeOpenAiDebugStage,
   TailoredResumeOpenAiDebugTrace,
   TailoredResumePlanningChange,
@@ -67,9 +68,32 @@ const tailorResumePlanSchema = {
     },
     companyName: { type: "string" },
     displayName: { type: "string" },
+    emphasizedTechnologies: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          evidence: { type: "string" },
+          name: { type: "string" },
+          priority: {
+            type: "string",
+            enum: ["high", "low"],
+          },
+        },
+        required: ["name", "priority", "evidence"],
+      },
+    },
     positionTitle: { type: "string" },
   },
-  required: ["thesis", "changes", "companyName", "displayName", "positionTitle"],
+  required: [
+    "thesis",
+    "changes",
+    "companyName",
+    "displayName",
+    "emphasizedTechnologies",
+    "positionTitle",
+  ],
 } as const;
 
 async function emitTailorResumeGenerationStep(
@@ -344,6 +368,74 @@ function parseTailoredResumePlanChange(
   };
 }
 
+function parseTailoredResumeEmphasizedTechnology(
+  value: unknown,
+): TailoredResumeEmphasizedTechnology {
+  if (!value || typeof value !== "object") {
+    throw new Error("The model returned an invalid emphasized technology.");
+  }
+
+  const name = "name" in value ? readTrimmedString(value.name) : "";
+  const priority =
+    "priority" in value && (value.priority === "high" || value.priority === "low")
+      ? value.priority
+      : null;
+  const evidence = "evidence" in value ? readTrimmedString(value.evidence) : "";
+
+  if (!name) {
+    throw new Error("The model returned an emphasized technology without a name.");
+  }
+
+  if (!priority) {
+    throw new Error(
+      `The model returned emphasized technology "${name}" without a valid priority.`,
+    );
+  }
+
+  return {
+    evidence,
+    name,
+    priority,
+  };
+}
+
+function normalizeTailoredResumeEmphasizedTechnologies(
+  technologies: TailoredResumeEmphasizedTechnology[],
+) {
+  const normalizedTechnologies =
+    new Map<string, TailoredResumeEmphasizedTechnology>();
+
+  for (const technology of technologies) {
+    const key = technology.name.toLowerCase();
+    const existingTechnology = normalizedTechnologies.get(key);
+
+    if (
+      !existingTechnology ||
+      (existingTechnology.priority === "low" && technology.priority === "high")
+    ) {
+      normalizedTechnologies.set(key, technology);
+    }
+  }
+
+  return [...normalizedTechnologies.values()];
+}
+
+function parseTailoredResumeEmphasizedTechnologies(
+  value: unknown,
+): TailoredResumeEmphasizedTechnology[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error("The model did not return an emphasizedTechnologies array.");
+  }
+
+  return normalizeTailoredResumeEmphasizedTechnologies(
+    value.map(parseTailoredResumeEmphasizedTechnology),
+  );
+}
+
 export function parseTailoredResumePlanResponse(
   value: unknown,
 ): TailoredResumePlanResponse {
@@ -362,6 +454,9 @@ export function parseTailoredResumePlanResponse(
   return {
     changes,
     ...normalizeTailoredResumeMetadata(value as TailoredResumePlanResponse),
+    emphasizedTechnologies: parseTailoredResumeEmphasizedTechnologies(
+      "emphasizedTechnologies" in value ? value.emphasizedTechnologies : null,
+    ),
     questioningSummary: null,
     thesis: parseTailoredResumeThesis("thesis" in value ? value.thesis : null),
   };
@@ -520,6 +615,26 @@ function serializeTailorResumeImplementationBlocks(input: {
         block?.latexCode ?? "[missing block]",
       ].join("\n");
     })
+    .join("\n\n");
+}
+
+function serializeTailorResumeEmphasizedTechnologies(
+  technologies: TailoredResumeEmphasizedTechnology[] | undefined,
+) {
+  const resolvedTechnologies = technologies ?? [];
+
+  if (resolvedTechnologies.length === 0) {
+    return "[none identified]";
+  }
+
+  return resolvedTechnologies
+    .map((technology, index) =>
+      [
+        `${index + 1}. ${technology.name}`,
+        `   priority: ${technology.priority}`,
+        `   evidence: ${technology.evidence || "[not provided]"}`,
+      ].join("\n"),
+    )
     .join("\n\n");
 }
 
@@ -838,6 +953,11 @@ function buildTailoringImplementationInput(input: {
             "Accepted tailoring thesis:\n" +
             `jobDescriptionFocus: ${input.plan.thesis.jobDescriptionFocus}\n` +
             `resumeChanges: ${input.plan.thesis.resumeChanges}\n\n` +
+            "Technologies emphasized by the job description:\n" +
+            serializeTailorResumeEmphasizedTechnologies(
+              input.plan.emphasizedTechnologies,
+            ) +
+            "\n\n" +
             questioningLearningsText +
             buildUserMarkdownImplementationContext(input.userMarkdown) +
             "Planned segment edits:\n" +
@@ -893,6 +1013,7 @@ function buildFallbackTailoredResumePlanningResult(): TailoredResumePlanningResu
     changes: [],
     companyName: fallbackMetadata.companyName,
     displayName: fallbackMetadata.displayName,
+    emphasizedTechnologies: [],
     jobIdentifier: fallbackMetadata.jobIdentifier,
     positionTitle: fallbackMetadata.positionTitle,
     questioningSummary: null,

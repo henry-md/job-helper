@@ -49,6 +49,7 @@ test("advanceTailorResumeQuestioning skips immediately when no block edits are p
       changes: [],
       companyName: "OpenAI",
       displayName: "OpenAI - Research Engineer",
+      emphasizedTechnologies: [],
       jobIdentifier: "Research Engineer",
       positionTitle: "Research Engineer",
       questioningSummary: null,

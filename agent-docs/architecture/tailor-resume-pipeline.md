@@ -12,6 +12,7 @@ Step 0. Generate LaTeX base resume
 Step 1. Generate plaintext generalized edits
 - The planning stage sees whole-resume plaintext plus document-ordered plaintext blocks keyed by `segmentId`.
 - It returns a tailoring thesis plus generalized plaintext edits for targeted blocks.
+- It also extracts a deduped list of job-description-emphasized technologies with high/low priority. The model should infer priority from the posting text, especially required/basic/minimum and preferred/nice-to-have sections, but the stored shape should keep only the priority, technology name, and evidence.
 - This stage decides what should change, but it does not write final LaTeX yet.
 
 Step 2. Ask user clarifications if useful
@@ -21,11 +22,13 @@ Step 2. Ask user clarifications if useful
 - Ask one question at a time only when a grounded answer could materially improve an already-adjacent resume block.
 - Questions should concisely state the job-description signal, the resume gap, and 1-2 brief examples of strong answer shapes tailored to that job-description signal.
 - Technology questions should only cover close neighbors of resume-supported experience that also appear in the job description, such as a framework adjacent to strong JavaScript experience or C adjacent to listed C++ experience.
+- The interview receives the Step 1 emphasized-technology list and should prioritize high-priority adjacent gaps before low-priority terms.
 - Store the questioning agenda, the number of questions already asked, and learned facts mapped back to target `segmentId`s so later stages can use them surgically.
 - When the user's answer reveals durable context likely to matter later, the interview tool may submit `USER.md` markdown patch operations. Normal additions should append under a chosen heading path; restructuring should use exact-match replace/insert/delete operations. Failed exact matches are fed back to the model for a retry instead of allowing full-document replacement.
 
 Step 3. Generate block-scoped edits
 - The implementation stage takes the accepted plan plus any user-confirmed learnings and returns exact LaTeX replacements for only the targeted segments.
+- It also receives the emphasized-technology list as keyword guidance. Include high-priority terms wherever they are factually supported by the source resume, USER.md, interview learnings, or accepted plan; do not invent unsupported technology experience.
 - Failures here should retry the block-edit stage rather than forcing the model to rethink the whole thesis.
 - The goal is segment-safe replacements that preserve local LaTeX structure.
 - Block replacements should not polish unrelated details such as punctuation, dates of experience, employers, titles, metrics, separators, capitalization, or links.

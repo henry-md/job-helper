@@ -33,6 +33,7 @@ function buildGenerationResult(
       changes: [],
       companyName: "OpenAI",
       displayName: "OpenAI - Research Engineer",
+      emphasizedTechnologies: [],
       jobIdentifier: "REQ-123",
       positionTitle: "Research Engineer",
       questioningSummary: null,

@@ -39,6 +39,7 @@ function buildTailoredResume(
     jobDescription: overrides.jobDescription ?? "Original description",
     jobIdentifier: overrides.jobIdentifier ?? "Research Engineer",
     jobUrl: overrides.jobUrl ?? "https://jobs.example.com/research-engineer",
+    keywordCoverage: overrides.keywordCoverage ?? null,
     latexCode: overrides.latexCode ?? "\\documentclass{article}",
     openAiDebug: overrides.openAiDebug ?? {
       implementation: {
@@ -57,6 +58,7 @@ function buildTailoredResume(
       changes: [],
       companyName: "OpenAI",
       displayName: "OpenAI - Research Engineer",
+      emphasizedTechnologies: [],
       jobIdentifier: "Research Engineer",
       positionTitle: "Research Engineer",
       questioningSummary: null,

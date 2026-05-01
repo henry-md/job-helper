@@ -77,6 +77,10 @@ test("parseTailorResumeProfile reads the current LaTeX-only shape", () => {
     profile.generationSettings.values.preventPageCountIncrease,
     true,
   );
+  assert.equal(
+    profile.generationSettings.values.includeLowPriorityTermsInKeywordCoverage,
+    false,
+  );
   assert.equal(profile.workspace.isBaseResumeStepComplete, false);
 });
 
@@ -137,6 +141,10 @@ test("parseTailorResumeProfile merges saved prompt overrides onto the defaults",
     profile.generationSettings.values.preventPageCountIncrease,
     true,
   );
+  assert.equal(
+    profile.generationSettings.values.includeLowPriorityTermsInKeywordCoverage,
+    false,
+  );
 });
 
 test("emptyTailorResumeProfile defaults to an empty LaTeX draft", () => {
@@ -160,6 +168,10 @@ test("emptyTailorResumeProfile defaults to an empty LaTeX draft", () => {
     profile.generationSettings.values.preventPageCountIncrease,
     true,
   );
+  assert.equal(
+    profile.generationSettings.values.includeLowPriorityTermsInKeywordCoverage,
+    false,
+  );
   assert.equal(profile.resume, null);
   assert.deepEqual(profile.tailoredResumes, []);
   assert.equal(profile.workspace.isBaseResumeStepComplete, false);
@@ -171,6 +183,7 @@ test("parseTailorResumeProfile keeps saved generation settings", () => {
       updatedAt: "2026-04-20T12:00:00.000Z",
       values: {
         allowTailorResumeFollowUpQuestions: false,
+        includeLowPriorityTermsInKeywordCoverage: true,
         preventPageCountIncrease: false,
       },
     },
@@ -187,6 +200,10 @@ test("parseTailorResumeProfile keeps saved generation settings", () => {
   assert.equal(
     profile.generationSettings.values.preventPageCountIncrease,
     false,
+  );
+  assert.equal(
+    profile.generationSettings.values.includeLowPriorityTermsInKeywordCoverage,
+    true,
   );
 });
 
@@ -230,6 +247,13 @@ test("parseTailorResumeProfile keeps an active tailoring interview", () => {
           ],
           companyName: "OpenAI",
           displayName: "OpenAI - Research Engineer",
+          emphasizedTechnologies: [
+            {
+              evidence: 'Required qualifications mention "CI/CD".',
+              name: "CI/CD",
+              priority: "high",
+            },
+          ],
           jobIdentifier: "Applied research",
           positionTitle: "Research Engineer",
           questioningSummary: {
@@ -312,6 +336,7 @@ test("parseTailorResumeProfile keeps parallel tailoring interviews and preserves
             changes: [],
             companyName: "OpenAI",
             displayName: "OpenAI - Research Engineer",
+            emphasizedTechnologies: [],
             jobIdentifier: "Applied research",
             positionTitle: "Research Engineer",
             questioningSummary: null,
@@ -350,6 +375,7 @@ test("parseTailorResumeProfile keeps parallel tailoring interviews and preserves
             changes: [],
             companyName: "Anthropic",
             displayName: "Anthropic - Product Engineer",
+            emphasizedTechnologies: [],
             jobIdentifier: "Product systems",
             positionTitle: "Product Engineer",
             questioningSummary: null,
@@ -403,6 +429,7 @@ test("parseTailorResumeProfile upgrades a legacy singular tailoring interview in
           changes: [],
           companyName: "OpenAI",
           displayName: "OpenAI - Research Engineer",
+          emphasizedTechnologies: [],
           jobIdentifier: "Applied research",
           positionTitle: "Research Engineer",
           questioningSummary: null,
@@ -478,6 +505,13 @@ test("parseTailorResumeProfile keeps tailored resume metadata and workspace stat
           ],
           companyName: "OpenAI",
           displayName: "OpenAI - Research Engineer",
+          emphasizedTechnologies: [
+            {
+              evidence: 'Required qualifications mention "CI/CD".',
+              name: "CI/CD",
+              priority: "high",
+            },
+          ],
           jobIdentifier: "Applied research",
           positionTitle: "Research Engineer",
           thesis: {
@@ -525,6 +559,13 @@ test("parseTailorResumeProfile keeps tailored resume metadata and workspace stat
     profile.tailoredResumes[0]?.planningResult.changes[0]?.desiredPlainText,
     "Tailored bullet",
   );
+  assert.deepEqual(profile.tailoredResumes[0]?.planningResult.emphasizedTechnologies, [
+    {
+      evidence: 'Required qualifications mention "CI/CD".',
+      name: "CI/CD",
+      priority: "high",
+    },
+  ]);
   assert.equal(
     profile.tailoredResumes[0]?.openAiDebug.planning.prompt,
     "First call prompt",
@@ -601,6 +642,7 @@ test("parseTailorResumeProfile folds legacy model and user rows into one block e
           ],
           companyName: "OpenAI",
           displayName: "OpenAI - Research Engineer",
+          emphasizedTechnologies: [],
           jobIdentifier: "Applied research",
           positionTitle: "Research Engineer",
           thesis: {
@@ -653,6 +695,7 @@ test("parseTailorResumeProfile drops tailored resumes without the saved openai d
           changes: [],
           companyName: "Anthropic",
           displayName: "Anthropic - Product Engineer",
+          emphasizedTechnologies: [],
           jobIdentifier: "General",
           positionTitle: "Product Engineer",
           thesis: {

@@ -90,6 +90,7 @@ import {
   implementTailoredResumePlan,
   planTailoredResume,
 } from "@/lib/tailor-resume-tailoring";
+import { buildTailoredResumeKeywordCoverage } from "@/lib/tailor-resume-keyword-coverage";
 import {
   tailorResumeDebugErrorSources,
 } from "@/lib/tailor-resume-debug-errors";
@@ -138,6 +139,7 @@ import {
   resolveAppliedAt,
 } from "@/lib/job-tracking-shared";
 import {
+  cleanupInvalidTailorResumeArtifacts,
   deleteDbTailoredResumes,
   deleteLinkedDashboardArtifactsWithinLockedProfile,
   deleteTailorResumeArtifacts,
@@ -160,6 +162,7 @@ const maxLatexCodeLength = 300_000;
 const maxTailoredResumeRefinementPreviewImageCount = 6;
 const maxTailoredResumeRefinementPromptLength = 8_000;
 const maxTailoredResumeDisplayNameLength = 200;
+const tailorResumeRunHeartbeatIntervalMs = 30_000;
 
 function normalizeAnnotatedLatexState(latexCode: string, updatedAt: string) {
   const normalizedLatex = normalizeTailorResumeLatex(latexCode);
@@ -280,7 +283,10 @@ async function readApplicationSummaryPayload(input: {
         },
       },
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-      where: { userId: input.userId },
+      where: {
+        archivedAt: null,
+        userId: input.userId,
+      },
     }),
     prisma.company.count({
       where: {
@@ -980,6 +986,7 @@ async function ensureTailorResumeJobApplication(input: {
     },
   });
   const applicationData = {
+    archivedAt: null,
     companyId: company.id,
     employmentType: applicationDraft.employmentType,
     jobDescription: input.jobDescription,
@@ -1048,6 +1055,7 @@ function buildCompletedExistingTailoringState(
     companyName: tailoredResume.companyName,
     createdAt: tailoredResume.createdAt,
     displayName: tailoredResume.displayName,
+    emphasizedTechnologies: tailoredResume.planningResult.emphasizedTechnologies,
     error: tailoredResume.error,
     id: tailoredResume.id,
     jobIdentifier: tailoredResume.jobIdentifier || null,
@@ -1068,6 +1076,7 @@ function buildDbCompletedExistingTailoringState(
     companyName: tailoredResume.companyName,
     createdAt: tailoredResume.createdAt.toISOString(),
     displayName: tailoredResume.displayName,
+    emphasizedTechnologies: [],
     error: tailoredResume.error,
     id: tailoredResume.id,
     jobIdentifier: null,
@@ -1279,6 +1288,63 @@ async function updateTailorResumeRunStatus(input: {
   if (updatedRuns.count > 0) {
     await markTailoringChanged(input.userId);
   }
+}
+
+function startTailorResumeRunHeartbeat(input: {
+  runId: string | null;
+  userId: string;
+}) {
+  const runId = input.runId?.trim();
+
+  if (!runId) {
+    return () => {};
+  }
+
+  let isStopped = false;
+  let intervalId: ReturnType<typeof globalThis.setInterval> | null = null;
+  const stop = () => {
+    if (isStopped) {
+      return;
+    }
+
+    isStopped = true;
+
+    if (intervalId) {
+      globalThis.clearInterval(intervalId);
+      intervalId = null;
+    }
+  };
+
+  async function beat() {
+    if (isStopped) {
+      return;
+    }
+
+    try {
+      const updatedRuns = await getPrismaClient().tailorResumeRun.updateMany({
+        data: {
+          updatedAt: new Date(),
+        },
+        where: {
+          id: runId,
+          status: "RUNNING",
+          userId: input.userId,
+        },
+      });
+
+      if (updatedRuns.count === 0) {
+        stop();
+      }
+    } catch (error) {
+      console.warn("Could not refresh the Tailor Resume run heartbeat.", error);
+    }
+  }
+
+  intervalId = globalThis.setInterval(() => {
+    void beat();
+  }, tailorResumeRunHeartbeatIntervalMs);
+
+  return stop;
 }
 
 function readTailorResumeBackendErrorMessage(
@@ -1698,6 +1764,12 @@ async function finalizeTailorResumeGeneration(input: {
 
   const tailoredResumeId = randomUUID();
   const tailoredResumeUpdatedAt = new Date().toISOString();
+  const keywordCoverage = buildTailoredResumeKeywordCoverage({
+    emphasizedTechnologies: tailoringResult.planningResult.emphasizedTechnologies,
+    originalLatexCode: input.generationSourceAnnotatedLatex,
+    tailoredLatexCode: tailoringResult.latexCode,
+    updatedAt: tailoredResumeUpdatedAt,
+  });
   const shouldReplaceOverwrittenTailoredResumes = Boolean(
     tailoringResult.previewPdf && !tailoringResult.validationError?.trim(),
   );
@@ -1752,6 +1824,7 @@ async function finalizeTailorResumeGeneration(input: {
         jobDescription: input.jobDescription,
         jobIdentifier: tailoringResult.jobIdentifier,
         jobUrl: input.jobUrl,
+        keywordCoverage,
         latexCode: tailoringResult.latexCode,
         openAiDebug: tailoringResult.openAiDebug,
         pdfUpdatedAt: tailoringResult.previewPdf ? tailoredResumeUpdatedAt : null,
@@ -2166,6 +2239,10 @@ async function handleTailorResumeGeneration(
     });
     await options.onStepEvent?.(event);
   };
+  const stopRunHeartbeat = startTailorResumeRunHeartbeat({
+    runId: preparation.runId,
+    userId,
+  });
 
   try {
     const normalizedBaseLatex = normalizeAnnotatedLatexState(
@@ -2549,6 +2626,8 @@ async function handleTailorResumeGeneration(
       runId: preparation.runId,
       userId,
     });
+  } finally {
+    stopRunHeartbeat();
   }
 }
 
@@ -2645,6 +2724,10 @@ async function handleAdvanceTailorResumeInterview(
     });
     await options.onStepEvent?.(event);
   };
+  const stopRunHeartbeat = startTailorResumeRunHeartbeat({
+    runId: preparation.runId,
+    userId,
+  });
 
   try {
     const nextConversation = [
@@ -2990,6 +3073,8 @@ async function handleAdvanceTailorResumeInterview(
         preparation.tailoringInterview.accumulatedModelDurationMs,
       userId,
     });
+  } finally {
+    stopRunHeartbeat();
   }
 }
 
@@ -3110,6 +3195,10 @@ async function handleCompleteTailorResumeInterview(
     });
     await options.onStepEvent?.(event);
   };
+  const stopRunHeartbeat = startTailorResumeRunHeartbeat({
+    runId: preparation.runId,
+    userId,
+  });
 
   try {
     const userMarkdown = await readTailorResumeUserMarkdown(userId);
@@ -3137,6 +3226,8 @@ async function handleCompleteTailorResumeInterview(
         preparation.tailoringInterview.accumulatedModelDurationMs,
       userId,
     });
+  } finally {
+    stopRunHeartbeat();
   }
 }
 
@@ -3827,6 +3918,9 @@ export async function GET(request: Request) {
 
   const includeApplications = readIncludeApplicationsFlag(request);
   const applicationSummaryLimit = readApplicationSummaryLimit(request);
+
+  await cleanupInvalidTailorResumeArtifacts(session.user.id);
+
   const [
     { activeRun, activeRuns, profile, rawProfile },
     syncState,

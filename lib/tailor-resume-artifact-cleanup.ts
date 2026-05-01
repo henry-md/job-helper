@@ -1,6 +1,6 @@
 import type { TailorResumeProfile } from "./tailor-resume-types.ts";
 
-export const STALE_ACTIVE_TAILOR_RESUME_RUN_MAX_AGE_MS = 1000 * 60 * 20;
+export const STALE_ACTIVE_TAILOR_RESUME_RUN_MAX_AGE_MS = 1000 * 60 * 5;
 const TERMINAL_ACTIVE_TAILOR_RESUME_RUN_GRACE_MS = 1000 * 45;
 
 export function isInvalidTailoredResumeArtifact(

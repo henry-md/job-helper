@@ -546,6 +546,26 @@ function serializePlannedBlocks(input: {
     .join("\n\n");
 }
 
+function serializeEmphasizedTechnologies(
+  planningResult: TailoredResumePlanningResult,
+) {
+  const technologies = planningResult.emphasizedTechnologies ?? [];
+
+  if (technologies.length === 0) {
+    return "[none identified]";
+  }
+
+  return technologies
+    .map((technology, index) =>
+      [
+        `${index + 1}. ${technology.name}`,
+        `   priority: ${technology.priority}`,
+        `   evidence: ${technology.evidence || "[not provided]"}`,
+      ].join("\n"),
+    )
+    .join("\n\n");
+}
+
 function serializeConversation(messages: TailorResumeConversationMessage[]) {
   if (messages.length === 0) {
     return "[no conversation yet]";
@@ -632,6 +652,12 @@ function buildTailorResumeInterviewInput(input: {
               planningBlocksById: input.planningBlocksById,
               planningResult: input.planningResult,
             }),
+        },
+        {
+          type: "input_text" as const,
+          text:
+            "Technologies emphasized by the job description:\n" +
+            serializeEmphasizedTechnologies(input.planningResult),
         },
         {
           type: "input_text" as const,

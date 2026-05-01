@@ -1,6 +1,7 @@
 import type { TailorResumeDbRunRecord } from "./tailor-resume-route-response-state.ts";
 import { normalizeTailorResumeJobUrl } from "./tailor-resume-job-url.ts";
 import type {
+  TailoredResumeEmphasizedTechnology,
   TailorResumeGenerationStepEvent,
   TailorResumePendingInterview,
 } from "./tailor-resume-types.ts";
@@ -28,6 +29,7 @@ export type TailorResumeExistingTailoringState =
       jobIdentifier: string | null;
       jobUrl: string | null;
       kind: "pending_interview";
+      emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
       positionTitle: string | null;
       questionCount: number | null;
       updatedAt: string;
@@ -39,6 +41,7 @@ export type TailorResumeExistingTailoringState =
       displayName: string;
       error: string | null;
       id: string;
+      emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
       jobIdentifier: string | null;
       jobUrl: string | null;
       kind: "completed";
@@ -62,6 +65,46 @@ function readString(value: unknown) {
 
 function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function readEmphasizedTechnologies(
+  value: unknown,
+): TailoredResumeEmphasizedTechnology[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const technologies: TailoredResumeEmphasizedTechnology[] = [];
+
+  for (const item of value) {
+    if (!isRecord(item)) {
+      continue;
+    }
+
+    const name = readString(item.name);
+    const priority =
+      item.priority === "high" ? "high" : item.priority === "low" ? "low" : null;
+
+    if (!name || !priority) {
+      continue;
+    }
+
+    const dedupeKey = `${priority}:${name.toLowerCase()}`;
+
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    technologies.push({
+      evidence: readString(item.evidence),
+      name,
+      priority,
+    });
+  }
+
+  return technologies;
 }
 
 function readExistingTailoringTime(value: TailorResumeExistingTailoringState) {
@@ -228,6 +271,7 @@ export function buildPendingInterviewExistingTailoringState(
     companyName: tailoringInterview.planningResult.companyName || null,
     createdAt: run?.createdAt.toISOString() ?? tailoringInterview.createdAt,
     id: run?.id ?? tailoringInterview.tailorResumeRunId ?? tailoringInterview.id,
+    emphasizedTechnologies: tailoringInterview.planningResult.emphasizedTechnologies,
     jobDescription: tailoringInterview.jobDescription,
     jobIdentifier: tailoringInterview.planningResult.jobIdentifier || null,
     jobUrl: tailoringInterview.jobUrl,
@@ -395,6 +439,9 @@ export function readTailorResumeExistingTailoringState(
       applicationId: readNullableString(existingTailoring.applicationId),
       companyName: readNullableString(existingTailoring.companyName),
       createdAt,
+      emphasizedTechnologies: readEmphasizedTechnologies(
+        existingTailoring.emphasizedTechnologies,
+      ),
       id,
       jobDescription: readString(existingTailoring.jobDescription),
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
@@ -422,6 +469,9 @@ export function readTailorResumeExistingTailoringState(
       companyName: readNullableString(existingTailoring.companyName),
       createdAt,
       displayName,
+      emphasizedTechnologies: readEmphasizedTechnologies(
+        existingTailoring.emphasizedTechnologies,
+      ),
       error: readNullableString(existingTailoring.error),
       id,
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),

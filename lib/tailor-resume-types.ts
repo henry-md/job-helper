@@ -111,6 +111,14 @@ export type TailoredResumeQuestioningSummary = {
   learnings: TailoredResumeQuestionLearning[];
 };
 
+export type TailoredResumeEmphasizedTechnologyPriority = "high" | "low";
+
+export type TailoredResumeEmphasizedTechnology = {
+  evidence: string;
+  name: string;
+  priority: TailoredResumeEmphasizedTechnologyPriority;
+};
+
 export type TailorResumeWorkspaceState = {
   tailoringInterview: TailorResumePendingInterview | null;
   tailoringInterviews: TailorResumePendingInterview[];
@@ -174,10 +182,37 @@ export type TailoredResumePlanningResult = {
   changes: TailoredResumePlanningChange[];
   companyName: string;
   displayName: string;
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
   jobIdentifier: string;
   positionTitle: string;
   questioningSummary: TailoredResumeQuestioningSummary | null;
   thesis: TailoredResumeThesis;
+};
+
+export type TailoredResumeKeywordCoverageTerm = {
+  name: string;
+  presentInOriginal: boolean;
+  presentInTailored: boolean;
+  priority: TailoredResumeEmphasizedTechnologyPriority;
+};
+
+export type TailoredResumeKeywordCoverageBucket = {
+  addedTerms: string[];
+  matchedOriginalTerms: string[];
+  matchedTailoredTerms: string[];
+  originalHitCount: number;
+  originalHitPercentage: number;
+  tailoredHitCount: number;
+  tailoredHitPercentage: number;
+  terms: TailoredResumeKeywordCoverageTerm[];
+  totalTermCount: number;
+};
+
+export type TailoredResumeKeywordCoverage = {
+  allPriorities: TailoredResumeKeywordCoverageBucket;
+  highPriority: TailoredResumeKeywordCoverageBucket;
+  matcherVersion: 1;
+  updatedAt: string;
 };
 
 export type TailoredResumeOpenAiDebugStage = {
@@ -221,6 +256,7 @@ export type TailoredResumeRecord = {
   jobDescription: string;
   jobIdentifier: string;
   jobUrl: string | null;
+  keywordCoverage: TailoredResumeKeywordCoverage | null;
   latexCode: string;
   openAiDebug: TailoredResumeOpenAiDebugTrace;
   pdfUpdatedAt: string | null;
@@ -674,6 +710,184 @@ function parseTailoredResumePlanningChange(
   };
 }
 
+function parseTailoredResumeEmphasizedTechnology(
+  value: unknown,
+): TailoredResumeEmphasizedTechnology | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const name = readString(value.name).trim();
+  const evidence = readString(value.evidence).trim();
+  const priority =
+    value.priority === "high" || value.priority === "low"
+      ? value.priority
+      : null;
+
+  if (!name || !priority) {
+    return null;
+  }
+
+  return {
+    evidence,
+    name,
+    priority,
+  };
+}
+
+function normalizeTailoredResumeEmphasizedTechnologies(
+  technologies: TailoredResumeEmphasizedTechnology[],
+) {
+  const normalizedTechnologies =
+    new Map<string, TailoredResumeEmphasizedTechnology>();
+
+  for (const technology of technologies) {
+    const key = technology.name.toLowerCase();
+    const existingTechnology = normalizedTechnologies.get(key);
+
+    if (
+      !existingTechnology ||
+      (existingTechnology.priority === "low" && technology.priority === "high")
+    ) {
+      normalizedTechnologies.set(key, technology);
+    }
+  }
+
+  return [...normalizedTechnologies.values()];
+}
+
+function parseTailoredResumeEmphasizedTechnologies(
+  value: unknown,
+): TailoredResumeEmphasizedTechnology[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return normalizeTailoredResumeEmphasizedTechnologies(
+    value.flatMap((technology) => {
+      const parsedTechnology = parseTailoredResumeEmphasizedTechnology(technology);
+      return parsedTechnology ? [parsedTechnology] : [];
+    }),
+  );
+}
+
+function readPercentage(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+function parseTailoredResumeKeywordCoverageTerm(
+  value: unknown,
+): TailoredResumeKeywordCoverageTerm | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const name = readString(value.name).trim();
+  const priority =
+    value.priority === "high" || value.priority === "low"
+      ? value.priority
+      : null;
+
+  if (!name || !priority) {
+    return null;
+  }
+
+  return {
+    name,
+    presentInOriginal: value.presentInOriginal === true,
+    presentInTailored: value.presentInTailored === true,
+    priority,
+  };
+}
+
+function parseTailoredResumeKeywordCoverageTerms(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailoredResumeKeywordCoverageTerm[];
+  }
+
+  return value
+    .map(parseTailoredResumeKeywordCoverageTerm)
+    .filter((term): term is TailoredResumeKeywordCoverageTerm =>
+      Boolean(term),
+    );
+}
+
+function parseStringArray(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as string[];
+  }
+
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function parseTailoredResumeKeywordCoverageBucket(
+  value: unknown,
+): TailoredResumeKeywordCoverageBucket | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const terms = parseTailoredResumeKeywordCoverageTerms(value.terms);
+  const totalTermCount =
+    typeof value.totalTermCount === "number" && Number.isFinite(value.totalTermCount)
+      ? Math.max(0, Math.floor(value.totalTermCount))
+      : terms.length;
+  const originalHitCount =
+    typeof value.originalHitCount === "number" && Number.isFinite(value.originalHitCount)
+      ? Math.max(0, Math.floor(value.originalHitCount))
+      : terms.filter((term) => term.presentInOriginal).length;
+  const tailoredHitCount =
+    typeof value.tailoredHitCount === "number" && Number.isFinite(value.tailoredHitCount)
+      ? Math.max(0, Math.floor(value.tailoredHitCount))
+      : terms.filter((term) => term.presentInTailored).length;
+
+  return {
+    addedTerms: parseStringArray(value.addedTerms),
+    matchedOriginalTerms: parseStringArray(value.matchedOriginalTerms),
+    matchedTailoredTerms: parseStringArray(value.matchedTailoredTerms),
+    originalHitCount,
+    originalHitPercentage: readPercentage(value.originalHitPercentage),
+    tailoredHitCount,
+    tailoredHitPercentage: readPercentage(value.tailoredHitPercentage),
+    terms,
+    totalTermCount,
+  };
+}
+
+function parseTailoredResumeKeywordCoverage(
+  value: unknown,
+): TailoredResumeKeywordCoverage | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const highPriority = parseTailoredResumeKeywordCoverageBucket(
+    value.highPriority,
+  );
+  const allPriorities = parseTailoredResumeKeywordCoverageBucket(
+    value.allPriorities,
+  );
+  const updatedAt = readNullableString(value.updatedAt);
+
+  if (!highPriority || !allPriorities || !updatedAt) {
+    return null;
+  }
+
+  return {
+    allPriorities,
+    highPriority,
+    matcherVersion: 1,
+    updatedAt,
+  };
+}
+
 function parseTailoredResumeQuestionLearning(
   value: unknown,
 ): TailoredResumeQuestionLearning | null {
@@ -790,6 +1004,9 @@ function parseTailoredResumePlanningResult(
     changes,
     companyName,
     displayName,
+    emphasizedTechnologies: parseTailoredResumeEmphasizedTechnologies(
+      value.emphasizedTechnologies,
+    ),
     jobIdentifier,
     positionTitle,
     questioningSummary,
@@ -818,6 +1035,7 @@ function buildLegacyTailoredResumePlanningResult(input: {
     changes: [],
     companyName: input.companyName,
     displayName: input.displayName,
+    emphasizedTechnologies: [],
     jobIdentifier: input.jobIdentifier,
     positionTitle: input.positionTitle,
     questioningSummary: null,
@@ -1119,6 +1337,7 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
     jobDescription,
     jobIdentifier,
     jobUrl,
+    keywordCoverage: parseTailoredResumeKeywordCoverage(value.keywordCoverage),
     latexCode,
     openAiDebug,
     pdfUpdatedAt,

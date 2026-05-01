@@ -1,16 +1,19 @@
 export const tailorResumeGenerationSettingKeys = [
   "allowTailorResumeFollowUpQuestions",
+  "includeLowPriorityTermsInKeywordCoverage",
   "preventPageCountIncrease",
 ] as const;
 
 export type TailorResumeGenerationSettings = {
   allowTailorResumeFollowUpQuestions: boolean;
+  includeLowPriorityTermsInKeywordCoverage: boolean;
   preventPageCountIncrease: boolean;
 };
 
 export function createDefaultTailorResumeGenerationSettings(): TailorResumeGenerationSettings {
   return {
     allowTailorResumeFollowUpQuestions: true,
+    includeLowPriorityTermsInKeywordCoverage: false,
     preventPageCountIncrease: true,
   };
 }

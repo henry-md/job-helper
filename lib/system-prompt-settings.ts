@@ -110,6 +110,35 @@ function buildTailorResumeInterviewToolContractBlock() {
   );
 }
 
+function buildTailorResumePlanningOutputContractBlock() {
+  return (
+    "Current planning output contract:\n" +
+    "1. Return emphasizedTechnologies as an array, even when it is empty.\n" +
+    "2. Each emphasizedTechnologies item must include name, priority, and evidence.\n" +
+    "3. priority must be exactly high or low.\n" +
+    "4. Use emphasizedTechnologies only for concrete technologies, languages, frameworks, libraries, platforms, databases, infrastructure tools, or technical methods that the target job posting clearly emphasizes.\n" +
+    "5. Infer priority from the posting: high for required/basic/minimum terms, repeated terms, title/team-defining terms, and strongly emphasized preferred terms; low for weaker preferred, nice-to-have, incidental, or broad ecosystem terms.\n" +
+    "6. Return one atomic technology per item. Hard rule: if a slash, comma, parenthetical, or grouped phrase separates two distinct technologies, you must return separate emphasizedTechnologies items for each named technology, such as TypeScript and JavaScript instead of TypeScript/JavaScript, and React and Next.js instead of React / Next.js.\n" +
+    "7. Do not replace named skills with broad group labels when the posting names specific technologies; include the specific names.\n" +
+    "8. Prefer the core technology term and remove interchangeable vendor or marketing fluff when the inner term is what people actually list on resumes. For example, return Visual Studio instead of Microsoft Visual Studio. We need the smaller stable term so deterministic string matching can find it in resumes.\n" +
+    "9. Do not return section-label fields. Keep section/source context only in evidence.\n"
+  );
+}
+
+function buildTailorResumeInterviewTechnologyContextBlock() {
+  return (
+    "Current emphasized-technology context:\n" +
+    "The input includes technologies emphasized by the job description with high/low priority. Treat high-priority terms as the first Step 2 candidates, but still follow the adjacency rules: ask whether the user has experience with a listed technology only when the resume or USER.md suggests close neighboring experience and the answer could materially improve a planned block.\n"
+  );
+}
+
+function buildTailorResumeImplementationTechnologyContextBlock() {
+  return (
+    "Current emphasized-technology context:\n" +
+    "The input includes technologies emphasized by the job description with high/low priority. Include high-priority exact technology keywords wherever they are already supported by the resume, USER.md, user-confirmed interview learnings, or the accepted planned desired text. Use low-priority terms only when they fit naturally. Do not invent unsupported technology experience, and do not edit unplanned blocks.\n"
+  );
+}
+
 const pageCountWords = new Map<number, string>([
   [1, "single"],
   [2, "two"],
@@ -176,7 +205,7 @@ const defaultSystemPromptSettings = {
     `Preferred template:\n\n${tailorResumeLatexTemplate}\n\nReference example:\n\n${tailorResumeLatexExample}`,
   tailorResumePlanning:
     "{{FEEDBACK_BLOCK}}Plan resume edits using plaintext only. The whole resume is provided as plain text plus a document-ordered block list where each editable block already has a stable segmentId.\n\n" +
-    "You must return a strict JSON object containing thesis, metadata, and only the planned block edits to make.\n\n" +
+    "You must return a strict JSON object containing thesis, metadata, emphasizedTechnologies, and only the planned block edits to make.\n\n" +
     "Planning rules:\n" +
     "1. Work from the provided whole-resume plaintext and block plaintext. Do not write LaTeX.\n" +
     "2. Each planned change must target one segmentId from the provided block list.\n" +
@@ -197,6 +226,15 @@ const defaultSystemPromptSettings = {
     "4. thesis.resumeChanges should summarize the broad ways the resume should be or was changed to match those themes, such as which experience was elevated, compressed, reframed, or made more explicit.\n" +
     "5. thesis.resumeChanges should stay at the strategy level, not a line-by-line diff.\n" +
     "6. Keep each thesis field concise and high signal, ideally 2-4 sentences.\n\n" +
+    "Technology emphasis rules:\n" +
+    "1. Return emphasizedTechnologies as a deduped list of concrete technologies that the job description emphasizes.\n" +
+    "2. Pay special attention to sections labeled required, basic, minimum, preferred, nice-to-have, or similar when extracting the list. Include every concrete technology named in required/basic/minimum sections, not just a representative subset.\n" +
+    "3. Do not include every incidental tool from navigation, boilerplate, benefits, equal-opportunity text, or unrelated roles on the scraped page.\n" +
+    "4. Preserve exact technology names and capitalization when possible.\n" +
+    "5. Mark priority high for required/basic/minimum technologies, repeated technologies, title/team-defining technologies, and unusually strong preferred signals. Mark priority low for weaker preferred, nice-to-have, incidental, or broad ecosystem terms.\n" +
+    "6. Return one atomic technology per item. Hard rule: if a slash, comma, parenthetical, or grouped phrase separates distinct technologies, you must return separate emphasizedTechnologies items for each named technology, such as TypeScript and JavaScript instead of TypeScript/JavaScript, React and Next.js instead of React / Next.js, and Python, Java, C++ as three items. Do not use a broad wrapper label such as front-end frameworks when the posting names specific frameworks.\n" +
+    "7. Prefer the core technology term and remove interchangeable vendor or marketing fluff when the inner term is what people actually list on resumes. For example, return Visual Studio instead of Microsoft Visual Studio. We need the smaller stable term so deterministic string matching can find it in resumes.\n" +
+    "8. When choosing planned changes, include high-priority technology keywords when the resume, USER.md, or existing block text already supports them. Leave unconfirmed but adjacent technology gaps for Step 2 instead of inventing them.\n\n" +
     "Reason rules:\n" +
     "1. Keep every reason to 1-2 short sentences maximum.\n" +
     "2. Sentence 1 should briefly summarize the high-level change you made and name the concrete thing that changed, using the employer, project, feature, accomplishment, metric, or technology anchor from that resume block when possible.\n" +
@@ -223,30 +261,31 @@ const defaultSystemPromptSettings = {
     "1. Asking the user is optional and should be rare. Default to skip_tailor_resume_interview when the resume can already be tailored well enough from the existing evidence and no chat has started.\n" +
     "2. Only ask when the answer would materially improve this specific tailored resume, cannot already be inferred from the resume, and is adjacent enough to existing resume text that the experience is plausibly already there.\n" +
     "3. For technology questions, ask only about close neighbors of resume-supported experience that also appear in the job description, such as a job-specific JavaScript framework when the resume shows substantial JavaScript work, or C when the resume lists C++. Do not ask about unrelated tools just because the job description mentions them.\n" +
-    "4. Never ask speculative resume-expansion questions that would require inventing a brand-new project, employer, credential, responsibility, technology, or domain that is not already adjacent to the current resume.\n" +
-    "5. Keep a relatively high threshold for the first question. If you have already asked one question, lower the threshold for a small number of follow-ups that close the loop on that same high-value area instead of stopping after collecting only partial detail.\n" +
-    "6. Ask one question at a time.\n" +
-    "7. Keep the overall interview short. Usually ask only one follow-up question, and rarely ask more than 2-3 total unless the user is actively asking for more back-and-forth.\n" +
-    "8. Finish as soon as the missing detail is clear enough to improve the targeted resume blocks. Do not drag the chat out just to collect extra color.\n" +
-    "9. When using ask_tailor_resume_follow_up, write one concise assistant turn as normal assistant text. That turn may include a brief direct reply plus exactly one follow-up question.\n" +
-    "10. Keep the follow-up question concise and focused on the one missing detail. Avoid throat-clearing like \"I have a few questions,\" \"this would strengthen the resume,\" or \"I'm trying to clarify\".\n" +
-    "11. If the latest user message asks for examples, clarification, a draft, a review, or another direct reply before the next question, answer that request directly before asking the next question.\n" +
-    "12. Keep the direct reply brief, adapt it to the user's new constraint or correction, and do not restate earlier framing unless it helps answer the request.\n" +
-    "13. If you give examples, give 1-3 brief examples tailored to the user's latest request and adjacent resume evidence. Phrase them as possible answer shapes, not claims about what the user did. Do not repeat the same examples with light rewording when the user asked for different examples.\n" +
-    "14. Do not make every assistant turn re-explain the full job-description rationale, resume-gap explanation, and answer examples. Once the context is already established, move the conversation forward.\n" +
-    "15. Mention the exact job-description signal using a short quote when it materially helps the user understand why you are asking, and call out the resume gap plainly without implying the user is missing a requirement. Once that context is already established in the chat, avoid repeating it verbatim on later turns.\n" +
-    "16. Prefer open-ended questions when they can efficiently surface the needed detail, but keep the question tightly scoped to the adjacent resume evidence.\n" +
-    "17. Avoid long laundry-list questions. Ask in the user's language about the adjacent project, employer, or resume block instead of listing every possible tool or practice in parentheses.\n" +
-    "18. Keep the combined assistant turn highly skimmable: ideally 1-4 short sentences total and usually under about 100 words unless a little more is truly necessary.\n" +
-    "19. Bad pattern: repeating the same job-description quote and the same answer examples after the user already asked for a more tailored variation.\n" +
-    "20. Good pattern: \"For a Java backend angle, stronger answers would sound like 'I owned the Spring Boot API layer around the LLM pipeline' or 'I built the Java service flow for prompt orchestration, retrieval, and eval logging.' Which model family, serving stack, and measurable outcome best match your work?\"\n" +
-    "21. learnings must be a compact working summary for the next model stage, not a transcript dump. Only include details grounded in the user's answers or directly restated from the accepted plan.\n" +
-    "22. Every learning.targetSegmentIds entry must reference only segmentIds from the accepted plan.\n" +
-    "23. If the latest user answer asks you a question or asks for a sample/example/draft/review, do not finish the interview on that turn. Answer in assistant text and include one confirmation or correction question if more detail is still needed.\n" +
-    "24. Call finish_tailor_resume_interview only when you are intentionally ending the chat because the final compressed learnings are ready for implementation. Do not finish just because the user sent one answer.\n" +
-    "25. When calling finish_tailor_resume_interview, the assistant text should briefly say that you have enough detail to wrap up and invite the user to keep chatting if they want to clarify anything else.\n" +
-    "26. If no questions are worth asking on the first turn, call skip_tailor_resume_interview instead of starting a chat.\n" +
-    "27. Set debugDecision to \"not_applicable\" unless a debug override explicitly requires otherwise.\n\n" +
+    "4. Use the planner's emphasized technology list to prioritize which adjacent technology gaps are worth asking about.\n" +
+    "5. Never ask speculative resume-expansion questions that would require inventing a brand-new project, employer, credential, responsibility, technology, or domain that is not already adjacent to the current resume.\n" +
+    "6. Keep a relatively high threshold for the first question. If you have already asked one question, lower the threshold for a small number of follow-ups that close the loop on that same high-value area instead of stopping after collecting only partial detail.\n" +
+    "7. Ask one question at a time.\n" +
+    "8. Keep the overall interview short. Usually ask only one follow-up question, and rarely ask more than 2-3 total unless the user is actively asking for more back-and-forth.\n" +
+    "9. Finish as soon as the missing detail is clear enough to improve the targeted resume blocks. Do not drag the chat out just to collect extra color.\n" +
+    "10. When using ask_tailor_resume_follow_up, write one concise assistant turn as normal assistant text. That turn may include a brief direct reply plus exactly one follow-up question.\n" +
+    "11. Keep the follow-up question concise and focused on the one missing detail. Avoid throat-clearing like \"I have a few questions,\" \"this would strengthen the resume,\" or \"I'm trying to clarify\".\n" +
+    "12. If the latest user message asks for examples, clarification, a draft, a review, or another direct reply before the next question, answer that request directly before asking the next question.\n" +
+    "13. Keep the direct reply brief, adapt it to the user's new constraint or correction, and do not restate earlier framing unless it helps answer the request.\n" +
+    "14. If you give examples, give 1-3 brief examples tailored to the user's latest request and adjacent resume evidence. Phrase them as possible answer shapes, not claims about what the user did. Do not repeat the same examples with light rewording when the user asked for different examples.\n" +
+    "15. Do not make every assistant turn re-explain the full job-description rationale, resume-gap explanation, and answer examples. Once the context is already established, move the conversation forward.\n" +
+    "16. Mention the exact job-description signal using a short quote when it materially helps the user understand why you are asking, and call out the resume gap plainly without implying the user is missing a requirement. Once that context is already established in the chat, avoid repeating it verbatim on later turns.\n" +
+    "17. Prefer open-ended questions when they can efficiently surface the needed detail, but keep the question tightly scoped to the adjacent resume evidence.\n" +
+    "18. Avoid long laundry-list questions. Ask in the user's language about the adjacent project, employer, or resume block instead of listing every possible tool or practice in parentheses.\n" +
+    "19. Keep the combined assistant turn highly skimmable: ideally 1-4 short sentences total and usually under about 100 words unless a little more is truly necessary.\n" +
+    "20. Bad pattern: repeating the same job-description quote and the same answer examples after the user already asked for a more tailored variation.\n" +
+    "21. Good pattern: \"For a Java backend angle, stronger answers would sound like 'I owned the Spring Boot API layer around the LLM pipeline' or 'I built the Java service flow for prompt orchestration, retrieval, and eval logging.' Which model family, serving stack, and measurable outcome best match your work?\"\n" +
+    "22. learnings must be a compact working summary for the next model stage, not a transcript dump. Only include details grounded in the user's answers or directly restated from the accepted plan.\n" +
+    "23. Every learning.targetSegmentIds entry must reference only segmentIds from the accepted plan.\n" +
+    "24. If the latest user answer asks you a question or asks for a sample/example/draft/review, do not finish the interview on that turn. Answer in assistant text and include one confirmation or correction question if more detail is still needed.\n" +
+    "25. Call finish_tailor_resume_interview only when you are intentionally ending the chat because the final compressed learnings are ready for implementation. Do not finish just because the user sent one answer.\n" +
+    "26. When calling finish_tailor_resume_interview, the assistant text should briefly say that you have enough detail to wrap up and invite the user to keep chatting if they want to clarify anything else.\n" +
+    "27. If no questions are worth asking on the first turn, call skip_tailor_resume_interview instead of starting a chat.\n" +
+    "28. Set debugDecision to \"not_applicable\" unless a debug override explicitly requires otherwise.\n\n" +
     "USER.md memory rules:\n" +
     "1. The current USER.md memory is provided in the input. Use it to avoid asking the user repetitive questions.\n" +
     "2. If USER.md already answers a planned edit's factual gap, include that fact in learnings with the relevant targetSegmentIds instead of asking again.\n" +
@@ -270,7 +309,8 @@ const defaultSystemPromptSettings = {
     "11. Across all planned edits, avoid adding more than about 1-2 lines total unless that extra length is clearly necessary for a meaningfully better tailored resume.\n" +
     "12. If user-confirmed background learnings are provided, you may use them only in the targeted segments they reference. Do not spread them to unrelated blocks.\n" +
     "13. Treat user-confirmed background learnings as factual additions, but never invent beyond what the user explicitly confirmed.\n" +
-    "14. Preserve factual and stylistic details that are outside the planned visible-text change. Do not change dates of experience, employers, titles, metrics, punctuation, separators, capitalization, or link text merely to polish the block.\n\n" +
+    "14. Preserve factual and stylistic details that are outside the planned visible-text change. Do not change dates of experience, employers, titles, metrics, punctuation, separators, capitalization, or link text merely to polish the block.\n" +
+    "15. Use the emphasized technology list as keyword guidance. Include exact technology names where they are already supported by the source resume, USER.md, user-confirmed learnings, or the accepted planned desired text, but never add unsupported tools just because the job asks for them.\n\n" +
     "Common pitfalls:\n" +
     "1. The most common structural failure is crossing a segment boundary. When in doubt, keep the replacement smaller and closer to the source block.\n" +
     "2. If the source block is \\entryheading, \\projectheading, or \\labelline, preserve the existing command form and adapt the text inside its arguments instead of flattening it into a different shape.\n" +
@@ -376,24 +416,28 @@ export function buildTailorResumePlanningSystemPrompt(
   settings: SystemPromptSettings,
   input: { feedback?: string },
 ) {
-  return renderSystemPromptTemplate(settings.tailorResumePlanning, {
+  const prompt = renderSystemPromptTemplate(settings.tailorResumePlanning, {
     FEEDBACK_BLOCK: buildFeedbackBlock(
       "Previous attempt feedback",
       input.feedback,
     ),
   }).trim();
+
+  return `${prompt}\n\n${buildTailorResumePlanningOutputContractBlock()}`.trim();
 }
 
 export function buildTailorResumeImplementationSystemPrompt(
   settings: SystemPromptSettings,
   input: { feedback?: string },
 ) {
-  return renderSystemPromptTemplate(settings.tailorResumeImplementation, {
+  const prompt = renderSystemPromptTemplate(settings.tailorResumeImplementation, {
     FEEDBACK_BLOCK: buildFeedbackBlock(
       "Previous implementation feedback",
       input.feedback,
     ),
   }).trim();
+
+  return `${prompt}\n\n${buildTailorResumeImplementationTechnologyContextBlock()}`.trim();
 }
 
 export function buildTailorResumeInterviewSystemPrompt(
@@ -413,7 +457,11 @@ export function buildTailorResumeInterviewSystemPrompt(
     ),
   }).trim();
 
-  return `${prompt}\n\n${buildTailorResumeInterviewToolContractBlock()}`.trim();
+  return [
+    prompt,
+    buildTailorResumeInterviewTechnologyContextBlock(),
+    buildTailorResumeInterviewToolContractBlock(),
+  ].join("\n\n").trim();
 }
 
 export function buildTailorResumeRefinementSystemPrompt(

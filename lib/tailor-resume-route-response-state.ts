@@ -744,12 +744,31 @@ export async function cleanupInvalidTailorResumeArtifacts(userId: string) {
       await writeTailorResumeProfile(userId, nextRawProfile);
     }
 
-    await deleteTailorResumeArtifacts({
-      jobUrls: invalidTailoredResumes.map((record) => record.jobUrl),
-      runIds: staleRunIds,
-      tailoredResumeIds: invalidTailoredResumes.map((record) => record.id),
-      userId,
-    });
+    if (invalidTailoredResumes.length > 0) {
+      await deleteTailorResumeArtifacts({
+        jobUrls: invalidTailoredResumes.map((record) => record.jobUrl),
+        tailoredResumeIds: invalidTailoredResumes.map((record) => record.id),
+        userId,
+      });
+    }
+
+    if (staleRunIds.length > 0) {
+      await getPrismaClient().tailorResumeRun.updateMany({
+        data: {
+          error: "The Tailor Resume run expired after it stopped reporting progress.",
+          status: "CANCELLED",
+        },
+        where: {
+          id: {
+            in: staleRunIds,
+          },
+          status: {
+            in: ["RUNNING", "NEEDS_INPUT"],
+          },
+          userId,
+        },
+      });
+    }
 
     await bumpUserSyncState({
       applications: false,

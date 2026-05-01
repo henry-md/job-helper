@@ -177,6 +177,28 @@ test("parseTailoredResumePlanResponse keeps the structured thesis payload", () =
     ],
     companyName: "OpenAI",
     displayName: "OpenAI - Research Engineer",
+    emphasizedTechnologies: [
+      {
+        evidence: 'Required qualifications mention "CI/CD".',
+        name: "CI/CD",
+        priority: "high",
+      },
+      {
+        evidence: 'Preferred qualifications mention "Kubernetes".',
+        name: "Kubernetes",
+        priority: "low",
+      },
+      {
+        evidence: 'Required qualifications mention "TypeScript/JavaScript".',
+        name: "TypeScript/JavaScript",
+        priority: "high",
+      },
+      {
+        evidence: 'Preferred qualifications mention "React / Next.js".',
+        name: "React / Next.js",
+        priority: "low",
+      },
+    ],
     positionTitle: "Research Engineer",
     thesis: {
       jobDescriptionFocus:
@@ -188,6 +210,28 @@ test("parseTailoredResumePlanResponse keeps the structured thesis payload", () =
 
   assert.equal(parsed.companyName, "OpenAI");
   assert.equal(parsed.jobIdentifier, "General");
+  assert.deepEqual(parsed.emphasizedTechnologies, [
+    {
+      evidence: 'Required qualifications mention "CI/CD".',
+      name: "CI/CD",
+      priority: "high",
+    },
+    {
+      evidence: 'Preferred qualifications mention "Kubernetes".',
+      name: "Kubernetes",
+      priority: "low",
+    },
+    {
+      evidence: 'Required qualifications mention "TypeScript/JavaScript".',
+      name: "TypeScript/JavaScript",
+      priority: "high",
+    },
+    {
+      evidence: 'Preferred qualifications mention "React / Next.js".',
+      name: "React / Next.js",
+      priority: "low",
+    },
+  ]);
   assert.equal(
     parsed.thesis.jobDescriptionFocus,
     "Over-indexes on research infrastructure and rigorous CI/CD expectations beyond generic software engineering signals.",

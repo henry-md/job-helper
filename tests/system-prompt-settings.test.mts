@@ -78,6 +78,27 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
 
   assert.match(prompt, /Previous attempt feedback:/);
   assert.match(prompt, /Missing thesis object/);
+  assert.match(prompt, /emphasizedTechnologies/);
+  assert.match(prompt, /priority must be exactly high or low/i);
+  assert.match(prompt, /required\/basic\/minimum/i);
+  assert.match(
+    prompt,
+    /Hard rule: if a slash, comma, parenthetical, or grouped phrase separates/i,
+  );
+  assert.match(
+    prompt,
+    /must return separate emphasizedTechnologies items/i,
+  );
+  assert.match(
+    prompt,
+    /TypeScript and JavaScript instead of TypeScript\/JavaScript/i,
+  );
+  assert.match(
+    prompt,
+    /React and Next\.js instead of React \/ Next\.js/i,
+  );
+  assert.match(prompt, /Visual Studio instead of Microsoft Visual Studio/i);
+  assert.match(prompt, /deterministic string matching/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 
@@ -126,6 +147,7 @@ test("buildTailorResumeInterviewSystemPrompt keeps user-facing interview text ou
   assert.match(prompt, /close neighbors of resume-supported experience/i);
   assert.match(prompt, /JavaScript framework/i);
   assert.match(prompt, /resume lists C\+\+/i);
+  assert.match(prompt, /high-priority terms as the first Step 2 candidates/i);
   assert.match(prompt, /Spring Boot API layer around the LLM pipeline/i);
   assert.match(prompt, /prompt orchestration, retrieval, and eval logging/i);
   assert.match(prompt, /Which model family, serving stack, and measurable outcome best match your work/i);
@@ -166,6 +188,8 @@ test("buildTailorResumeImplementationSystemPrompt injects retry feedback", () =>
   assert.match(prompt, /Unknown segment returned/);
   assert.match(prompt, /Do not change dates of experience/i);
   assert.match(prompt, /punctuation, separators, capitalization, or link text/i);
+  assert.match(prompt, /high-priority exact technology keywords/i);
+  assert.match(prompt, /Use low-priority terms only when they fit naturally/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 
