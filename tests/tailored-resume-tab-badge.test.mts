@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { buildCompanyResumeDownloadName } from "../extension/src/tailored-resume-download-name.ts";
 import { resolveTailoredResumeTabBadge } from "../extension/src/tailored-resume-tab-badge.ts";
 import type {
   TailorResumeExistingTailoringState,
@@ -30,9 +31,17 @@ function buildTailoredResumeSummary(
     companyName: "Example Corp",
     createdAt: "2026-04-25T15:10:00.000Z",
     displayName: "Example Corp - Software Engineer",
+    emphasizedTechnologies: [
+      {
+        evidence: "Required section lists TypeScript.",
+        name: "TypeScript",
+        priority: "high",
+      },
+    ],
     id: "tailored-123",
     jobIdentifier: "Software Engineer",
     jobUrl: "https://jobs.example.com/roles/123?utm_campaign=saved",
+    keywordCoverage: null,
     positionTitle: "Software Engineer",
     status: "ready",
     updatedAt: "2026-04-25T15:10:00.000Z",
@@ -70,8 +79,18 @@ test("returns a tab badge for a completed tailored resume matching the page URL"
 
   assert.deepEqual(badge, {
     badgeKey: "tailored-resume:tailored-123",
+    companyName: "Example Corp",
     displayName: "Example Corp - Software Engineer",
+    downloadName: "Example Corp Resume.pdf",
+    emphasizedTechnologies: [
+      {
+        evidence: "Required section lists TypeScript.",
+        name: "TypeScript",
+        priority: "high",
+      },
+    ],
     jobUrl: "https://jobs.example.com/roles/123?utm_campaign=saved",
+    keywordCoverage: null,
     tailoredResumeId: "tailored-123",
   });
 });
@@ -84,6 +103,23 @@ test("does not show the generated-resume badge while a matching run is active", 
   });
 
   assert.equal(badge, null);
+});
+
+test("builds company resume download names from company or display name", () => {
+  assert.equal(
+    buildCompanyResumeDownloadName({
+      companyName: "Notion",
+      displayName: "Notion - Product Designer",
+    }),
+    "Notion Resume.pdf",
+  );
+  assert.equal(
+    buildCompanyResumeDownloadName({
+      companyName: null,
+      displayName: "Acme/AI - Senior Product Engineer",
+    }),
+    "Acme-AI Resume.pdf",
+  );
 });
 
 test("does not show the generated-resume badge for failed completed artifacts", () => {

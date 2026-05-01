@@ -1,16 +1,23 @@
 import type {
   TailorResumeExistingTailoringState,
+  TailoredResumeEmphasizedTechnology,
+  TailoredResumeKeywordCoverage,
   TailoredResumeSummary,
 } from "./job-helper.ts";
 import {
   resolveCompletedTailoringForPage,
   type TailorOverwritePageIdentity,
 } from "./tailor-overwrite-guard.ts";
+import { buildCompanyResumeDownloadName } from "./tailored-resume-download-name.ts";
 
 export type TailoredResumeTabBadgeSummary = {
   badgeKey: string;
+  companyName: string | null;
   displayName: string;
+  downloadName: string;
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
   jobUrl: string | null;
+  keywordCoverage: TailoredResumeKeywordCoverage | null;
   tailoredResumeId: string;
 };
 
@@ -46,10 +53,19 @@ export function resolveTailoredResumeTabBadge(input: {
     return null;
   }
 
+  const tailoredResume =
+    input.tailoredResumes.find(
+      (resume) => resume.id === completedTailoring.tailoredResumeId,
+    ) ?? null;
+
   return {
     badgeKey: `tailored-resume:${completedTailoring.tailoredResumeId}`,
+    companyName: completedTailoring.companyName,
     displayName: completedTailoring.displayName,
+    downloadName: buildCompanyResumeDownloadName(completedTailoring),
+    emphasizedTechnologies: completedTailoring.emphasizedTechnologies,
     jobUrl: completedTailoring.jobUrl,
+    keywordCoverage: tailoredResume?.keywordCoverage ?? null,
     tailoredResumeId: completedTailoring.tailoredResumeId,
   };
 }

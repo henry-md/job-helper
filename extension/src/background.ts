@@ -8,16 +8,19 @@ import {
   DEFAULT_DASHBOARD_URL,
   DEFAULT_SYNC_STATE_ENDPOINT,
   DEFAULT_TAILOR_RESUME_ENDPOINT,
+  DEFAULT_TAILOR_RESUME_PREVIEW_ENDPOINT,
   EXISTING_TAILORING_STORAGE_KEY,
   EXTENSION_AUTH_GOOGLE_ENDPOINT,
   EXTENSION_AUTH_SESSION_ENDPOINT,
   EXTENSION_BROWSER_SESSION_ENDPOINT,
+  isJobHelperAppUrl,
   LAST_TAILORING_STORAGE_KEY,
   normalizeComparableUrl,
   PREPARING_TAILORING_STORAGE_KEY,
   TAILORING_PREPARATIONS_STORAGE_KEY,
   TAILORING_PROMPTS_STORAGE_KEY,
   TAILORING_RUNS_STORAGE_KEY,
+  TAILORED_RESUME_REVIEW_REQUEST_STORAGE_KEY,
   type JobHelperAuthSession,
   type JobHelperAuthUser,
   type JobPageContext,
@@ -27,6 +30,7 @@ import {
   readTailorResumeExistingTailoringState,
   readTailorResumeExistingTailoringStates,
   type TailorResumeGenerationStepSummary,
+  type TailorResumeGenerationStepTiming,
   type PersonalInfoSummary,
   readTailorResumeProfileSummary,
   type TailorResumeRunRecord,
@@ -59,6 +63,10 @@ import {
 } from "./tailor-overwrite-guard";
 import { resolveTailoredResumeTabBadge } from "./tailored-resume-tab-badge";
 import {
+  buildCompanyResumeDownloadName,
+  sanitizeResumeDownloadFilenameBase,
+} from "./tailored-resume-download-name";
+import {
   buildTailorRunRegistryKey,
   readTailorRunRegistryKeyFromPageContext,
   readTailorRunRegistryKeyFromTab,
@@ -66,6 +74,7 @@ import {
 import {
   buildTailorResumeLiveStatusMessage as buildLiveTailorResumeStatusMessage,
 } from "../../lib/tailor-resume-step-display.ts";
+import { mergeTailorResumeGenerationStepTiming } from "./tailor-run-step-timing";
 
 type OverlayTone = "error" | "info" | "success" | "warning";
 
@@ -225,6 +234,7 @@ function buildRunningTailoringRunRecord(input: {
   message?: string;
   pageContext?: JobPageContext | null;
   step?: TailorResumeGenerationStepSummary | null;
+  stepTimings?: TailorResumeGenerationStepTiming[];
   suppressedTailoredResumeId?: string | null;
   tab: chrome.tabs.Tab | null;
 }) {
@@ -238,6 +248,7 @@ function buildRunningTailoringRunRecord(input: {
     companyName: pageApplicationContext?.companyName ?? null,
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
     generationStep: input.step ?? null,
+    generationStepTimings: input.stepTimings ?? [],
     jobIdentifier: null,
     message:
       input.message ?? buildLiveTailorResumeStatusMessage(input.step ?? null),
@@ -256,6 +267,7 @@ function buildFailedTailoringRunRecord(input: {
   message: string;
   pageContext?: JobPageContext | null;
   step?: TailorResumeGenerationStepSummary | null;
+  stepTimings?: TailorResumeGenerationStepTiming[];
   tab: chrome.tabs.Tab | null;
 }) {
   const pageApplicationContext = input.pageContext
@@ -268,6 +280,7 @@ function buildFailedTailoringRunRecord(input: {
     companyName: pageApplicationContext?.companyName ?? null,
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
     generationStep: input.step ?? null,
+    generationStepTimings: input.stepTimings ?? [],
     jobIdentifier: null,
     message: input.message,
     pageTitle: input.pageContext?.title || cleanText(input.tab?.title) || null,
@@ -345,8 +358,18 @@ async function sendTailoredResumeBadgeMessage(
     | {
         payload: {
           badgeKey: string;
+          companyName: string | null;
           displayName: string;
+          downloadName: string;
+          emphasizedTechnologies: {
+            evidence: string;
+            name: string;
+            priority: "high" | "low";
+          }[];
+          includeLowPriorityTermsInKeywordCoverage: boolean;
           jobUrl: string | null;
+          keywordCoverage: unknown;
+          tailoredResumeId: string;
         };
         type: "JOB_HELPER_SHOW_TAILORED_RESUME_BADGE";
       }
@@ -435,7 +458,7 @@ async function refreshTailoredResumeBadgeForTab(
 
   const tabUrl = cleanText(latestTab.url) || cleanText(latestTab.pendingUrl);
 
-  if (!isHttpTabUrl(tabUrl)) {
+  if (!isHttpTabUrl(tabUrl) || isJobHelperAppUrl(tabUrl)) {
     await sendTailoredResumeBadgeMessage(tabId, {
       type: "JOB_HELPER_HIDE_TAILORED_RESUME_BADGE",
     });
@@ -443,6 +466,17 @@ async function refreshTailoredResumeBadgeForTab(
   }
 
   const pageIdentity = await readTailoredResumeBadgePageIdentity(latestTab);
+
+  if (
+    isJobHelperAppUrl(pageIdentity.pageUrl) ||
+    isJobHelperAppUrl(pageIdentity.jobUrl) ||
+    isJobHelperAppUrl(pageIdentity.canonicalUrl)
+  ) {
+    await sendTailoredResumeBadgeMessage(tabId, {
+      type: "JOB_HELPER_HIDE_TAILORED_RESUME_BADGE",
+    });
+    return;
+  }
 
   if (
     !isHttpTabUrl(pageIdentity.pageUrl) &&
@@ -475,7 +509,11 @@ async function refreshTailoredResumeBadgeForTab(
   }
 
   await sendTailoredResumeBadgeMessage(tabId, {
-    payload: badge,
+    payload: {
+      ...badge,
+      includeLowPriorityTermsInKeywordCoverage:
+        personalInfo.generationSettings.includeLowPriorityTermsInKeywordCoverage,
+    },
     type: "JOB_HELPER_SHOW_TAILORED_RESUME_BADGE",
   });
 }
@@ -821,6 +859,91 @@ function readResponseError(
 function authorizationHeaders(session: JobHelperAuthSession) {
   return {
     Authorization: `Bearer ${session.sessionToken}`,
+  };
+}
+
+function buildTailoredResumePreviewDownloadUrl(tailoredResumeId: string) {
+  const url = new URL(DEFAULT_TAILOR_RESUME_PREVIEW_ENDPOINT);
+  url.searchParams.set("tailoredResumeId", tailoredResumeId);
+  return url.toString();
+}
+
+function normalizeTailoredResumeDownloadName(value: string) {
+  const rawBaseName = value.replace(/\.pdf$/i, "");
+  const baseName =
+    sanitizeResumeDownloadFilenameBase(rawBaseName) ||
+    sanitizeResumeDownloadFilenameBase(
+      buildCompanyResumeDownloadName({
+        companyName: null,
+        displayName: null,
+      }).replace(/\.pdf$/i, ""),
+    );
+
+  return `${baseName || "Tailored Resume"}.pdf`;
+}
+
+async function blobToDataUrl(blob: Blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+
+  return `data:${blob.type || "application/pdf"};base64,${btoa(binary)}`;
+}
+
+async function downloadTailoredResumePdf(input: {
+  downloadName: string;
+  tailoredResumeId: string;
+}) {
+  const tailoredResumeId = input.tailoredResumeId.trim();
+
+  if (!tailoredResumeId) {
+    throw new Error("Could not download the resume because its ID is missing.");
+  }
+
+  if (!chrome.downloads?.download) {
+    throw new Error("Chrome downloads are not available in this extension context.");
+  }
+
+  const filename = normalizeTailoredResumeDownloadName(
+    input.downloadName || buildCompanyResumeDownloadName(null),
+  );
+  const session = await ensureJobHelperSession({ interactive: false });
+  const response = await fetch(
+    buildTailoredResumePreviewDownloadUrl(tailoredResumeId),
+    {
+      cache: "no-store",
+      credentials: "include",
+      headers: authorizationHeaders(session),
+    },
+  );
+
+  if (response.status === 401) {
+    await clearStoredAuthSession();
+  }
+
+  if (!response.ok) {
+    const payload = await response
+      .clone()
+      .json()
+      .catch(() => ({} as Record<string, unknown>));
+
+    throw new Error(
+      readResponseError(payload, "Could not download the tailored resume."),
+    );
+  }
+
+  const downloadId = await chrome.downloads.download({
+    filename,
+    saveAs: false,
+    url: await blobToDataUrl(await response.blob()),
+  });
+
+  return {
+    downloadId,
+    filename,
   };
 }
 
@@ -1243,10 +1366,16 @@ async function goToBrowserTab(url: string) {
   };
 }
 
-async function triggerTailorResumeRegeneration(url: string) {
-  const result = await focusOrCreateBrowserTab(url);
+async function triggerTailorResumeRegeneration(input: {
+  overwriteTargetApplicationId?: string | null;
+  overwriteTargetTailoredResumeId?: string | null;
+  url: string;
+}) {
+  const result = await focusOrCreateBrowserTab(input.url);
   void runCaptureFlow({
     openSidePanel: true,
+    overwriteTargetApplicationId: input.overwriteTargetApplicationId,
+    overwriteTargetTailoredResumeId: input.overwriteTargetTailoredResumeId,
     overwriteExisting: true,
     tab: result.tab,
   });
@@ -1640,6 +1769,7 @@ async function tailorResumeForTab(input: {
   }
 
   let latestStepEvent: TailorResumeGenerationStepSummary | null = null;
+  let latestStepTimings: TailorResumeGenerationStepTiming[] = [];
   let result: Awaited<ReturnType<typeof patchTailorResume>>;
 
   try {
@@ -1675,6 +1805,11 @@ async function tailorResumeForTab(input: {
           }
 
               latestStepEvent = stepEvent;
+              latestStepTimings = mergeTailorResumeGenerationStepTiming({
+                observedAt: new Date().toISOString(),
+                step: stepEvent,
+                timings: latestStepTimings,
+              });
               requestSharedPersonalInfoRefresh();
               void persistResult(
                 pageKey,
@@ -1683,6 +1818,7 @@ async function tailorResumeForTab(input: {
                   capturedAt,
                   pageContext,
                   step: stepEvent,
+                  stepTimings: latestStepTimings,
                   suppressedTailoredResumeId: overwriteTargetTailoredResumeId,
                   tab: readyTab,
                 }),
@@ -1703,6 +1839,7 @@ async function tailorResumeForTab(input: {
       message,
       pageContext,
       step: latestStepEvent,
+      stepTimings: latestStepTimings,
       tab: readyTab,
     });
 
@@ -1767,6 +1904,7 @@ async function tailorResumeForTab(input: {
       message,
       pageContext,
       step: latestStepEvent,
+      stepTimings: latestStepTimings,
       tab: readyTab,
     });
 
@@ -2299,6 +2437,31 @@ chrome.runtime.onMessage.addListener((
     });
   }
 
+  if (typedMessage?.type === "JOB_HELPER_OPEN_TAILORED_RESUME_REVIEW") {
+    return sendAsyncResponse(sendResponse, async () => {
+      const tailoredResumeId = readPayloadString(
+        typedMessage.payload,
+        "tailoredResumeId",
+      );
+
+      if (!tailoredResumeId) {
+        throw new Error("Could not open the resume review because the id is missing.");
+      }
+
+      await chrome.storage.local.set({
+        [TAILORED_RESUME_REVIEW_REQUEST_STORAGE_KEY]: {
+          createdAt: new Date().toISOString(),
+          tailoredResumeId,
+          view: "quickReview",
+        },
+      });
+
+      await openSidePanelForTab(sender.tab ?? (await getActiveTab()));
+
+      return {};
+    });
+  }
+
   if (typedMessage?.type === "JOB_HELPER_GO_TO_TAB") {
     return sendAsyncResponse(sendResponse, async () => {
       const url = readPayloadString(typedMessage.payload, "url");
@@ -2311,15 +2474,37 @@ chrome.runtime.onMessage.addListener((
     });
   }
 
+  if (typedMessage?.type === "JOB_HELPER_DOWNLOAD_TAILORED_RESUME") {
+    return sendAsyncResponse(sendResponse, async () =>
+      downloadTailoredResumePdf({
+        downloadName: readPayloadString(typedMessage.payload, "downloadName"),
+        tailoredResumeId: readPayloadString(
+          typedMessage.payload,
+          "tailoredResumeId",
+        ),
+      }),
+    );
+  }
+
   if (typedMessage?.type === "JOB_HELPER_REGENERATE_TAILORING") {
     return sendAsyncResponse(sendResponse, async () => {
       const url = readPayloadString(typedMessage.payload, "url");
 
       if (!url) {
-        throw new Error("Could not regenerate those edits because the job URL is missing.");
+        throw new Error("Could not retry tailoring because the job URL is missing.");
       }
 
-      return triggerTailorResumeRegeneration(url);
+      return triggerTailorResumeRegeneration({
+        overwriteTargetApplicationId: readPayloadString(
+          typedMessage.payload,
+          "existingTailoringApplicationId",
+        ),
+        overwriteTargetTailoredResumeId: readPayloadString(
+          typedMessage.payload,
+          "existingTailoringTailoredResumeId",
+        ),
+        url,
+      });
     });
   }
 });

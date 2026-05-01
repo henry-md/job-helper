@@ -38,6 +38,7 @@ function buildCompletedExistingTailoringState(
     companyName: tailoredResume.companyName,
     createdAt: tailoredResume.createdAt,
     displayName: tailoredResume.displayName,
+    emphasizedTechnologies: tailoredResume.emphasizedTechnologies,
     error: null,
     id: tailoredResume.id,
     jobIdentifier: tailoredResume.jobIdentifier,

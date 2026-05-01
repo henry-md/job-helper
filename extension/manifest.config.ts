@@ -51,7 +51,14 @@ export function createManifest(env: ManifestEnv = process.env) {
       service_worker: "src/background.ts",
       type: "module",
     },
-    permissions: ["identity", "scripting", "sidePanel", "storage", "tabs"],
+    permissions: [
+      "downloads",
+      "identity",
+      "scripting",
+      "sidePanel",
+      "storage",
+      "tabs",
+    ],
     host_permissions: ["<all_urls>"],
     ...(extensionPublicKey ? { key: extensionPublicKey } : {}),
     ...(googleExtensionClientId

@@ -34,6 +34,7 @@ function buildActiveTailoring(
     lastStep: {
       attempt: number | null;
       detail: string | null;
+      durationMs: number;
       retrying: boolean;
       status: "failed" | "running" | "skipped" | "succeeded";
       stepCount: number;
@@ -64,9 +65,15 @@ function buildTailoredResumeSummary(
     companyName: string | null;
     createdAt: string;
     displayName: string;
+    emphasizedTechnologies: Array<{
+      evidence: string;
+      name: string;
+      priority: "high" | "low";
+    }>;
     id: string;
     jobIdentifier: string | null;
     jobUrl: string | null;
+    keywordCoverage: null;
     positionTitle: string | null;
     status: string | null;
     updatedAt: string;
@@ -78,9 +85,11 @@ function buildTailoredResumeSummary(
     companyName: "Example Corp",
     createdAt: "2026-04-25T15:10:00.000Z",
     displayName: "Example Corp - Software Engineer",
+    emphasizedTechnologies: [],
     id: "tailored-123",
     jobIdentifier: "Software Engineer",
     jobUrl: "https://jobs.example.com/roles/123?utm_campaign=saved",
+    keywordCoverage: null,
     positionTitle: "Software Engineer",
     status: "ready",
     updatedAt: "2026-04-25T15:10:00.000Z",
@@ -111,6 +120,7 @@ test("returns a completed overwrite prompt when a saved tailored resume matches"
     companyName: "Example Corp",
     createdAt: "2026-04-25T15:10:00.000Z",
     displayName: "Example Corp - Software Engineer",
+    emphasizedTechnologies: [],
     error: null,
     id: "tailored-123",
     jobIdentifier: "Software Engineer",

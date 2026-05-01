@@ -1,6 +1,7 @@
 import {
   AUTH_SESSION_STORAGE_KEY,
   DEFAULT_TAILOR_RESUME_ENDPOINT,
+  defaultExtensionPreferences,
   EXISTING_TAILORING_STORAGE_KEY,
   EXTENSION_PREFERENCES_STORAGE_KEY,
   LAST_TAILORING_STORAGE_KEY,
@@ -108,10 +109,24 @@ function createMockTailoringRun(
 ) {
   const isStep4Error = variant === "step4-error";
   const isStep4Retry = isStep4Error || variant === "step4-running";
+  const nowTime = Date.now();
+  const step1DurationMs = 44_000;
+  const step2DurationMs = 72_000;
+  const step3DurationMs = 132_000;
+  const step4DurationMs = 17_000;
+  const runningStartedAtTime = nowTime - step4DurationMs;
+  const capturedAtTime =
+    status === "running" && isStep4Retry
+      ? nowTime -
+        step1DurationMs -
+        step2DurationMs -
+        step3DurationMs -
+        step4DurationMs
+      : Date.parse("2026-04-21T23:10:00.000Z");
 
 	  return {
 	    applicationId: null,
-	    capturedAt: new Date("2026-04-21T23:10:00.000Z").toISOString(),
+	    capturedAt: new Date(capturedAtTime).toISOString(),
     companyName: "Acme AI",
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
     message:
@@ -127,6 +142,7 @@ function createMockTailoringRun(
           attempt: 2,
           detail:
             "The model did not submit verified compaction candidates after 4 Step 4 tool rounds.",
+          durationMs: isStep4Error ? step4DurationMs : 0,
           retrying: true,
           status: "running",
           stepCount: 4,
@@ -134,6 +150,62 @@ function createMockTailoringRun(
           summary: "Keeping the tailored resume within the original page count",
         }
       : null,
+    generationStepTimings: isStep4Retry
+      ? [
+          {
+            attempt: 1,
+            detail: "Finished planning targeted edits.",
+            durationMs: step1DurationMs,
+            observedAt: new Date(capturedAtTime + step1DurationMs).toISOString(),
+            retrying: false,
+            status: "succeeded",
+            stepCount: 4,
+            stepNumber: 1,
+            summary: "Generating plaintext edit outline",
+          },
+          {
+            attempt: 1,
+            detail: "No follow-up questions were needed.",
+            durationMs: step2DurationMs,
+            observedAt: new Date(
+              capturedAtTime + step1DurationMs + step2DurationMs,
+            ).toISOString(),
+            retrying: false,
+            status: "succeeded",
+            stepCount: 4,
+            stepNumber: 2,
+            summary: "No need to ask the user any follow-up questions",
+          },
+          {
+            attempt: 1,
+            detail: "Generated block-scoped edits.",
+            durationMs: step3DurationMs,
+            observedAt: new Date(
+              capturedAtTime +
+                step1DurationMs +
+                step2DurationMs +
+                step3DurationMs,
+            ).toISOString(),
+            retrying: false,
+            status: "succeeded",
+            stepCount: 4,
+            stepNumber: 3,
+            summary: "Generating block-scoped edits",
+          },
+          {
+            attempt: 2,
+            detail:
+              "The model did not submit verified compaction candidates after 4 Step 4 tool rounds.",
+            durationMs: isStep4Error ? step4DurationMs : 0,
+            observedAt: new Date(runningStartedAtTime).toISOString(),
+            retrying: true,
+            status: "running",
+            stepCount: 4,
+            stepNumber: 4,
+            summary: "Keeping the tailored resume within the original page count",
+          },
+        ]
+      : [],
     jobIdentifier: null,
     pageTitle: mockPageContext.title,
     pageUrl: mockPageContext.url,
@@ -158,9 +230,11 @@ function createMockTailoredResumes() {
       companyName: "Microsoft",
       createdAt: new Date("2026-04-21T23:17:00.000Z").toISOString(),
       displayName: "Microsoft - Software Engineer",
+      emphasizedTechnologies: [],
       id: "debug-tailored-resume",
       jobIdentifier: null,
       jobUrl: "https://careers.microsoft.com/jobs/debug-tailored-resume",
+      keywordCoverage: null,
       positionTitle: "Software Engineer",
       status: "ready",
       updatedAt: new Date("2026-04-21T23:17:00.000Z").toISOString(),
@@ -191,11 +265,18 @@ function readInitialTailoringRun(searchParams: URLSearchParams) {
 }
 
 function readInitialExtensionPreferences(searchParams: URLSearchParams) {
+  const rawTimeMode =
+    searchParams.get("timeMode") ?? searchParams.get("time") ?? "";
+
   return {
     compactTailorRun:
       searchParams.get("compact") === "1" ||
       searchParams.get("compact") === "true" ||
       searchParams.get("compact") === "on",
+    tailorRunTimeDisplayMode:
+      rawTimeMode === "aggregate" || rawTimeMode === "specific"
+        ? rawTimeMode
+        : defaultExtensionPreferences.tailorRunTimeDisplayMode,
   };
 }
 
@@ -289,7 +370,11 @@ export function installDebugChromeRuntime() {
     }
   }
 
-  if (initialExtensionPreferences.compactTailorRun) {
+  if (
+    initialExtensionPreferences.compactTailorRun ||
+    initialExtensionPreferences.tailorRunTimeDisplayMode !==
+      defaultExtensionPreferences.tailorRunTimeDisplayMode
+  ) {
     storage.set(
       EXTENSION_PREFERENCES_STORAGE_KEY,
       initialExtensionPreferences,
@@ -322,6 +407,11 @@ export function installDebugChromeRuntime() {
       applicationCount: 0,
       applications: [],
       companyCount: 0,
+      generationSettings: {
+        allowTailorResumeFollowUpQuestions: true,
+        includeLowPriorityTermsInKeywordCoverage: false,
+        preventPageCountIncrease: true,
+      },
       originalResume: {
         error: null,
         filename: "Henry Deutsch Resume.pdf",
@@ -503,6 +593,36 @@ export function installDebugChromeRuntime() {
 
         if (type === "JOB_HELPER_OPEN_DASHBOARD") {
           return { ok: true };
+        }
+
+        if (type === "JOB_HELPER_DOWNLOAD_TAILORED_RESUME") {
+          const payload =
+            isRecord(message) && isRecord(message.payload)
+              ? message.payload
+              : {};
+          const filename =
+            typeof payload.downloadName === "string" && payload.downloadName.trim()
+              ? payload.downloadName.trim()
+              : "Tailored Resume.pdf";
+          const debugDownloadsHost = globalThis as typeof globalThis & {
+            __jobHelperDebugDownloads?: Array<{
+              filename: string;
+              tailoredResumeId: string | null;
+            }>;
+          };
+
+          debugDownloadsHost.__jobHelperDebugDownloads = [
+            ...(debugDownloadsHost.__jobHelperDebugDownloads ?? []),
+            {
+              filename,
+              tailoredResumeId:
+                typeof payload.tailoredResumeId === "string"
+                  ? payload.tailoredResumeId
+                  : null,
+            },
+          ];
+
+          return { filename, ok: true };
         }
 
         return { ok: true };

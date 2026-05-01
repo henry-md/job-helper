@@ -55,9 +55,57 @@ export const EXTENSION_AUTH_SESSION_ENDPOINT =
   `${DEFAULT_APP_BASE_URL}/api/extension/auth/session`;
 export const EXTENSION_BROWSER_SESSION_ENDPOINT =
   `${DEFAULT_APP_BASE_URL}/api/extension/auth/browser-session`;
+
+function isLoopbackHostname(value: string) {
+  const normalizedValue = value.trim().toLowerCase();
+
+  return (
+    normalizedValue === "localhost" ||
+    normalizedValue === "127.0.0.1" ||
+    normalizedValue === "::1" ||
+    normalizedValue === "[::1]"
+  );
+}
+
+function readUrlPort(url: URL) {
+  if (url.port) {
+    return url.port;
+  }
+
+  return url.protocol === "https:" ? "443" : url.protocol === "http:" ? "80" : "";
+}
+
+export function isJobHelperAppUrl(value: string | null | undefined) {
+  const trimmedValue = value?.trim();
+
+  if (!trimmedValue) {
+    return false;
+  }
+
+  try {
+    const appUrl = new URL(DEFAULT_APP_BASE_URL);
+    const url = new URL(trimmedValue);
+
+    if (url.origin === appUrl.origin) {
+      return true;
+    }
+
+    return (
+      url.protocol === appUrl.protocol &&
+      readUrlPort(url) === readUrlPort(appUrl) &&
+      isLoopbackHostname(url.hostname) &&
+      isLoopbackHostname(appUrl.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export const AUTH_SESSION_STORAGE_KEY = "jobHelperAuthSession";
 export const EXTENSION_PREFERENCES_STORAGE_KEY = "jobHelperExtensionPreferences";
 export const LAST_TAILORING_STORAGE_KEY = "jobHelperLastTailoringRun";
+export const TAILORED_RESUME_REVIEW_REQUEST_STORAGE_KEY =
+  "jobHelperTailoredResumeReviewRequest";
 export const EXISTING_TAILORING_STORAGE_KEY =
   "jobHelperExistingTailoringPrompt";
 export const PREPARING_TAILORING_STORAGE_KEY =
@@ -66,6 +114,25 @@ export const TAILORING_RUNS_STORAGE_KEY = "jobHelperTailoringRuns";
 export const TAILORING_PROMPTS_STORAGE_KEY = "jobHelperTailoringPrompts";
 export const TAILORING_PREPARATIONS_STORAGE_KEY =
   "jobHelperTailoringPreparations";
+
+export type TailorRunTimeDisplayMode = "aggregate" | "specific";
+
+export type ExtensionPreferences = {
+  compactTailorRun: boolean;
+  tailorRunTimeDisplayMode: TailorRunTimeDisplayMode;
+};
+
+export const defaultExtensionPreferences: ExtensionPreferences = {
+  compactTailorRun: false,
+  tailorRunTimeDisplayMode: "specific",
+};
+
+export const defaultTailorResumeGenerationSettingsSummary:
+  TailorResumeGenerationSettingsSummary = {
+    allowTailorResumeFollowUpQuestions: true,
+    includeLowPriorityTermsInKeywordCoverage: false,
+    preventPageCountIncrease: true,
+  };
 
 export function buildTailoredResumeReviewUrl(
   tailoredResumeId: string | null | undefined,
@@ -128,6 +195,7 @@ export type TailorResumeRunRecord = {
   companyName: string | null;
   failureKind?: "page_capture" | null;
   generationStep?: TailorResumeGenerationStepSummary | null;
+  generationStepTimings?: TailorResumeGenerationStepTiming[];
   jobIdentifier: string | null;
   message: string;
   pageTitle: string | null;
@@ -152,12 +220,52 @@ export type TailoredResumeSummary = {
   companyName: string | null;
   createdAt: string;
   displayName: string;
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
   id: string;
   jobIdentifier: string | null;
   jobUrl: string | null;
+  keywordCoverage: TailoredResumeKeywordCoverage | null;
   positionTitle: string | null;
   status: string | null;
   updatedAt: string;
+};
+
+export type TailoredResumeEmphasizedTechnology = {
+  evidence: string;
+  name: string;
+  priority: "high" | "low";
+};
+
+export type TailoredResumeKeywordCoverageTerm = {
+  name: string;
+  presentInOriginal: boolean;
+  presentInTailored: boolean;
+  priority: "high" | "low";
+};
+
+export type TailoredResumeKeywordCoverageBucket = {
+  addedTerms: string[];
+  matchedOriginalTerms: string[];
+  matchedTailoredTerms: string[];
+  originalHitCount: number;
+  originalHitPercentage: number;
+  tailoredHitCount: number;
+  tailoredHitPercentage: number;
+  terms: TailoredResumeKeywordCoverageTerm[];
+  totalTermCount: number;
+};
+
+export type TailoredResumeKeywordCoverage = {
+  allPriorities: TailoredResumeKeywordCoverageBucket;
+  highPriority: TailoredResumeKeywordCoverageBucket;
+  matcherVersion: 1;
+  updatedAt: string;
+};
+
+export type TailorResumeGenerationSettingsSummary = {
+  allowTailorResumeFollowUpQuestions: boolean;
+  includeLowPriorityTermsInKeywordCoverage: boolean;
+  preventPageCountIncrease: boolean;
 };
 
 export type TrackedApplicationSummary = {
@@ -185,6 +293,7 @@ export type PersonalInfoSummary = {
   applicationCount: number;
   applications: TrackedApplicationSummary[];
   companyCount: number;
+  generationSettings: TailorResumeGenerationSettingsSummary;
   originalResume: OriginalResumeSummary;
   syncState: UserSyncStateSnapshot;
   tailoredResumes: TailoredResumeSummary[];
@@ -233,12 +342,18 @@ export type TailorResumePendingInterviewSummary = {
 export type TailorResumeGenerationStepSummary = {
   attempt: number | null;
   detail: string | null;
+  durationMs: number;
   retrying: boolean;
   status: "failed" | "running" | "skipped" | "succeeded";
   stepCount: number;
   stepNumber: number;
   summary: string;
 };
+
+export type TailorResumeGenerationStepTiming =
+  TailorResumeGenerationStepSummary & {
+    observedAt: string | null;
+  };
 
 export type TailorResumeExistingTailoringState =
   | {
@@ -263,6 +378,7 @@ export type TailorResumeExistingTailoringState =
       jobIdentifier: string | null;
       jobUrl: string | null;
       kind: "pending_interview";
+      emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
       positionTitle: string | null;
       questionCount: number | null;
       updatedAt: string;
@@ -274,6 +390,7 @@ export type TailorResumeExistingTailoringState =
       displayName: string;
       error: string | null;
       id: string;
+      emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
       jobIdentifier: string | null;
       jobUrl: string | null;
       kind: "completed";
@@ -588,6 +705,9 @@ export function readTailoredResumeSummary(
   const createdAt = readString(value.createdAt);
   const displayName = readString(value.displayName);
   const updatedAt = readString(value.updatedAt);
+  const planningResult = isRecord(value.planningResult)
+    ? value.planningResult
+    : null;
 
   if (!createdAt || !id || !displayName || !updatedAt) {
     return null;
@@ -599,9 +719,13 @@ export function readTailoredResumeSummary(
     companyName: readString(value.companyName) || null,
     createdAt,
     displayName,
+    emphasizedTechnologies: readTailoredResumeEmphasizedTechnologies(
+      planningResult?.emphasizedTechnologies ?? value.emphasizedTechnologies,
+    ),
     id,
     jobIdentifier: readNullableString(value.jobIdentifier),
     jobUrl: readNullableString(value.jobUrl),
+    keywordCoverage: readTailoredResumeKeywordCoverage(value.keywordCoverage),
     positionTitle: readString(value.positionTitle) || null,
     status: readString(value.status) || null,
     updatedAt,
@@ -726,6 +850,203 @@ function readTailorResumeQuestioningSummary(
   };
 }
 
+function readTailoredResumeEmphasizedTechnologies(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailoredResumeEmphasizedTechnology[];
+  }
+
+  const seen = new Set<string>();
+  const technologies: TailoredResumeEmphasizedTechnology[] = [];
+
+  for (const item of value) {
+    if (!isRecord(item)) {
+      continue;
+    }
+
+    const name = readString(item.name);
+    const priority =
+      item.priority === "high" ? "high" : item.priority === "low" ? "low" : null;
+
+    if (!name || !priority) {
+      continue;
+    }
+
+    const dedupeKey = `${priority}:${name.toLowerCase()}`;
+
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    technologies.push({
+      evidence: readString(item.evidence),
+      name,
+      priority,
+    });
+  }
+
+  return technologies;
+}
+
+function readPercentage(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+function readStringArray(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as string[];
+  }
+
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function readTailoredResumeKeywordCoverageTerm(
+  value: unknown,
+): TailoredResumeKeywordCoverageTerm | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const name = readString(value.name);
+  const priority =
+    value.priority === "high" ? "high" : value.priority === "low" ? "low" : null;
+
+  if (!name || !priority) {
+    return null;
+  }
+
+  return {
+    name,
+    presentInOriginal: value.presentInOriginal === true,
+    presentInTailored: value.presentInTailored === true,
+    priority,
+  };
+}
+
+function readTailoredResumeKeywordCoverageTerms(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailoredResumeKeywordCoverageTerm[];
+  }
+
+  return value
+    .map(readTailoredResumeKeywordCoverageTerm)
+    .filter((term): term is TailoredResumeKeywordCoverageTerm => Boolean(term));
+}
+
+function readTailoredResumeKeywordCoverageBucket(
+  value: unknown,
+): TailoredResumeKeywordCoverageBucket | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const terms = readTailoredResumeKeywordCoverageTerms(value.terms);
+  const totalTermCount = readNumber(value.totalTermCount) || terms.length;
+  const originalHitCount =
+    readNumber(value.originalHitCount) ||
+    terms.filter((term) => term.presentInOriginal).length;
+  const tailoredHitCount =
+    readNumber(value.tailoredHitCount) ||
+    terms.filter((term) => term.presentInTailored).length;
+
+  return {
+    addedTerms: readStringArray(value.addedTerms),
+    matchedOriginalTerms: readStringArray(value.matchedOriginalTerms),
+    matchedTailoredTerms: readStringArray(value.matchedTailoredTerms),
+    originalHitCount,
+    originalHitPercentage: readPercentage(value.originalHitPercentage),
+    tailoredHitCount,
+    tailoredHitPercentage: readPercentage(value.tailoredHitPercentage),
+    terms,
+    totalTermCount,
+  };
+}
+
+function readTailoredResumeKeywordCoverage(
+  value: unknown,
+): TailoredResumeKeywordCoverage | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const highPriority = readTailoredResumeKeywordCoverageBucket(
+    value.highPriority,
+  );
+  const allPriorities = readTailoredResumeKeywordCoverageBucket(
+    value.allPriorities,
+  );
+  const updatedAt = readString(value.updatedAt);
+
+  if (!highPriority || !allPriorities || !updatedAt) {
+    return null;
+  }
+
+  return {
+    allPriorities,
+    highPriority,
+    matcherVersion: 1,
+    updatedAt,
+  };
+}
+
+export function readTailorResumeGenerationSettingsSummary(
+  value: unknown,
+): TailorResumeGenerationSettingsSummary {
+  if (isRecord(value) && isRecord(value.profile)) {
+    return readTailorResumeGenerationSettingsSummary(value.profile);
+  }
+
+  const settings = isRecord(value) && isRecord(value.generationSettings)
+    ? isRecord(value.generationSettings.values)
+      ? value.generationSettings.values
+      : value.generationSettings
+    : value;
+
+  if (!isRecord(settings)) {
+    return defaultTailorResumeGenerationSettingsSummary;
+  }
+
+  return {
+    allowTailorResumeFollowUpQuestions:
+      typeof settings.allowTailorResumeFollowUpQuestions === "boolean"
+        ? settings.allowTailorResumeFollowUpQuestions
+        : defaultTailorResumeGenerationSettingsSummary.allowTailorResumeFollowUpQuestions,
+    includeLowPriorityTermsInKeywordCoverage:
+      typeof settings.includeLowPriorityTermsInKeywordCoverage === "boolean"
+        ? settings.includeLowPriorityTermsInKeywordCoverage
+        : defaultTailorResumeGenerationSettingsSummary.includeLowPriorityTermsInKeywordCoverage,
+    preventPageCountIncrease:
+      typeof settings.preventPageCountIncrease === "boolean"
+        ? settings.preventPageCountIncrease
+        : defaultTailorResumeGenerationSettingsSummary.preventPageCountIncrease,
+  };
+}
+
+export function readExtensionPreferences(
+  value: unknown,
+): ExtensionPreferences {
+  if (!isRecord(value)) {
+    return defaultExtensionPreferences;
+  }
+
+  const rawTimeDisplayMode = value.tailorRunTimeDisplayMode;
+
+  return {
+    compactTailorRun: value.compactTailorRun === true,
+    tailorRunTimeDisplayMode:
+      rawTimeDisplayMode === "aggregate" || rawTimeDisplayMode === "specific"
+        ? rawTimeDisplayMode
+        : defaultExtensionPreferences.tailorRunTimeDisplayMode,
+  };
+}
+
 export function readTailorResumeGenerationStepSummary(
   value: unknown,
 ): TailorResumeGenerationStepSummary | null {
@@ -754,12 +1075,38 @@ export function readTailorResumeGenerationStepSummary(
   return {
     attempt: attempt > 0 ? Math.floor(attempt) : null,
     detail: readNullableString(value.detail),
+    durationMs: Math.max(0, Math.floor(readNumber(value.durationMs))),
     retrying: value.retrying === true,
     status,
     stepCount: Math.max(1, Math.floor(stepCount)),
     stepNumber: Math.max(1, Math.floor(stepNumber)),
     summary,
   };
+}
+
+export function readTailorResumeGenerationStepTimings(
+  value: unknown,
+): TailorResumeGenerationStepTiming[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((candidate) => {
+      const step = readTailorResumeGenerationStepSummary(candidate);
+
+      if (!step) {
+        return null;
+      }
+
+      return {
+        ...step,
+        observedAt: isRecord(candidate)
+          ? readNullableString(candidate.observedAt)
+          : null,
+      } satisfies TailorResumeGenerationStepTiming;
+    })
+    .filter((step): step is TailorResumeGenerationStepTiming => Boolean(step));
 }
 
 function readExistingTailoringQuestionCount(value: unknown) {
@@ -832,6 +1179,9 @@ export function readTailorResumeExistingTailoringState(
       applicationId: readNullableString(existingTailoring.applicationId),
       companyName: readNullableString(existingTailoring.companyName),
       createdAt,
+      emphasizedTechnologies: readTailoredResumeEmphasizedTechnologies(
+        existingTailoring.emphasizedTechnologies,
+      ),
       id,
       jobDescription: readString(existingTailoring.jobDescription),
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
@@ -859,6 +1209,9 @@ export function readTailorResumeExistingTailoringState(
       companyName: readNullableString(existingTailoring.companyName),
       createdAt,
       displayName,
+      emphasizedTechnologies: readTailoredResumeEmphasizedTechnologies(
+        existingTailoring.emphasizedTechnologies,
+      ),
       error: readNullableString(existingTailoring.error),
       id,
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
@@ -1104,6 +1457,9 @@ export function readPersonalInfoSummary(input: {
     applicationCount: readNumber(applicationsPayload.applicationCount),
     applications: readTrackedApplicationSummaries(applicationsPayload),
     companyCount: readNumber(applicationsPayload.companyCount),
+    generationSettings: readTailorResumeGenerationSettingsSummary(
+      input.tailorResumePayload,
+    ),
     originalResume: readOriginalResumeSummary(input.tailorResumePayload),
     syncState: readUserSyncStateSnapshot(input.tailorResumePayload),
     tailoredResumes: tailorResumeProfile?.tailoredResumes ?? [],
@@ -1144,6 +1500,9 @@ export function readPersonalInfoPayload(value: unknown): PersonalInfoSummary {
     applicationCount: readNumber(payloadRecord.applicationCount),
     applications: readTrackedApplicationSummaries(payloadRecord.applications),
     companyCount: readNumber(payloadRecord.companyCount),
+    generationSettings: readTailorResumeGenerationSettingsSummary(
+      payloadRecord,
+    ),
     originalResume: readOriginalResumeSummary(
       "originalResume" in payloadRecord
         ? payloadRecord.originalResume
