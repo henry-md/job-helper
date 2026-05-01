@@ -29,6 +29,7 @@ import {
   DEFAULT_TAILOR_RESUME_ENDPOINT,
   DEFAULT_TAILOR_RESUME_PREVIEW_ENDPOINT,
   EXTENSION_DEBUG_UI_ENABLED,
+  EXTENSION_PREFERENCES_STORAGE_KEY,
   EXTENSION_TOP_LEVEL_AI_CHAT_HIDDEN,
   EXISTING_TAILORING_STORAGE_KEY,
   LAST_TAILORING_STORAGE_KEY,
@@ -37,26 +38,34 @@ import {
   TAILORING_PREPARATIONS_STORAGE_KEY,
   TAILORING_PROMPTS_STORAGE_KEY,
   TAILORING_RUNS_STORAGE_KEY,
+  TAILORED_RESUME_REVIEW_REQUEST_STORAGE_KEY,
+  type ExtensionPreferences,
   type JobHelperAuthSession,
   type JobHelperAuthUser,
   type JobPageContext,
   type PersonalInfoSummary,
   type UserMarkdownSummary,
   defaultUserMarkdown,
+  defaultExtensionPreferences,
+  readExtensionPreferences,
   readPersonalInfoPayload,
   readTailorResumePreparationState,
   readJobUrlFromPageContext,
   readTailoredResumeSummaries,
   readTailorResumeExistingTailoringState,
   readTailorResumeGenerationStepSummary,
+  readTailorResumeGenerationStepTimings,
+  readTailorResumeGenerationSettingsSummary,
   readTailorResumeProfileSummary,
   type TailorResumeExistingTailoringState,
   type TailorResumeConversationMessage,
   type TailorResumeGenerationStepSummary,
+  type TailorResumeGenerationStepTiming,
   type TailorResumeApplicationContext,
   type TailorResumePreparationState,
   type TailorResumePendingInterviewSummary,
   type TailorResumeRunRecord,
+  type TailorRunTimeDisplayMode,
   type TailoredResumeSummary,
   type TrackedApplicationSummary,
 } from "./job-helper";
@@ -77,13 +86,16 @@ import {
   readTailorRunDisplayUrl,
 } from "./tailor-run-identity";
 import {
-  formatTailorRunElapsedTime,
+  formatTailorRunStepTimeDisplay,
   resolveDisplayedTailorRunIdentity,
   resolveReviewableTailoredResumeId,
   shouldRenderLegacyTailorRunShell as resolveShouldRenderLegacyTailorRunShell,
-  shouldRenderTailorPageNotification,
   shouldRenderTailorRunShell,
 } from "./tailor-run-display";
+import {
+  mergeTailorResumeGenerationStepTiming,
+  mergeTailorResumeGenerationStepTimingHistory,
+} from "./tailor-run-step-timing";
 import { buildCompletedTailoringMessage } from "./tailor-run-copy";
 import {
   buildTailorResumeLiveStatusMessage as buildLiveTailorResumeStatusMessage,
@@ -197,6 +209,7 @@ type ActiveTailorRunCard = {
   startedAtTime: number;
   suppressedTailoredResumeId: string | null;
   step: TailorRunProgressStep;
+  stepTimings: TailorResumeGenerationStepTiming[];
   title: string;
   url: string | null;
 };
@@ -750,6 +763,7 @@ function buildTailoringRunRecord(input: {
   companyName: string | null;
   failureKind?: TailorResumeRunRecord["failureKind"];
   generationStep?: TailorResumeGenerationStepSummary | null;
+  generationStepTimings?: TailorResumeGenerationStepTiming[];
   jobIdentifier?: string | null;
   message: string;
   pageContext: JobPageContext | null;
@@ -773,6 +787,7 @@ function buildTailoringRunRecord(input: {
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
     failureKind: input.failureKind ?? null,
     generationStep: input.generationStep ?? null,
+    generationStepTimings: input.generationStepTimings ?? [],
     jobIdentifier: input.jobIdentifier || null,
     message: input.message,
     pageTitle: input.pageContext?.title || null,
@@ -824,6 +839,29 @@ function sameTailoringJobUrl(left: string | null, right: string | null) {
   const normalizedRight = normalizeComparableUrl(right);
 
   return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
+function mergeTailoringRunTimingHistory(
+  nextRun: TailorResumeRunRecord | null,
+  previousRun: TailorResumeRunRecord | null,
+) {
+  if (!nextRun || !previousRun) {
+    return nextRun;
+  }
+
+  if ((previousRun.generationStepTimings ?? []).length === 0) {
+    return nextRun;
+  }
+
+  return {
+    ...nextRun,
+    generationStepTimings: mergeTailorResumeGenerationStepTimingHistory({
+      observedAt: new Date().toISOString(),
+      previousTimings: previousRun.generationStepTimings ?? [],
+      step: nextRun.generationStep ?? null,
+      timings: nextRun.generationStepTimings ?? [],
+    }),
+  } satisfies TailorResumeRunRecord;
 }
 
 function resolveTailoredResumeByComparableUrl(input: {
@@ -1223,6 +1261,7 @@ function buildTailoringRunRecordFromExistingTailoring(input: {
       companyName: input.existingTailoring.companyName,
       endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
       generationStep: null,
+      generationStepTimings: [],
       jobIdentifier,
       message: "Resume questions are waiting in the side panel.",
       pageTitle,
@@ -1242,6 +1281,7 @@ function buildTailoringRunRecordFromExistingTailoring(input: {
       companyName: input.existingTailoring.companyName,
       endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
       generationStep: null,
+      generationStepTimings: [],
       jobIdentifier,
       message: buildCompletedTailoringMessage({
         jobLabel: input.existingTailoring.displayName,
@@ -1258,6 +1298,15 @@ function buildTailoringRunRecordFromExistingTailoring(input: {
   }
 
   const generationStep = input.existingTailoring.lastStep ?? null;
+  const previousGenerationStepTimings = reusePreviousPageMetadata
+    ? input.previousRun?.generationStepTimings ?? []
+    : [];
+  const generationStepTimings = mergeTailorResumeGenerationStepTimingHistory({
+    observedAt: input.existingTailoring.updatedAt,
+    previousTimings: previousGenerationStepTimings,
+    step: generationStep,
+    timings: [],
+  });
 
   return {
     applicationId: input.existingTailoring.applicationId,
@@ -1267,6 +1316,7 @@ function buildTailoringRunRecordFromExistingTailoring(input: {
       (reusePreviousPageMetadata ? input.previousRun?.companyName ?? null : null),
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
     generationStep,
+    generationStepTimings,
     jobIdentifier,
     message: buildLiveTailorResumeStatusMessage(
       generationStep,
@@ -1422,6 +1472,7 @@ function buildFailedTailorRunProgressSteps(
       : {
           attempt: null,
           detail: null,
+          durationMs: 0,
           retrying: false,
           status: "failed",
           stepCount: 4,
@@ -1556,6 +1607,18 @@ function readActiveTailorRunSortTime(value: string | null | undefined) {
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
+function buildTailorRunStepTimingDisplayInputs(
+  timings: TailorResumeGenerationStepTiming[],
+) {
+  return timings.map((timing) => ({
+    durationMs: timing.durationMs,
+    observedAtTime: readActiveTailorRunSortTime(timing.observedAt),
+    retrying: timing.retrying,
+    status: timing.status,
+    stepNumber: timing.stepNumber,
+  }));
+}
+
 function readExistingTailoringSortTime(
   existingTailoring: TailorResumeExistingTailoringState,
 ) {
@@ -1631,6 +1694,7 @@ function buildActiveTailorRunCardFromRun(input: {
       tailorGenerationStep: input.run.generationStep ?? null,
       tailorInterview: null,
     }),
+    stepTimings: input.run.generationStepTimings ?? [],
     title: buildTailorRunCardTitle({
       companyName: input.run.companyName ?? input.titleFallback?.companyName ?? null,
       pageTitle: input.run.pageTitle ?? input.titleFallback?.pageTitle ?? null,
@@ -1739,6 +1803,7 @@ function buildActiveTailorRunCardFromPreparation(input: {
       tailorGenerationStep: input.run?.generationStep ?? null,
       tailorInterview: null,
     }),
+    stepTimings: input.run?.generationStepTimings ?? [],
     title: buildTailorRunCardTitle({
       companyName: input.run?.companyName ?? input.titleFallback?.companyName ?? null,
       pageTitle:
@@ -2256,6 +2321,9 @@ function readStoredTailoringRunRecord(
         : DEFAULT_TAILOR_RESUME_ENDPOINT,
     failureKind: value.failureKind === "page_capture" ? "page_capture" : null,
     generationStep: readTailorResumeGenerationStepSummary(value.generationStep),
+    generationStepTimings: readTailorResumeGenerationStepTimings(
+      value.generationStepTimings,
+    ),
     jobIdentifier:
       typeof value.jobIdentifier === "string" ? value.jobIdentifier : null,
     message,
@@ -2683,14 +2751,12 @@ function App() {
   );
   const [tailoredResumeArchiveFilter, setTailoredResumeArchiveFilter] =
     useState<TailoredResumeArchiveFilter>("unarchived");
-  const [
-    dismissedTailorPageNotificationKeys,
-    setDismissedTailorPageNotificationKeys,
-  ] = useState<Set<string>>(() => new Set());
   const [state, setState] = useState<PanelState>({
     status: "loading",
     snapshot: null,
   });
+  const [extensionPreferences, setExtensionPreferences] =
+    useState<ExtensionPreferences>(defaultExtensionPreferences);
   const [captureState, setCaptureState] = useState<CaptureState>("idle");
   const [authState, setAuthState] = useState<AuthState>({ status: "loading" });
   const [authActionState, setAuthActionState] =
@@ -2786,6 +2852,8 @@ function App() {
     useState<TailorResumeRunRecord | null>(null);
   const [tailorGenerationStep, setTailorGenerationStep] =
     useState<TailorResumeGenerationStepSummary | null>(null);
+  const [tailorGenerationStepTimings, setTailorGenerationStepTimings] =
+    useState<TailorResumeGenerationStepTiming[]>([]);
   const [tailorInterview, setTailorInterview] =
     useState<TailorResumePendingInterviewSummary | null>(null);
   const [isTailorInterviewOpen, setIsTailorInterviewOpen] = useState(false);
@@ -2856,6 +2924,13 @@ function App() {
   );
   const tailoringRunsRefreshKey =
     buildTailoringRunsRefreshKey(tailoringRunsByKey);
+
+  const loadExtensionPreferences = useCallback(async () => {
+    const result = await chrome.storage.local.get(EXTENSION_PREFERENCES_STORAGE_KEY);
+    setExtensionPreferences(
+      readExtensionPreferences(result[EXTENSION_PREFERENCES_STORAGE_KEY]),
+    );
+  }, []);
 
   const loadSnapshot = useCallback(async () => {
     setState({ status: "loading", snapshot: null });
@@ -3330,9 +3405,8 @@ function App() {
         buildTailorRunRegistryKey(record?.pageUrl) ??
         readCurrentPageRegistryKey();
 
-      setLastTailoringRun(record);
-
       if (!pageKey) {
+        setLastTailoringRun(record);
         return;
       }
 
@@ -3343,12 +3417,21 @@ function App() {
               ...result[TAILORING_RUNS_STORAGE_KEY],
             }
           : {};
+        const previousStoredRun = pageKey
+          ? readStoredTailoringRunRecord(registry[pageKey])
+          : null;
+        const nextRecord = mergeTailoringRunTimingHistory(
+          record,
+          previousStoredRun,
+        );
+
+        setLastTailoringRun(nextRecord);
 
         setTailoringRunsByKey((currentRegistry) => {
           const nextRegistry = { ...currentRegistry };
 
-          if (record) {
-            nextRegistry[pageKey] = record;
+          if (nextRecord) {
+            nextRegistry[pageKey] = nextRecord;
           } else {
             delete nextRegistry[pageKey];
           }
@@ -3356,8 +3439,8 @@ function App() {
           return nextRegistry;
         });
 
-        if (record) {
-          registry[pageKey] = record;
+        if (nextRecord) {
+          registry[pageKey] = nextRecord;
         } else {
           delete registry[pageKey];
         }
@@ -4334,11 +4417,12 @@ function App() {
       hasCurrentPageExistingTailoringPrompt: Boolean(existingTailoringPrompt),
       hasCurrentPageRunCard: Boolean(currentActiveTailorRunCard),
       shouldShowTailorRunShell,
-    }) && !shouldOfferTailorPageNotification;
+    });
   const shouldShowLegacyTailorRunElapsedTime =
     shouldRenderLegacyTailorRunShell &&
     statusDisplayState === "loading" &&
     shouldShowTailorRunFocusedStep;
+  const tailorRunTimeDisplayMode = extensionPreferences.tailorRunTimeDisplayMode;
   const hasLoadingTailorRunTimer =
     activeTailorRunCards.some(
       (card) => card.statusDisplayState === "loading",
@@ -4354,13 +4438,17 @@ function App() {
   );
   const legacyTailorRunElapsedTimeLabel =
     shouldShowLegacyTailorRunElapsedTime
-      ? formatTailorRunElapsedTime({
+      ? formatTailorRunStepTimeDisplay({
+          activeStepNumber: compactTailorRunStep?.stepNumber ?? null,
+          mode: tailorRunTimeDisplayMode,
           nowTime: tailorRunElapsedNow,
-          startedAtTime: legacyTailorRunElapsedStartTime,
+          runStartedAtTime: legacyTailorRunElapsedStartTime,
+          timings: buildTailorRunStepTimingDisplayInputs(
+            tailorGenerationStepTimings,
+          ),
         })
       : null;
   const hasUnarchivedTailorItems =
-    shouldShowTailorPageNotification ||
     displayedUnarchivedTailoredResumes.length > 0 ||
     activeTailorRunCards.length > 0 ||
     Boolean(pageCaptureFailureRun) ||
@@ -4372,7 +4460,6 @@ function App() {
   const unarchivedTailorDisplayCount =
     displayedUnarchivedTailoredResumes.length +
     activeTailorRunCards.length +
-    (shouldShowTailorPageNotification ? 1 : 0) +
     (pageCaptureFailureRun ? 1 : 0) +
     (shouldRenderLegacyTailorRunShell &&
     displayedUnarchivedTailoredResumes.length === 0 &&
@@ -4592,18 +4679,6 @@ function App() {
     setIsTailorInterviewFinishPromptOpen(false);
   }
 
-  function dismissTailorPageNotification(notificationKey: string) {
-    setDismissedTailorPageNotificationKeys((currentKeys) => {
-      if (currentKeys.has(notificationKey)) {
-        return currentKeys;
-      }
-
-      const nextKeys = new Set(currentKeys);
-      nextKeys.add(notificationKey);
-      return nextKeys;
-    });
-  }
-
   const revealTailorInterview = useCallback(
     (options: { focusComposer?: boolean } = {}) => {
       setIsTailorInterviewOpen(true);
@@ -4736,6 +4811,33 @@ function App() {
     setIsTailorAuthPromptOpen(true);
   }
 
+  async function updateTailorRunTimeDisplayMode(
+    mode: TailorRunTimeDisplayMode,
+  ) {
+    const nextPreferences = {
+      ...extensionPreferences,
+      tailorRunTimeDisplayMode: mode,
+    };
+
+    setExtensionPreferences(nextPreferences);
+    await chrome.storage.local.set({
+      [EXTENSION_PREFERENCES_STORAGE_KEY]: nextPreferences,
+    });
+  }
+
+  function recordTailorGenerationStepEvent(
+    stepEvent: TailorResumeGenerationStepSummary,
+  ) {
+    setTailorGenerationStep(stepEvent);
+    setTailorGenerationStepTimings((currentTimings) =>
+      mergeTailorResumeGenerationStepTiming({
+        observedAt: new Date().toISOString(),
+        step: stepEvent,
+        timings: currentTimings,
+      }),
+    );
+  }
+
   useEffect(() => {
     let isMounted = true;
 
@@ -4763,6 +4865,31 @@ function App() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    void loadExtensionPreferences();
+
+    function handleStorageChange(
+      changes: Record<string, chrome.storage.StorageChange>,
+      areaName: string,
+    ) {
+      if (areaName !== "local" || !changes[EXTENSION_PREFERENCES_STORAGE_KEY]) {
+        return;
+      }
+
+      setExtensionPreferences(
+        readExtensionPreferences(
+          changes[EXTENSION_PREFERENCES_STORAGE_KEY].newValue,
+        ),
+      );
+    }
+
+    chrome.storage.onChanged.addListener(handleStorageChange);
+
+    return () => {
+      chrome.storage.onChanged.removeListener(handleStorageChange);
+    };
+  }, [loadExtensionPreferences]);
 
   useEffect(() => {
     void loadAuthStatus();
@@ -5059,10 +5186,10 @@ function App() {
     if (activeTailoring) {
       const nextRun = buildTailoringRunRecordFromExistingTailoring({
         existingTailoring: activeTailoring,
-        previousRun: lastTailoringRun,
+        previousRun: currentPageStoredTailoringRun ?? lastTailoringRun,
       });
 
-      if (!areTailoringRunRecordsEqual(lastTailoringRun, nextRun)) {
+      if (!areTailoringRunRecordsEqual(currentPageStoredTailoringRun, nextRun)) {
         void persistTailoringRun(nextRun);
       }
 
@@ -5075,6 +5202,7 @@ function App() {
     ) {
       setLastTailoringRun(null);
       setTailorGenerationStep(null);
+      setTailorGenerationStepTimings([]);
       setCaptureState((currentCaptureState) =>
         currentCaptureState === "blocked" ? "blocked" : "idle",
       );
@@ -5093,6 +5221,7 @@ function App() {
 
     setLastTailoringRun(null);
     setTailorGenerationStep(null);
+    setTailorGenerationStepTimings([]);
     setCaptureState((currentCaptureState) =>
       currentCaptureState === "blocked" ? "blocked" : "idle",
     );
@@ -5499,6 +5628,9 @@ function App() {
         currentPageStoredTailoringRun?.generationStep,
       ) ?? null,
     );
+    setTailorGenerationStepTimings(
+      currentPageStoredTailoringRun?.generationStepTimings ?? [],
+    );
     setCaptureState((currentCaptureState) => {
       if (currentPageExistingTailoringPrompt) {
         return "blocked";
@@ -5687,6 +5819,7 @@ function App() {
 
       await persistTailorPreparationState(null);
       setTailorGenerationStep(null);
+      setTailorGenerationStepTimings([]);
       const record = buildTailoringRunRecord({
         companyName: null,
         message,
@@ -5730,6 +5863,7 @@ function App() {
     setIsTailorInterviewFinishPromptOpen(false);
     setTailorInterviewError(null);
     setTailorGenerationStep(null);
+    setTailorGenerationStepTimings([]);
     setCaptureState("running");
     setLastTailoringRun(null);
     setPersonalInfoState((currentState) =>
@@ -5775,6 +5909,7 @@ function App() {
         error instanceof Error ? error.message : "Failed to tailor the resume.";
       await persistTailorPreparationState(null);
       setTailorGenerationStep(null);
+      setTailorGenerationStepTimings([]);
       const record = buildTailoringRunRecord({
         companyName: null,
         message,
@@ -5882,6 +6017,7 @@ function App() {
     setIsTailorInterviewFinishPromptOpen(false);
     setTailorInterviewError(null);
     setTailorGenerationStep(null);
+    setTailorGenerationStepTimings([]);
     setLastTailoringRun(null);
     setCaptureState("idle");
     let nextPersonalInfo: PersonalInfoSummary | null = null;
@@ -5986,6 +6122,7 @@ function App() {
     dismissTailorInterviewFinishPrompt();
     setTailorInterviewError(null);
     setTailorGenerationStep(null);
+    setTailorGenerationStepTimings([]);
     setCaptureState("finishing");
     const requestController = beginTailorRequest();
 
@@ -6002,7 +6139,7 @@ function App() {
               return;
             }
 
-            setTailorGenerationStep(stepEvent);
+            recordTailorGenerationStepEvent(stepEvent);
           },
           signal: requestController.signal,
         },
@@ -6033,6 +6170,7 @@ function App() {
 
         await persistTailoringRun(record);
         setTailorGenerationStep(null);
+        setTailorGenerationStepTimings([]);
         setCaptureState("needs_input");
         return;
       }
@@ -6077,6 +6215,7 @@ function App() {
       await persistTailoringRun(record);
       setTailorInterview(null);
       setTailorGenerationStep(null);
+      setTailorGenerationStepTimings([]);
       setCaptureState("sent");
     } catch (error) {
       if (isAbortError(error)) {
@@ -6092,6 +6231,7 @@ function App() {
       setDraftTailorInterviewAnswer(trimmedAnswer);
       setTailorInterviewError(message);
       setTailorGenerationStep(null);
+      setTailorGenerationStepTimings([]);
       setCaptureState("needs_input");
     } finally {
       clearTailorRequest(requestController);
@@ -6115,6 +6255,7 @@ function App() {
     setTailorInterviewError(null);
     setIsFinishingTailorInterview(true);
     setTailorGenerationStep(null);
+    setTailorGenerationStepTimings([]);
     setCaptureState("finishing");
     const requestController = beginTailorRequest();
 
@@ -6130,7 +6271,7 @@ function App() {
               return;
             }
 
-            setTailorGenerationStep(stepEvent);
+            recordTailorGenerationStepEvent(stepEvent);
           },
           signal: requestController.signal,
         },
@@ -6188,6 +6329,7 @@ function App() {
 
       await persistTailoringRun(record);
       setTailorGenerationStep(null);
+      setTailorGenerationStepTimings([]);
       setCaptureState("sent");
     } catch (error) {
       if (isAbortError(error)) {
@@ -6201,6 +6343,7 @@ function App() {
       );
       setIsTailorInterviewFinishPromptOpen(true);
       setTailorGenerationStep(null);
+      setTailorGenerationStepTimings([]);
       setCaptureState("needs_input");
     } finally {
       clearTailorRequest(requestController);
@@ -6794,6 +6937,7 @@ function App() {
     setIsTailorInterviewFinishPromptOpen(false);
     setTailorInterviewError(null);
     setTailorGenerationStep(null);
+    setTailorGenerationStepTimings([]);
     setLastTailoringRun(null);
     setCaptureState("idle");
     let previousPersonalInfo: PersonalInfoSummary | null = null;
@@ -7188,9 +7332,12 @@ function App() {
     });
     const elapsedTimeLabel =
       card.statusDisplayState === "loading"
-        ? formatTailorRunElapsedTime({
+        ? formatTailorRunStepTimeDisplay({
+            activeStepNumber: card.step.stepNumber,
+            mode: tailorRunTimeDisplayMode,
             nowTime: tailorRunElapsedNow,
-            startedAtTime: card.startedAtTime,
+            runStartedAtTime: card.startedAtTime,
+            timings: buildTailorRunStepTimingDisplayInputs(card.stepTimings),
           })
         : null;
     const canStopCard = card.statusDisplayState !== "error";
@@ -7334,9 +7481,17 @@ function App() {
               <span className="tailor-progress-step-label">{stepLabel}</span>
               {elapsedTimeLabel ? (
                 <span
-                  aria-label={`Loading for ${elapsedTimeLabel}`}
+                  aria-label={
+                    tailorRunTimeDisplayMode === "specific"
+                      ? `Step timings ${elapsedTimeLabel}`
+                      : `Loading for ${elapsedTimeLabel}`
+                  }
                   className="tailor-progress-step-elapsed"
-                  title={`Loading for ${elapsedTimeLabel}`}
+                  title={
+                    tailorRunTimeDisplayMode === "specific"
+                      ? `Step timings: ${elapsedTimeLabel}`
+                      : `Loading for ${elapsedTimeLabel}`
+                  }
                 >
                   {elapsedTimeLabel}
                 </span>
@@ -7674,9 +7829,17 @@ function App() {
                   </span>
                   {legacyTailorRunElapsedTimeLabel ? (
                     <span
-                      aria-label={`Loading for ${legacyTailorRunElapsedTimeLabel}`}
+                      aria-label={
+                        tailorRunTimeDisplayMode === "specific"
+                          ? `Step timings ${legacyTailorRunElapsedTimeLabel}`
+                          : `Loading for ${legacyTailorRunElapsedTimeLabel}`
+                      }
                       className="tailor-progress-step-elapsed"
-                      title={`Loading for ${legacyTailorRunElapsedTimeLabel}`}
+                      title={
+                        tailorRunTimeDisplayMode === "specific"
+                          ? `Step timings: ${legacyTailorRunElapsedTimeLabel}`
+                          : `Loading for ${legacyTailorRunElapsedTimeLabel}`
+                      }
                     >
                       {legacyTailorRunElapsedTimeLabel}
                     </span>
@@ -7815,21 +7978,6 @@ function App() {
     });
   }
 
-  function renderTailorPageNotification() {
-    if (!shouldShowTailorPageNotification || !tailorRunMessage) {
-      return null;
-    }
-
-    return (
-      <DismissibleNotification
-        detail={tailorRunDetail}
-        title={tailorRunMessage}
-        tone={authState.status === "signedIn" ? "info" : "warning"}
-        onDismiss={() => dismissTailorPageNotification(tailorPageNotificationKey)}
-      />
-    );
-  }
-
   function renderTailoredResumeArchiveControls() {
     return (
       <div className="tailored-resume-archive-controls">
@@ -7914,7 +8062,6 @@ function App() {
         className="tailor-resume-library-surface"
       >
         <div className="tailored-resume-card-stack">
-          {renderTailorPageNotification()}
           {renderPageCaptureFailureNotice()}
           {legacyTailorRunShell}
           {activeTailorRunCards.length > 0 ? (
@@ -8344,6 +8491,7 @@ function App() {
         const pageKey = buildTailorRunRegistryKey(lastTailoringRun.pageUrl);
 
         setTailorGenerationStep(null);
+        setTailorGenerationStepTimings([]);
         setLastTailoringRun(null);
         setCaptureState((currentCaptureState) =>
           currentCaptureState === "blocked" ? "blocked" : "idle",

@@ -1,14 +1,17 @@
 import {
+  defaultTailorResumeGenerationSettingsSummary,
   readPersonalInfoPayload,
   type PersonalInfoSummary,
 } from "./job-helper.ts";
 import { type UserSyncStateSnapshot } from "../../lib/sync-state.ts";
 
 export const PERSONAL_INFO_CACHE_STORAGE_KEY = "jobHelperPersonalInfoCache";
+const PERSONAL_INFO_CACHE_SCHEMA_VERSION = 3;
 
 export type PersonalInfoCacheEntry = {
   cachedAt: string;
   personalInfo: PersonalInfoSummary;
+  schemaVersion: number;
   userId: string;
 };
 
@@ -28,6 +31,7 @@ export function buildPersonalInfoCacheEntry(input: {
   return {
     cachedAt: input.cachedAt ?? new Date().toISOString(),
     personalInfo: input.personalInfo,
+    schemaVersion: PERSONAL_INFO_CACHE_SCHEMA_VERSION,
     userId: input.userId,
   } satisfies PersonalInfoCacheEntry;
 }
@@ -39,14 +43,23 @@ export function readPersonalInfoCacheEntry(value: unknown) {
 
   const cachedAt = readString(value.cachedAt);
   const userId = readString(value.userId);
+  const schemaVersion =
+    typeof value.schemaVersion === "number" && Number.isFinite(value.schemaVersion)
+      ? Math.floor(value.schemaVersion)
+      : 0;
 
-  if (!cachedAt || !userId) {
+  if (
+    !cachedAt ||
+    !userId ||
+    schemaVersion !== PERSONAL_INFO_CACHE_SCHEMA_VERSION
+  ) {
     return null;
   }
 
   return {
     cachedAt,
     personalInfo: readPersonalInfoPayload(value.personalInfo),
+    schemaVersion,
     userId,
   } satisfies PersonalInfoCacheEntry;
 }
@@ -79,6 +92,7 @@ export function invalidateChangedPersonalInfoSlices(input: {
       ? {
           activeTailoring: null,
           activeTailorings: [],
+          generationSettings: defaultTailorResumeGenerationSettingsSummary,
           tailoredResumes: [],
           tailoringInterview: null,
           tailoringInterviews: [],

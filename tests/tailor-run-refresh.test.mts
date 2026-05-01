@@ -8,12 +8,24 @@ function buildRun(overrides: Partial<{
   generationStep: {
     attempt: number | null;
     detail: string | null;
+    durationMs: number;
     retrying: boolean;
     status: "failed" | "running" | "skipped" | "succeeded";
     stepCount: number;
     stepNumber: number;
     summary: string;
   } | null;
+  generationStepTimings: Array<{
+    attempt: number | null;
+    detail: string | null;
+    durationMs: number;
+    observedAt: string | null;
+    retrying: boolean;
+    status: "failed" | "running" | "skipped" | "succeeded";
+    stepCount: number;
+    stepNumber: number;
+    summary: string;
+  }>;
   message: string;
   pageUrl: string | null;
   status: "error" | "needs_input" | "running" | "success";
@@ -27,6 +39,7 @@ function buildRun(overrides: Partial<{
     companyName: "OpenAI",
     endpoint: "http://localhost:1285/api/tailor-resume",
     generationStep: overrides.generationStep ?? null,
+    generationStepTimings: overrides.generationStepTimings ?? [],
     jobIdentifier: null,
     message: overrides.message ?? "Tailoring...",
     pageTitle: "Job posting",
@@ -80,12 +93,52 @@ test("buildTailoringRunsRefreshKey changes when another tab's run status changes
   assert.notEqual(before, after);
 });
 
+test("buildTailoringRunsRefreshKey changes when step timing history changes", () => {
+  const before = buildTailoringRunsRefreshKey({
+    "https://jobs.example.com/roles/1": buildRun({
+      generationStepTimings: [
+        {
+          attempt: 1,
+          detail: "Done",
+          durationMs: 44_000,
+          observedAt: "2026-04-26T12:00:44.000Z",
+          retrying: false,
+          status: "succeeded",
+          stepCount: 4,
+          stepNumber: 1,
+          summary: "Generating plaintext edit outline",
+        },
+      ],
+    }),
+  });
+  const after = buildTailoringRunsRefreshKey({
+    "https://jobs.example.com/roles/1": buildRun({
+      generationStepTimings: [
+        {
+          attempt: 1,
+          detail: "Done",
+          durationMs: 72_000,
+          observedAt: "2026-04-26T12:01:12.000Z",
+          retrying: false,
+          status: "succeeded",
+          stepCount: 4,
+          stepNumber: 1,
+          summary: "Generating plaintext edit outline",
+        },
+      ],
+    }),
+  });
+
+  assert.notEqual(before, after);
+});
+
 test("buildTailoringRunsRefreshKey changes when a running step starts retrying", () => {
   const before = buildTailoringRunsRefreshKey({
     "https://jobs.example.com/roles/1": buildRun({
       generationStep: {
         attempt: 1,
         detail: "Starting the planning pass.",
+        durationMs: 1000,
         retrying: false,
         status: "running",
         stepCount: 4,
@@ -99,6 +152,7 @@ test("buildTailoringRunsRefreshKey changes when a running step starts retrying",
       generationStep: {
         attempt: 2,
         detail: "Retrying after the previous attempt failed validation.",
+        durationMs: 2000,
         retrying: true,
         status: "running",
         stepCount: 4,

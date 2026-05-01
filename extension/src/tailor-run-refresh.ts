@@ -20,6 +20,13 @@ export function buildTailoringRunsRefreshKey(
         run.generationStep?.attempt ?? "",
         run.generationStep?.summary ?? "",
         run.generationStep?.detail ?? "",
+        ...(run.generationStepTimings ?? []).flatMap((timing) => [
+          timing.stepNumber,
+          timing.status,
+          timing.retrying === true ? "retrying" : "",
+          timing.durationMs,
+          timing.observedAt ?? "",
+        ]),
         run.message,
         run.tailoredResumeError ?? "",
         run.tailoredResumeId ?? "",

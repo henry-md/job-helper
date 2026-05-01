@@ -8,6 +8,11 @@ function buildPersonalInfo() {
     applicationCount: 0,
     applications: [],
     companyCount: 0,
+    generationSettings: {
+      allowTailorResumeFollowUpQuestions: true,
+      includeLowPriorityTermsInKeywordCoverage: false,
+      preventPageCountIncrease: true,
+    },
     originalResume: {
       error: null,
       filename: null,
@@ -26,9 +31,11 @@ function buildPersonalInfo() {
         companyName: "Microsoft",
         createdAt: "2026-04-26T21:32:00.000Z",
         displayName: "Microsoft - Software Engineer II",
+        emphasizedTechnologies: [],
         id: "tailored-1",
         jobIdentifier: null,
         jobUrl: "https://jobs.example.com/roles/1",
+        keywordCoverage: null,
         positionTitle: "Software Engineer II",
         status: "ready",
         updatedAt: "2026-04-26T21:32:00.000Z",

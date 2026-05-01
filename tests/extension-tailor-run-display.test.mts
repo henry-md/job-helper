@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   formatTailorRunElapsedTime,
+  formatTailorRunStepTimeDisplay,
   resolveDisplayedTailorRunIdentity,
   resolveReviewableTailoredResumeId,
   shouldRenderLegacyTailorRunShell,
-  shouldRenderTailorPageNotification,
   shouldRenderTailorRunShell,
 } from "../extension/src/tailor-run-display.ts";
 
@@ -77,6 +77,96 @@ test("clamps missing or future loading elapsed time to zero", () => {
       startedAtTime: nowTime + 1000,
     }),
     "0:00",
+  );
+});
+
+test("formats specific tailor run timing as one value per completed and running step", () => {
+  const runStartedAtTime = Date.parse("2026-04-29T19:52:18.000Z");
+  const step4ObservedAtTime = runStartedAtTime + 44_000 + 72_000 + 132_000;
+
+  assert.equal(
+    formatTailorRunStepTimeDisplay({
+      activeStepNumber: 4,
+      mode: "specific",
+      nowTime: step4ObservedAtTime + 17_000,
+      runStartedAtTime,
+      timings: [
+        {
+          durationMs: 44_000,
+          observedAtTime: runStartedAtTime + 44_000,
+          retrying: false,
+          status: "succeeded",
+          stepNumber: 1,
+        },
+        {
+          durationMs: 72_000,
+          observedAtTime: runStartedAtTime + 44_000 + 72_000,
+          retrying: false,
+          status: "succeeded",
+          stepNumber: 2,
+        },
+        {
+          durationMs: 132_000,
+          observedAtTime: step4ObservedAtTime,
+          retrying: false,
+          status: "succeeded",
+          stepNumber: 3,
+        },
+        {
+          durationMs: 0,
+          observedAtTime: step4ObservedAtTime,
+          retrying: false,
+          status: "running",
+          stepNumber: 4,
+        },
+      ],
+    }),
+    "0:44/1:12/2:12/0:17",
+  );
+});
+
+test("formats aggregate tailor run timing as the total elapsed value", () => {
+  const runStartedAtTime = Date.parse("2026-04-29T19:52:18.000Z");
+
+  assert.equal(
+    formatTailorRunStepTimeDisplay({
+      activeStepNumber: 2,
+      mode: "aggregate",
+      nowTime: runStartedAtTime + 116_000,
+      runStartedAtTime,
+      timings: [
+        {
+          durationMs: 44_000,
+          observedAtTime: runStartedAtTime + 44_000,
+          retrying: false,
+          status: "succeeded",
+          stepNumber: 1,
+        },
+        {
+          durationMs: 0,
+          observedAtTime: runStartedAtTime + 44_000,
+          retrying: false,
+          status: "running",
+          stepNumber: 2,
+        },
+      ],
+    }),
+    "1:56",
+  );
+});
+
+test("falls back to run elapsed time for a current step without timing history", () => {
+  const runStartedAtTime = Date.parse("2026-04-29T19:52:18.000Z");
+
+  assert.equal(
+    formatTailorRunStepTimeDisplay({
+      activeStepNumber: 1,
+      mode: "specific",
+      nowTime: runStartedAtTime + 21_000,
+      runStartedAtTime,
+      timings: [],
+    }),
+    "0:21",
   );
 });
 
@@ -165,63 +255,6 @@ test("keeps completed current-page resumes on the row surface without a prompt",
       hasCurrentPageExistingTailoringPrompt: false,
       hasCurrentPageRunCard: false,
       shouldShowTailorRunShell: true,
-    }),
-    false,
-  );
-});
-
-test("shows a dismissible page notification for ready pages with no tailoring state", () => {
-  assert.equal(
-    shouldRenderTailorPageNotification({
-      activeTailoringKind: null,
-      captureState: "idle",
-      hasCurrentPageRunCard: false,
-      hasExistingTailoringPrompt: false,
-      hasPageCaptureFailureRun: false,
-      hasTailorInterview: false,
-      isStoppingCurrentTailoring: false,
-      isTailorPreparationPending: false,
-      lastTailoringRunStatus: null,
-      pageStatus: "ready",
-      showTailoredPreview: false,
-    }),
-    true,
-  );
-});
-
-test("does not show the page notification when a tailoring run owns the state", () => {
-  assert.equal(
-    shouldRenderTailorPageNotification({
-      activeTailoringKind: null,
-      captureState: "idle",
-      hasCurrentPageRunCard: true,
-      hasExistingTailoringPrompt: false,
-      hasPageCaptureFailureRun: false,
-      hasTailorInterview: false,
-      isStoppingCurrentTailoring: false,
-      isTailorPreparationPending: false,
-      lastTailoringRunStatus: "running",
-      pageStatus: "ready",
-      showTailoredPreview: false,
-    }),
-    false,
-  );
-});
-
-test("does not show the page notification for completed resume previews", () => {
-  assert.equal(
-    shouldRenderTailorPageNotification({
-      activeTailoringKind: "completed",
-      captureState: "idle",
-      hasCurrentPageRunCard: false,
-      hasExistingTailoringPrompt: false,
-      hasPageCaptureFailureRun: false,
-      hasTailorInterview: false,
-      isStoppingCurrentTailoring: false,
-      isTailorPreparationPending: false,
-      lastTailoringRunStatus: null,
-      pageStatus: "ready",
-      showTailoredPreview: true,
     }),
     false,
   );

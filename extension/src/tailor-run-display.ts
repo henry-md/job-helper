@@ -19,8 +19,6 @@ type TailorRunExistingTailoringKind =
   | "completed"
   | "pending_interview";
 
-type TailorRunPageStatus = "error" | "idle" | "loading" | "ready";
-
 type TailorRunIdentityFields = {
   companyName: string | null;
   positionTitle: string | null;
@@ -30,6 +28,36 @@ type TailorRunPageApplicationContext = {
   companyName: string | null;
   jobTitle: string | null;
 };
+
+type TailorRunStepTimingStatus =
+  | "failed"
+  | "running"
+  | "skipped"
+  | "succeeded";
+
+export type TailorRunTimeDisplayMode = "aggregate" | "specific";
+
+export type TailorRunStepTimingDisplayInput = {
+  durationMs: number | null | undefined;
+  observedAtTime: number | null | undefined;
+  retrying?: boolean | null;
+  status: TailorRunStepTimingStatus;
+  stepNumber: number;
+};
+
+function readNonNegativeDurationMs(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : 0;
+}
+
+function formatTailorRunDurationMs(durationMs: number) {
+  const totalSeconds = Math.floor(Math.max(0, durationMs) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
 
 export function formatTailorRunElapsedTime(input: {
   nowTime: number;
@@ -41,11 +69,107 @@ export function formatTailorRunElapsedTime(input: {
     input.startedAtTime > 0
       ? Math.max(0, input.nowTime - input.startedAtTime)
       : 0;
-  const totalSeconds = Math.floor(elapsedMs / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
 
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  return formatTailorRunDurationMs(elapsedMs);
+}
+
+function readTailorRunStepTimingDuration(input: {
+  fallbackDurationMs: number | null;
+  nowTime: number;
+  timing: TailorRunStepTimingDisplayInput;
+}) {
+  const baseDurationMs = readNonNegativeDurationMs(input.timing.durationMs);
+
+  if (input.timing.status !== "running" && input.timing.retrying !== true) {
+    return baseDurationMs;
+  }
+
+  if (
+    typeof input.timing.observedAtTime === "number" &&
+    Number.isFinite(input.timing.observedAtTime) &&
+    input.timing.observedAtTime > 0 &&
+    Number.isFinite(input.nowTime)
+  ) {
+    return Math.max(0, baseDurationMs + input.nowTime - input.timing.observedAtTime);
+  }
+
+  return input.fallbackDurationMs ?? baseDurationMs;
+}
+
+export function formatTailorRunStepTimeDisplay(input: {
+  activeStepNumber: number | null | undefined;
+  mode: TailorRunTimeDisplayMode;
+  nowTime: number;
+  runStartedAtTime: number;
+  timings: TailorRunStepTimingDisplayInput[];
+}) {
+  if (input.mode === "aggregate") {
+    return formatTailorRunElapsedTime({
+      nowTime: input.nowTime,
+      startedAtTime: input.runStartedAtTime,
+    });
+  }
+
+  const runElapsedMs =
+    Number.isFinite(input.nowTime) &&
+    Number.isFinite(input.runStartedAtTime) &&
+    input.runStartedAtTime > 0
+      ? Math.max(0, input.nowTime - input.runStartedAtTime)
+      : 0;
+  const activeStepNumber =
+    typeof input.activeStepNumber === "number" &&
+    Number.isFinite(input.activeStepNumber) &&
+    input.activeStepNumber > 0
+      ? Math.floor(input.activeStepNumber)
+      : null;
+  const timingsByStepNumber = new Map<number, TailorRunStepTimingDisplayInput>();
+
+  for (const timing of input.timings) {
+    if (
+      Number.isFinite(timing.stepNumber) &&
+      timing.stepNumber > 0 &&
+      (!activeStepNumber || timing.stepNumber <= activeStepNumber)
+    ) {
+      timingsByStepNumber.set(Math.floor(timing.stepNumber), timing);
+    }
+  }
+
+  const sortedTimings = [...timingsByStepNumber.values()].sort(
+    (left, right) => left.stepNumber - right.stepNumber,
+  );
+  const terminalDurationMs = sortedTimings
+    .filter((timing) => timing.status !== "running" && timing.retrying !== true)
+    .reduce(
+      (totalDurationMs, timing) =>
+        totalDurationMs + readNonNegativeDurationMs(timing.durationMs),
+      0,
+    );
+  const fallbackRunningDurationMs = Math.max(
+    0,
+    runElapsedMs - terminalDurationMs,
+  );
+  const durations = sortedTimings.map((timing) =>
+    readTailorRunStepTimingDuration({
+      fallbackDurationMs:
+        activeStepNumber && timing.stepNumber === activeStepNumber
+          ? fallbackRunningDurationMs
+          : null,
+      nowTime: input.nowTime,
+      timing,
+    }),
+  );
+
+  if (durations.length === 0 && runElapsedMs > 0) {
+    durations.push(runElapsedMs);
+  }
+
+  if (durations.length === 0 && activeStepNumber) {
+    durations.push(0);
+  }
+
+  return durations
+    .map((durationMs) => formatTailorRunDurationMs(durationMs))
+    .join("/");
 }
 
 export function shouldRenderTailorRunShell(input: {
@@ -117,36 +241,6 @@ export function shouldRenderLegacyTailorRunShell(input: {
   }
 
   return !input.hasCurrentPageCompletedTailoring;
-}
-
-export function shouldRenderTailorPageNotification(input: {
-  activeTailoringKind: TailorRunExistingTailoringKind | null;
-  captureState: TailorRunCaptureState;
-  hasCurrentPageRunCard: boolean;
-  hasExistingTailoringPrompt: boolean;
-  hasPageCaptureFailureRun: boolean;
-  hasTailorInterview: boolean;
-  isStoppingCurrentTailoring: boolean;
-  isTailorPreparationPending: boolean;
-  lastTailoringRunStatus: TailorRunStatus | null;
-  pageStatus: TailorRunPageStatus;
-  showTailoredPreview: boolean;
-}) {
-  if (
-    input.activeTailoringKind ||
-    input.hasCurrentPageRunCard ||
-    input.hasExistingTailoringPrompt ||
-    input.hasPageCaptureFailureRun ||
-    input.hasTailorInterview ||
-    input.isStoppingCurrentTailoring ||
-    input.isTailorPreparationPending ||
-    input.lastTailoringRunStatus ||
-    input.showTailoredPreview
-  ) {
-    return false;
-  }
-
-  return input.pageStatus === "ready" && input.captureState === "idle";
 }
 
 export function resolveReviewableTailoredResumeId(input: {
