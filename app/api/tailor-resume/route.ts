@@ -827,6 +827,75 @@ function readTailorResumeInterviewSortTime(interview: TailorResumePendingIntervi
   return Number.isFinite(updatedAtTime) ? updatedAtTime : 0;
 }
 
+function activeTailorResumeRunBlocksQuestionQueue(run: {
+  status: string;
+  stepNumber: number | null;
+  stepStatus: string | null;
+}) {
+  if (run.status === "NEEDS_INPUT") {
+    return true;
+  }
+
+  if (!run.stepNumber) {
+    return true;
+  }
+
+  if (run.stepNumber < 2) {
+    return true;
+  }
+
+  if (run.stepNumber > 2) {
+    return false;
+  }
+
+  const normalizedStepStatus = run.stepStatus?.trim().toLowerCase();
+  return normalizedStepStatus !== "skipped" &&
+    normalizedStepStatus !== "succeeded";
+}
+
+async function readTailorResumeQuestionQueueRunPosition(input: {
+  runId: string | null;
+  userId: string;
+}) {
+  if (!input.runId) {
+    return {
+      hasPriorQuestionQueueBlocker: false,
+      runStillActive: true,
+    };
+  }
+
+  const activeRuns = await getPrismaClient().tailorResumeRun.findMany({
+    orderBy: [{ createdAt: "asc" }, { updatedAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      status: true,
+      stepNumber: true,
+      stepStatus: true,
+    },
+    where: {
+      status: {
+        in: ["RUNNING", "NEEDS_INPUT"],
+      },
+      userId: input.userId,
+    },
+  });
+  const runIndex = activeRuns.findIndex((run) => run.id === input.runId);
+
+  if (runIndex < 0) {
+    return {
+      hasPriorQuestionQueueBlocker: false,
+      runStillActive: false,
+    };
+  }
+
+  return {
+    hasPriorQuestionQueueBlocker: activeRuns
+      .slice(0, runIndex)
+      .some(activeTailorResumeRunBlocksQuestionQueue),
+    runStillActive: true,
+  };
+}
+
 function buildTailorResumeChatQueuedStepEvent(
   detail =
     "Another resume follow-up chat is active, so this run is queued until USER.md is updated and its Step 2 question decision can be re-evaluated.",
@@ -894,13 +963,13 @@ async function reserveTailorResumeQuestionDecision(input: {
 }) {
   return withTailorResumeProfileLock(input.userId, async () => {
     const latestState = await readTailorResumeProfileState(input.userId);
-    const runStillActive = await isTailorResumeRunStillActive({
+    const queuePosition = await readTailorResumeQuestionQueueRunPosition({
       runId: input.runId,
       userId: input.userId,
     });
 
     if (
-      !runStillActive ||
+      !queuePosition.runStillActive ||
       hasTailorResumeGenerationSourceChanged({
         currentLockedLinks: latestState.lockedLinks,
         currentRawProfile: latestState.rawProfile,
@@ -920,6 +989,8 @@ async function reserveTailorResumeQuestionDecision(input: {
         isTailorResumeInterviewReady(interview) ||
         isTailorResumeInterviewDecisionInFlight(interview),
     );
+    const earlierRunStillOwnsQuestionQueue =
+      queuePosition.hasPriorQuestionQueueBlocker;
     const pendingInterview = buildTailorResumeQueuedInterview({
       accumulatedModelDurationMs: input.accumulatedModelDurationMs,
       applicationId: input.applicationId,
@@ -930,7 +1001,10 @@ async function reserveTailorResumeQuestionDecision(input: {
       planningResult: input.planningResult,
       runId: input.runId,
       sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode,
-      status: questionDecisionIsBusy ? "queued" : "deciding",
+      status:
+        questionDecisionIsBusy || earlierRunStillOwnsQuestionQueue
+          ? "queued"
+          : "deciding",
     });
     const nextRawProfile: TailorResumeProfile = {
       ...latestState.rawProfile,
@@ -1058,13 +1132,13 @@ async function claimNextQueuedTailorResumeQuestionDecision(userId: string) {
     const staleQueuedInterviewIds = new Set<string>();
 
     for (const queuedInterview of queuedInterviews) {
-      const runStillActive = await isTailorResumeRunStillActive({
+      const queuePosition = await readTailorResumeQuestionQueueRunPosition({
         runId: queuedInterview.tailorResumeRunId,
         userId,
       });
 
       if (
-        !runStillActive ||
+        !queuePosition.runStillActive ||
         hasTailorResumeGenerationSourceChanged({
           currentLockedLinks: latestState.lockedLinks,
           currentRawProfile: latestState.rawProfile,
@@ -1080,6 +1154,22 @@ async function claimNextQueuedTailorResumeQuestionDecision(userId: string) {
           userId,
         });
         continue;
+      }
+
+      if (queuePosition.hasPriorQuestionQueueBlocker) {
+        if (staleQueuedInterviewIds.size > 0) {
+          const nextRawProfile: TailorResumeProfile = {
+            ...latestState.rawProfile,
+            workspace: removeTailorResumeWorkspaceInterview(
+              latestState.rawProfile.workspace,
+              (interview) => staleQueuedInterviewIds.has(interview.id),
+            ),
+          };
+
+          await writeTailorResumeProfileAndMarkChanged(userId, nextRawProfile);
+        }
+
+        return null;
       }
 
       const decidingInterview: TailorResumePendingInterview = {

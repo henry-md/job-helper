@@ -9,6 +9,7 @@ import {
   mergeSystemPromptSettings,
   type SystemPromptSettings,
 } from "./system-prompt-settings.ts";
+import { sortTailorResumeWorkspaceInterviews } from "./tailor-resume-workspace-interviews.ts";
 
 export type SavedResumeRecord = {
   mimeType: string;
@@ -533,13 +534,16 @@ function parseTailorResumeWorkspaceState(value: unknown): TailorResumeWorkspaceS
   );
   const normalizedTailoringInterviews =
     tailoringInterviews.length > 0
-      ? tailoringInterviews
+      ? sortTailorResumeWorkspaceInterviews(tailoringInterviews)
       : legacyTailoringInterview
         ? [legacyTailoringInterview]
         : [];
 
   return {
-    tailoringInterview: normalizedTailoringInterviews[0] ?? null,
+    tailoringInterview:
+      normalizedTailoringInterviews.find(
+        (interview) => interview.status === "ready",
+      ) ?? null,
     tailoringInterviews: normalizedTailoringInterviews,
     isBaseResumeStepComplete: value.isBaseResumeStepComplete === true,
     updatedAt: readNullableString(value.updatedAt),

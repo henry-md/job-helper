@@ -30,29 +30,48 @@ function readTailorResumeInterviewTimestamp(value: string | null | undefined) {
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
+function readTailorResumeInterviewQueueTime(
+  interview: TailorResumePendingInterview,
+) {
+  return (
+    readTailorResumeInterviewTimestamp(interview.createdAt) ||
+    readTailorResumeInterviewTimestamp(interview.updatedAt)
+  );
+}
+
+function readTailorResumeInterviewStatusRank(
+  interview: TailorResumePendingInterview,
+) {
+  if (isTailorResumeInterviewReady(interview)) {
+    return 0;
+  }
+
+  if (isTailorResumeInterviewDecisionInFlight(interview)) {
+    return 1;
+  }
+
+  if (isTailorResumeInterviewQueued(interview)) {
+    return 2;
+  }
+
+  return 3;
+}
+
 export function sortTailorResumeWorkspaceInterviews(
   interviews: TailorResumePendingInterview[],
 ) {
   return [...interviews].sort(
     (left, right) => {
-      const leftReady = isTailorResumeInterviewReady(left) ? 1 : 0;
-      const rightReady = isTailorResumeInterviewReady(right) ? 1 : 0;
+      const statusDifference =
+        readTailorResumeInterviewStatusRank(left) -
+        readTailorResumeInterviewStatusRank(right);
 
-      if (leftReady !== rightReady) {
-        return rightReady - leftReady;
+      if (statusDifference !== 0) {
+        return statusDifference;
       }
 
-      const leftQueued = isTailorResumeInterviewQueued(left) ? 1 : 0;
-      const rightQueued = isTailorResumeInterviewQueued(right) ? 1 : 0;
-
-      if (leftQueued !== rightQueued) {
-        return rightQueued - leftQueued;
-      }
-
-      return (
-        readTailorResumeInterviewTimestamp(right.updatedAt) -
-        readTailorResumeInterviewTimestamp(left.updatedAt)
-      );
+      return readTailorResumeInterviewQueueTime(left) -
+        readTailorResumeInterviewQueueTime(right);
     },
   );
 }

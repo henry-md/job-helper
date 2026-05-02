@@ -2133,7 +2133,7 @@ function buildParallelTailorRunCards(input: {
     cards.push(nextCard);
   }
 
-  cards.sort((left, right) => right.sortTime - left.sortTime);
+  cards.sort((left, right) => left.sortTime - right.sortTime);
 
   return cards;
 }
@@ -2224,9 +2224,7 @@ function dedupeActiveTailorRunCards(cards: ActiveTailorRunCard[]) {
     }
   }
 
-  return selectedCards.sort(
-    (left, right) => right.sortTime - left.sortTime,
-  );
+  return selectedCards.sort((left, right) => left.sortTime - right.sortTime);
 }
 
 function readJobPageIdentity(pageContext: JobPageContext | null) {
@@ -2891,6 +2889,19 @@ function TailorInterviewMessageContent({
       />
       <ToolCallDetails toolCalls={message.toolCalls} />
     </>
+  );
+}
+
+function TailorInterviewThinkingIndicator() {
+  return (
+    <div
+      className="interview-thinking-indicator"
+      aria-label="Job Helper is thinking"
+    >
+      <span />
+      <span />
+      <span />
+    </div>
   );
 }
 
@@ -4178,10 +4189,16 @@ function App() {
           null,
       })
     : "Resume questions";
+  const isTailorInterviewAnswerPending = Boolean(pendingTailorInterviewAnswerMessage);
   const isTailorInterviewBusy =
     captureState === "finishing" ||
+    isTailorInterviewAnswerPending ||
     isStoppingCurrentTailoring ||
     isFinishingTailorInterview;
+  const isTailorInterviewThinking =
+    Boolean(tailorInterview) &&
+    !tailorInterviewError &&
+    (isTailorInterviewAnswerPending || isFinishingTailorInterview);
   const lastTailoringRunMessage = lastTailoringRun?.message?.trim() || null;
   const lastTailoringRunError = lastTailoringRun?.tailoredResumeError?.trim() || null;
   const pageCaptureFailureRun = isPageCaptureFailureRun(currentPageStoredTailoringRun)
@@ -6881,7 +6898,10 @@ function App() {
     const pageContext = state.status === "ready" ? state.snapshot : null;
 
     setIsTailorInterviewFinishPromptOpen(false);
+    setIsTailorInterviewOpen(false);
     setTailorInterviewError(null);
+    setDraftTailorInterviewAnswer("");
+    setPendingTailorInterviewAnswerMessage(null);
     setIsFinishingTailorInterview(true);
     setTailorGenerationStep(null);
     setTailorGenerationStepTimings([]);
@@ -6918,6 +6938,40 @@ function App() {
 
       setTailorInterview(profileSummary.tailoringInterview);
       await loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
+
+      if (profileSummary.tailoringInterview) {
+        const returnedInterviewMatchesCurrentPage = Boolean(
+          pageContext &&
+            (sameTailoringJobUrl(
+              profileSummary.tailoringInterview.jobUrl,
+              readJobUrlFromPageContext(pageContext),
+            ) ||
+              sameTailoringJobUrl(
+                profileSummary.tailoringInterview.jobUrl,
+                pageContext.url,
+              )),
+        );
+
+        if (returnedInterviewMatchesCurrentPage) {
+          const record = buildTailoringRunRecord({
+            companyName: profileSummary.tailoringInterview.companyName,
+            generationStepTimings: tailorGenerationStepTimingsRef.current,
+            message: "One more resume question is waiting in the sidebar.",
+            pageContext,
+            positionTitle: profileSummary.tailoringInterview.positionTitle,
+            status: "needs_input",
+          });
+
+          await persistTailoringRun(record);
+        }
+        setTailorInterviewError(null);
+        setIsTailorInterviewOpen(true);
+        setTailorGenerationStep(null);
+        tailorGenerationStepTimingsRef.current = [];
+        setTailorGenerationStepTimings([]);
+        setCaptureState("needs_input");
+        return;
+      }
 
       const tailoredResume = resolveTailoredResumeFromPayload(result.payload);
 
@@ -6970,6 +7024,7 @@ function App() {
           ? error.message
           : "Unable to finish the tailoring follow-up questions.",
       );
+      setIsTailorInterviewOpen(true);
       setIsTailorInterviewFinishPromptOpen(true);
       setTailorGenerationStep(null);
       setTailorGenerationStepTimings([]);
@@ -10740,6 +10795,11 @@ function App() {
                 <TailorInterviewMessageContent message={message} />
               </div>
             ))}
+            {isTailorInterviewThinking ? (
+              <div className="interview-message interview-message-assistant interview-message-thinking">
+                <TailorInterviewThinkingIndicator />
+              </div>
+            ) : null}
             <div ref={tailorInterviewMessagesEndRef} />
           </div>
 
@@ -10797,7 +10857,7 @@ function App() {
               type="button"
               onClick={() => void submitTailorInterviewAnswer()}
             >
-              {captureState === "finishing"
+              {isTailorInterviewThinking
                 ? "Thinking..."
                 : isTailorInterviewAwaitingCompletion
                   ? "Send clarification"
@@ -11034,6 +11094,11 @@ function App() {
                     <TailorInterviewMessageContent message={message} />
                   </div>
                 ))}
+                {isTailorInterviewThinking ? (
+                  <div className="interview-message interview-message-assistant interview-message-thinking">
+                    <TailorInterviewThinkingIndicator />
+                  </div>
+                ) : null}
                 <div ref={tailorInterviewMessagesEndRef} />
               </div>
 
@@ -11091,7 +11156,7 @@ function App() {
                   type="button"
                   onClick={() => void submitTailorInterviewAnswer()}
                 >
-                  {captureState === "finishing"
+                  {isTailorInterviewThinking
                     ? "Thinking..."
                     : isTailorInterviewAwaitingCompletion
                       ? "Send clarification"

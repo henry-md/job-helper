@@ -155,7 +155,7 @@ export async function findActiveTailorResumeRunsForUser(input: {
   userId: string;
 }) {
   return getPrismaClient().tailorResumeRun.findMany({
-    orderBy: [{ createdAt: "desc" }, { updatedAt: "desc" }],
+    orderBy: [{ createdAt: "asc" }, { updatedAt: "asc" }],
     select: {
       application: {
         select: {

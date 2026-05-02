@@ -325,13 +325,13 @@ export function buildActiveTailoringStates(input: {
   ).sort(
     (left, right) => {
       const createdAtDifference =
-        Date.parse(right.createdAt || "") - Date.parse(left.createdAt || "");
+        Date.parse(left.createdAt || "") - Date.parse(right.createdAt || "");
 
       if (createdAtDifference !== 0) {
         return createdAtDifference;
       }
 
-      return Date.parse(right.updatedAt || "") - Date.parse(left.updatedAt || "");
+      return Date.parse(left.updatedAt || "") - Date.parse(right.updatedAt || "");
     },
   );
 }

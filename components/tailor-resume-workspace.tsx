@@ -616,6 +616,20 @@ function StatusPill({ children }: { children: ReactNode }) {
   );
 }
 
+function ChatThinkingDots({ label = "Assistant is thinking" }: { label?: string }) {
+  return (
+    <span
+      aria-label={label}
+      className="inline-flex min-h-5 w-max items-center gap-1.5"
+      role="status"
+    >
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current [animation-delay:-260ms]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current [animation-delay:-130ms]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current" />
+    </span>
+  );
+}
+
 function TailorResumeToolCallDetails({
   toolCalls,
 }: {
@@ -871,6 +885,9 @@ export default function TailorResumeWorkspace({
     isCancellingTailorInterview ||
     isSubmittingTailorInterviewAnswer ||
     isFinishingTailorInterview;
+  const isTailorInterviewThinking =
+    hasTailoringInterview &&
+    (isSubmittingTailorInterviewAnswer || isFinishingTailorInterview);
   const isBaseResumeStepComplete = profile.workspace.isBaseResumeStepComplete;
   const hasUnsavedJobDescriptionChanges =
     draftJobDescription !== lastSavedJobDescriptionRef.current;
@@ -3235,6 +3252,11 @@ export default function TailorResumeWorkspace({
                         <TailorResumeToolCallDetails toolCalls={message.toolCalls} />
                       </div>
                     ))}
+                    {isTailorInterviewThinking ? (
+                      <div className="max-w-[85%] rounded-[1.15rem] border border-emerald-300/18 bg-emerald-400/10 px-4 py-3 text-sm leading-6 text-emerald-50 shadow-[0_18px_40px_rgba(0,0,0,0.18)]">
+                        <ChatThinkingDots label="Job Helper is thinking" />
+                      </div>
+                    ) : null}
                     <div ref={tailorInterviewMessagesEndRef} />
                   </div>
 

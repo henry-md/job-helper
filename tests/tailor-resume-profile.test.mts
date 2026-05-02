@@ -3,7 +3,56 @@ import test from "node:test";
 import {
   emptyTailorResumeProfile,
   parseTailorResumeProfile,
+  type TailorResumePendingInterview,
 } from "../lib/tailor-resume-types.ts";
+
+function buildTestTailorInterview(input: {
+  createdAt: string;
+  id: string;
+  status: TailorResumePendingInterview["status"];
+}): TailorResumePendingInterview {
+  return {
+    accumulatedModelDurationMs: 1000,
+    applicationId: `application-${input.id}`,
+    completionRequestedAt: null,
+    conversation: [],
+    createdAt: input.createdAt,
+    generationSourceSnapshot: {
+      latexCode: "\\documentclass{article}",
+      linkState: "[]",
+      lockedLinkState: "[]",
+      resumeStoragePath: "/uploads/resumes/user/resume.pdf",
+      resumeUpdatedAt: "2026-04-20T09:55:00.000Z",
+    },
+    id: input.id,
+    jobDescription: "Role text",
+    jobUrl: `https://jobs.example.com/roles/${input.id}`,
+    planningDebug: {
+      outputJson: null,
+      prompt: "Question decision prompt",
+      skippedReason: null,
+    },
+    planningResult: {
+      changes: [],
+      companyName: "OpenAI",
+      displayName: "OpenAI - Research Engineer",
+      emphasizedTechnologies: [],
+      jobIdentifier: "Research systems",
+      positionTitle: "Research Engineer",
+      questioningSummary: null,
+      thesis: {
+        jobDescriptionFocus: "Research systems delivery",
+        resumeChanges: "Elevates the most relevant platform work.",
+      },
+    },
+    pendingUserMarkdownEditOperations: [],
+    sourceAnnotatedLatexCode:
+      "% JOBHELPER_SEGMENT_ID: experience.entry-1.bullet-1\n\\resumeitem{Original bullet}",
+    status: input.status,
+    tailorResumeRunId: `tailor-run-${input.id}`,
+    updatedAt: input.createdAt,
+  };
+}
 
 test("parseTailorResumeProfile reads the current LaTeX-only shape", () => {
   const profile = parseTailorResumeProfile({
@@ -427,6 +476,38 @@ test("parseTailorResumeProfile keeps parallel tailoring interviews and preserves
   assert.equal(profile.workspace.tailoringInterviews[0]?.id, "interview-1");
   assert.equal(profile.workspace.tailoringInterviews[1]?.id, "interview-2");
   assert.equal(profile.workspace.tailoringInterview?.id, "interview-1");
+});
+
+test("parseTailorResumeProfile sorts question queue as popped item then FIFO queued items", () => {
+  const profile = parseTailorResumeProfile({
+    workspace: {
+      isBaseResumeStepComplete: true,
+      tailoringInterviews: [
+        buildTestTailorInterview({
+          createdAt: "2026-04-20T10:02:00.000Z",
+          id: "queued-newer",
+          status: "queued",
+        }),
+        buildTestTailorInterview({
+          createdAt: "2026-04-20T10:01:00.000Z",
+          id: "queued-older",
+          status: "queued",
+        }),
+        buildTestTailorInterview({
+          createdAt: "2026-04-20T10:03:00.000Z",
+          id: "deciding",
+          status: "deciding",
+        }),
+      ],
+      updatedAt: "2026-04-20T10:03:00.000Z",
+    },
+  });
+
+  assert.deepEqual(
+    profile.workspace.tailoringInterviews.map((interview) => interview.id),
+    ["deciding", "queued-older", "queued-newer"],
+  );
+  assert.equal(profile.workspace.tailoringInterview, null);
 });
 
 test("parseTailorResumeProfile upgrades a legacy singular tailoring interview into the array", () => {

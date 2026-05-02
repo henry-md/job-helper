@@ -105,6 +105,20 @@ function AiRefinementHelperBox({ children }: { children: ReactNode }) {
   );
 }
 
+function AiThinkingDots() {
+  return (
+    <span
+      aria-label="Assistant is thinking"
+      className="inline-flex min-h-5 w-max items-center gap-1.5"
+      role="status"
+    >
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current [animation-delay:-260ms]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current [animation-delay:-130ms]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current" />
+    </span>
+  );
+}
+
 function resolveAcceptedBlockChoiceFromEditState(
   editState: TailoredResumeEditState | null | undefined,
 ) {
@@ -2380,7 +2394,7 @@ export default function TailoredResumeReviewModal({
             <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-zinc-500">
               Assistant
             </p>
-            <p>Reworking the model blocks now...</p>
+            <AiThinkingDots />
           </div>
         ) : null}
       </div>
