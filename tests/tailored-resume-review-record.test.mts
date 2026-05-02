@@ -25,7 +25,7 @@ test("resolveTailoredResumeReviewRecordFromPayload returns the requested record"
                 state: "applied",
               },
             ],
-            error: "Step 4: Example review warning.",
+            error: "Step 5: Example review warning.",
             id: "tailored-resume-1",
             pdfUpdatedAt: "2026-04-24T18:00:00.000Z",
             positionTitle: "Software Engineer",

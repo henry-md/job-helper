@@ -84,12 +84,12 @@ async function buildCompactionOverflowFixture() {
   const giantSentence =
     "Built role-aligned platform delivery narratives across engineering, reliability, onboarding, experimentation, observability, incident response, and developer workflow improvements for distributed teams ";
   const step3Changes = bulletBlocks.slice(0, 4).map((block, index) => ({
-    generatedByStep: 3 as const,
+    generatedByStep: 4 as const,
     latexCode:
       String.raw`\resumeitem{` +
       `${giantSentence.repeat(index === 0 ? 8 : 12)}` +
       `while preserving the original project scope and quantitative anchors for the tailored resume.}`,
-    reason: `Long Step 3 expansion ${index + 1}.`,
+    reason: `Long Step 4 expansion ${index + 1}.`,
     segmentId: block.id,
   }));
   const current = applyTailorResumeBlockChanges({
@@ -299,7 +299,7 @@ test("page-count compaction keeps verified line-saving edits even when the exact
       (edit) => edit.segmentId === fixture.candidate.segmentId,
     );
     assert.ok(compactedEdit);
-    assert.equal(compactedEdit?.generatedByStep, 4);
+    assert.equal(compactedEdit?.generatedByStep, 5);
     assert.equal(
       compactedEdit?.afterLatexCode.includes(
         String.raw`\resumeitem{Led TikTok refactor enabling \textbf{\$50K+/mo in ad spend} across the software suite.}`,
@@ -495,7 +495,7 @@ test("page-count compaction retries from kept reductions and can finish on a lat
           ),
         )
         .map((edit) => edit.generatedByStep),
-      [4, 4, 4, 4],
+      [5, 5, 5, 5],
     );
     assert.equal(toolNamesSeen.length, 6);
     for (const toolNames of toolNamesSeen) {

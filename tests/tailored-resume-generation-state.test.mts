@@ -8,14 +8,14 @@ import {
 test("step-4 reviewable failures are classified as failed generations", () => {
   assert.equal(
     hasTailoredResumeGenerationFailure({
-      error: "Step 4: The compacted resume still rendered to 2 pages instead of 1 page.",
+      error: "Step 5: The compacted resume still rendered to 2 pages instead of 1 page.",
       status: "ready",
     }),
     true,
   );
   assert.equal(
     getTailoredResumeGenerationFailureLabel({
-      error: "Step 4: The compacted resume still rendered to 2 pages instead of 1 page.",
+      error: "Step 5: The compacted resume still rendered to 2 pages instead of 1 page.",
       status: "ready",
     }),
     "Failed generation",

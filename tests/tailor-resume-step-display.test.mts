@@ -63,10 +63,10 @@ test("live status messages use retry wording when a retry is in flight", () => {
       attempt: 2,
       retrying: true,
       status: "running",
-      stepCount: 4,
-      stepNumber: 4,
+      stepCount: 5,
+      stepNumber: 5,
       summary: "Keeping the tailored resume within the original page count",
     }),
-    "Stage 4/4: Keeping the tailored resume within the original page count - Retrying (attempt 2)",
+    "Step 5/5: Keeping the tailored resume within the original page count - Retrying (attempt 2)",
   );
 });

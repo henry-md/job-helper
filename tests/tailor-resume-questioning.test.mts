@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  advanceTailorResumeQuestioning,
   findAskWorthyMissingTailorResumeQuestionTerms,
   isDebugForceConversationInTailorPipelineEnabled,
   latestUserMessageDirectlyConfirmsTechnologyExperience,
@@ -43,33 +42,6 @@ test("isDebugForceConversationInTailorPipelineEnabled defaults off", () => {
   }
 });
 
-test("advanceTailorResumeQuestioning skips immediately when no block edits are planned", async () => {
-  const result = await advanceTailorResumeQuestioning({
-    conversation: [],
-    jobDescription: "Role text",
-    planningResult: {
-      changes: [],
-      companyName: "OpenAI",
-      displayName: "OpenAI - Research Engineer",
-      emphasizedTechnologies: [],
-      jobIdentifier: "Research Engineer",
-      positionTitle: "Research Engineer",
-      questioningSummary: null,
-      thesis: {
-        jobDescriptionFocus: "Focus",
-        resumeChanges: "Changes",
-      },
-    },
-    planningSnapshot: {
-      blocks: [],
-      resumePlainText: "Existing resume text",
-    },
-  });
-
-  assert.equal(result.action, "skip");
-  assert.equal(result.questioningSummary, null);
-});
-
 test("findAskWorthyMissingTailorResumeQuestionTerms keeps concrete stack gaps", () => {
   assert.deepEqual(
     findAskWorthyMissingTailorResumeQuestionTerms({
@@ -82,7 +54,7 @@ test("findAskWorthyMissingTailorResumeQuestionTerms keeps concrete stack gaps", 
         "Gradle",
         "Redux",
       ],
-      lowPriorityMissingFromOriginalResumeAndUserMarkdown: [],
+      lowPriorityMissingFromOriginalResumeAndUserMarkdown: ["Kafka"],
       terms: [
         {
           evidence: "Palantir product",
@@ -134,6 +106,13 @@ test("findAskWorthyMissingTailorResumeQuestionTerms keeps concrete stack gaps", 
           priority: "high",
         },
         {
+          evidence: "nice-to-have streaming stack",
+          name: "Kafka",
+          presentInOriginalResume: false,
+          presentInUserMarkdown: false,
+          priority: "low",
+        },
+        {
           evidence: "already covered",
           name: "React",
           presentInOriginalResume: true,
@@ -142,7 +121,7 @@ test("findAskWorthyMissingTailorResumeQuestionTerms keeps concrete stack gaps", 
         },
       ],
     }),
-    ["Go", "Cassandra", "Spark", "Elasticsearch", "Gradle", "Redux"],
+    ["Go", "Cassandra", "Spark", "Elasticsearch", "Gradle", "Redux", "Kafka"],
   );
 });
 
@@ -204,6 +183,58 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads finish tool calls"
   assert.equal(response.toolCalls[0]?.name, "finish_tailor_resume_interview");
 });
 
+test("parseTailorResumeInterviewResponseFromModelOutput preserves cumulative USER.md edits on finish", () => {
+  const response = parseTailorResumeInterviewResponseFromModelOutput({
+    output: [
+      {
+        arguments: JSON.stringify({
+          learnings: [
+            {
+              detail: "Confirmed Go, Cassandra, and Spark work at Johns Hopkins.",
+              targetSegmentIds: [],
+              topic: "Johns Hopkins backend and data infra",
+            },
+          ],
+          userMarkdownEditOperations: [
+            {
+              headingPath: ["Go"],
+              markdown:
+                '- "Built Go streaming microservice to ingest disaster-response sensor data at 1k msg/sec with <250ms end-to-end latency for near-real-time dashboards." -- Johns Hopkins\n',
+              op: "append",
+            },
+            {
+              headingPath: ["Cassandra"],
+              markdown:
+                '- "Migrated time-series data from MongoDB to Cassandra to reduce storage costs 40% and improve query tail latency by 2x." -- Johns Hopkins\n',
+              op: "append",
+            },
+            {
+              headingPath: ["Spark"],
+              markdown:
+                '- "Wrote Spark streaming pipeline to aggregate event streams for real-time metrics at 10k msg/sec with exactly-once semantics." -- Johns Hopkins\n',
+              op: "append",
+            },
+          ],
+        }),
+        call_id: "call-finish-cumulative",
+        name: "finish_tailor_resume_interview",
+        type: "function_call",
+      },
+    ],
+    output_text:
+      "I have enough detail to wrap up, and I am updating USER.md with the Go, Cassandra, and Spark context from this chat.",
+  });
+
+  assert.equal(response.response.action, "done");
+  assert.equal(response.response.userMarkdownEditOperations.length, 3);
+  assert.deepEqual(
+    response.response.userMarkdownEditOperations.map((operation) =>
+      operation.headingPath.join(" / "),
+    ),
+    ["Go", "Cassandra", "Spark"],
+  );
+});
+
 test("parseTailorResumeInterviewResponseFromModelOutput reads probing-question tool calls with assistant text", () => {
   const response = parseTailorResumeInterviewResponseFromModelOutput({
     output: [
@@ -237,6 +268,118 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads probing-question t
   );
   assert.equal(response.response.debugDecision, "not_applicable");
   assert.equal(response.toolCalls[0]?.name, "initiate_tailor_resume_probing_questions");
+});
+
+test("parseTailorResumeInterviewResponseFromModelOutput keeps follow-up technology cards", () => {
+  const response = parseTailorResumeInterviewResponseFromModelOutput({
+    output: [
+      {
+        arguments: JSON.stringify({
+          assistantMessage:
+            "Your answer sounded close to Cassandra work. Which resume project should this map to?",
+          debugDecision: "not_applicable",
+          learnings: [],
+          technologyContexts: [
+            {
+              definition:
+                "Cassandra is a distributed NoSQL database used for high-write, large-scale event or time-series data.",
+              examples: [
+                "Designed Cassandra data models for high-volume event writes -- NewForm",
+                "Migrated time-series metrics into Cassandra-backed storage -- KnoWhiz",
+              ],
+              name: "Cassandra",
+            },
+          ],
+          userMarkdownEditOperations: [],
+        }),
+        call_id: "call-follow-up",
+        name: "initiate_tailor_resume_probing_questions",
+        type: "function_call",
+      },
+    ],
+  });
+
+  assert.equal(response.response.action, "ask");
+  assert.equal(response.response.technologyContexts.length, 1);
+  assert.equal(response.response.technologyContexts[0]?.name, "Cassandra");
+  assert.deepEqual(response.response.technologyContexts[0]?.examples, [
+    "Designed Cassandra data models for high-volume event writes -- NewForm",
+    "Migrated time-series metrics into Cassandra-backed storage -- KnoWhiz",
+  ]);
+});
+
+test("parseTailorResumeInterviewResponseFromModelOutput allows requested extra technology examples", () => {
+  const response = parseTailorResumeInterviewResponseFromModelOutput({
+    output: [
+      {
+        arguments: JSON.stringify({
+          assistantMessage:
+            "Here are four more realistic Go options. Which ones are closest to your experience?",
+          debugDecision: "not_applicable",
+          learnings: [],
+          technologyContexts: [
+            {
+              definition:
+                "Go is a compiled language commonly used for backend services, workers, APIs, and infrastructure tooling.",
+              examples: [
+                "Rewrote Quizlet import worker in Go, increasing throughput 3x and cutting memory usage 50% -- KnoWhiz",
+                "Implemented Go concurrent worker pool and AWS SQS consumers to process onboarding jobs at 200 jobs/sec, reducing backlog 75% -- HF Engineering",
+                "Built Go streaming service to ingest sensor data at 1k msg/sec with sub-250ms latency for near-real-time dashboards -- Johns Hopkins University",
+                "Replaced Java PDF parsing pipeline with a Go service to cut page generation from minutes to under 15s and reduce hosting costs 30% -- Chief of NYC Fire Dept Website",
+              ],
+              name: "Go",
+            },
+          ],
+          userMarkdownEditOperations: [],
+        }),
+        call_id: "call-more-examples",
+        name: "initiate_tailor_resume_probing_questions",
+        type: "function_call",
+      },
+    ],
+  });
+
+  assert.equal(response.response.action, "ask");
+  assert.equal(response.response.technologyContexts[0]?.name, "Go");
+  assert.equal(response.response.technologyContexts[0]?.examples.length, 4);
+  assert.match(
+    response.response.assistantMessage,
+    /Which ones are closest to your experience/i,
+  );
+});
+
+test("parseTailorResumeInterviewResponseFromModelOutput rejects duplicated technology card text", () => {
+  assert.throws(
+    () =>
+      parseTailorResumeInterviewResponseFromModelOutput({
+        output: [
+          {
+            arguments: JSON.stringify({
+              assistantMessage:
+                "Two Go bullet suggestions you can use outside NewForm:\n\n- Built a Go microservice for Quizlet imports, replacing a Python ETL and increasing throughput 4x while cutting memory use 60% -- KnoWhiz\n- Implemented a Go-based concurrent worker pool and AWS SQS consumers to process onboarding jobs at 2k jobs/sec, reducing processing lag 80% -- HF Engineering\n\nWhich of these should I add?",
+              debugDecision: "not_applicable",
+              learnings: [],
+              technologyContexts: [
+                {
+                  definition:
+                    "Go is a compiled language designed for building high-performance backend services and concurrent systems.",
+                  examples: [
+                    "Built a Go microservice for Quizlet imports, replacing a Python ETL and increasing throughput 4x while cutting memory use 60% -- KnoWhiz",
+                    "Implemented a Go-based concurrent worker pool and AWS SQS consumers to process onboarding jobs at 2k jobs/sec, reducing processing lag 80% -- HF Engineering",
+                  ],
+                  name: "Go",
+                },
+              ],
+              userMarkdownEditOperations: [],
+            }),
+            call_id: "call-duplicate-card",
+            name: "initiate_tailor_resume_probing_questions",
+            type: "function_call",
+          },
+        ],
+      }),
+    /must not repeat the rendered definition or example bullets/i,
+  );
 });
 
 test("parseTailorResumeInterviewResponseFromModelOutput rejects plain JSON text", () => {

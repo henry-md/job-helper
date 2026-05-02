@@ -34,7 +34,7 @@ test("buildTailoredResumeBlockEdits snapshots before and after LaTeX by segment"
   assert.equal(edits[0]?.beforeLatexCode.includes("\\resumeitem"), true);
   assert.equal(edits[0]?.afterLatexCode, "\\resumeitem{Tailored bullet one}");
   assert.equal(edits[0]?.customLatexCode, null);
-  assert.equal(edits[0]?.generatedByStep, 3);
+  assert.equal(edits[0]?.generatedByStep, 4);
   assert.equal(edits[0]?.state, "applied");
 });
 
@@ -50,7 +50,7 @@ test("buildTailoredResumeBlockEdits can mark page-count compaction replacements"
     annotatedLatexCode: normalized.annotatedLatex,
     changes: [
       {
-        generatedByStep: 4,
+        generatedByStep: 5,
         latexCode: "\\resumeitem{Compacted bullet}",
         reason: "Keeps the core job-specific signal while fitting the page.",
         segmentId: targetSegment.id,
@@ -58,7 +58,7 @@ test("buildTailoredResumeBlockEdits can mark page-count compaction replacements"
     ],
   });
 
-  assert.equal(edits[0]?.generatedByStep, 4);
+  assert.equal(edits[0]?.generatedByStep, 5);
 });
 
 test("normalizeTailoredResumeEditReason trims reasons to at most two sentences", () => {

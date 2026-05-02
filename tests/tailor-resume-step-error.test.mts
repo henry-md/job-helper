@@ -8,10 +8,10 @@ import {
 test("formatTailorResumeStepError prefixes step numbers", () => {
   assert.equal(
     formatTailorResumeStepError(
-      3,
+      4,
       "Replacement for segment experience.entry-1 failed to compile.",
     ),
-    "Step 3: Replacement for segment experience.entry-1 failed to compile.",
+    "Step 4: Replacement for segment experience.entry-1 failed to compile.",
   );
 });
 
@@ -29,9 +29,9 @@ test("buildTailorResumeAttemptFailureMessage includes the step label", () => {
   assert.equal(
     buildTailorResumeAttemptFailureMessage({
       attempts: 2,
-      stepNumber: 1,
+      stepNumber: 3,
       validationError: "The planning response schema was invalid.",
     }),
-    "Unable to generate a valid tailored resume after 2 attempts: Step 1: The planning response schema was invalid.",
+    "Unable to generate a valid tailored resume after 2 attempts: Step 3: The planning response schema was invalid.",
   );
 });

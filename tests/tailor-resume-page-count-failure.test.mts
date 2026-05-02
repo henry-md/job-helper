@@ -65,7 +65,7 @@ test("page-count compaction failure hard-fails even with a preview PDF", () => {
   assert.equal(updated.outcome, "generation_failure");
   assert.equal(
     updated.validationError,
-    "Step 4: No proposed compaction candidate reduced its block's measured rendered line count.",
+    "Step 5: No proposed compaction candidate reduced its block's measured rendered line count.",
   );
   assert.ok(updated.previewPdf);
 });
@@ -83,7 +83,7 @@ test("page-count compaction failure still hard-fails when no preview exists", ()
   assert.equal(updated.outcome, "generation_failure");
   assert.equal(
     updated.validationError,
-    "Step 4: Unable to compare the tailored resume page count.",
+    "Step 5: Unable to compare the tailored resume page count.",
   );
   assert.equal(updated.previewPdf, null);
 });

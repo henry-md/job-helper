@@ -292,6 +292,7 @@ test("parseTailorResumeTechnologyExtractionResponse reads JD-only technology ext
 
 test("mergeTailorResumeJobDescriptionTechnologies prefers JD extraction and filters resume-only planner terms", () => {
   const technologies = mergeTailorResumeJobDescriptionTechnologies({
+    employerName: "Acme Systems",
     extractedTechnologies: [
       {
         evidence: "Required section names Go.",
@@ -303,9 +304,14 @@ test("mergeTailorResumeJobDescriptionTechnologies prefers JD extraction and filt
         name: "Cassandra",
         priority: "high",
       },
+      {
+        evidence: "The product team builds Acme Foundry.",
+        name: "Acme Foundry",
+        priority: "high",
+      },
     ],
     jobDescription:
-      "Required: experience with Go, Cassandra, Spark, React, and Redux.",
+      "Required: experience with Go, Cassandra, Spark, React, and Redux. The product team builds Acme Foundry.",
     plannerTechnologies: [
       {
         evidence: "Technical skills list Java.",
@@ -341,7 +347,6 @@ test("extractTailorResumeJobDescriptionTechnologyHints finds concrete stack term
       technology.priority,
     ]),
     [
-      ["Palantir Foundry", "low"],
       ["Elasticsearch", "high"],
       ["TypeScript", "high"],
       ["Cassandra", "high"],
