@@ -2,6 +2,7 @@ import {
   buildTailorRunIdentityDisplay,
   type TailorRunIdentityDisplay,
 } from "./tailor-run-identity.ts";
+import { normalizeComparableUrl } from "./comparable-job-url.ts";
 
 type TailorRunCaptureState =
   | "blocked"
@@ -27,6 +28,31 @@ type TailorRunIdentityFields = {
 type TailorRunPageApplicationContext = {
   companyName: string | null;
   jobTitle: string | null;
+};
+
+type TailorRunCleanupRun = {
+  applicationId: string | null;
+  pageUrl: string | null;
+  status: string | null;
+  tailoredResumeId: string | null;
+};
+
+type TailorRunCleanupActiveTailoring = {
+  applicationId: string | null;
+  jobUrl: string | null;
+  kind: string;
+};
+
+type TailorRunCleanupInterview = {
+  applicationId: string | null;
+  jobUrl: string | null;
+};
+
+type TailorRunCleanupResume = {
+  applicationId: string | null;
+  archivedAt: string | null;
+  id: string;
+  jobUrl: string | null;
 };
 
 type TailorRunStepTimingStatus =
@@ -74,13 +100,17 @@ export function formatTailorRunElapsedTime(input: {
 }
 
 function readTailorRunStepTimingDuration(input: {
+  isActive: boolean;
   fallbackDurationMs: number | null;
   nowTime: number;
   timing: TailorRunStepTimingDisplayInput;
 }) {
   const baseDurationMs = readNonNegativeDurationMs(input.timing.durationMs);
 
-  if (input.timing.status !== "running" && input.timing.retrying !== true) {
+  if (
+    !input.isActive ||
+    (input.timing.status !== "running" && input.timing.retrying !== true)
+  ) {
     return baseDurationMs;
   }
 
@@ -154,6 +184,7 @@ export function formatTailorRunStepTimeDisplay(input: {
         activeStepNumber && timing.stepNumber === activeStepNumber
           ? fallbackRunningDurationMs
           : null,
+      isActive: Boolean(activeStepNumber && timing.stepNumber === activeStepNumber),
       nowTime: input.nowTime,
       timing,
     }),
@@ -241,6 +272,68 @@ export function shouldRenderLegacyTailorRunShell(input: {
   }
 
   return !input.hasCurrentPageCompletedTailoring;
+}
+
+function sameTailorRunCleanupUrl(left: string | null, right: string | null) {
+  const normalizedLeft = normalizeComparableUrl(left);
+  const normalizedRight = normalizeComparableUrl(right);
+
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
+function cleanupRunMatchesRecord(
+  run: TailorRunCleanupRun,
+  record: {
+    applicationId: string | null;
+    jobUrl: string | null;
+  },
+) {
+  const runApplicationId = run.applicationId?.trim();
+  const recordApplicationId = record.applicationId?.trim();
+
+  return Boolean(
+    (runApplicationId && recordApplicationId && runApplicationId === recordApplicationId) ||
+      sameTailorRunCleanupUrl(run.pageUrl, record.jobUrl),
+  );
+}
+
+export function shouldClearCompletedLocalTailorRun(input: {
+  activeTailorings: TailorRunCleanupActiveTailoring[];
+  run: TailorRunCleanupRun;
+  tailoredResumes: TailorRunCleanupResume[];
+  tailoringInterviews: TailorRunCleanupInterview[];
+}) {
+  if (input.run.status !== "running" && input.run.status !== "needs_input") {
+    return false;
+  }
+
+  if (
+    input.activeTailorings.some(
+      (activeTailoring) =>
+        activeTailoring.kind !== "completed" &&
+        cleanupRunMatchesRecord(input.run, activeTailoring),
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    input.tailoringInterviews.some((tailoringInterview) =>
+      cleanupRunMatchesRecord(input.run, tailoringInterview),
+    )
+  ) {
+    return false;
+  }
+
+  return input.tailoredResumes.some((tailoredResume) => {
+    const runTailoredResumeId = input.run.tailoredResumeId?.trim();
+
+    return Boolean(
+      !tailoredResume.archivedAt &&
+        ((runTailoredResumeId && tailoredResume.id === runTailoredResumeId) ||
+          cleanupRunMatchesRecord(input.run, tailoredResume)),
+    );
+  });
 }
 
 export function resolveReviewableTailoredResumeId(input: {

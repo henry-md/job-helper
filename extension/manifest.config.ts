@@ -52,6 +52,7 @@ export function createManifest(env: ManifestEnv = process.env) {
       type: "module",
     },
     permissions: [
+      "alarms",
       "downloads",
       "identity",
       "scripting",

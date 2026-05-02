@@ -117,6 +117,10 @@ let personalInfoCacheRefreshPromise: Promise<{
 const PERSONAL_INFO_REQUEST_TIMEOUT_MS = 8_000;
 const SYNC_STATE_REQUEST_TIMEOUT_MS = 4_000;
 const TAILORED_RESUME_BADGE_CHECK_DEBOUNCE_MS = 250;
+const TAILOR_INTERVIEW_MONITOR_ALARM_NAME =
+  "job-helper-tailor-interview-monitor";
+const TAILOR_INTERVIEW_MONITOR_PERIOD_MINUTES = 0.5;
+const TAILOR_INTERVIEW_ALERT_STORAGE_KEY = "jobHelperTailorInterviewAlert";
 let tailoredResumeBadgeCheckSequence = 0;
 const scheduledTailoredResumeBadgeChecks = new Map<
   number,
@@ -382,6 +386,78 @@ async function sendTailoredResumeBadgeMessage(
   }
 }
 
+async function sendEmphasizedTechnologiesBadgeMessage(
+  tabId: number,
+  message: {
+    payload: {
+      badgeKey: string;
+      displayName: string;
+      emphasizedTechnologies: NonNullable<
+        TailorResumeGenerationStepSummary["emphasizedTechnologies"]
+      >;
+      includeLowPriorityTermsInKeywordCoverage: boolean;
+      jobUrl: string | null;
+      keywordCoverage: null;
+    };
+    type: "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE";
+  },
+) {
+  try {
+    await chrome.tabs.sendMessage(tabId, message);
+  } catch {
+    // Some pages do not allow content scripts or have not finished injecting.
+  }
+}
+
+function buildStepOneKeywordBadgeDisplayName(input: {
+  companyName: string | null;
+  positionTitle: string | null;
+}) {
+  if (input.positionTitle && input.companyName) {
+    return `${input.positionTitle} at ${input.companyName}`;
+  }
+
+  return input.positionTitle || input.companyName || "Tailor Resume keywords";
+}
+
+async function showStepOneKeywordBadge(input: {
+  pageContext: JobPageContext;
+  pageKey: string;
+  stepEvent: TailorResumeGenerationStepSummary;
+  tabId: number;
+}) {
+  const emphasizedTechnologies =
+    input.stepEvent.emphasizedTechnologies?.filter((technology) =>
+      Boolean(technology.name.trim()),
+    ) ?? [];
+
+  if (
+    input.stepEvent.stepNumber !== 1 ||
+    emphasizedTechnologies.length === 0
+  ) {
+    return;
+  }
+
+  const pageApplicationContext = buildTailorResumeApplicationContext(
+    input.pageContext,
+  );
+
+  await sendEmphasizedTechnologiesBadgeMessage(input.tabId, {
+    payload: {
+      badgeKey: `tailor-run-keywords:${input.pageKey}`,
+      displayName: buildStepOneKeywordBadgeDisplayName({
+        companyName: pageApplicationContext.companyName,
+        positionTitle: pageApplicationContext.jobTitle,
+      }),
+      emphasizedTechnologies,
+      includeLowPriorityTermsInKeywordCoverage: false,
+      jobUrl: readJobUrlFromPageContext(input.pageContext),
+      keywordCoverage: null,
+    },
+    type: "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE",
+  });
+}
+
 function isHttpTabUrl(value: string | null | undefined) {
   const trimmedValue = cleanText(value);
 
@@ -561,12 +637,21 @@ async function readStorageRegistry(
   return isRecord(registry) ? { ...registry } : {};
 }
 
+function areStorageValuesEqual(left: unknown, right: unknown) {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
 async function setStorageRegistryEntry<T>(
   key: string,
   entryKey: string,
   value: T | null,
 ) {
   const registry = await readStorageRegistry(key);
+  const previousValue = registry[entryKey] ?? null;
+
+  if (areStorageValuesEqual(previousValue, value)) {
+    return;
+  }
 
   if (value) {
     registry[entryKey] = value;
@@ -1503,6 +1588,111 @@ async function readStoredPersonalInfoCache(userId: string) {
   return cacheEntry;
 }
 
+function hasQueuedTailorResumeChat(personalInfo: PersonalInfoSummary) {
+  return personalInfo.activeTailorings.some(
+    (activeTailoring) =>
+      activeTailoring.kind === "active_generation" &&
+      activeTailoring.lastStep?.stepNumber === 2 &&
+      activeTailoring.lastStep.summary === "Chat Queued",
+  );
+}
+
+function hasVolatileTailorResumeState(personalInfo: PersonalInfoSummary) {
+  return (
+    personalInfo.tailoringInterviews.length > 0 ||
+    personalInfo.activeTailorings.some(
+      (activeTailoring) =>
+        activeTailoring.kind === "active_generation" ||
+        activeTailoring.kind === "pending_interview",
+    )
+  );
+}
+
+function readPersonalInfoCacheAgeMs(cachedAt: string) {
+  const cachedAtTime = Date.parse(cachedAt);
+
+  return Number.isFinite(cachedAtTime)
+    ? Date.now() - cachedAtTime
+    : Number.POSITIVE_INFINITY;
+}
+
+async function scheduleTailorInterviewMonitor() {
+  try {
+    await chrome.alarms.create(TAILOR_INTERVIEW_MONITOR_ALARM_NAME, {
+      delayInMinutes: TAILOR_INTERVIEW_MONITOR_PERIOD_MINUTES,
+      periodInMinutes: TAILOR_INTERVIEW_MONITOR_PERIOD_MINUTES,
+    });
+  } catch (error) {
+    console.warn("Could not schedule the Tailor Resume chat monitor.", error);
+  }
+}
+
+async function clearTailorInterviewMonitor() {
+  try {
+    await chrome.alarms.clear(TAILOR_INTERVIEW_MONITOR_ALARM_NAME);
+  } catch {
+    // The alarm may not exist yet.
+  }
+}
+
+async function maybeOpenSidePanelForReadyTailorInterview(
+  personalInfo: PersonalInfoSummary,
+) {
+  const interviewId = personalInfo.tailoringInterview?.id?.trim();
+
+  if (!interviewId) {
+    return;
+  }
+
+  const result = await chrome.storage.local.get(TAILOR_INTERVIEW_ALERT_STORAGE_KEY);
+  const previousAlert = result[TAILOR_INTERVIEW_ALERT_STORAGE_KEY];
+  const previousInterviewId = isRecord(previousAlert)
+    ? typeof previousAlert.interviewId === "string"
+      ? previousAlert.interviewId
+      : ""
+    : typeof previousAlert === "string"
+      ? previousAlert
+      : "";
+
+  if (previousInterviewId === interviewId) {
+    return;
+  }
+
+  const activeTab = await getActiveTab().catch(() => null);
+
+  if (!activeTab) {
+    return;
+  }
+
+  await openSidePanelForTab(activeTab);
+  await chrome.storage.local.set({
+    [TAILOR_INTERVIEW_ALERT_STORAGE_KEY]: {
+      interviewId,
+      surfacedAt: new Date().toISOString(),
+    },
+  });
+}
+
+async function reconcileTailorInterviewMonitor(personalInfo: PersonalInfoSummary) {
+  await maybeOpenSidePanelForReadyTailorInterview(personalInfo);
+
+  if (hasQueuedTailorResumeChat(personalInfo)) {
+    await scheduleTailorInterviewMonitor();
+    return;
+  }
+
+  await clearTailorInterviewMonitor();
+}
+
+async function refreshQueuedTailorInterviewMonitor() {
+  try {
+    const { personalInfo } = await getPersonalInfoSummary();
+    await reconcileTailorInterviewMonitor(personalInfo);
+  } catch (error) {
+    console.warn("Could not refresh queued Tailor Resume chat state.", error);
+  }
+}
+
 async function fetchWithTimeout(
   input: {
     errorMessage: string;
@@ -1563,6 +1753,7 @@ async function fetchFreshPersonalInfoSummary(session: JobHelperAuthSession) {
     personalInfo,
     userId: session.user.id,
   });
+  await reconcileTailorInterviewMonitor(personalInfo);
 
   return {
     personalInfo,
@@ -1644,12 +1835,35 @@ async function fetchSyncStateSummary(session: JobHelperAuthSession) {
   };
 }
 
-async function getPersonalInfoSummary() {
+async function getPersonalInfoSummary(
+  options: { forceFresh?: boolean } = {},
+) {
   const session = await ensureJobHelperSession({ interactive: false });
+
+  if (options.forceFresh) {
+    return refreshPersonalInfoCache(session);
+  }
+
   const cachedPersonalInfo = await readStoredPersonalInfoCache(session.user.id);
 
   if (!cachedPersonalInfo) {
     return refreshPersonalInfoCache(session);
+  }
+
+  const cacheAgeMs = readPersonalInfoCacheAgeMs(cachedPersonalInfo.cachedAt);
+
+  if (
+    cacheAgeMs > 5_000 ||
+    hasVolatileTailorResumeState(cachedPersonalInfo.personalInfo)
+  ) {
+    try {
+      return await refreshPersonalInfoCache(session);
+    } catch (error) {
+      console.warn(
+        "Could not refresh stale or volatile personal info; falling back to sync-state reconciliation.",
+        error,
+      );
+    }
   }
 
   try {
@@ -1676,11 +1890,6 @@ async function getPersonalInfoSummary() {
       });
     }
   } catch (error) {
-    const cachedAtTime = Date.parse(cachedPersonalInfo.cachedAt);
-    const cacheAgeMs = Number.isFinite(cachedAtTime)
-      ? Date.now() - cachedAtTime
-      : Number.POSITIVE_INFINITY;
-
     if (cacheAgeMs <= 15_000) {
       return {
         personalInfo: cachedPersonalInfo.personalInfo,
@@ -1804,25 +2013,31 @@ async function tailorResumeForTab(input: {
             return;
           }
 
-              latestStepEvent = stepEvent;
-              latestStepTimings = mergeTailorResumeGenerationStepTiming({
-                observedAt: new Date().toISOString(),
-                step: stepEvent,
-                timings: latestStepTimings,
-              });
-              requestSharedPersonalInfoRefresh();
-              void persistResult(
-                pageKey,
-                buildRunningTailoringRunRecord({
-                  applicationId: overwriteTargetApplicationId,
-                  capturedAt,
-                  pageContext,
-                  step: stepEvent,
-                  stepTimings: latestStepTimings,
-                  suppressedTailoredResumeId: overwriteTargetTailoredResumeId,
-                  tab: readyTab,
-                }),
+          latestStepEvent = stepEvent;
+          latestStepTimings = mergeTailorResumeGenerationStepTiming({
+            observedAt: new Date().toISOString(),
+            step: stepEvent,
+            timings: latestStepTimings,
+          });
+          requestSharedPersonalInfoRefresh();
+          void persistResult(
+            pageKey,
+            buildRunningTailoringRunRecord({
+              applicationId: overwriteTargetApplicationId,
+              capturedAt,
+              pageContext,
+              step: stepEvent,
+              stepTimings: latestStepTimings,
+              suppressedTailoredResumeId: overwriteTargetTailoredResumeId,
+              tab: readyTab,
+            }),
           );
+          void showStepOneKeywordBadge({
+            pageContext,
+            pageKey,
+            stepEvent,
+            tabId,
+          });
         },
         signal: abortController.signal,
       },
@@ -1929,6 +2144,7 @@ async function tailorResumeForTab(input: {
       companyName: activeInterview?.companyName ?? null,
       endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
       generationStep: null,
+      generationStepTimings: latestStepTimings,
       jobIdentifier: activeInterview?.jobIdentifier ?? null,
       message: "Resume questions are waiting in the side panel.",
       pageTitle: pageContext.title || null,
@@ -1946,6 +2162,43 @@ async function tailorResumeForTab(input: {
       "the tailoring run moved into interview follow-up",
     );
     await showOverlay(tabId, record.message, "info");
+    await openSidePanelForTab(activeTab);
+    return;
+  }
+
+  if (payload.tailoringStatus === "chat_queued") {
+    const record: TailorResumeRunRecord = {
+      applicationId: overwriteTargetApplicationId ?? null,
+      capturedAt,
+      companyName: null,
+      endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
+      generationStep:
+        latestStepEvent ?? {
+          attempt: null,
+          detail:
+            "Another resume follow-up chat is active, so this run is queued.",
+          durationMs: 0,
+          retrying: false,
+          status: "running",
+          stepCount: 4,
+          stepNumber: 2,
+          summary: "Chat Queued",
+        },
+      generationStepTimings: latestStepTimings,
+      jobIdentifier: null,
+      message: "Chat Queued",
+      pageTitle: pageContext.title || null,
+      pageUrl: pageContext.url || null,
+      positionTitle: null,
+      status: "running",
+      suppressedTailoredResumeId: overwriteTargetTailoredResumeId?.trim() || null,
+      tailoredResumeError: null,
+      tailoredResumeId: null,
+    };
+
+    await persistResult(pageKey, record);
+    refreshSharedPersonalInfoCache(authSession, "the tailoring chat was queued");
+    await showOverlay(tabId, "Chat Queued", "info");
     return;
   }
 
@@ -2307,6 +2560,14 @@ chrome.runtime.onInstalled.addListener(() => {
   console.log("Job Helper extension installed.");
 });
 
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== TAILOR_INTERVIEW_MONITOR_ALARM_NAME) {
+    return;
+  }
+
+  void refreshQueuedTailorInterviewMonitor();
+});
+
 chrome.commands.onCommand.addListener((command) => {
   if (command !== CAPTURE_COMMAND_NAME) {
     return;
@@ -2405,7 +2666,11 @@ chrome.runtime.onMessage.addListener((
   }
 
   if (typedMessage?.type === "JOB_HELPER_PERSONAL_INFO") {
-    return sendAsyncResponse(sendResponse, getPersonalInfoSummary);
+    return sendAsyncResponse(sendResponse, () =>
+      getPersonalInfoSummary({
+        forceFresh: readPayloadBoolean(typedMessage.payload, "forceFresh"),
+      }),
+    );
   }
 
   if (typedMessage?.type === "JOB_HELPER_SYNC_STATE") {

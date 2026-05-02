@@ -50,6 +50,19 @@ type TailoredResumeKeywordCoveragePayload = {
   updatedAt?: string;
 };
 
+type NormalizedKeywordCoverageTerm =
+  Required<TailoredResumeKeywordCoverageTermPayload>;
+
+type NormalizedKeywordCoverageBucket = {
+  addedTerms: string[];
+  missingTerms: string[];
+  originalHitCount: number;
+  sharedTerms: string[];
+  tailoredHitCount: number;
+  terms: NormalizedKeywordCoverageTerm[];
+  totalTermCount: number;
+};
+
 const resumeBadgeRootId = "job-helper-tailored-resume-badge";
 const emphasizedTechnologyBadgeRootId =
   "job-helper-emphasized-technologies-badge";
@@ -129,10 +142,10 @@ function normalizeCoverageTermNames(value: unknown) {
 
 function normalizeKeywordCoverageTerms(value: unknown) {
   if (!Array.isArray(value)) {
-    return [] as Required<TailoredResumeKeywordCoverageTermPayload>[];
+    return [] as NormalizedKeywordCoverageTerm[];
   }
 
-  const terms: Required<TailoredResumeKeywordCoverageTermPayload>[] = [];
+  const terms: NormalizedKeywordCoverageTerm[] = [];
   const seen = new Set<string>();
 
   for (const item of value) {
@@ -237,20 +250,71 @@ function normalizeKeywordCoverageBucket(
       readNonNegativeInteger(value.tailoredHitCount),
       totalTermCount,
     ),
+    terms,
     totalTermCount,
   };
 }
 
-function readKeywordCoverageBucket(payload: TailoredResumeBadgePayload) {
+function buildKeywordCoverageBucketFromTerms(
+  terms: NormalizedKeywordCoverageTerm[],
+): NormalizedKeywordCoverageBucket | null {
+  if (terms.length === 0) {
+    return null;
+  }
+
+  return {
+    addedTerms: uniqueStrings(
+      terms
+        .filter((term) => !term.presentInOriginal && term.presentInTailored)
+        .map((term) => term.name),
+      20,
+    ),
+    missingTerms: uniqueStrings(
+      terms
+        .filter((term) => !term.presentInOriginal && !term.presentInTailored)
+        .map((term) => term.name),
+      20,
+    ),
+    originalHitCount: terms.filter((term) => term.presentInOriginal).length,
+    sharedTerms: uniqueStrings(
+      terms
+        .filter((term) => term.presentInOriginal && term.presentInTailored)
+        .map((term) => term.name),
+      20,
+    ),
+    tailoredHitCount: terms.filter((term) => term.presentInTailored).length,
+    terms,
+    totalTermCount: terms.length,
+  };
+}
+
+function readKeywordCoverageBuckets(payload: TailoredResumeBadgePayload) {
   const coverage = payload.keywordCoverage;
 
   if (!coverage || typeof coverage !== "object") {
     return null;
   }
 
-  return payload.includeLowPriorityTermsInKeywordCoverage
-    ? normalizeKeywordCoverageBucket(coverage.allPriorities)
-    : normalizeKeywordCoverageBucket(coverage.highPriority);
+  const allPriorities = normalizeKeywordCoverageBucket(coverage.allPriorities);
+  const highPriority = normalizeKeywordCoverageBucket(coverage.highPriority);
+  const lowPriority = allPriorities
+    ? buildKeywordCoverageBucketFromTerms(
+        allPriorities.terms.filter((term) => term.priority === "low"),
+      )
+    : null;
+  const summary = payload.includeLowPriorityTermsInKeywordCoverage
+    ? allPriorities
+    : highPriority;
+
+  if (!summary || !highPriority) {
+    return null;
+  }
+
+  return {
+    highPriority,
+    lowPriority,
+    summary,
+  };
 }
 
 function formatKeywordCoverageScope(payload: TailoredResumeBadgePayload) {
@@ -646,32 +710,12 @@ function getPagePromptElements() {
     .filter((element): element is HTMLElement => element instanceof HTMLElement);
 }
 
-function clampPagePromptPosition(
-  element: HTMLElement,
-  position: { x: number; y: number },
-) {
-  const width = element.offsetWidth || element.getBoundingClientRect().width || 360;
-  const height =
-    element.offsetHeight || element.getBoundingClientRect().height || 160;
-  const maxX = Math.max(pagePromptEdgeInset, window.innerWidth - width - pagePromptEdgeInset);
-  const maxY = Math.max(
-    pagePromptEdgeInset,
-    window.innerHeight - height - pagePromptEdgeInset,
-  );
-
-  return {
-    x: Math.min(Math.max(pagePromptEdgeInset, position.x), maxX),
-    y: Math.min(Math.max(pagePromptEdgeInset, position.y), maxY),
-  };
-}
-
 function setPagePromptPosition(
   element: HTMLElement,
   position: { x: number; y: number },
 ) {
-  const nextPosition = clampPagePromptPosition(element, position);
-  element.style.left = `${nextPosition.x}px`;
-  element.style.top = `${nextPosition.y}px`;
+  element.style.left = `${position.x}px`;
+  element.style.top = `${position.y}px`;
   element.style.right = "auto";
   element.style.bottom = "auto";
   element.style.transform = "none";
@@ -999,10 +1043,10 @@ function appendKeywordCoverageDisclosure(
   container: HTMLElement,
   payload: TailoredResumeBadgePayload,
 ) {
-  const bucket = readKeywordCoverageBucket(payload);
+  const buckets = readKeywordCoverageBuckets(payload);
   const tailoredResumeId = cleanText(payload.tailoredResumeId, 160);
 
-  if (!bucket || !tailoredResumeId) {
+  if (!buckets || !tailoredResumeId) {
     return;
   }
 
@@ -1017,7 +1061,7 @@ function appendKeywordCoverageDisclosure(
   const helpWrap = document.createElement("span");
   const helpButton = document.createElement("button");
   const helpTooltip = document.createElement("span");
-  const termGrid = document.createElement("div");
+  const termSections = document.createElement("div");
   const action = document.createElement("button");
   const scopeLabel = formatKeywordCoverageScope(payload);
 
@@ -1125,10 +1169,9 @@ function appendKeywordCoverageDisclosure(
     width: "260px",
     zIndex: "2147483647",
   });
-  styleElement(termGrid, {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: "5px",
+  styleElement(termSections, {
+    display: "grid",
+    gap: "9px",
     minWidth: "0",
   });
   styleElement(action, {
@@ -1146,8 +1189,8 @@ function appendKeywordCoverageDisclosure(
 
   summaryTitle.textContent = "See Changes";
   summaryMeta.textContent =
-    `${scopeLabel}: ${bucket.originalHitCount}/${bucket.totalTermCount} -> ` +
-    `${bucket.tailoredHitCount}/${bucket.totalTermCount}`;
+    `${scopeLabel}: ${buckets.summary.originalHitCount}/${buckets.summary.totalTermCount} -> ` +
+    `${buckets.summary.tailoredHitCount}/${buckets.summary.totalTermCount}`;
   chevron.textContent = "v";
   action.type = "button";
   action.textContent = "See Full Diff";
@@ -1260,11 +1303,14 @@ function appendKeywordCoverageDisclosure(
   window.addEventListener("scroll", repositionVisibleHelpTooltip, true);
   helpWrap.append(helpButton);
 
-  function appendTermChips(input: {
-    color: string;
-    terms: string[];
-    tone: "added" | "missing" | "shared";
-  }) {
+  function appendTermChips(
+    chipList: HTMLElement,
+    input: {
+      color: string;
+      terms: string[];
+      tone: "added" | "missing" | "shared";
+    },
+  ) {
     for (const term of input.terms) {
       const chip = document.createElement("span");
       const isAdded = input.tone === "added";
@@ -1287,34 +1333,74 @@ function appendKeywordCoverageDisclosure(
         overflowWrap: "anywhere",
         padding: "4px 8px",
       });
-      termGrid.append(chip);
+      chipList.append(chip);
     }
   }
 
+  function appendCoverageSection(
+    label: string,
+    bucket: NormalizedKeywordCoverageBucket | null,
+  ) {
+    if (!bucket || bucket.totalTermCount <= 0) {
+      return;
+    }
+
+    const section = document.createElement("div");
+    const heading = document.createElement("div");
+    const chipList = document.createElement("div");
+
+    styleElement(section, {
+      display: "grid",
+      gap: "6px",
+      minWidth: "0",
+    });
+    styleElement(heading, {
+      color: "rgba(212, 212, 216, 0.62)",
+      fontSize: "9px",
+      fontWeight: "800",
+      letterSpacing: "0.18em",
+      lineHeight: "1.2",
+      textTransform: "uppercase",
+    });
+    styleElement(chipList, {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: "5px",
+      minWidth: "0",
+    });
+
+    heading.textContent = label;
+    appendTermChips(chipList, {
+      color: "rgba(56, 189, 248, 0.32)",
+      terms: bucket.sharedTerms,
+      tone: "shared",
+    });
+    appendTermChips(chipList, {
+      color: "rgba(52, 211, 153, 0.34)",
+      terms: bucket.addedTerms,
+      tone: "added",
+    });
+    appendTermChips(chipList, {
+      color: "rgba(251, 113, 133, 0.34)",
+      terms: bucket.missingTerms,
+      tone: "missing",
+    });
+
+    section.append(heading, chipList);
+    termSections.append(section);
+  }
+
   legendItems.append(
-    createLegendItem(`Both ${bucket.sharedTerms.length}`, "#38bdf8"),
-    createLegendItem(`New ${bucket.addedTerms.length}`, "#34d399"),
-    createLegendItem(`Missing ${bucket.missingTerms.length}`, "#fb7185"),
+    createLegendItem(`Both ${buckets.summary.sharedTerms.length}`, "#38bdf8"),
+    createLegendItem(`New ${buckets.summary.addedTerms.length}`, "#34d399"),
+    createLegendItem(`Missing ${buckets.summary.missingTerms.length}`, "#fb7185"),
   );
   legend.append(legendItems, helpWrap);
-  appendTermChips({
-    color: "rgba(56, 189, 248, 0.32)",
-    terms: bucket.sharedTerms,
-    tone: "shared",
-  });
-  appendTermChips({
-    color: "rgba(52, 211, 153, 0.34)",
-    terms: bucket.addedTerms,
-    tone: "added",
-  });
-  appendTermChips({
-    color: "rgba(251, 113, 133, 0.34)",
-    terms: bucket.missingTerms,
-    tone: "missing",
-  });
+  appendCoverageSection("High Priority Keywords", buckets.highPriority);
+  appendCoverageSection("Low Priority Keywords", buckets.lowPriority);
 
   summary.append(summaryTitle, summaryMeta, chevron);
-  panel.append(legend, termGrid, action);
+  panel.append(legend, termSections, action);
   details.append(summary, panel);
   details.addEventListener("toggle", () => {
     chevron.textContent = details.open ? "^" : "v";
@@ -1606,6 +1692,30 @@ chrome.runtime.onMessage.addListener((
     }
 
     showTailoredResumeBadge(typedMessage.payload ?? {});
+    sendResponse({ ok: true });
+    return;
+  }
+
+  if (typedMessage?.type === "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE") {
+    if (shouldSuppressTailoredResumePagePrompts()) {
+      hideTailoredResumePrompts();
+      sendResponse({
+        ok: false,
+        skipped: "job_helper_app_page",
+      });
+      return;
+    }
+
+    const payload = typedMessage.payload ?? {};
+    const badgeKey =
+      cleanText(payload.badgeKey, 220) ||
+      cleanText(payload.jobUrl, 220) ||
+      cleanText(payload.displayName, 220);
+
+    if (badgeKey) {
+      showEmphasizedTechnologyBadge(payload, badgeKey);
+    }
+
     sendResponse({ ok: true });
     return;
   }

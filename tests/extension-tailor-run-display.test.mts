@@ -5,6 +5,7 @@ import {
   formatTailorRunStepTimeDisplay,
   resolveDisplayedTailorRunIdentity,
   resolveReviewableTailoredResumeId,
+  shouldClearCompletedLocalTailorRun,
   shouldRenderLegacyTailorRunShell,
   shouldRenderTailorRunShell,
 } from "../extension/src/tailor-run-display.ts";
@@ -170,6 +171,43 @@ test("falls back to run elapsed time for a current step without timing history",
   );
 });
 
+test("does not keep counting a stale earlier running step", () => {
+  const runStartedAtTime = Date.parse("2026-04-29T19:52:18.000Z");
+
+  assert.equal(
+    formatTailorRunStepTimeDisplay({
+      activeStepNumber: 3,
+      mode: "specific",
+      nowTime: runStartedAtTime + 67_000,
+      runStartedAtTime,
+      timings: [
+        {
+          durationMs: 41_000,
+          observedAtTime: runStartedAtTime,
+          retrying: false,
+          status: "running",
+          stepNumber: 1,
+        },
+        {
+          durationMs: 0,
+          observedAtTime: runStartedAtTime + 41_000,
+          retrying: false,
+          status: "succeeded",
+          stepNumber: 2,
+        },
+        {
+          durationMs: 0,
+          observedAtTime: runStartedAtTime + 41_000,
+          retrying: false,
+          status: "running",
+          stepNumber: 3,
+        },
+      ],
+    }),
+    "0:41/0:00/0:26",
+  );
+});
+
 test("falls back to the current tab only before a run has stored identity", () => {
   const result = resolveDisplayedTailorRunIdentity({
     activeTailoring: null,
@@ -273,6 +311,63 @@ test("keeps an errored run visible even after switching tabs", () => {
       lastTailoringRunStatus: "error",
     }),
     true,
+  );
+});
+
+test("clears a stale local running card once a matching saved resume is synced", () => {
+  assert.equal(
+    shouldClearCompletedLocalTailorRun({
+      activeTailorings: [],
+      run: {
+        applicationId: null,
+        pageUrl: "https://jobs.lever.co/palantir/dea9d3d5-75b2-4588-b7bd-585a47b79c8c",
+        status: "running",
+        tailoredResumeId: null,
+      },
+      tailoredResumes: [
+        {
+          applicationId: null,
+          archivedAt: null,
+          id: "tailored_1",
+          jobUrl:
+            "https://jobs.lever.co/palantir/dea9d3d5-75b2-4588-b7bd-585a47b79c8c",
+        },
+      ],
+      tailoringInterviews: [],
+    }),
+    true,
+  );
+});
+
+test("keeps a local running card while matching server work is still active", () => {
+  assert.equal(
+    shouldClearCompletedLocalTailorRun({
+      activeTailorings: [
+        {
+          applicationId: null,
+          jobUrl:
+            "https://jobs.lever.co/palantir/dea9d3d5-75b2-4588-b7bd-585a47b79c8c",
+          kind: "active_generation",
+        },
+      ],
+      run: {
+        applicationId: null,
+        pageUrl: "https://jobs.lever.co/palantir/dea9d3d5-75b2-4588-b7bd-585a47b79c8c",
+        status: "running",
+        tailoredResumeId: null,
+      },
+      tailoredResumes: [
+        {
+          applicationId: null,
+          archivedAt: null,
+          id: "tailored_1",
+          jobUrl:
+            "https://jobs.lever.co/palantir/dea9d3d5-75b2-4588-b7bd-585a47b79c8c",
+        },
+      ],
+      tailoringInterviews: [],
+    }),
+    false,
   );
 });
 
