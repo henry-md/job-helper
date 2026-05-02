@@ -698,15 +698,34 @@ export async function cleanupInvalidTailorResumeArtifacts(userId: string) {
     const invalidTailoredResumes = rawProfile.tailoredResumes.filter(
       isInvalidTailoredResumeArtifact,
     );
-    const activeInterviewRunIds = new Set(
-      readTailorResumeWorkspaceInterviews(rawProfile.workspace)
-        .map((interview) => interview.tailorResumeRunId)
-        .filter((runId): runId is string => Boolean(runId)),
+    const workspaceInterviews = readTailorResumeWorkspaceInterviews(
+      rawProfile.workspace,
     );
+    const activeRunIds = new Set(activeRuns.map((run) => run.id));
+    const activeInterviewStatusByRunId = new Map(
+      workspaceInterviews
+        .filter(
+          (interview) =>
+            interview.tailorResumeRunId &&
+            activeRunIds.has(interview.tailorResumeRunId),
+        )
+        .map((interview) => [
+          interview.tailorResumeRunId as string,
+          interview.status,
+        ]),
+    );
+    const orphanInterviewIds = workspaceInterviews
+      .filter(
+        (interview) =>
+          interview.tailorResumeRunId &&
+          !activeRunIds.has(interview.tailorResumeRunId),
+      )
+      .map((interview) => interview.id);
     const staleRunIds = activeRuns
       .filter((run) =>
         shouldDeleteActiveTailorResumeRun({
-          hasMatchingInterview: activeInterviewRunIds.has(run.id),
+          hasMatchingInterview: activeInterviewStatusByRunId.has(run.id),
+          matchingInterviewStatus: activeInterviewStatusByRunId.get(run.id),
           status: run.status,
           stepStatus: run.stepStatus,
           updatedAt: run.updatedAt,
@@ -714,11 +733,16 @@ export async function cleanupInvalidTailorResumeArtifacts(userId: string) {
       )
       .map((run) => run.id);
 
-    if (invalidTailoredResumes.length === 0 && staleRunIds.length === 0) {
+    if (
+      invalidTailoredResumes.length === 0 &&
+      staleRunIds.length === 0 &&
+      orphanInterviewIds.length === 0
+    ) {
       return;
     }
 
     const staleRunIdSet = new Set(staleRunIds);
+    const orphanInterviewIdSet = new Set(orphanInterviewIds);
     const invalidTailoredResumeIdSet = new Set(
       invalidTailoredResumes.map((record) => record.id),
     );
@@ -729,8 +753,9 @@ export async function cleanupInvalidTailorResumeArtifacts(userId: string) {
       ),
       workspace: withTailorResumeWorkspaceInterviews(
         rawProfile.workspace,
-        readTailorResumeWorkspaceInterviews(rawProfile.workspace).filter(
+        workspaceInterviews.filter(
           (interview) =>
+            !orphanInterviewIdSet.has(interview.id) &&
             !(
               interview.tailorResumeRunId &&
               staleRunIdSet.has(interview.tailorResumeRunId)
@@ -770,11 +795,14 @@ export async function cleanupInvalidTailorResumeArtifacts(userId: string) {
       });
     }
 
-    await bumpUserSyncState({
-      applications: false,
-      tailoring: invalidTailoredResumes.length > 0 || staleRunIds.length > 0,
-      userId,
-    });
+      await bumpUserSyncState({
+        applications: false,
+        tailoring:
+          invalidTailoredResumes.length > 0 ||
+          staleRunIds.length > 0 ||
+          orphanInterviewIds.length > 0,
+        userId,
+      });
   });
 }
 

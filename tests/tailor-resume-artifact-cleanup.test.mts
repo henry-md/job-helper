@@ -76,6 +76,42 @@ test("deletes stale running tailor resume runs", () => {
   );
 });
 
+test("keeps queued running tailor resume runs while another chat is active", () => {
+  const now = Date.parse("2026-04-25T18:00:00.000Z");
+
+  assert.equal(
+    shouldDeleteActiveTailorResumeRun({
+      hasMatchingInterview: true,
+      matchingInterviewStatus: "queued",
+      now,
+      status: "RUNNING",
+      stepStatus: "running",
+      updatedAt: new Date(
+        now - STALE_ACTIVE_TAILOR_RESUME_RUN_MAX_AGE_MS - 60_000,
+      ).toISOString(),
+    }),
+    false,
+  );
+});
+
+test("keeps claimed question-decision runs while Step 2 is re-evaluating", () => {
+  const now = Date.parse("2026-04-25T18:00:00.000Z");
+
+  assert.equal(
+    shouldDeleteActiveTailorResumeRun({
+      hasMatchingInterview: true,
+      matchingInterviewStatus: "deciding",
+      now,
+      status: "RUNNING",
+      stepStatus: "running",
+      updatedAt: new Date(
+        now - STALE_ACTIVE_TAILOR_RESUME_RUN_MAX_AGE_MS - 60_000,
+      ).toISOString(),
+    }),
+    false,
+  );
+});
+
 test("deletes active runs stuck on a terminal step", () => {
   const now = Date.parse("2026-04-25T18:00:00.000Z");
 

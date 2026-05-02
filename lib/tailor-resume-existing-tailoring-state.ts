@@ -5,6 +5,7 @@ import type {
   TailorResumeGenerationStepEvent,
   TailorResumePendingInterview,
 } from "./tailor-resume-types.ts";
+import { isTailorResumeInterviewReady } from "./tailor-resume-workspace-interviews.ts";
 
 export type TailorResumeExistingTailoringState =
   | {
@@ -303,7 +304,11 @@ export function buildActiveTailoringStates(input: {
     }
 
     activeTailorings.push(
-      buildPendingInterviewExistingTailoringState(tailoringInterview, run),
+      isTailorResumeInterviewReady(tailoringInterview)
+        ? buildPendingInterviewExistingTailoringState(tailoringInterview, run)
+        : run
+          ? buildActiveRunExistingTailoringState(run)
+          : buildPendingInterviewExistingTailoringState(tailoringInterview, run),
     );
   }
 

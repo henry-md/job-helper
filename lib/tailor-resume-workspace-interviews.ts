@@ -3,6 +3,24 @@ import type {
   TailorResumeWorkspaceState,
 } from "./tailor-resume-types.ts";
 
+export function isTailorResumeInterviewReady(
+  interview: TailorResumePendingInterview,
+) {
+  return interview.status === "ready";
+}
+
+export function isTailorResumeInterviewQueued(
+  interview: TailorResumePendingInterview,
+) {
+  return interview.status === "queued";
+}
+
+export function isTailorResumeInterviewDecisionInFlight(
+  interview: TailorResumePendingInterview,
+) {
+  return interview.status === "deciding";
+}
+
 function readTailorResumeInterviewTimestamp(value: string | null | undefined) {
   if (!value) {
     return 0;
@@ -16,9 +34,26 @@ export function sortTailorResumeWorkspaceInterviews(
   interviews: TailorResumePendingInterview[],
 ) {
   return [...interviews].sort(
-    (left, right) =>
-      readTailorResumeInterviewTimestamp(right.updatedAt) -
-      readTailorResumeInterviewTimestamp(left.updatedAt),
+    (left, right) => {
+      const leftReady = isTailorResumeInterviewReady(left) ? 1 : 0;
+      const rightReady = isTailorResumeInterviewReady(right) ? 1 : 0;
+
+      if (leftReady !== rightReady) {
+        return rightReady - leftReady;
+      }
+
+      const leftQueued = isTailorResumeInterviewQueued(left) ? 1 : 0;
+      const rightQueued = isTailorResumeInterviewQueued(right) ? 1 : 0;
+
+      if (leftQueued !== rightQueued) {
+        return rightQueued - leftQueued;
+      }
+
+      return (
+        readTailorResumeInterviewTimestamp(right.updatedAt) -
+        readTailorResumeInterviewTimestamp(left.updatedAt)
+      );
+    },
   );
 }
 
@@ -38,10 +73,13 @@ export function withTailorResumeWorkspaceInterviews(
   updatedAt: string | null,
 ): TailorResumeWorkspaceState {
   const nextInterviews = sortTailorResumeWorkspaceInterviews(interviews);
+  const readyInterview =
+    nextInterviews.find((interview) => isTailorResumeInterviewReady(interview)) ??
+    null;
 
   return {
     ...workspace,
-    tailoringInterview: nextInterviews[0] ?? null,
+    tailoringInterview: readyInterview,
     tailoringInterviews: nextInterviews,
     updatedAt,
   };

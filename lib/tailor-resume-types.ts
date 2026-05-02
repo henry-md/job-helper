@@ -1,5 +1,6 @@
 import {
   createDefaultTailorResumeGenerationSettings,
+  currentTailorResumeGenerationSettingsVersion,
   mergeTailorResumeGenerationSettings,
   type TailorResumeGenerationSettings,
 } from "./tailor-resume-generation-settings.ts";
@@ -111,6 +112,20 @@ export type TailoredResumeQuestioningSummary = {
   learnings: TailoredResumeQuestionLearning[];
 };
 
+export type TailorResumeUserMarkdownPatchOperation = {
+  anchorMarkdown?: string;
+  headingPath?: string[];
+  markdown?: string;
+  newMarkdown?: string;
+  oldMarkdown?: string;
+  op: "append" | "delete_exact" | "insert_after" | "insert_before" | "replace_exact";
+};
+
+export type TailorResumePendingInterviewStatus =
+  | "deciding"
+  | "queued"
+  | "ready";
+
 export type TailoredResumeEmphasizedTechnologyPriority = "high" | "low";
 
 export type TailoredResumeEmphasizedTechnology = {
@@ -134,6 +149,7 @@ export type TailorResumePromptSettingsState = {
 export type TailorResumeGenerationSettingsState = {
   updatedAt: string | null;
   values: TailorResumeGenerationSettings;
+  version: number;
 };
 
 export type TailoredResumeBlockGeneratedByStep = 3 | 4;
@@ -165,6 +181,7 @@ export type TailorResumeGenerationStepEvent = {
   attempt: number | null;
   detail: string | null;
   durationMs: number;
+  emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
   retrying: boolean;
   status: TailorResumeGenerationStepStatus;
   stepCount: number;
@@ -238,6 +255,8 @@ export type TailorResumePendingInterview = {
   jobUrl: string | null;
   planningDebug: TailoredResumeOpenAiDebugStage;
   planningResult: TailoredResumePlanningResult;
+  pendingUserMarkdownEditOperations: TailorResumeUserMarkdownPatchOperation[];
+  status: TailorResumePendingInterviewStatus;
   sourceAnnotatedLatexCode: string;
   tailorResumeRunId: string | null;
   updatedAt: string;
@@ -340,6 +359,7 @@ export function emptyTailorResumeGenerationSettingsState(): TailorResumeGenerati
   return {
     updatedAt: null,
     values: createDefaultTailorResumeGenerationSettings(),
+    version: currentTailorResumeGenerationSettingsVersion,
   };
 }
 
@@ -539,9 +559,26 @@ function parseTailorResumeGenerationSettingsState(
     return emptyTailorResumeGenerationSettingsState();
   }
 
+  const rawVersion = value.version;
+  const version =
+    typeof rawVersion === "number" &&
+    Number.isFinite(rawVersion) &&
+    rawVersion >= 1
+      ? Math.floor(rawVersion)
+      : 1;
+  const values = mergeTailorResumeGenerationSettings(value.values);
+
+  if (
+    version < currentTailorResumeGenerationSettingsVersion &&
+    values.allowTailorResumeFollowUpQuestions === false
+  ) {
+    values.allowTailorResumeFollowUpQuestions = true;
+  }
+
   return {
     updatedAt: readNullableString(value.updatedAt),
-    values: mergeTailorResumeGenerationSettings(value.values),
+    values,
+    version: currentTailorResumeGenerationSettingsVersion,
   };
 }
 
@@ -1194,6 +1231,47 @@ function parseTailorResumeConversationMessages(value: unknown) {
   });
 }
 
+function parseTailorResumeUserMarkdownPatchOperations(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailorResumeUserMarkdownPatchOperation[];
+  }
+
+  return value.flatMap((operation) => {
+    if (!isRecord(operation)) {
+      return [];
+    }
+
+    const op =
+      operation.op === "append" ||
+      operation.op === "delete_exact" ||
+      operation.op === "insert_after" ||
+      operation.op === "insert_before" ||
+      operation.op === "replace_exact"
+        ? operation.op
+        : null;
+
+    if (!op) {
+      return [];
+    }
+
+    return [
+      {
+        anchorMarkdown: readNullableString(operation.anchorMarkdown) ?? undefined,
+        headingPath: Array.isArray(operation.headingPath)
+          ? operation.headingPath.flatMap((heading) => {
+              const parsedHeading = readNullableString(heading)?.trim() ?? "";
+              return parsedHeading ? [parsedHeading] : [];
+            })
+          : undefined,
+        markdown: readNullableString(operation.markdown) ?? undefined,
+        newMarkdown: readNullableString(operation.newMarkdown) ?? undefined,
+        oldMarkdown: readNullableString(operation.oldMarkdown) ?? undefined,
+        op,
+      } satisfies TailorResumeUserMarkdownPatchOperation,
+    ];
+  });
+}
+
 function parseTailorResumePendingInterview(
   value: unknown,
 ): TailorResumePendingInterview | null {
@@ -1218,6 +1296,14 @@ function parseTailorResumePendingInterview(
       ? Math.max(0, value.accumulatedModelDurationMs)
       : null;
   const conversation = parseTailorResumeConversationMessages(value.conversation);
+  const status =
+    value.status === "queued" || value.status === "deciding"
+      ? value.status
+      : "ready";
+  const pendingUserMarkdownEditOperations =
+    parseTailorResumeUserMarkdownPatchOperations(
+      value.pendingUserMarkdownEditOperations,
+    );
 
   if (
     !id ||
@@ -1247,6 +1333,8 @@ function parseTailorResumePendingInterview(
     jobUrl,
     planningDebug,
     planningResult,
+    pendingUserMarkdownEditOperations,
+    status,
     sourceAnnotatedLatexCode,
     tailorResumeRunId: readNullableString(value.tailorResumeRunId),
     updatedAt,

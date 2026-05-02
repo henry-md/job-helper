@@ -11,6 +11,7 @@ export function isInvalidTailoredResumeArtifact(
 
 export function shouldDeleteActiveTailorResumeRun(input: {
   hasMatchingInterview: boolean;
+  matchingInterviewStatus?: string | null;
   now?: number;
   status: string;
   stepStatus: string | null;
@@ -30,6 +31,17 @@ export function shouldDeleteActiveTailorResumeRun(input: {
   }
 
   if (input.status !== "RUNNING") {
+    return false;
+  }
+
+  const normalizedInterviewStatus =
+    input.matchingInterviewStatus?.trim().toLowerCase() ?? null;
+
+  if (
+    normalizedInterviewStatus === "queued" ||
+    normalizedInterviewStatus === "deciding" ||
+    normalizedInterviewStatus === "ready"
+  ) {
     return false;
   }
 
