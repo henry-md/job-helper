@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   advanceTailorResumeQuestioning,
+  findAskWorthyMissingTailorResumeQuestionTerms,
   isDebugForceConversationInTailorPipelineEnabled,
+  latestUserMessageDirectlyConfirmsTechnologyExperience,
   normalizeTailorResumeInterviewResponseForCurrentTurn,
   parseTailorResumeInterviewResponseFromModelOutput,
 } from "../lib/tailor-resume-questioning.ts";
@@ -68,6 +70,82 @@ test("advanceTailorResumeQuestioning skips immediately when no block edits are p
   assert.equal(result.questioningSummary, null);
 });
 
+test("findAskWorthyMissingTailorResumeQuestionTerms keeps concrete stack gaps", () => {
+  assert.deepEqual(
+    findAskWorthyMissingTailorResumeQuestionTerms({
+      highPriorityMissingFromOriginalResumeAndUserMarkdown: [
+        "Palantir Gotham",
+        "Go",
+        "Cassandra",
+        "Spark",
+        "Elasticsearch",
+        "Gradle",
+        "Redux",
+      ],
+      lowPriorityMissingFromOriginalResumeAndUserMarkdown: [],
+      terms: [
+        {
+          evidence: "Palantir product",
+          name: "Palantir Gotham",
+          presentInOriginalResume: false,
+          presentInUserMarkdown: false,
+          priority: "high",
+        },
+        {
+          evidence: "backend services",
+          name: "Go",
+          presentInOriginalResume: false,
+          presentInUserMarkdown: false,
+          priority: "high",
+        },
+        {
+          evidence: "data systems",
+          name: "Cassandra",
+          presentInOriginalResume: false,
+          presentInUserMarkdown: false,
+          priority: "high",
+        },
+        {
+          evidence: "data systems",
+          name: "Spark",
+          presentInOriginalResume: false,
+          presentInUserMarkdown: false,
+          priority: "high",
+        },
+        {
+          evidence: "search",
+          name: "Elasticsearch",
+          presentInOriginalResume: false,
+          presentInUserMarkdown: false,
+          priority: "high",
+        },
+        {
+          evidence: "build tooling",
+          name: "Gradle",
+          presentInOriginalResume: false,
+          presentInUserMarkdown: false,
+          priority: "high",
+        },
+        {
+          evidence: "frontend state",
+          name: "Redux",
+          presentInOriginalResume: false,
+          presentInUserMarkdown: false,
+          priority: "high",
+        },
+        {
+          evidence: "already covered",
+          name: "React",
+          presentInOriginalResume: true,
+          presentInUserMarkdown: false,
+          priority: "high",
+        },
+      ],
+    }),
+    ["Go", "Cassandra", "Spark", "Elasticsearch", "Gradle", "Redux"],
+  );
+});
+
 test("normalizeTailorResumeInterviewResponseForCurrentTurn does not treat post-start skip as done", () => {
   const response = normalizeTailorResumeInterviewResponseForCurrentTurn({
     previousSummary: {
@@ -126,7 +204,7 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads finish tool calls"
   assert.equal(response.toolCalls[0]?.name, "finish_tailor_resume_interview");
 });
 
-test("parseTailorResumeInterviewResponseFromModelOutput reads ask tool calls with assistant text", () => {
+test("parseTailorResumeInterviewResponseFromModelOutput reads probing-question tool calls with assistant text", () => {
   const response = parseTailorResumeInterviewResponseFromModelOutput({
     output: [
       {
@@ -143,7 +221,7 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads ask tool calls wit
           userMarkdownEditOperations: [],
         }),
         call_id: "call-2",
-        name: "ask_tailor_resume_follow_up",
+        name: "initiate_tailor_resume_probing_questions",
         type: "function_call",
       },
     ],
@@ -158,7 +236,7 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads ask tool calls wit
     /Which model family, serving stack, and measurable outcome/i,
   );
   assert.equal(response.response.debugDecision, "not_applicable");
-  assert.equal(response.toolCalls[0]?.name, "ask_tailor_resume_follow_up");
+  assert.equal(response.toolCalls[0]?.name, "initiate_tailor_resume_probing_questions");
 });
 
 test("parseTailorResumeInterviewResponseFromModelOutput rejects plain JSON text", () => {
@@ -172,5 +250,51 @@ test("parseTailorResumeInterviewResponseFromModelOutput rejects plain JSON text"
         }),
       }),
     /tool call/i,
+  );
+});
+
+test("latestUserMessageDirectlyConfirmsTechnologyExperience detects concise technology confirmations", () => {
+  assert.equal(
+    latestUserMessageDirectlyConfirmsTechnologyExperience({
+      messages: [
+        {
+          id: "assistant-1",
+          role: "assistant",
+          text: "Do you have experience with Go, Cassandra, or Spark?",
+          toolCalls: [],
+        },
+        {
+          id: "user-1",
+          role: "user",
+          text: "Yes: I have used Go, Cassandra, Spark, Elasticsearch, Redux, and Gradle.",
+          toolCalls: [],
+        },
+      ],
+      technologyNames: ["Go", "Cassandra", "Spark"],
+    }),
+    true,
+  );
+});
+
+test("latestUserMessageDirectlyConfirmsTechnologyExperience ignores user requests for examples", () => {
+  assert.equal(
+    latestUserMessageDirectlyConfirmsTechnologyExperience({
+      messages: [
+        {
+          id: "assistant-1",
+          role: "assistant",
+          text: "Do you have experience with Go?",
+          toolCalls: [],
+        },
+        {
+          id: "user-1",
+          role: "user",
+          text: "Yes, I have used Go. Can you show me a concise bullet?",
+          toolCalls: [],
+        },
+      ],
+      technologyNames: ["Go"],
+    }),
+    false,
   );
 });

@@ -85,7 +85,7 @@ function buildTailorResumeInterviewDebugBlock(input: {
     "Debug override:\n" +
     "1. DEBUG_FORCE_CONVERSATION_IN_TAILOR_PIPELINE is enabled for this run.\n" +
     "2. On the first interview turn, you must ask at least one follow-up question. Do not call skip_tailor_resume_interview or finish_tailor_resume_interview on that first turn.\n" +
-    "3. When you call ask_tailor_resume_follow_up during this debug mode, set debugDecision to \"would_ask_without_debug\" if you genuinely would have asked that question even without the override.\n" +
+    "3. When you call initiate_tailor_resume_probing_questions during this debug mode, set debugDecision to \"would_ask_without_debug\" if you genuinely would have asked that question even without the override.\n" +
     "4. Otherwise set debugDecision to \"forced_only\" if you are only asking because debug mode requires at least one question.\n" +
     "5. When you call any other interview tool, set debugDecision to \"not_applicable\" if that tool accepts debugDecision.\n\n"
   );
@@ -95,14 +95,14 @@ function buildTailorResumeInterviewToolContractBlock() {
   return (
     "Current interview tool contract:\n" +
     "1. Call exactly one interview tool on every turn.\n" +
-    "2. The tool call is the control-plane output. Put the user-facing assistant reply in normal assistant text, not inside the tool arguments.\n" +
-    "3. Use ask_tailor_resume_follow_up to keep the chat open. The assistant text for that turn may include a brief direct reply plus the next single follow-up question.\n" +
-    "4. If the latest user answer asks you for a sample bullet, example, draft, clarification, or review, keep the chat open with ask_tailor_resume_follow_up. Answer directly in assistant text, then ask one confirmation or correction question if more detail is still needed.\n" +
-    "5. Use finish_tailor_resume_interview only after an interview has already started and only when the collected learnings are sufficient for implementation with no useful follow-up remaining.\n" +
+    "2. The tool call is the control-plane output. Put the user-facing assistant reply in normal assistant text when possible, and mirror the same concise text in assistantMessage or completionMessage on the tool call so the app can render it if the API returns only the tool call.\n" +
+    "3. Use initiate_tailor_resume_probing_questions to keep the chat open. On the first ask turn, ask all useful technology questions together in one grouped message instead of opening a multi-turn checklist.\n" +
+    "4. If the latest user answer asks you for a sample bullet, example, draft, clarification, or review, keep the chat open with initiate_tailor_resume_probing_questions. Answer directly in assistant text, then ask one concise confirmation or correction question if more detail is still needed.\n" +
+    "5. Use finish_tailor_resume_interview only after an interview has already started and only when you want the user to decide whether the chat should end. The app will ask the user to press Done or keep chatting; your tool call does not end the chat by itself.\n" +
     "6. When you call finish_tailor_resume_interview, also write a brief completion message in assistant text. That completion message is shown to the user before the app asks them whether to press Done or keep chatting.\n" +
     "7. Use skip_tailor_resume_interview only on the first turn when no interview should start at all, and do not write assistant text for skip.\n" +
-    "8. If userMarkdownEditOperations is non-empty, the user-facing assistant text or completion message must explicitly say that you are updating USER.md.\n" +
-    "9. Every interview tool accepts userMarkdownEditOperations. Use an empty array when USER.md should not change.\n" +
+    "8. Only finish_tailor_resume_interview should edit USER.md. Use an empty userMarkdownEditOperations array for initiate_tailor_resume_probing_questions and skip_tailor_resume_interview.\n" +
+    "9. If userMarkdownEditOperations is non-empty, the completion message must explicitly say that you are updating USER.md.\n" +
     "10. USER.md edit operations are transactional markdown patches. Supported op values are append, replace_exact, insert_before, insert_after, and delete_exact.\n" +
     "11. For append, set headingPath to the section path you want and markdown to the exact markdown to add. The app will create missing headings. Leave oldMarkdown, newMarkdown, and anchorMarkdown empty strings.\n" +
     "12. For replace_exact, set oldMarkdown and newMarkdown. For insert_before/insert_after, set anchorMarkdown and markdown. For delete_exact, set markdown. Exact-match operations must match exactly once or the app will feed back an error for retry.\n" +
@@ -128,14 +128,29 @@ function buildTailorResumePlanningOutputContractBlock() {
 function buildTailorResumeInterviewTechnologyContextBlock() {
   return (
     "Current emphasized-technology context:\n" +
-    "The input includes technologies emphasized by the job description with high/low priority. Treat high-priority terms as the first Step 2 candidates, but still follow the adjacency rules: ask whether the user has experience with a listed technology only when the resume or USER.md suggests close neighboring experience and the answer could materially improve a planned block.\n"
+    "The input includes deterministic keyword presence for the original resume and USER.md. Use that model-only context as the main Step 2 decision anchor. It is okay to tell the user that a skill was not found in the resume or USER.md, but do not expose raw analysis fields. Strongly prefer asking when a concrete job technology is missing from both the original resume and USER.md and you cannot cleanly assume the user's experience yourself. Skip questions for vague, generic, or low-value terms such as broad practices, collaboration traits, or phrases like internet terminology. Include low-priority missing terms in the grouped question only when they are concrete and share an obvious likely insertion point with stronger terms. Group ask-worthy missing technologies into one pointed question, such as \"Do you have experience with Go, Cassandra, or Spark?\" and give each technology a one-sentence explanation plus two unlabeled resume examples that include the exact keyword.\n"
+  );
+}
+
+function buildTailorResumeInterviewUserMarkdownMemoryBlock() {
+  return (
+    "Current USER.md technology-memory format:\n" +
+    "1. When finish_tailor_resume_interview writes USER.md, organize technology learnings under technology-specific headings such as \"## Cassandra\" or \"## Spark\" unless the current USER.md already has a clearly equivalent section.\n" +
+    "2. Under each technology heading, write separate markdown bullets. End bullets that map to a specific employer/project/experience with `-- ExperienceName`, for example `-- KnoWhiz` or `-- NewForm`.\n" +
+    "3. Quoted bullets are candidate resume bullet ideas. Put the entire candidate bullet text in double quotes, then add `-- ExperienceName`. Quoted candidate bullets should be grounded in what the user confirmed and should be written as swap-in replacements for a lower-importance bullet in that same experience. They are starting points that later tailoring may adapt, not sacred final text.\n" +
+    "4. Do not turn uncertain or adjacent experience into a quoted production-style claim. If the user only confirmed adjacency, familiarity, or that the technology can be listed in skills, write an unquoted factual note instead.\n" +
+    "5. Unquoted bullets are factual notes or constraints, not exact candidate resume wording. Use them for no-experience notes, skills-only permissions, adjacent exposure, uncertainty, or constraints such as `No direct production Cassandra experience.` or `Can list Gradle in build tools skills; used adjacent Java build automation, but did not confirm Gradle project work.`\n" +
+    "6. For each technology asked about in the chat, record one of: no user experience; can list in the skills section without changing an experience bullet; or one or more quoted candidate bullets tied to the experience where the bullet could replace a lower-importance bullet. Include the skills-section category when the technology can be added there.\n" +
+    "7. Preserve the distinction between direct experience and adjacency. Never write `production`, scale metrics, ownership, or exact technologies into a quoted bullet unless the user confirmed those details.\n"
   );
 }
 
 function buildTailorResumeImplementationTechnologyContextBlock() {
   return (
     "Current emphasized-technology context:\n" +
-    "The input includes technologies emphasized by the job description with high/low priority. Include high-priority exact technology keywords wherever they are already supported by the resume, USER.md, user-confirmed interview learnings, or the accepted planned desired text. Use low-priority terms only when they fit naturally. Do not invent unsupported technology experience, and do not edit unplanned blocks.\n"
+    "The input includes technologies emphasized by the job description with high/low priority. Include high-priority exact technology keywords wherever they are already supported by the resume, USER.md, user-confirmed interview learnings, or the accepted planned desired text. Use low-priority terms only when they fit naturally. Do not invent unsupported technology experience, and do not edit unplanned blocks.\n\n" +
+    "USER.md technology-memory semantics:\n" +
+    "Quoted bullets under technology headings are candidate resume bullet ideas tied to the experience after `-- ExperienceName`; treat them as grounded starting points that may be adapted to the job and swapped for a lower-importance bullet in that same experience. Unquoted bullets are factual notes, constraints, skills-only permissions, adjacency notes, or no-experience statements; do not turn them into exact resume claims unless the note explicitly supports that claim.\n"
   );
 }
 
@@ -258,40 +273,50 @@ const defaultSystemPromptSettings = {
     "{{FEEDBACK_BLOCK}}{{DEBUG_FORCE_BLOCK}}Decide whether the user should be asked a few follow-up questions before the tailored resume is implemented in LaTeX.\n\n" +
     "Use the available interview tools instead of returning plain JSON.\n\n" +
     "Questioning rules:\n" +
-    "1. Asking the user is optional and should be rare. Default to skip_tailor_resume_interview when the resume can already be tailored well enough from the existing evidence and no chat has started.\n" +
-    "2. Only ask when the answer would materially improve this specific tailored resume, cannot already be inferred from the resume, and is adjacent enough to existing resume text that the experience is plausibly already there.\n" +
-    "3. For technology questions, ask only about close neighbors of resume-supported experience that also appear in the job description, such as a job-specific JavaScript framework when the resume shows substantial JavaScript work, or C when the resume lists C++. Do not ask about unrelated tools just because the job description mentions them.\n" +
-    "4. Use the planner's emphasized technology list to prioritize which adjacent technology gaps are worth asking about.\n" +
-    "5. Never ask speculative resume-expansion questions that would require inventing a brand-new project, employer, credential, responsibility, technology, or domain that is not already adjacent to the current resume.\n" +
-    "6. Keep a relatively high threshold for the first question. If you have already asked one question, lower the threshold for a small number of follow-ups that close the loop on that same high-value area instead of stopping after collecting only partial detail.\n" +
-    "7. Ask one question at a time.\n" +
-    "8. Keep the overall interview short. Usually ask only one follow-up question, and rarely ask more than 2-3 total unless the user is actively asking for more back-and-forth.\n" +
-    "9. Finish as soon as the missing detail is clear enough to improve the targeted resume blocks. Do not drag the chat out just to collect extra color.\n" +
-    "10. When using ask_tailor_resume_follow_up, write one concise assistant turn as normal assistant text. That turn may include a brief direct reply plus exactly one follow-up question.\n" +
-    "11. Keep the follow-up question concise and focused on the one missing detail. Avoid throat-clearing like \"I have a few questions,\" \"this would strengthen the resume,\" or \"I'm trying to clarify\".\n" +
-    "12. If the latest user message asks for examples, clarification, a draft, a review, or another direct reply before the next question, answer that request directly before asking the next question.\n" +
-    "13. Keep the direct reply brief, adapt it to the user's new constraint or correction, and do not restate earlier framing unless it helps answer the request.\n" +
-    "14. If you give examples, give 1-3 brief examples tailored to the user's latest request and adjacent resume evidence. Phrase them as possible answer shapes, not claims about what the user did. Do not repeat the same examples with light rewording when the user asked for different examples.\n" +
-    "15. Do not make every assistant turn re-explain the full job-description rationale, resume-gap explanation, and answer examples. Once the context is already established, move the conversation forward.\n" +
-    "16. Mention the exact job-description signal using a short quote when it materially helps the user understand why you are asking, and call out the resume gap plainly without implying the user is missing a requirement. Once that context is already established in the chat, avoid repeating it verbatim on later turns.\n" +
-    "17. Prefer open-ended questions when they can efficiently surface the needed detail, but keep the question tightly scoped to the adjacent resume evidence.\n" +
-    "18. Avoid long laundry-list questions. Ask in the user's language about the adjacent project, employer, or resume block instead of listing every possible tool or practice in parentheses.\n" +
-    "19. Keep the combined assistant turn highly skimmable: ideally 1-4 short sentences total and usually under about 100 words unless a little more is truly necessary.\n" +
-    "20. Bad pattern: repeating the same job-description quote and the same answer examples after the user already asked for a more tailored variation.\n" +
-    "21. Good pattern: \"For a Java backend angle, stronger answers would sound like 'I owned the Spring Boot API layer around the LLM pipeline' or 'I built the Java service flow for prompt orchestration, retrieval, and eval logging.' Which model family, serving stack, and measurable outcome best match your work?\"\n" +
-    "22. learnings must be a compact working summary for the next model stage, not a transcript dump. Only include details grounded in the user's answers or directly restated from the accepted plan.\n" +
-    "23. Every learning.targetSegmentIds entry must reference only segmentIds from the accepted plan.\n" +
-    "24. If the latest user answer asks you a question or asks for a sample/example/draft/review, do not finish the interview on that turn. Answer in assistant text and include one confirmation or correction question if more detail is still needed.\n" +
-    "25. Call finish_tailor_resume_interview only when you are intentionally ending the chat because the final compressed learnings are ready for implementation. Do not finish just because the user sent one answer.\n" +
-    "26. When calling finish_tailor_resume_interview, the assistant text should briefly say that you have enough detail to wrap up and invite the user to keep chatting if they want to clarify anything else.\n" +
-    "27. If no questions are worth asking on the first turn, call skip_tailor_resume_interview instead of starting a chat.\n" +
-    "28. Set debugDecision to \"not_applicable\" unless a debug override explicitly requires otherwise.\n\n" +
+    "1. Asking the user is optional, but do not make the threshold so high that important job technologies stay missing. Default to asking when the deterministic keyword context says a concrete technology is missing from both the original resume and USER.md and you cannot cleanly assume the user's experience yourself.\n" +
+    "2. Only ask when the answer would materially improve this specific tailored resume, cannot already be inferred from the resume or USER.md, and would let you truthfully include a missing keyword in a likely skills section or existing experience bullet.\n" +
+    "3. For technology questions, ask about concrete close neighbors of resume-supported experience that also appear in the job description, such as a job-specific JavaScript framework when the resume shows substantial JavaScript work, Go beside backend/API work, Cassandra or Spark beside distributed systems/data infrastructure, or C when the resume lists C++. Do not ask about vague umbrella phrases, generic practices, or low-signal keywords just because the job description mentions them.\n" +
+    "4. Use the deterministic keyword presence context to prioritize gaps. High-priority missing concrete technologies should usually be asked together unless USER.md already clearly answers them or the resume evidence makes the experience cleanly inferable.\n" +
+    "5. Low-priority missing terms should join the first grouped question only when they are concrete technologies and share an obvious likely insertion point with stronger missing terms. Skip low-priority fluff such as broad practices, generic domain language, or phrases like internet terminology.\n" +
+    "6. On the first ask turn, ask all useful missing-technology questions together in one grouped message. Do not ask one technology per turn.\n" +
+    "7. First-turn structure: start with this human-facing intro or a close variant: \"Here are some skills that I didn't see in your resume or USER.md, which would be good to include in the new resume. I'll give a quick definition of each term and a couple examples of something that could fit the resume well:\" Then include one section per technology.\n" +
+    "8. Each technology section must use this shape: technology name, one sentence explaining what the technology is and which resume activities it most likely maps to, then exactly two different one-sentence example resume bullets or bullet fragments that include the exact keyword. The two examples must be meaningfully different ideas, not light rewordings. Do not label the explanation as \"Definition\" and do not label the bullets as \"Example A\", \"Example B\", or \"sample resume-add bullets\".\n" +
+    "9. Good technology definition style: \"Apache Spark helps you process large amounts of data by splitting it across computers in parallel; common for processing tons of logs, training ML models at scale.\" This is a good model for explaining what the tool is and helping the user recognize adjacent experience.\n" +
+    "10. Good first-turn pattern:\n" +
+    "\"Here are some skills that I didn't see in your resume or USER.md, which would be good to include in the new resume. I'll give a quick definition of each term and a couple examples of something that could fit the resume well:\n\nGo:\nGo is a programming language often used for backend services, APIs, CLIs, and infrastructure tooling.\n- Built Go services for backend APIs handling request routing and data validation.\n- Used Go for internal tooling that automated deployment or developer workflows.\n\nSpark:\nApache Spark helps you process large amounts of data by splitting it across computers in parallel; common for processing tons of logs, training ML models at scale.\n- Built Spark ETL jobs to process large event or analytics datasets.\n- Used Spark to prepare training data or aggregate logs for downstream analysis.\n\nDo any of these match your experience? If so, which ones and where?\"\n" +
+    "11. Keep the overall interview short. Usually one batched ask turn is enough; ask a follow-up only when the user's answer is ambiguous, contradicts itself, or asks for help.\n" +
+    "12. If the latest user answer directly confirms experience with the technologies you asked about, treat that as enough context and call finish_tailor_resume_interview. Do not ask another placement, wording, or \"should I also insert these into bullets\" question. The implementation stage can choose skills versus existing bullets from your USER.md notes.\n" +
+    "13. Finish as soon as the missing detail is clear enough to improve the targeted resume blocks. Do not drag the chat out just to collect extra color.\n" +
+    "14. When using initiate_tailor_resume_probing_questions, write one skimmable assistant turn as normal assistant text and mirror that exact text in assistantMessage. On the first turn it should contain grouped technology sections; on later turns it should contain at most one concise follow-up.\n" +
+    "15. Keep the question focused on missing technology evidence. Avoid throat-clearing like \"I have a few questions,\" \"this would strengthen the resume,\" or \"I'm trying to clarify\".\n" +
+    "16. If the latest user message asks for examples, clarification, a draft, a review, or another direct reply before the next question, answer that request directly before asking the next question.\n" +
+    "17. Keep the direct reply brief, adapt it to the user's new constraint or correction, and do not restate earlier framing unless it helps answer the request.\n" +
+    "18. If you give examples after the first turn, give 1-3 brief examples tailored to the user's latest request and adjacent resume evidence. Phrase them as possible answer shapes, not claims about what the user did. Do not repeat the same examples with light rewording when the user asked for different examples.\n" +
+    "19. Do not make every assistant turn re-explain the full job-description rationale, resume-gap explanation, and answer examples. Once the context is already established, move the conversation forward.\n" +
+    "20. Mention the exact job-description signal using a short quote when it materially helps the user understand why you are asking, and call out the resume gap plainly without implying the user is missing a requirement. Once that context is already established in the chat, avoid repeating it verbatim on later turns.\n" +
+    "21. Prefer pointed yes/no-plus-context technology questions over broad open-ended questions. Ask in the user's language about adjacent projects, employers, or resume blocks.\n" +
+    "22. Group missing technologies by likely resume insertion point when useful, but still give each technology its own name, one-sentence explanation, and two different example sentences. Avoid every possible tool or practice in parentheses.\n" +
+    "23. Keep the combined assistant turn highly skimmable: no essay paragraphs, no long preamble, and no more than two examples per skill.\n" +
+    "24. Bad pattern: repeating the same job-description quote and the same answer examples after the user already asked for a more tailored variation.\n" +
+    "25. learnings must be a compact working summary for the next model stage, not a transcript dump. Only include details grounded in the user's answers or directly restated from the accepted plan.\n" +
+    "26. Every learning.targetSegmentIds entry must reference only segmentIds from the accepted plan.\n" +
+    "27. If the latest user answer asks you a question or asks for a sample/example/draft/review, do not finish the interview on that turn. Answer in assistant text and include one confirmation or correction question if more detail is still needed.\n" +
+    "28. Call finish_tailor_resume_interview only when you believe the final compressed learnings are ready and you want the user to choose whether the chat should end. The app, not the tool call, gives the user the final Done button.\n" +
+    "29. When calling finish_tailor_resume_interview, the assistant text and completionMessage should briefly say that you have enough detail, that you are updating USER.md if edits are included, and that the user can keep chatting if they want to clarify anything else.\n" +
+    "30. If no questions are worth asking on the first turn, call skip_tailor_resume_interview instead of starting a chat.\n" +
+    "31. Set debugDecision to \"not_applicable\" unless a debug override explicitly requires otherwise.\n\n" +
     "USER.md memory rules:\n" +
     "1. The current USER.md memory is provided in the input. Use it to avoid asking the user repetitive questions.\n" +
     "2. If USER.md already answers a planned edit's factual gap, include that fact in learnings with the relevant targetSegmentIds instead of asking again.\n" +
-    "3. If the user's latest answer confirms a durable fact about their experience, lack of experience, preferences, constraints, or reusable resume context, update USER.md through userMarkdownEditOperations.\n" +
+    "3. Do not edit USER.md until the chat is ready to finish. When the user's answers confirm durable facts about experience, lack of experience, preferences, constraints, or reusable resume context, include one end-of-chat USER.md patch in finish_tailor_resume_interview.\n" +
     "4. Do not write facts to USER.md from the job description alone, from guesses, or from unsupported resume extrapolation.\n" +
-    "5. Prefer append for ordinary new memory. Use exact-match operations only when deduplicating or restructuring existing USER.md content.\n",
+    "5. Prefer append for ordinary new memory. Use exact-match operations only when deduplicating or restructuring existing USER.md content.\n" +
+    "6. For each technology you asked about in the chat, write USER.md memory under a technology-specific heading. Under that heading, record one of: no user experience; can list in the skills section without changing an experience bullet; or one or more quoted candidate experience bullets that could include that technology, plus the skills-section category where the technology can be added.\n" +
+    "7. Exact candidate resume bullet ideas must be wrapped in double quotes and end with `-- ExperienceName`, where ExperienceName is the employer, project, or organization the bullet belongs to. These quoted bullets are meant as grounded starting points that later tailoring may adapt and swap for a lower-importance bullet in the same experience.\n" +
+    "8. Non-exact notes must not be quoted. Use unquoted bullets for no-experience notes, skills-only permissions, adjacent exposure, uncertainty, or constraints. Do not make adjacency sound like production experience.\n" +
+    "9. If the user confirms several technologies in one answer, write one USER.md bullet or technology section per confirmed technology. Do not collapse them into a generic storage, backend, frontend, or tooling note.\n" +
+    "10. For confirmed missing technologies, prefer recording a skills-section category even when you also record an experience-bullet replacement, so the implementation stage has a direct place to add the exact keyword. If you are unsure about a bullet placement but the user confirmed the technology, record that it can be listed in the skills section and finish.\n" +
+    "11. Optimistically infer likely insertion points from the resume, but only record confirmed user experience or confirmed non-experience.\n",
   tailorResumeImplementation:
     "{{FEEDBACK_BLOCK}}Implement the approved resume edit plan as exact LaTeX block replacements. The strategic edit choices, targeted segments, and desired visible text are already decided.\n\n" +
     "You must return a strict JSON object containing only changes.\n\n" +
@@ -459,6 +484,7 @@ export function buildTailorResumeInterviewSystemPrompt(
 
   return [
     prompt,
+    buildTailorResumeInterviewUserMarkdownMemoryBlock(),
     buildTailorResumeInterviewTechnologyContextBlock(),
     buildTailorResumeInterviewToolContractBlock(),
   ].join("\n\n").trim();

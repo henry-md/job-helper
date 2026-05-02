@@ -124,33 +124,49 @@ test("buildTailorResumeInterviewSystemPrompt injects retry feedback", () => {
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 
-test("buildTailorResumeInterviewSystemPrompt keeps user-facing interview text outside tool arguments", () => {
+test("buildTailorResumeInterviewSystemPrompt keeps user-facing interview text concise and mirrored for rendering", () => {
   const prompt = buildTailorResumeInterviewSystemPrompt(
     createDefaultSystemPromptSettings(),
     {},
   );
 
   assert.match(prompt, /normal assistant text/i);
+  assert.match(prompt, /mirror that exact text in assistantMessage/i);
+  assert.match(prompt, /completionMessage/i);
   assert.match(prompt, /tool call is the control-plane output/i);
-  assert.match(prompt, /keep the follow-up question concise/i);
+  assert.match(prompt, /ask all useful missing-technology questions together/i);
   assert.match(prompt, /adapt it to the user's new constraint or correction/i);
   assert.match(prompt, /do not repeat the same examples with light rewording/i);
   assert.match(prompt, /avoid repeating it verbatim on later turns/i);
   assert.match(prompt, /keep the overall interview short/i);
-  assert.match(prompt, /usually ask only one follow-up question/i);
-  assert.match(prompt, /rarely ask more than 2-3 total/i);
+  assert.match(prompt, /one batched ask turn is enough/i);
+  assert.match(prompt, /Do not ask one technology per turn/i);
   assert.match(prompt, /possible answer shapes, not claims about what the user did/i);
-  assert.match(prompt, /ask_tailor_resume_follow_up/i);
+  assert.match(prompt, /initiate_tailor_resume_probing_questions/i);
   assert.match(prompt, /finish_tailor_resume_interview/i);
-  assert.match(prompt, /Do not finish just because the user sent one answer/i);
+  assert.match(prompt, /gives the user the final Done button/i);
   assert.match(prompt, /sample bullet, example, draft, clarification, or review/i);
-  assert.match(prompt, /close neighbors of resume-supported experience/i);
+  assert.match(prompt, /Go beside backend\/API work/i);
   assert.match(prompt, /JavaScript framework/i);
   assert.match(prompt, /resume lists C\+\+/i);
-  assert.match(prompt, /high-priority terms as the first Step 2 candidates/i);
-  assert.match(prompt, /Spring Boot API layer around the LLM pipeline/i);
-  assert.match(prompt, /prompt orchestration, retrieval, and eval logging/i);
-  assert.match(prompt, /Which model family, serving stack, and measurable outcome best match your work/i);
+  assert.match(prompt, /deterministic keyword presence/i);
+  assert.match(prompt, /main Step 2 decision anchor/i);
+  assert.match(prompt, /cannot cleanly assume the user's experience/i);
+  assert.match(prompt, /internet terminology/i);
+  assert.match(prompt, /Here are some skills that I didn't see in your resume or USER\.md/i);
+  assert.match(prompt, /one-sentence explanation/i);
+  assert.match(prompt, /exactly two different one-sentence example/i);
+  assert.match(prompt, /do not label the explanation as "Definition"/i);
+  assert.match(prompt, /do not label the bullets as "Example A"/i);
+  assert.match(prompt, /Apache Spark helps you process large amounts of data/i);
+  assert.match(prompt, /quoted candidate experience bullets/i);
+  assert.match(prompt, /technology-specific headings/i);
+  assert.match(prompt, /Quoted bullets are candidate resume bullet ideas/i);
+  assert.match(prompt, /swap-in replacements for a lower-importance bullet/i);
+  assert.match(prompt, /Do not turn uncertain or adjacent experience into a quoted production-style claim/i);
+  assert.match(prompt, /Unquoted bullets are factual notes or constraints/i);
+  assert.match(prompt, /No direct production Cassandra experience/i);
+  assert.match(prompt, /Only finish_tailor_resume_interview should edit USER\.md/i);
   assert.equal(
     prompt.includes("make the question text do four jobs"),
     false,
@@ -190,6 +206,9 @@ test("buildTailorResumeImplementationSystemPrompt injects retry feedback", () =>
   assert.match(prompt, /punctuation, separators, capitalization, or link text/i);
   assert.match(prompt, /high-priority exact technology keywords/i);
   assert.match(prompt, /Use low-priority terms only when they fit naturally/i);
+  assert.match(prompt, /Quoted bullets under technology headings are candidate resume bullet ideas/i);
+  assert.match(prompt, /swapped for a lower-importance bullet/i);
+  assert.match(prompt, /Unquoted bullets are factual notes/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 

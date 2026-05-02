@@ -16,6 +16,11 @@ import type {
   TailorResumePlanningBlock,
   TailorResumePlanningSnapshot,
 } from "./tailor-resume-planning.ts";
+import {
+  buildTailorResumeKeywordPresenceContext,
+  type TailorResumeKeywordPresenceContext,
+  type TailorResumeKeywordPresenceContextTerm,
+} from "./tailor-resume-keyword-coverage.ts";
 import { runWithTransientModelRetries } from "./tailor-resume-transient-retry.ts";
 import {
   applyTailorResumeUserMarkdownPatch,
@@ -72,10 +77,15 @@ const tailorResumeUserMarkdownEditOperationSchema = {
   ],
 } as const;
 
-const askTailorResumeFollowUpToolParameters = {
+const initiateTailorResumeProbingQuestionsToolParameters = {
   type: "object",
   additionalProperties: false,
   properties: {
+    assistantMessage: {
+      type: "string",
+      description:
+        "The user-facing chat message. On the first turn, use a natural intro, then one section per missing technology: the technology name, a one-sentence explanation of what it is, and exactly two unlabeled possible resume bullets. Do not use scaffold labels like 'Missing technologies', 'Definition', 'Example A', or 'sample resume-add bullets'.",
+    },
     debugDecision: {
       type: "string",
       enum: [
@@ -93,13 +103,23 @@ const askTailorResumeFollowUpToolParameters = {
       items: tailorResumeUserMarkdownEditOperationSchema,
     },
   },
-  required: ["debugDecision", "learnings", "userMarkdownEditOperations"],
+  required: [
+    "assistantMessage",
+    "debugDecision",
+    "learnings",
+    "userMarkdownEditOperations",
+  ],
 } as const;
 
 const finishTailorResumeInterviewToolParameters = {
   type: "object",
   additionalProperties: false,
   properties: {
+    completionMessage: {
+      type: "string",
+      description:
+        "A concise user-facing request asking whether the user wants to end the chat now.",
+    },
     learnings: {
       type: "array",
       items: tailorResumeInterviewLearningSchema,
@@ -109,7 +129,7 @@ const finishTailorResumeInterviewToolParameters = {
       items: tailorResumeUserMarkdownEditOperationSchema,
     },
   },
-  required: ["learnings", "userMarkdownEditOperations"],
+  required: ["completionMessage", "learnings", "userMarkdownEditOperations"],
 } as const;
 
 const skipTailorResumeInterviewToolParameters = {
@@ -128,17 +148,17 @@ const skipTailorResumeInterviewToolParameters = {
 const tailorResumeInterviewTools = [
   {
     type: "function" as const,
-    name: "ask_tailor_resume_follow_up",
+    name: "initiate_tailor_resume_probing_questions",
     description:
-      "Ask exactly one additional user-facing follow-up question and keep the tailoring interview open.",
-    parameters: askTailorResumeFollowUpToolParameters,
+      "Initiate or continue Step 2 probing questions and keep the tailoring interview open. The first turn may group all high-value technology questions together.",
+    parameters: initiateTailorResumeProbingQuestionsToolParameters,
     strict: true,
   },
   {
     type: "function" as const,
     name: "finish_tailor_resume_interview",
     description:
-      "Explicitly end an active tailoring interview after the useful learnings are complete.",
+      "Request user confirmation to end an active tailoring interview after the useful learnings are complete.",
     parameters: finishTailorResumeInterviewToolParameters,
     strict: true,
   },
@@ -183,6 +203,7 @@ export type AdvanceTailorResumeQuestioningResult =
       generationDurationMs: number;
       questioningSummary: TailoredResumeQuestioningSummary | null;
       toolCalls: TailorResumeConversationToolCall[];
+      userMarkdownEditOperations: TailorResumeUserMarkdownPatchOperation[];
       userMarkdownPatchResult: TailorResumeUserMarkdownPatchResult | null;
     }
   | {
@@ -252,6 +273,14 @@ function readOutputText(response: TailoredResumeResponse) {
 
 function readTrimmedString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readRecordString(value: unknown, key: string) {
+  if (!value || typeof value !== "object" || !(key in value)) {
+    return "";
+  }
+
+  return readTrimmedString(value[key as keyof typeof value]);
 }
 
 export function isDebugForceConversationInTailorPipelineEnabled() {
@@ -389,8 +418,14 @@ function parseTailorResumeInterviewResponse(
 
   return {
     action,
-    assistantMessage: action === "ask" ? outputText : "",
-    completionMessage: action === "done" ? outputText : "",
+    assistantMessage:
+      action === "ask"
+        ? outputText || readRecordString(value, "assistantMessage")
+        : "",
+    completionMessage:
+      action === "done"
+        ? outputText || readRecordString(value, "completionMessage")
+        : "",
     debugDecision,
     learnings: rawLearnings.map(parseTailoredResumeQuestionLearning),
     userMarkdownEditOperations,
@@ -467,7 +502,7 @@ export function parseTailorResumeInterviewResponseFromModelOutput(
     serializeTailorResumeConversationToolCall(toolCall),
   ];
 
-  if (toolCall.name === "ask_tailor_resume_follow_up") {
+  if (toolCall.name === "initiate_tailor_resume_probing_questions") {
     return {
       response: parseTailorResumeInterviewResponse({
         ...(argumentsJson && typeof argumentsJson === "object"
@@ -539,6 +574,7 @@ function serializePlannedBlocks(input: {
       return [
         `${index + 1}. segmentId: ${change.segmentId}`,
         `   current text: ${block?.plainText ?? "[missing block]"}`,
+        `   current latex: ${block?.latexCode ?? "[missing block]"}`,
         `   desired text: ${change.desiredPlainText || "[remove this block]"}`,
         `   reason: ${change.reason.trim()}`,
       ].join("\n");
@@ -564,6 +600,219 @@ function serializeEmphasizedTechnologies(
       ].join("\n"),
     )
     .join("\n\n");
+}
+
+function serializeKeywordPresenceContext(
+  context: TailorResumeKeywordPresenceContext,
+) {
+  if (context.terms.length === 0) {
+    return "[no emphasized technologies identified]";
+  }
+
+  const highMissing =
+    context.highPriorityMissingFromOriginalResumeAndUserMarkdown.length > 0
+      ? context.highPriorityMissingFromOriginalResumeAndUserMarkdown.join(", ")
+      : "[none]";
+  const lowMissing =
+    context.lowPriorityMissingFromOriginalResumeAndUserMarkdown.length > 0
+      ? context.lowPriorityMissingFromOriginalResumeAndUserMarkdown.join(", ")
+      : "[none]";
+  const terms = context.terms
+    .map((term, index) =>
+      [
+        `${index + 1}. ${term.name}`,
+        `   priority: ${term.priority}`,
+        `   presentInOriginalResume: ${String(term.presentInOriginalResume)}`,
+        `   presentInUserMarkdown: ${String(term.presentInUserMarkdown)}`,
+        `   evidence: ${term.evidence || "[not provided]"}`,
+      ].join("\n"),
+    )
+    .join("\n\n");
+
+  return [
+    "This context is model-only. Do not reveal USER.md presence to the user.",
+    `High-priority terms missing from both original resume and USER.md: ${highMissing}`,
+    `Low-priority terms missing from both original resume and USER.md: ${lowMissing}`,
+    "Per-term deterministic presence:",
+    terms,
+  ].join("\n");
+}
+
+const productSpecificTermsToAvoidAsking = new Set([
+  "apollo",
+  "blueprint",
+  "environment platform",
+  "foundry",
+  "gotham",
+  "mission manager",
+  "palantir apollo",
+  "palantir foundry",
+  "palantir gotham",
+  "rubix",
+  "signals",
+]);
+
+const vagueTermsToAvoidAsking = [
+  "cloud infrastructure",
+  "communication",
+  "collaboration",
+  "computer science",
+  "developer experience",
+  "internet terminology",
+  "micro-service repos",
+  "microservices",
+  "open-source",
+  "security clearance",
+] as const;
+
+function isAskWorthyMissingTechnologyTerm(
+  term: TailorResumeKeywordPresenceContextTerm,
+) {
+  const normalizedName = term.name.trim().toLowerCase();
+
+  if (
+    !normalizedName ||
+    term.priority !== "high" ||
+    term.presentInOriginalResume ||
+    term.presentInUserMarkdown
+  ) {
+    return false;
+  }
+
+  if (productSpecificTermsToAvoidAsking.has(normalizedName)) {
+    return false;
+  }
+
+  if (
+    vagueTermsToAvoidAsking.some(
+      (vagueTerm) =>
+        normalizedName === vagueTerm || normalizedName.includes(vagueTerm),
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+export function findAskWorthyMissingTailorResumeQuestionTerms(
+  context: TailorResumeKeywordPresenceContext,
+) {
+  return context.terms
+    .filter(isAskWorthyMissingTechnologyTerm)
+    .map((term) => term.name);
+}
+
+function buildMissingTechnologySkipRejectionFeedback(terms: string[]) {
+  return [
+    "Do not skip the first Step 2 interview turn.",
+    `The deterministic keyword presence context says these high-priority concrete technologies are missing from both the original resume and USER.md: ${terms.join(", ")}.`,
+    "Ask one grouped question using initiate_tailor_resume_probing_questions. Start with a natural user-facing intro, then include one section per technology with a one-sentence explanation and exactly two different unlabeled resume example sentences.",
+    'Good shape: "Here are some skills that I didn\'t see in your resume or USER.md, which would be good to include in the new resume. I\'ll give a quick definition of each term and a couple examples of something that could fit the resume well: ..."',
+  ].join("\n");
+}
+
+function getFallbackTechnologyDefinition(term: string) {
+  const normalizedTerm = term.toLowerCase();
+
+  if (normalizedTerm === "go") {
+    return "Go is a programming language often used for backend services, APIs, CLIs, and infrastructure tooling.";
+  }
+
+  if (normalizedTerm === "cassandra") {
+    return "Cassandra is a distributed database for high-write, high-scale systems where data is spread across many machines.";
+  }
+
+  if (normalizedTerm === "spark") {
+    return "Apache Spark helps you process large amounts of data by splitting it across computers in parallel; common for processing tons of logs, training ML models at scale.";
+  }
+
+  if (normalizedTerm === "elasticsearch") {
+    return "Elasticsearch is a search and analytics engine commonly used for fast text search, log exploration, and indexed queries over large datasets.";
+  }
+
+  if (normalizedTerm === "gradle") {
+    return "Gradle is a build tool often used for Java projects to compile code, manage dependencies, run tests, and wire builds into CI.";
+  }
+
+  if (normalizedTerm === "redux") {
+    return "Redux is a state-management library usually used with React when an app has complex shared UI state or multi-step data flows.";
+  }
+
+  return `${term} is a job-relevant technology; look for projects where you used it directly or worked on the adjacent system it supports.`;
+}
+
+function getFallbackTechnologyExamples(term: string) {
+  const normalizedTerm = term.toLowerCase();
+
+  if (normalizedTerm === "go") {
+    return [
+      "Built Go backend services for API routing, request validation, or data processing.",
+      "Used Go to create internal infrastructure tooling that automated deployment or developer workflows.",
+    ];
+  }
+
+  if (normalizedTerm === "cassandra") {
+    return [
+      "Modeled Cassandra tables for high-volume writes and low-latency reads in a distributed data workflow.",
+      "Used Cassandra-style wide-column storage patterns to support scalable event or analytics data.",
+    ];
+  }
+
+  if (normalizedTerm === "spark") {
+    return [
+      "Built Spark ETL jobs to process large event, log, or analytics datasets.",
+      "Used Spark to prepare training data or aggregate records for downstream analysis.",
+    ];
+  }
+
+  if (normalizedTerm === "elasticsearch") {
+    return [
+      "Built Elasticsearch indexes and queries for fast search over application or analytics data.",
+      "Used Elasticsearch to support log exploration, filtering, or low-latency retrieval workflows.",
+    ];
+  }
+
+  if (normalizedTerm === "gradle") {
+    return [
+      "Used Gradle to build, test, and package Java services in CI.",
+      "Maintained Gradle build configuration for dependencies, test tasks, or release automation.",
+    ];
+  }
+
+  if (normalizedTerm === "redux") {
+    return [
+      "Managed complex React application state with Redux across multi-step UI flows.",
+      "Used Redux to coordinate API data, form state, or shared UI state in a TypeScript React app.",
+    ];
+  }
+
+  return [
+    `Used ${term} in an existing project, service, or skills section where it accurately reflects your work.`,
+    `Added ${term} to a resume bullet tied to the system, project, or workflow where you used it directly.`,
+  ];
+}
+
+function buildFallbackTailorResumeProbeQuestion(terms: string[]) {
+  const selectedTerms = terms.slice(0, 6);
+  const sections = selectedTerms.map((term) => {
+    const [firstExample, secondExample] = getFallbackTechnologyExamples(term);
+
+    return [
+      `${term}:`,
+      getFallbackTechnologyDefinition(term),
+      `- ${firstExample}`,
+      `- ${secondExample}`,
+    ].join("\n");
+  });
+
+  return [
+    `Here are some skills that I didn't see in your resume or USER.md, which would be good to include in the new resume. I'll give a quick definition of each term and a couple examples of something that could fit the resume well:`,
+    "",
+    sections.join("\n\n"),
+    "",
+    "Do any of these match your experience? If so, which ones and where?",
+  ].join("\n");
 }
 
 function serializeConversation(messages: TailorResumeConversationMessage[]) {
@@ -612,6 +861,7 @@ function serializeQuestioningSummary(
 function buildTailorResumeInterviewInput(input: {
   conversation: TailorResumeConversationMessage[];
   jobDescription: string;
+  keywordPresenceContext: TailorResumeKeywordPresenceContext;
   planningBlocksById: Map<string, TailorResumePlanningBlock>;
   planningResult: TailoredResumePlanningResult;
   planningSnapshot: TailorResumePlanningSnapshot;
@@ -658,6 +908,12 @@ function buildTailorResumeInterviewInput(input: {
           text:
             "Technologies emphasized by the job description:\n" +
             serializeEmphasizedTechnologies(input.planningResult),
+        },
+        {
+          type: "input_text" as const,
+          text:
+            "Deterministic keyword presence context before Step 2:\n" +
+            serializeKeywordPresenceContext(input.keywordPresenceContext),
         },
         {
           type: "input_text" as const,
@@ -710,6 +966,42 @@ function latestUserMessageRequestsAssistantReply(
   );
 }
 
+function textMentionsTechnology(text: string, technologyName: string) {
+  const normalizedText = text.toLowerCase();
+  const normalizedTechnologyName = technologyName.trim().toLowerCase();
+
+  return (
+    normalizedTechnologyName.length > 0 &&
+    normalizedText.includes(normalizedTechnologyName)
+  );
+}
+
+export function latestUserMessageDirectlyConfirmsTechnologyExperience(input: {
+  messages: TailorResumeConversationMessage[];
+  technologyNames: string[];
+}) {
+  const latestUserMessage = [...input.messages]
+    .reverse()
+    .find((message) => message.role === "user");
+  const text = latestUserMessage?.text.trim() ?? "";
+
+  if (!text || latestUserMessageRequestsAssistantReply(input.messages)) {
+    return false;
+  }
+
+  if (
+    !/\b(?:yes|yep|yeah|correct|confirmed|i\s+(?:have|used|built|worked|owned)|i['’]ve|experience\s+with)\b/i.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+
+  return input.technologyNames.some((technologyName) =>
+    textMentionsTechnology(text, technologyName),
+  );
+}
+
 function mentionsUserMarkdown(text: string) {
   return /\buser\.md\b/i.test(text);
 }
@@ -736,28 +1028,29 @@ function deriveTailorResumeQuestioningAgenda(input: {
 function validateTailorResumeInterviewResponse(input: {
   conversation: TailorResumeConversationMessage[];
   debugForceConversation: boolean;
+  emphasizedTechnologyNames: string[];
   plannedSegmentIds: Set<string>;
   previousSummary: TailoredResumeQuestioningSummary | null;
   response: TailorResumeInterviewResponse;
 }) {
   for (const learning of input.response.learnings) {
     const seenSegmentIds = new Set<string>();
+    const validTargetSegmentIds: string[] = [];
 
     for (const segmentId of learning.targetSegmentIds) {
       if (seenSegmentIds.has(segmentId)) {
-        throw new Error(
-          `The model returned duplicate targetSegmentIds for learning "${learning.topic}".`,
-        );
+        continue;
       }
 
       if (!input.plannedSegmentIds.has(segmentId)) {
-        throw new Error(
-          `The model returned an interview learning for unknown segment ${segmentId}.`,
-        );
+        continue;
       }
 
       seenSegmentIds.add(segmentId);
+      validTargetSegmentIds.push(segmentId);
     }
+
+    learning.targetSegmentIds = validTargetSegmentIds;
   }
 
   if (input.previousSummary) {
@@ -807,8 +1100,37 @@ function validateTailorResumeInterviewResponse(input: {
     throw new Error('Action "ask" must return user-facing assistant text.');
   }
 
+  if (
+    input.response.action === "ask" &&
+    input.response.assistantMessage.split(/\s+/).filter(Boolean).length > 650
+  ) {
+    throw new Error(
+      'Action "ask" must keep the user-facing message skimmable and under 650 words.',
+    );
+  }
+
   if (input.response.action === "ask" && input.response.completionMessage) {
     throw new Error('Action "ask" must not return completionMessage.');
+  }
+
+  if (
+    input.response.action === "ask" &&
+    input.response.userMarkdownEditOperations.length > 0
+  ) {
+    throw new Error('Action "ask" must not edit USER.md before the chat ends.');
+  }
+
+  if (
+    input.response.action === "ask" &&
+    input.previousSummary &&
+    latestUserMessageDirectlyConfirmsTechnologyExperience({
+      messages: input.conversation,
+      technologyNames: input.emphasizedTechnologyNames,
+    })
+  ) {
+    throw new Error(
+      "The latest user answer directly confirms technology experience. Use finish_tailor_resume_interview with per-technology USER.md notes instead of asking another placement or wording question.",
+    );
   }
 
   if (input.response.action === "done" && !input.response.completionMessage) {
@@ -824,7 +1146,7 @@ function validateTailorResumeInterviewResponse(input: {
     latestUserMessageRequestsAssistantReply(input.conversation)
   ) {
     throw new Error(
-      "The latest user answer asks for an assistant reply. Use ask_tailor_resume_follow_up, answer in assistant text, and include one confirmation or correction question instead of ending the interview.",
+      "The latest user answer asks for an assistant reply. Use initiate_tailor_resume_probing_questions, answer in assistant text, and include one confirmation or correction question instead of ending the interview.",
     );
   }
 
@@ -911,6 +1233,13 @@ export async function advanceTailorResumeQuestioning(input: {
     input.planningResult.changes.map((change) => change.segmentId),
   );
   const previousSummary = input.planningResult.questioningSummary;
+  const keywordPresenceContext = buildTailorResumeKeywordPresenceContext({
+    emphasizedTechnologies: input.planningResult.emphasizedTechnologies,
+    originalResumeText: input.planningSnapshot.resumePlainText,
+    userMarkdown: userMarkdown.markdown,
+  });
+  const askWorthyMissingTerms =
+    findAskWorthyMissingTailorResumeQuestionTerms(keywordPresenceContext);
   let feedback = "";
   let lastError = "Unable to decide whether resume follow-up questions are needed.";
 
@@ -918,6 +1247,7 @@ export async function advanceTailorResumeQuestioning(input: {
     const interviewInput = buildTailorResumeInterviewInput({
       conversation: input.conversation,
       jobDescription: input.jobDescription,
+      keywordPresenceContext,
       planningBlocksById,
       planningResult: input.planningResult,
       planningSnapshot: input.planningSnapshot,
@@ -956,6 +1286,9 @@ export async function advanceTailorResumeQuestioning(input: {
       validateTailorResumeInterviewResponse({
         conversation: input.conversation,
         debugForceConversation,
+        emphasizedTechnologyNames: input.planningResult.emphasizedTechnologies.map(
+          (technology) => technology.name,
+        ),
         plannedSegmentIds,
         previousSummary,
         response: parsedResponse,
@@ -966,7 +1299,19 @@ export async function advanceTailorResumeQuestioning(input: {
           ? error.message
           : "The model returned an invalid interview response.";
       feedback =
-        `${lastError}\nCall exactly one valid interview tool. Put the user-facing assistant reply in normal assistant text instead of tool arguments. Keep the interview short and focused, ask only one question at a time, keep learnings compact, and only call finish_tailor_resume_interview when you intentionally want the chat to end.`;
+        `${lastError}\nCall exactly one valid interview tool. Put the user-facing assistant reply in normal assistant text when possible and also fill the tool's assistantMessage or completionMessage field so the app can render the chat. Keep the interview short and focused, group first-turn technology questions together, keep learnings compact, and only call finish_tailor_resume_interview when you want the user to decide whether the chat should end.`;
+      continue;
+    }
+
+    if (
+      input.conversation.length === 0 &&
+      parsedResponse.action === "skip" &&
+      askWorthyMissingTerms.length > 0
+    ) {
+      lastError = buildMissingTechnologySkipRejectionFeedback(
+        askWorthyMissingTerms,
+      );
+      feedback = lastError;
       continue;
     }
 
@@ -1029,7 +1374,40 @@ export async function advanceTailorResumeQuestioning(input: {
       generationDurationMs: Math.max(0, Date.now() - startedAt),
       questioningSummary,
       toolCalls: parsedToolCalls,
+      userMarkdownEditOperations: parsedResponse.userMarkdownEditOperations,
       userMarkdownPatchResult,
+    };
+  }
+
+  if (input.conversation.length === 0 && askWorthyMissingTerms.length > 0) {
+    const assistantMessage =
+      buildFallbackTailorResumeProbeQuestion(askWorthyMissingTerms);
+    const fallbackToolCallArguments = {
+      assistantMessage,
+      debugDecision: "not_applicable",
+      learnings: [],
+      userMarkdownEditOperations: [],
+    };
+
+    return {
+      action: "ask",
+      assistantMessage,
+      generationDurationMs: Math.max(0, Date.now() - startedAt),
+      questioningSummary: {
+        agenda: `Ask whether the user has experience with ${askWorthyMissingTerms
+          .slice(0, 6)
+          .join(", ")} before writing final edits.`,
+        askedQuestionCount: 1,
+        debugDecision: null,
+        learnings: [],
+      },
+      toolCalls: [
+        {
+          argumentsText: JSON.stringify(fallbackToolCallArguments, null, 2),
+          name: "initiate_tailor_resume_probing_questions",
+        },
+      ],
+      userMarkdownPatchResult: null,
     };
   }
 
