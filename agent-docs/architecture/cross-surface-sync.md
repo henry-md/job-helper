@@ -34,7 +34,7 @@ Client refresh behavior:
 - Tailor Resume refreshes must include both saved profile state and server-side in-flight state. `GET /api/tailor-resume` returns `activeTailorings` for active generations and pending interviews, and both the extension and dashboard should render those directly instead of only rehydrating saved `profile.tailoredResumes`.
 - Saved tailored resumes now include `archivedAt`. Both clients should derive `unarchived` vs `archived` views from the same synced `tailoredResumes` payload instead of inventing separate local stores or archive-only endpoints.
 - Step-progress updates should also bump `tailoringVersion`, otherwise a client can miss long-running in-flight changes after the initial run-creation bump and stay visually stale until completion.
-- The dashboard should avoid clobbering local Step 2 editing state on every tailoring refresh tick. Refresh `activeTailorings` eagerly, but only replace the saved profile-shaped workspace state when the profile payload itself materially changed.
+- The dashboard should avoid clobbering local Step 2 interview editing state on every tailoring refresh tick. Refresh `activeTailorings` eagerly, but only replace the saved profile-shaped workspace state when the profile payload itself materially changed.
 - The extension's current-page shell should retire any transient local run as soon as synced server state shows a completed unarchived tailored resume for the same comparable job URL, even if the page's local URL variant differs from the saved tailored-resume URL.
 
 Guardrails:

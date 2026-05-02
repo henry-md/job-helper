@@ -1,6 +1,6 @@
 Tailor Resume interview soft question guidance
 
-- Bug: step 2 exposed `totalQuestionBudget` as a strict model-facing contract and server validation rule, so the interview could fail with `The model exceeded the declared interview question budget.` even when the follow-up itself was otherwise reasonable.
+- Bug: Step 1 exposed `totalQuestionBudget` as a strict model-facing contract and server validation rule, so the interview could fail with `The model exceeded the declared interview question budget.` even when the follow-up itself was otherwise reasonable.
 - Root cause: we treated a prompt preference about keeping the chat short as hard application state, persisted it in the questioning summary, surfaced it in UI counters, and rejected later tool calls that crossed that declared number.
 
 Fix:

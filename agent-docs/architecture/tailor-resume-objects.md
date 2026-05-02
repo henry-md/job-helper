@@ -61,10 +61,10 @@ Tailor Resume object model:
     - `jobIdentifier`, which should prefer a visible job/requisition/posting id and fall back to the usual short disambiguator when no job number is available
   - `jobUrl`, when the run came from a captured job page or a description with a URL header; URL matching lets the API return an existing tailored resume instead of generating a duplicate for the same posting
   - the saved OpenAI debug trace for developer inspection, including:
-    - the full prompt for the stage-1 plaintext planning call
-    - the full JSON output returned by the stage-1 call
-    - the full prompt for the stage-2 LaTeX implementation call
-    - the full JSON output returned by the stage-2 call
+    - the full prompt for the Step 3 plaintext planning call
+    - the full JSON output returned by the Step 3 call
+    - the full prompt for the Step 4 LaTeX implementation call
+    - the full JSON output returned by the Step 4 call
   - a `thesis` object with:
     - `jobDescriptionFocus`: the non-generic themes where the job description over-indexed
     - `resumeChanges`: the broad resume strategy used to match those themes
@@ -102,7 +102,7 @@ Tailor Resume object model:
   - job application extraction
   - resume-to-LaTeX extraction
   - tailored-resume planning
-  - optional tailored-resume follow-up questioning between planning and implementation
+  - optional Step 2 tailored-resume follow-up questioning before planning
   - tailored-resume block generation
   - tailored-resume block refinement / regeneration
   - automatic page-count compaction when a tailored resume grows beyond the original resume's page count
@@ -116,7 +116,7 @@ Tailor Resume object model:
 - This keeps per-user boolean generation guardrails that are not prompt text themselves.
 - Current user-editable settings include whether Step 2 may pause for follow-up questions, whether tailoring should automatically reject page-count growth by running a compaction follow-up pass when needed, plus the keyword-coverage percentage basis.
 - Step 2 follow-up questions are a real product setting, so the toggle must be visible from the extension settings panel as well as the web dashboard before saved `allowTailorResumeFollowUpQuestions` state is allowed to affect a run.
-- Generation settings are versioned; unversioned/older saved Step 2-off values are legacy hidden state and are migrated back to on when read. Once the visible switch saves version 2, off remains an explicit user choice.
+- Generation settings are versioned; unversioned/older saved Step-1-question-off values are legacy hidden state and are migrated back to on when read. Once the visible switch saves version 2, off remains an explicit user choice.
 - These values are editable from `/dashboard?tab=settings`; extension-started behavior-affecting settings must also be visible in the extension settings panel.
 
 10. User Memory (`TailorResumeUserMemory`)
@@ -143,16 +143,18 @@ Current flow:
 Tailoring generation:
 
 - Tailor Resume no longer asks one model call to decide the strategy and write final LaTeX at the same time.
-- The tailoring flow now runs in two required stages plus one optional middle stage:
-  - parallel Step 1 work: an OpenAI planning pass over whole-resume plaintext and document-ordered blocks, plus deterministic keyword scraping from the job posting
-  - an optional follow-up questioning pass that waits for both Step 1 results, then can pause the flow and ask the user a few high-value background questions before implementation
-  - an implementation pass that sees only the selected blocks and translates the approved plaintext plan plus any compressed user learnings back into block-local LaTeX replacements
+- The tailoring flow now runs in four required stages plus one conditional guardrail:
+  - Step 1 extracts emphasized job technologies and deterministic keyword presence
+  - Step 2 optionally asks one queued follow-up chat and updates `USER.md` before planning
+  - Step 3 runs an OpenAI planning pass over whole-resume plaintext and document-ordered blocks using the latest `USER.md`
+  - Step 4 sees only the selected blocks and translates the approved plaintext plan plus any compressed user learnings back into block-local LaTeX replacements
+  - Step 5 conditionally compacts edited blocks when page-count protection is enabled and the preview grows
 - The questioning pass should stay rare. It should only ask when the answer would materially improve the tailored resume, cannot already be inferred from the current resume, and is adjacent enough to existing resume text that the experience is plausibly already there.
-- If the visible Step 2 setting is enabled, Step 2 may still decide to skip questions, but that decision must come from the Step 2 model/tool path using the current resume, job keywords, and `USER.md`, not from hidden persisted profile state.
+- If the visible Step 2 setting is enabled, Step 2 may still decide to skip questions, but that decision must come from the Step 2 model/tool path using the original resume, job keywords, and `USER.md`, not from hidden persisted profile state.
 - If the visible Step 2 setting is disabled, the flow skips interactive questioning and passes `USER.md` memory as non-interactive context to planning and implementation.
 - When questioning does happen, persist only a compact summary of the learnings for the next model stage rather than forwarding the full chat transcript.
 - Existing `USER.md` memory can be copied into the compact learning summary when it answers a planned edit's factual gap; new durable facts from user answers can be written back to `USER.md` through patch operations.
-- When the page-count guardrail is enabled and the compiled tailored preview exceeds the original resume's page count, the flow runs a third conditional stage:
+- When the page-count guardrail is enabled and the compiled tailored preview exceeds the original resume's page count, the flow runs Step 5:
   - a refinement-style compaction pass that re-prompts only the existing edited blocks, sends highlighted rendered preview screenshots, and retries until the preview fits within the original page count or the attempt budget is exhausted
 - Compile retries stay scoped to the implementation pass so LaTeX escaping and block-boundary fixes do not force the model to rethink the whole editing thesis on every retry.
 - Extension-originated tailoring should pass the captured job URL separately from the job-description text and create/reuse a tracked `JobApplication` for the normalized URL before generation starts. The API should store live run state in `TailorResumeRun`; if the same application already has an active run or a linked tailored resume, return a conflict payload so the extension can ask whether to cancel/keep or overwrite.
