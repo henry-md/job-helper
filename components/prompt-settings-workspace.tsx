@@ -420,7 +420,7 @@ export default function PromptSettingsWorkspace({
           <p className="mt-3 text-sm leading-6 text-zinc-400">
             These prompts and generation guardrails are stored per user and are
             sent on the live model calls for job extraction, resume-to-LaTeX
-            generation, tailoring planning, optional follow-up questioning,
+            generation, optional follow-up questioning, tailoring planning,
             refinement, and automatic page-count compaction. Keep any runtime
             tokens you still want injected automatically.
           </p>

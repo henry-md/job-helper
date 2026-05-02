@@ -17,6 +17,7 @@ import {
   FileText,
   MessagesSquare,
   Minimize2,
+  Search,
   Sparkles,
 } from "lucide-react";
 
@@ -25,7 +26,7 @@ const previewModes = [
     id: "helper",
     label: "Resume Tailor",
     description:
-      "See the real staged tailoring system: LaTeX first, then plan, clarify, implement, and compact if the page grows.",
+      "See the real staged tailoring system: LaTeX first, then scrape, clarify, plan, implement, and compact if the page grows.",
   },
   {
     id: "tracker",
@@ -44,31 +45,39 @@ const tailorBaseStage = {
 
 const tailorPipelineStages = [
   {
-    chip: "plaintext",
-    descriptor: "Whole-resume generalized edits before touching block-level LaTeX.",
-    icon: FileText,
+    chip: "deterministic",
+    descriptor: "Extract job technology signals before any rewrite planning starts.",
+    icon: Search,
     step: "1",
-    title: "Plan edits",
+    title: "Scrape keywords",
   },
   {
     chip: "optional",
-    descriptor: "Ask only when a grounded answer could materially improve the resume.",
+    descriptor:
+      "Ask one concise question only when USER.md cannot cover concrete technology gaps.",
     icon: MessagesSquare,
     step: "2",
-    title: "Ask clarifying question",
+    title: "Clarify missing details",
+  },
+  {
+    chip: "OpenAI",
+    descriptor: "Draft targeted plaintext edits from resume, job text, and Step 2 learnings.",
+    icon: FileText,
+    step: "3",
+    title: "Plan edits",
   },
   {
     chip: "LaTeX",
     descriptor: "Translate only the approved segments back into scoped replacements.",
     icon: Braces,
-    step: "3",
+    step: "4",
     title: "Apply block edits",
   },
   {
     chip: "1-page guardrail",
     descriptor: "Condense edited blocks only if the tailored preview grows past the source.",
     icon: Minimize2,
-    step: "4",
+    step: "5",
     title: "Condense to fit",
   },
 ] as const;
@@ -164,7 +173,7 @@ function TailorResumePreview() {
         </span>
       </div>
 
-      <div className="public-pipeline-frame relative mt-2 flex-1 overflow-hidden rounded-[1.15rem] border border-white/8 bg-[linear-gradient(180deg,rgba(18,18,21,0.98),rgba(10,10,12,0.98))] p-2.5 sm:rounded-[1.25rem] sm:p-3.5">
+      <div className="public-pipeline-frame relative mt-1.5 flex-1 overflow-hidden rounded-[1.15rem] border border-white/8 bg-[linear-gradient(180deg,rgba(18,18,21,0.98),rgba(10,10,12,0.98))] p-2 sm:rounded-[1.25rem] sm:p-2.5">
         <div className="pointer-events-none absolute left-6 top-0 h-24 w-24 rounded-full bg-cyan-300/10 blur-3xl [animation:public-drift_13s_ease-in-out_infinite]" />
         <div className="pointer-events-none absolute bottom-0 right-8 h-24 w-24 rounded-full bg-emerald-300/10 blur-3xl [animation:public-drift_16s_ease-in-out_infinite_reverse]" />
 
@@ -268,10 +277,10 @@ function TailorPipelineNode(input: {
           }`}
         />
 
-        <div className="public-pipeline-node-content relative flex items-start justify-between gap-3 py-2.5 sm:py-3">
+        <div className="public-pipeline-node-content relative flex items-start justify-between gap-3 py-1.5 sm:py-2">
           <div className="min-w-0 flex items-start gap-2.5 sm:gap-3">
             <span
-              className={`public-pipeline-step-badge inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-full border text-[0.56rem] font-semibold sm:h-8 sm:w-8 sm:text-[0.72rem] ${
+              className={`public-pipeline-step-badge inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-full border text-[0.56rem] font-semibold sm:h-7 sm:w-7 sm:text-[0.68rem] ${
                 isBase
                   ? "border-cyan-200/22 bg-cyan-200/10 text-cyan-100"
                   : "border-emerald-200/20 bg-emerald-300/10 text-emerald-100"
@@ -294,7 +303,7 @@ function TailorPipelineNode(input: {
                 id={detailsId}
                 ref={descriptorRef}
                 data-expanded={input.expanded ? "true" : "false"}
-                className={`public-pipeline-description mt-1 text-[0.72rem] leading-relaxed text-zinc-400 transition-[opacity] duration-200 sm:text-[0.8rem] ${
+                className={`public-pipeline-description mt-0.5 text-[0.7rem] leading-snug text-zinc-400 transition-[opacity] duration-200 sm:text-[0.74rem] ${
                   input.expanded
                     ? "block max-w-[30rem] whitespace-normal opacity-100 lg:max-w-none"
                     : "block overflow-hidden text-ellipsis whitespace-nowrap opacity-100 lg:overflow-visible lg:whitespace-normal"
@@ -345,42 +354,33 @@ function TailorPipelineNode(input: {
 
 function TailorPipelineArrow() {
   return (
-    <div className="public-pipeline-arrow relative flex h-6 items-center justify-center sm:h-7">
+    <div className="public-pipeline-arrow relative flex h-4 items-center justify-center sm:h-4">
       <svg
         aria-hidden="true"
-        className="h-3.5 w-4.5 text-emerald-100/72 sm:h-4 sm:w-5"
+        className="h-4 w-3 text-emerald-100/72"
         fill="none"
-        viewBox="0 0 24 34"
+        viewBox="0 0 16 48"
       >
+        <defs>
+          <marker
+            id="pipeline-vertical-arrowhead"
+            markerHeight="7"
+            markerWidth="7"
+            orient="auto"
+            refX="6"
+            refY="3.5"
+            viewBox="0 0 7 7"
+          >
+            <path d="M0.8 0.9 6 3.5 0.8 6.1" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.35" />
+          </marker>
+        </defs>
         <path
-          d="M12 2C10.9 8.4 13.2 14.5 12 23.5"
+          d="M8 2V42"
+          markerEnd="url(#pipeline-vertical-arrowhead)"
           stroke="currentColor"
           strokeLinecap="round"
           strokeLinejoin="round"
           strokeWidth="1.7"
-        />
-        <path
-          d="M12.9 3.1C11.3 8.8 13.8 14.8 11.4 22.8"
-          opacity="0.34"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="1.15"
-        />
-        <path
-          d="M7.8 19.8 12 24.6l4.2-4.8"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="1.7"
-        />
-        <path
-          d="M8.6 19.2 12.3 24.9l3.8-4.5"
-          opacity="0.34"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="1.15"
         />
       </svg>
     </div>

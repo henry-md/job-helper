@@ -29,7 +29,7 @@ type TailorRunDisplayStep = {
 
 const tailorRunProgressStepDefinitions = [
   {
-    label: "Plan targeted edits",
+    label: "Scrape keywords",
     stepNumber: 1,
   },
   {
@@ -37,12 +37,16 @@ const tailorRunProgressStepDefinitions = [
     stepNumber: 2,
   },
   {
-    label: "Apply resume changes",
+    label: "Plan targeted edits",
     stepNumber: 3,
   },
   {
-    label: "Keep the original page count",
+    label: "Apply resume changes",
     stepNumber: 4,
+  },
+  {
+    label: "Keep the original page count",
+    stepNumber: 5,
   },
 ] as const;
 
@@ -96,13 +100,13 @@ function readTailorRunDisplayStep(
   }
 
   if (activeTailoring.kind === "completed") {
-    const stepDefinition = tailorRunProgressStepDefinitions[3];
+    const stepDefinition = tailorRunProgressStepDefinitions[4];
 
     return {
       attempt: null,
       label: stepDefinition?.label ?? "Keep the original page count",
       status: "succeeded",
-      stepNumber: 4,
+      stepNumber: 5,
     };
   }
 
@@ -113,7 +117,7 @@ function readTailorRunDisplayStep(
 
     return {
       attempt: null,
-      label: firstStep?.label ?? "Plan targeted edits",
+      label: firstStep?.label ?? "Scrape keywords",
       status: "current",
       stepNumber: 1,
     };

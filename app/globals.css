@@ -283,6 +283,24 @@ button {
   }
 }
 
+@media (min-width: 40rem) and (max-width: 63.999rem) {
+  .public-home-page {
+    height: auto;
+    min-height: 100svh;
+    overflow-y: auto;
+  }
+
+  .public-home-shell.glass-panel {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .public-showcase-card {
+    min-height: 39rem;
+  }
+}
+
 .serif-display {
   font-family: var(--font-cormorant), serif;
 }

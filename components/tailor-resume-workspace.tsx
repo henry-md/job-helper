@@ -2,8 +2,10 @@
 
 import {
   type ChangeEvent,
+  type Dispatch,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  type SetStateAction,
   useCallback,
   useEffect,
   useId,
@@ -108,7 +110,7 @@ const tailorResumeClickableToastClassNames = {
 const failedLinkToastDurationMs = 5 * 60 * 1_000;
 const tailorResumeGenerationStepLabels = [
   {
-    label: "Plan targeted edits",
+    label: "Scrape keywords",
     stepNumber: 1,
   },
   {
@@ -116,12 +118,16 @@ const tailorResumeGenerationStepLabels = [
     stepNumber: 2,
   },
   {
-    label: "Apply block-level resume changes",
+    label: "Plan targeted edits",
     stepNumber: 3,
   },
   {
-    label: "Keep the original page count",
+    label: "Apply block-level resume changes",
     stepNumber: 4,
+  },
+  {
+    label: "Keep the original page count",
+    stepNumber: 5,
   },
 ] as const;
 
@@ -145,7 +151,7 @@ function createTailorResumeProgressState(input?: {
     latestNotification: {
       detail:
         input?.detail ??
-        "Tracking the latest update from the 4-step generation flow.",
+        "Tracking the latest update from the 5-step generation flow.",
       title: "Generating resume...",
       tone: "info" as const,
     },
@@ -643,6 +649,68 @@ function TailorResumeToolCallDetails({
   );
 }
 
+function TailorResumeTechnologyContexts({
+  contexts,
+  messageId,
+  openContextKey,
+  setOpenContextKey,
+}: {
+  contexts?: TailorResumeConversationMessage["technologyContexts"];
+  messageId: string;
+  openContextKey: string | null;
+  setOpenContextKey: Dispatch<SetStateAction<string | null>>;
+}) {
+  if (!contexts || contexts.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 grid gap-1.5">
+      {contexts.map((context, index) => {
+        const contextKey = `${messageId}:${context.name}:${String(index)}`;
+
+        return (
+          <details
+            className="overflow-hidden rounded-lg border border-slate-500/70 bg-[#181c25] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+            key={contextKey}
+            onToggle={(event) => {
+              if (event.currentTarget.open) {
+                setOpenContextKey(contextKey);
+                return;
+              }
+
+              setOpenContextKey((currentContextKey) =>
+                currentContextKey === contextKey ? null : currentContextKey,
+              );
+            }}
+            open={openContextKey === contextKey}
+          >
+            <summary className="grid min-h-8 cursor-pointer list-none grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-2.5 py-1.5 text-xs [&::-webkit-details-marker]:hidden">
+              <span className="truncate font-semibold text-zinc-100">
+                {context.name}
+              </span>
+              <span className="text-[10px] font-semibold text-slate-400">
+                {context.examples.length}{" "}
+                {context.examples.length === 1 ? "example" : "examples"}
+              </span>
+            </summary>
+            <div className="grid gap-1.5 border-t border-slate-600/80 px-2.5 pb-2 pt-1.5 text-xs leading-5 text-slate-200">
+              <p>{context.definition}</p>
+              <ul className="grid list-disc gap-1 pl-4">
+                {context.examples.map((example, exampleIndex) => (
+                  <li key={`${context.name}:${String(exampleIndex)}`}>
+                    {example}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </details>
+        );
+      })}
+    </div>
+  );
+}
+
 function resolveInitialOpenTailorResumeStep(
   profile: TailorResumeProfile,
 ): TailorResumeStepId {
@@ -716,6 +784,10 @@ export default function TailorResumeWorkspace({
   const [isTailorInterviewFinishPromptOpen, setIsTailorInterviewFinishPromptOpen] =
     useState(false);
   const [isTailorResumeProgressOpen, setIsTailorResumeProgressOpen] = useState(false);
+  const [
+    openTailorInterviewTechnologyContextKey,
+    setOpenTailorInterviewTechnologyContextKey,
+  ] = useState<string | null>(null);
   const [isCancellingTailorInterview, setIsCancellingTailorInterview] =
     useState(false);
   const [isSubmittingTailorInterviewAnswer, setIsSubmittingTailorInterviewAnswer] =
@@ -1399,6 +1471,7 @@ export default function TailorResumeWorkspace({
 
   useEffect(() => {
     if (!isTailorInterviewOpen) {
+      setOpenTailorInterviewTechnologyContextKey(null);
       return;
     }
 
@@ -3151,6 +3224,14 @@ export default function TailorResumeWorkspace({
                         key={message.id}
                       >
                         <p className="whitespace-pre-wrap">{message.text}</p>
+                        <TailorResumeTechnologyContexts
+                          contexts={message.technologyContexts}
+                          messageId={message.id}
+                          openContextKey={openTailorInterviewTechnologyContextKey}
+                          setOpenContextKey={
+                            setOpenTailorInterviewTechnologyContextKey
+                          }
+                        />
                         <TailorResumeToolCallDetails toolCalls={message.toolCalls} />
                       </div>
                     ))}
