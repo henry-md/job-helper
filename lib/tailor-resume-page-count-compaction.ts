@@ -190,7 +190,7 @@ const tailorResumeLineReductionSubmissionTool = {
   type: "function",
   name: tailorResumeLineReductionSubmissionToolName,
   description:
-    "Submit the Step 4 candidates for this pass after you have used the measurement tool and the exact page-count verification tool on that same candidate set.",
+    "Submit the Step 5 candidates for this pass after you have used the measurement tool and the exact page-count verification tool on that same candidate set.",
   strict: true,
   parameters: {
     type: "object",
@@ -329,7 +329,7 @@ function describeLineReductionRejectionReason(reason: string | null) {
 
   switch (reason) {
     case "unknown_or_uneditable_segment":
-      return "The segment was unknown or is no longer editable in Step 4.";
+      return "The segment was unknown or is no longer editable in Step 5.";
     case "duplicate_candidate_for_segment":
       return "The same segment was proposed more than once in the same measurement pass.";
     case "current_segment_line_count_unavailable":
@@ -734,7 +734,7 @@ function updateWorkingEdits(input: {
       ...edit,
       afterLatexCode: acceptedCandidate.latexCode,
       customLatexCode: null,
-      generatedByStep: 4 as const,
+      generatedByStep: 5 as const,
       reason: acceptedCandidate.reason,
       state: "applied" as const,
     };
@@ -848,7 +848,7 @@ function serializeEditableBlocks(input: {
       `  current replacement rendered lines: ${entry.currentLineCount ?? "[unavailable]"}`,
       `  line delta vs original: ${entry.lineDelta === null ? "[unavailable]" : entry.lineDelta}`,
       `  current generated-by step: ${entry.edit.generatedByStep}`,
-      "  acceptance rule: a Step 4 candidate must render to fewer lines than the current replacement for that block",
+      "  acceptance rule: a Step 5 candidate must render to fewer lines than the current replacement for that block",
       `  current reason: ${entry.edit.reason}`,
       "  original latex block:",
       entry.edit.beforeLatexCode,
@@ -879,7 +879,7 @@ function serializeCompactionAttemptHistory(
   }
 
   return [
-    "Previous Step 4 retry memory:",
+    "Previous Step 5 retry memory:",
     ...history.slice(-maxCompactionHistoryAttemptsForPrompt).map((entry) => {
       const measurementLines = entry.measurementResult
         ? [
@@ -928,7 +928,7 @@ function serializeCompactionAttemptHistory(
 
 function buildCompactionInstructions() {
   return [
-    "You are Step 4 of a staged resume-tailoring pipeline.",
+    "You are Step 5 of a staged resume-tailoring pipeline.",
     "Your only job is to find real rendered-line reductions in the existing model-edited blocks.",
     `Before any final submission, you must call ${tailorResumeLineReductionToolName} to self-check your edits against rendered line counts.`,
     `After choosing a measured candidate set, you must call ${tailorResumePageCountVerificationToolName} on that same candidate set so you can read the exact rendered page count before deciding what to do next.`,
@@ -1078,8 +1078,8 @@ async function collectVerifiedCompactionCandidates(input: {
       const outputText = readOutputText(response);
       return {
         error: outputText
-          ? `The model did not call a Step 4 compaction tool. It returned: ${outputText}`
-          : "The model did not call a Step 4 compaction tool.",
+          ? `The model did not call a Step 5 compaction tool. It returned: ${outputText}`
+          : "The model did not call a Step 5 compaction tool.",
         measurementResult: latestMeasurementResult,
         pageCountVerification: latestPageCountVerification,
         model: latestModel,
@@ -1114,7 +1114,7 @@ async function collectVerifiedCompactionCandidates(input: {
             output: buildCompactionSubmissionToolOutput({
               accepted: false,
               message:
-                `Call ${tailorResumeLineReductionToolName} before submitting Step 4 candidates.`,
+                `Call ${tailorResumeLineReductionToolName} before submitting Step 5 candidates.`,
               nextAction:
                 `Start by calling ${tailorResumeLineReductionToolName} so the candidates are measured for rendered-line reduction first.`,
             }),
@@ -1268,7 +1268,7 @@ async function collectVerifiedCompactionCandidates(input: {
 
   return {
     error:
-      `The model did not submit verified compaction candidates after ${maxCompactionSelfCheckRounds} Step 4 tool rounds.`,
+      `The model did not submit verified compaction candidates after ${maxCompactionSelfCheckRounds} Step 5 tool rounds.`,
     measurementResult: latestMeasurementResult,
     pageCountVerification: latestPageCountVerification,
     model: latestModel,
@@ -1341,8 +1341,8 @@ export async function compactTailoredResumePageCount(input: {
       durationMs: 0,
       retrying: false,
       status: "failed",
-      stepCount: 4,
-      stepNumber: 4,
+      stepCount: 5,
+      stepNumber: 5,
       summary: "Keeping the tailored resume within the original page count",
     });
     return {
@@ -1385,12 +1385,12 @@ export async function compactTailoredResumePageCount(input: {
     attempt: null,
     detail:
       `The tailored preview expanded to ${buildPageCountLimitLabel(input.initialPageCount)}, ` +
-      `so step 4 is measuring rendered lines and asking for verified line reductions back toward ${buildPageCountLimitLabel(targetPageCount)}.`,
+      `so Step 5 is measuring rendered lines and asking for verified line reductions back toward ${buildPageCountLimitLabel(targetPageCount)}.`,
     durationMs: 0,
     retrying: false,
     status: "running",
-    stepCount: 4,
-    stepNumber: 4,
+    stepCount: 5,
+    stepNumber: 5,
     summary: "Keeping the tailored resume within the original page count",
   });
 
@@ -1415,8 +1415,8 @@ export async function compactTailoredResumePageCount(input: {
       durationMs: Math.max(0, Date.now() - startedAt),
       retrying: false,
       status: "failed",
-      stepCount: 4,
-      stepNumber: 4,
+      stepCount: 5,
+      stepNumber: 5,
       summary: "Keeping the tailored resume within the original page count",
     });
     return {
@@ -1480,8 +1480,8 @@ export async function compactTailoredResumePageCount(input: {
         durationMs: Math.max(0, Date.now() - startedAt),
         retrying: attempt < maxCompactionAttempts,
         status: attempt < maxCompactionAttempts ? "running" : "failed",
-        stepCount: 4,
-        stepNumber: 4,
+        stepCount: 5,
+        stepNumber: 5,
         summary: "Keeping the tailored resume within the original page count",
       });
       continue;
@@ -1510,12 +1510,12 @@ export async function compactTailoredResumePageCount(input: {
       await input.onStepEvent?.({
         attempt: retryAttempt,
         detail:
-          `${lastError} Step 4 is asking for more aggressive candidates that actually remove rendered lines.`,
+          `${lastError} Step 5 is asking for more aggressive candidates that actually remove rendered lines.`,
         durationMs: Math.max(0, Date.now() - startedAt),
         retrying: attempt < maxCompactionAttempts,
         status: attempt < maxCompactionAttempts ? "running" : "failed",
-        stepCount: 4,
-        stepNumber: 4,
+        stepCount: 5,
+        stepNumber: 5,
         summary: "Keeping the tailored resume within the original page count",
       });
       continue;
@@ -1564,8 +1564,8 @@ export async function compactTailoredResumePageCount(input: {
         durationMs: Math.max(0, Date.now() - startedAt),
         retrying: attempt < maxCompactionAttempts,
         status: attempt < maxCompactionAttempts ? "running" : "failed",
-        stepCount: 4,
-        stepNumber: 4,
+        stepCount: 5,
+        stepNumber: 5,
         summary: "Keeping the tailored resume within the original page count",
       });
       continue;
@@ -1607,8 +1607,8 @@ export async function compactTailoredResumePageCount(input: {
           durationMs: Math.max(0, Date.now() - startedAt),
           retrying: attempt < maxCompactionAttempts,
           status: attempt < maxCompactionAttempts ? "running" : "failed",
-          stepCount: 4,
-          stepNumber: 4,
+          stepCount: 5,
+          stepNumber: 5,
           summary: "Keeping the tailored resume within the original page count",
         });
         continue;
@@ -1623,8 +1623,8 @@ export async function compactTailoredResumePageCount(input: {
         durationMs: Math.max(0, Date.now() - startedAt),
         retrying: false,
         status: "succeeded",
-        stepCount: 4,
-        stepNumber: 4,
+        stepCount: 5,
+        stepNumber: 5,
         summary: "Keeping the tailored resume within the original page count",
       });
 
@@ -1664,12 +1664,12 @@ export async function compactTailoredResumePageCount(input: {
 
     await input.onStepEvent?.({
       attempt: retryAttempt,
-      detail: `${lastError} Step 4 is trying another measured reduction pass.`,
+      detail: `${lastError} Step 5 is trying another measured reduction pass.`,
       durationMs: Math.max(0, Date.now() - startedAt),
       retrying: attempt < maxCompactionAttempts,
       status: attempt < maxCompactionAttempts ? "running" : "failed",
-      stepCount: 4,
-      stepNumber: 4,
+      stepCount: 5,
+      stepNumber: 5,
       summary: "Keeping the tailored resume within the original page count",
     });
   }

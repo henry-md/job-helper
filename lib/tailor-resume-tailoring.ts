@@ -40,7 +40,7 @@ import type {
 import type { TailorResumeUserMarkdownState } from "./tailor-resume-user-memory.ts";
 
 const TEST_OPENAI_RESPONSE_MODEL = "test-openai-response";
-const tailorResumeGenerationStepCount = 4;
+const tailorResumeGenerationStepCount = 5;
 const tailorResumePlanSchema = {
   type: "object",
   additionalProperties: false,
@@ -220,6 +220,12 @@ export type PlanTailoredResumeResult =
       thesis: TailoredResumeThesis | null;
       validationError: string;
     };
+
+export type ExtractTailorResumeEmphasizedTechnologiesResult = {
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+  generationDurationMs: number;
+  model: string;
+};
 
 export type GenerateTailoredResumeResult = {
   annotatedLatexCode: string;
@@ -480,19 +486,99 @@ export function parseTailorResumeTechnologyExtractionResponse(
 }
 
 function technologyAppearsInJobDescription(input: {
+  employerName?: string | null;
   jobDescription: string;
   technology: TailoredResumeEmphasizedTechnology;
 }) {
+  if (
+    isEmployerSpecificTechnologyTerm({
+      employerName: input.employerName,
+      evidence: input.technology.evidence,
+      technologyName: input.technology.name,
+    })
+  ) {
+    return false;
+  }
+
   return resumeTextIncludesKeyword({
     term: input.technology.name,
     text: input.jobDescription,
   });
 }
 
+const employerNameNoiseWords = new Set([
+  "co",
+  "company",
+  "corp",
+  "corporation",
+  "inc",
+  "incorporated",
+  "llc",
+  "ltd",
+  "technologies",
+  "technology",
+]);
+
+function normalizeEmployerKeyword(value: string) {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9+#.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function readEmployerNameKeywords(value: string | null | undefined) {
+  const normalizedName = normalizeEmployerKeyword(value ?? "");
+
+  if (!normalizedName) {
+    return [];
+  }
+
+  const tokens = normalizedName
+    .split(" ")
+    .filter(
+      (token) =>
+        token.length >= 4 &&
+        !employerNameNoiseWords.has(token),
+    );
+
+  return [...new Set([normalizedName, ...tokens])];
+}
+
+function evidenceExplicitlyAsksForCandidateProductExperience(evidence: string) {
+  return /\b(?:experience|experienced|familiarity|proficiency|background)\s+(?:with|using|in)\b/i.test(
+    evidence,
+  );
+}
+
+function isEmployerSpecificTechnologyTerm(input: {
+  employerName?: string | null;
+  evidence: string;
+  technologyName: string;
+}) {
+  const normalizedTechnologyName = normalizeEmployerKeyword(input.technologyName);
+
+  if (!normalizedTechnologyName) {
+    return false;
+  }
+
+  if (evidenceExplicitlyAsksForCandidateProductExperience(input.evidence)) {
+    return false;
+  }
+
+  const employerKeywords = readEmployerNameKeywords(input.employerName);
+
+  return employerKeywords.some(
+    (keyword) =>
+      normalizedTechnologyName === keyword ||
+      normalizedTechnologyName.startsWith(`${keyword} `) ||
+      normalizedTechnologyName.endsWith(` ${keyword}`),
+  );
+}
+
 const tailorResumeJobTechnologyHintNames = [
-  "Palantir Gotham",
-  "Palantir Apollo",
-  "Palantir Foundry",
   "GitHub Actions",
   "Spring Boot",
   "Scikit-learn",
@@ -638,6 +724,7 @@ function readTechnologyHintPriority(input: { context: string; evidence: string }
 
 export function extractTailorResumeJobDescriptionTechnologyHints(
   jobDescription: string,
+  options: { employerName?: string | null } = {},
 ): TailoredResumeEmphasizedTechnology[] {
   const chunks = buildTechnologyEvidenceChunks(jobDescription);
   const technologies: TailoredResumeEmphasizedTechnology[] = [];
@@ -666,28 +753,34 @@ export function extractTailorResumeJobDescriptionTechnologyHints(
 
   return mergeTailorResumeJobDescriptionTechnologies({
     extractedTechnologies: technologies,
+    employerName: options.employerName,
     jobDescription,
     plannerTechnologies: [],
   });
 }
 
 export function mergeTailorResumeJobDescriptionTechnologies(input: {
+  employerName?: string | null;
   extractedTechnologies: TailoredResumeEmphasizedTechnology[];
   jobDescription: string;
   plannerTechnologies: TailoredResumeEmphasizedTechnology[];
 }) {
   return normalizeTailoredResumeEmphasizedTechnologies([
-    ...input.extractedTechnologies.filter((technology) =>
-      technologyAppearsInJobDescription({
-        jobDescription: input.jobDescription,
-        technology,
-      }),
+    ...input.extractedTechnologies.filter(
+      (technology) =>
+        technologyAppearsInJobDescription({
+          employerName: input.employerName,
+          jobDescription: input.jobDescription,
+          technology,
+        }),
     ),
-    ...input.plannerTechnologies.filter((technology) =>
-      technologyAppearsInJobDescription({
-        jobDescription: input.jobDescription,
-        technology,
-      }),
+    ...input.plannerTechnologies.filter(
+      (technology) =>
+        technologyAppearsInJobDescription({
+          employerName: input.employerName,
+          jobDescription: input.jobDescription,
+          technology,
+        }),
     ),
   ]);
 }
@@ -976,7 +1069,7 @@ function serializeTailorResumeQuestioningKeywordRequirements(
   }
 
   return [
-    "Step 2 confirmed keyword requirements:",
+    "Step 2 user-confirmed keyword requirements:",
     "The user confirmed these technologies can be used. Each keyword must appear in at least one replacement for its listed target segmentIds unless doing so would be structurally impossible; if impossible, keep the same segmentIds and make the smallest valid replacement that includes the keyword in the skills block.",
     ...requirements.map((requirement, index) =>
       [
@@ -1051,6 +1144,35 @@ function buildUserMarkdownPlanningContext(
   );
 }
 
+function buildQuestioningSummaryPlanningContext(
+  summary: TailoredResumePlanningResult["questioningSummary"] | null | undefined,
+) {
+  const learnings = summary?.learnings ?? [];
+
+  if (learnings.length === 0) {
+    return "";
+  }
+
+  return (
+    "Recent Step 2 user-confirmed learnings from this run:\n" +
+    "Use these alongside USER.md when choosing planned block edits. If a learning includes user-confirmed bullet-shaped experience for a job-emphasized technology, strongly consider a matching experience-bullet replacement/swap rather than only a skills-section edit.\n" +
+    learnings
+      .map((learning, index) =>
+        [
+          `${index + 1}. topic: ${learning.topic}`,
+          `   targetSegmentIds: ${
+            learning.targetSegmentIds.length > 0
+              ? learning.targetSegmentIds.join(", ")
+              : "[not decided yet; choose the matching resume block]"
+          }`,
+          `   detail: ${learning.detail}`,
+        ].join("\n"),
+      )
+      .join("\n\n") +
+    "\n\n"
+  );
+}
+
 function buildUserMarkdownImplementationContext(
   userMarkdown: TailorResumeUserMarkdownState | undefined,
 ) {
@@ -1067,14 +1189,21 @@ function buildUserMarkdownImplementationContext(
   );
 }
 
-function buildTechnologyExtractionInput(input: { jobDescription: string }) {
+function buildTechnologyExtractionInput(input: {
+  employerName?: string | null;
+  jobDescription: string;
+}) {
+  const employerContext = input.employerName?.trim()
+    ? `Employer name: ${input.employerName.trim()}\n\n`
+    : "";
+
   return [
     {
       role: "user" as const,
       content: [
         {
           type: "input_text" as const,
-          text: `Job description only:\n${input.jobDescription}`,
+          text: `${employerContext}Job description only:\n${input.jobDescription}`,
         },
       ],
     },
@@ -1086,6 +1215,8 @@ function buildTechnologyExtractionInstructions() {
     "Extract concrete technologies emphasized by the single target job posting. " +
     "Use only the provided job description text; do not infer from any resume. " +
     "Return concrete languages, frameworks, libraries, databases, platforms, infrastructure tools, developer tools, and technical methods. " +
+    "Only return terms a realistic candidate might already list on a resume as skills or experience areas. " +
+    "Do not return employer-branded internal products, product suites, customer-facing product brands, team names, or nouns that describe what the company builds unless the posting explicitly asks candidates to have prior experience using that product. " +
     "Include every named concrete technology in required/basic/minimum sections. " +
     "Use high priority for required/basic/minimum terms, repeated terms, title/team-defining terms, and strongly emphasized preferred terms. " +
     "Use low priority for weaker preferred, nice-to-have, incidental, or broad ecosystem terms. " +
@@ -1096,6 +1227,7 @@ function buildTechnologyExtractionInstructions() {
 
 async function extractTailorResumeJobDescriptionTechnologies(input: {
   client: OpenAI;
+  employerName?: string | null;
   jobDescription: string;
   model: string;
 }) {
@@ -1103,6 +1235,7 @@ async function extractTailorResumeJobDescriptionTechnologies(input: {
     operation: () =>
       input.client.responses.create({
         input: buildTechnologyExtractionInput({
+          employerName: input.employerName,
           jobDescription: input.jobDescription,
         }),
         instructions: buildTechnologyExtractionInstructions(),
@@ -1351,8 +1484,10 @@ function applySavedTailoredResumeLinks(
 }
 
 function buildTailoringPlanInput(input: {
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
   jobDescription: string;
   planningSnapshot: ReturnType<typeof buildTailorResumePlanningSnapshot>;
+  questioningSummary?: TailoredResumePlanningResult["questioningSummary"] | null;
   userMarkdown?: TailorResumeUserMarkdownState;
 }) {
   return [
@@ -1371,9 +1506,18 @@ function buildTailoringPlanInput(input: {
           text:
             "Resume context for planning edits only. Do not use this section as evidence for emphasizedTechnologies:\n" +
             `Whole resume plain text:\n${input.planningSnapshot.resumePlainText}\n\n` +
+            buildQuestioningSummaryPlanningContext(input.questioningSummary) +
             buildUserMarkdownPlanningContext(input.userMarkdown) +
             "Editable resume blocks (document order):\n" +
             serializeTailorResumePlanningBlocks(input.planningSnapshot.blocks),
+        },
+        {
+          type: "input_text" as const,
+          text:
+            "Step 1 pre-scanned technologies emphasized by the job description. Use this as keyword guidance when planning factually supported edits:\n" +
+            serializeTailorResumeEmphasizedTechnologies(
+              input.emphasizedTechnologies,
+            ),
         },
       ],
     },
@@ -1491,6 +1635,32 @@ function buildFallbackTailoredResumePlanningResult(): TailoredResumePlanningResu
   } satisfies TailoredResumePlanningResult;
 }
 
+export function buildPrePlanningTailoredResumePlanningResult(input: {
+  companyName?: string | null;
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+  positionTitle?: string | null;
+  questioningSummary?: TailoredResumePlanningResult["questioningSummary"];
+}): TailoredResumePlanningResult {
+  const companyName = input.companyName?.trim() ?? "";
+  const positionTitle = input.positionTitle?.trim() ?? "";
+
+  return {
+    changes: [],
+    companyName,
+    displayName: buildDisplayName({ companyName, positionTitle }),
+    emphasizedTechnologies: input.emphasizedTechnologies,
+    jobIdentifier: "General",
+    positionTitle,
+    questioningSummary: input.questioningSummary ?? null,
+    thesis: {
+      jobDescriptionFocus:
+        "Step 3 planning has not run yet; Step 2 is gathering missing resume context first.",
+      resumeChanges:
+        "The plaintext edit plan will be generated after Step 2 questions are skipped or completed.",
+    },
+  } satisfies TailoredResumePlanningResult;
+}
+
 function buildFallbackTailoredResumeOpenAiDebug() {
   return {
     implementation: {
@@ -1508,19 +1678,108 @@ function buildFallbackTailoredResumeOpenAiDebug() {
   } satisfies TailoredResumeOpenAiDebugTrace;
 }
 
-export async function planTailoredResume(input: {
-  annotatedLatexCode: string;
+export async function extractTailorResumeEmphasizedTechnologiesForQuestioning(input: {
+  employerName?: string | null;
   jobDescription: string;
   onStepEvent?: (
     event: TailorResumeGenerationStepEvent,
   ) => void | Promise<void>;
+}): Promise<ExtractTailorResumeEmphasizedTechnologiesResult> {
+  const startedAt = Date.now();
+  const model =
+    process.env.OPENAI_TAILOR_RESUME_KEYWORD_MODEL ??
+    process.env.OPENAI_TAILOR_RESUME_MODEL ??
+    "gpt-5-mini";
+  const client = getOpenAIClient();
+  const technologyHintTechnologies =
+    extractTailorResumeJobDescriptionTechnologyHints(input.jobDescription, {
+      employerName: input.employerName,
+    });
+
+  if (technologyHintTechnologies.length > 0) {
+    await emitTailorResumeGenerationStep(input.onStepEvent, {
+      attempt: 1,
+      detail:
+        `Identified ${technologyHintTechnologies.length} job keyword ` +
+        `${technologyHintTechnologies.length === 1 ? "term" : "terms"} while preparing Step 2 questions.`,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      emphasizedTechnologies: technologyHintTechnologies,
+      retrying: false,
+      status: "running",
+      stepNumber: 1,
+      summary: "Scrape keywords",
+    });
+  } else {
+    await emitTailorResumeGenerationStep(input.onStepEvent, {
+      attempt: 1,
+      detail: "Scanning the job description for concrete technologies before planning edits.",
+      durationMs: Math.max(0, Date.now() - startedAt),
+      emphasizedTechnologies: [],
+      retrying: false,
+      status: "running",
+      stepNumber: 1,
+      summary: "Scrape keywords",
+    });
+  }
+
+  let extractedTechnologies: TailoredResumeEmphasizedTechnology[] = [];
+
+  try {
+    extractedTechnologies = await extractTailorResumeJobDescriptionTechnologies({
+      client,
+      employerName: input.employerName,
+      jobDescription: input.jobDescription,
+      model,
+    });
+  } catch {
+    extractedTechnologies = [];
+  }
+
+  const emphasizedTechnologies = mergeTailorResumeJobDescriptionTechnologies({
+    employerName: input.employerName,
+    extractedTechnologies: [
+      ...technologyHintTechnologies,
+      ...extractedTechnologies,
+    ],
+    jobDescription: input.jobDescription,
+    plannerTechnologies: [],
+  });
+
+  await emitTailorResumeGenerationStep(input.onStepEvent, {
+    attempt: 1,
+    detail:
+      emphasizedTechnologies.length > 0
+        ? `Prepared ${emphasizedTechnologies.length} job keyword ${emphasizedTechnologies.length === 1 ? "term" : "terms"} for Step 2 clarification and Step 3 planning.`
+        : "No concrete job keyword terms were identified for Step 2 clarification.",
+    durationMs: Math.max(0, Date.now() - startedAt),
+    emphasizedTechnologies,
+    retrying: false,
+    status: "succeeded",
+    stepNumber: 1,
+    summary: "Scrape keywords",
+  });
+
+  return {
+    emphasizedTechnologies,
+    generationDurationMs: Math.max(0, Date.now() - startedAt),
+    model,
+  };
+}
+
+export async function planTailoredResume(input: {
+  annotatedLatexCode: string;
+  employerName?: string | null;
+  jobDescription: string;
+  onStepEvent?: (
+    event: TailorResumeGenerationStepEvent,
+  ) => void | Promise<void>;
+  precomputedEmphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
   promptSettings?: SystemPromptSettings;
+  questioningSummary?: TailoredResumePlanningResult["questioningSummary"] | null;
   userMarkdown?: TailorResumeUserMarkdownState;
 }): Promise<PlanTailoredResumeResult> {
   const startedAt = Date.now();
   const model = process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
-  const technologyExtractionModel =
-    process.env.OPENAI_TAILOR_RESUME_KEYWORD_MODEL ?? model;
   const maxPlanningAttempts = Math.min(2, getRetryAttemptsToGenerateLatexEdits());
   const normalizedInput = normalizeTailorResumeLatex(input.annotatedLatexCode);
   const planningSnapshot = buildTailorResumePlanningSnapshot(
@@ -1539,76 +1798,38 @@ export async function planTailoredResume(input: {
     skippedReason:
       "Planning stage did not run because no valid planner response was produced.",
   };
-  const technologyHintTechnologies =
-    extractTailorResumeJobDescriptionTechnologyHints(input.jobDescription);
-  const emittedTechnologyHintNames = new Set(
-    technologyHintTechnologies.map((technology) => technology.name.toLowerCase()),
-  );
-
-  if (technologyHintTechnologies.length > 0) {
-    await emitTailorResumeGenerationStep(input.onStepEvent, {
-      attempt: 1,
-      detail:
-        `Identified ${technologyHintTechnologies.length} job keyword ` +
-        `${technologyHintTechnologies.length === 1 ? "term" : "terms"} while the edit plan starts.`,
-      durationMs: Math.max(0, Date.now() - startedAt),
-      emphasizedTechnologies: technologyHintTechnologies,
-      retrying: false,
-      status: "running",
-      stepNumber: 1,
-      summary: "Generating plaintext edit outline",
-    });
-  }
-
-  const technologyExtractionPromise = extractTailorResumeJobDescriptionTechnologies({
-    client,
-    jobDescription: input.jobDescription,
-    model: technologyExtractionModel,
-  })
-    .catch(() => [] as TailoredResumeEmphasizedTechnology[])
-    .then((extractedTechnologies) =>
-      mergeTailorResumeJobDescriptionTechnologies({
-        extractedTechnologies: [
-          ...technologyHintTechnologies,
-          ...extractedTechnologies,
-        ],
+  const technologyExtractionPromise = input.precomputedEmphasizedTechnologies
+    ? Promise.resolve(input.precomputedEmphasizedTechnologies)
+    : extractTailorResumeJobDescriptionTechnologies({
+        client,
+        employerName: input.employerName,
         jobDescription: input.jobDescription,
-        plannerTechnologies: [],
-      }),
-    );
+        model: process.env.OPENAI_TAILOR_RESUME_KEYWORD_MODEL ?? model,
+      })
+        .catch(() => [] as TailoredResumeEmphasizedTechnology[])
+        .then((extractedTechnologies) =>
+          mergeTailorResumeJobDescriptionTechnologies({
+            employerName: input.employerName,
+            extractedTechnologies: [
+              ...extractTailorResumeJobDescriptionTechnologyHints(
+                input.jobDescription,
+                { employerName: input.employerName },
+              ),
+              ...extractedTechnologies,
+            ],
+            jobDescription: input.jobDescription,
+            plannerTechnologies: [],
+          }),
+        );
 
-  void technologyExtractionPromise
-    .then(async (emphasizedTechnologies) => {
-      const hasNewTechnology = emphasizedTechnologies.some(
-        (technology) =>
-          !emittedTechnologyHintNames.has(technology.name.toLowerCase()),
-      );
-
-      if (!hasNewTechnology) {
-        return;
-      }
-
-      await emitTailorResumeGenerationStep(input.onStepEvent, {
-        attempt: 1,
-        detail:
-          `Identified ${emphasizedTechnologies.length} job keyword ` +
-          `${emphasizedTechnologies.length === 1 ? "term" : "terms"} while the edit plan continues.`,
-        durationMs: Math.max(0, Date.now() - startedAt),
-        emphasizedTechnologies,
-        retrying: false,
-        status: "running",
-        stepNumber: 1,
-        summary: "Generating plaintext edit outline",
-      });
-    })
-    .catch(() => {
-      // The planning pass still emits the merged keyword list when it completes.
-    });
+  const emphasizedTechnologiesForPlanning = await technologyExtractionPromise;
 
   for (let attempt = 1; attempt <= maxPlanningAttempts; attempt += 1) {
     const planInput = buildTailoringPlanInput({
+      emphasizedTechnologies: emphasizedTechnologiesForPlanning,
       jobDescription: input.jobDescription,
       planningSnapshot,
+      questioningSummary: input.questioningSummary,
       userMarkdown: input.userMarkdown,
     });
     const planInstructions = buildTailoringPlanInstructions({
@@ -1628,7 +1849,7 @@ export async function planTailoredResume(input: {
       durationMs: Math.max(0, Date.now() - startedAt),
       retrying: attempt > 1,
       status: "running",
-      stepNumber: 1,
+      stepNumber: 3,
       summary: "Generating plaintext edit outline",
     });
     let response: Awaited<ReturnType<typeof client.responses.create>>;
@@ -1653,7 +1874,7 @@ export async function planTailoredResume(input: {
             },
           }),
         readDurationMs: () => Math.max(0, Date.now() - startedAt),
-        stepNumber: 1,
+        stepNumber: 3,
         summary: "Generating plaintext edit outline",
       });
     } catch (error) {
@@ -1668,7 +1889,7 @@ export async function planTailoredResume(input: {
         durationMs: Math.max(0, Date.now() - startedAt),
         retrying: attempt < maxPlanningAttempts,
         status: "failed",
-        stepNumber: 1,
+        stepNumber: 3,
         summary: "Generating plaintext edit outline",
       });
       lastPlanningDebug = {
@@ -1695,7 +1916,7 @@ export async function planTailoredResume(input: {
         durationMs: Math.max(0, Date.now() - startedAt),
         retrying: attempt < maxPlanningAttempts,
         status: "failed",
-        stepNumber: 1,
+        stepNumber: 3,
         summary: "Generating plaintext edit outline",
       });
       planningFeedback =
@@ -1710,11 +1931,11 @@ export async function planTailoredResume(input: {
 
     try {
       const nextPlan = parseTailoredResumePlanResponse(JSON.parse(outputText));
-      const extractedTechnologies = await technologyExtractionPromise;
       const nextPlanWithJobTechnologies: TailoredResumePlanResponse = {
         ...nextPlan,
         emphasizedTechnologies: mergeTailorResumeJobDescriptionTechnologies({
-          extractedTechnologies,
+          employerName: input.employerName,
+          extractedTechnologies: emphasizedTechnologiesForPlanning,
           jobDescription: input.jobDescription,
           plannerTechnologies: nextPlan.emphasizedTechnologies,
         }),
@@ -1739,7 +1960,7 @@ export async function planTailoredResume(input: {
         emphasizedTechnologies: nextPlanWithJobTechnologies.emphasizedTechnologies,
         retrying: false,
         status: "succeeded",
-        stepNumber: 1,
+        stepNumber: 3,
         summary: "Generating plaintext edit outline",
       });
 
@@ -1764,7 +1985,7 @@ export async function planTailoredResume(input: {
         durationMs: Math.max(0, Date.now() - startedAt),
         retrying: attempt < maxPlanningAttempts,
         status: "failed",
-        stepNumber: 1,
+        stepNumber: 3,
         summary: "Generating plaintext edit outline",
       });
       planningFeedback =
@@ -1846,7 +2067,7 @@ export async function implementTailoredResumePlan(input: {
       durationMs: Math.max(0, Date.now() - startedAt),
       retrying: false,
       status: "skipped",
-      stepNumber: 3,
+      stepNumber: 4,
       summary: "Planner found no block-scoped edits to apply",
     });
     const openAiDebug: TailoredResumeOpenAiDebugTrace = {
@@ -1959,7 +2180,7 @@ export async function implementTailoredResumePlan(input: {
       durationMs: Math.max(0, Date.now() - startedAt),
       retrying: attempt > 1,
       status: "running",
-      stepNumber: 3,
+      stepNumber: 4,
       summary: "Generating block-scoped edits",
     });
     let response: Awaited<ReturnType<typeof client.responses.create>>;
@@ -1984,7 +2205,7 @@ export async function implementTailoredResumePlan(input: {
             },
           }),
         readDurationMs: () => Math.max(0, Date.now() - startedAt),
-        stepNumber: 3,
+        stepNumber: 4,
         summary: "Generating block-scoped edits",
       });
     } catch (error) {
@@ -2001,7 +2222,7 @@ export async function implementTailoredResumePlan(input: {
         durationMs: Math.max(0, Date.now() - startedAt),
         retrying: attempt < maxTailoredResumeAttempts,
         status: "failed",
-        stepNumber: 3,
+        stepNumber: 4,
         summary: "Generating block-scoped edits",
       });
 
@@ -2024,7 +2245,7 @@ export async function implementTailoredResumePlan(input: {
         durationMs: Math.max(0, Date.now() - startedAt),
         retrying: attempt < maxTailoredResumeAttempts,
         status: "failed",
-        stepNumber: 3,
+        stepNumber: 4,
         summary: "Generating block-scoped edits",
       });
       implementationFeedback =
@@ -2049,7 +2270,7 @@ export async function implementTailoredResumePlan(input: {
         durationMs: Math.max(0, Date.now() - startedAt),
         retrying: attempt < maxTailoredResumeAttempts,
         status: "failed",
-        stepNumber: 3,
+        stepNumber: 4,
         summary: "Generating block-scoped edits",
       });
       implementationFeedback =
@@ -2123,7 +2344,7 @@ export async function implementTailoredResumePlan(input: {
         durationMs: Math.max(0, Date.now() - startedAt),
         retrying: attempt < maxTailoredResumeAttempts,
         status: "failed",
-        stepNumber: 3,
+        stepNumber: 4,
         summary: "Generating block-scoped edits",
       });
       implementationFeedback =
@@ -2152,7 +2373,7 @@ export async function implementTailoredResumePlan(input: {
         durationMs: Math.max(0, Date.now() - startedAt),
         retrying: false,
         status: "succeeded",
-        stepNumber: 3,
+        stepNumber: 4,
         summary: "Generating block-scoped edits",
       });
       return {
@@ -2195,7 +2416,7 @@ export async function implementTailoredResumePlan(input: {
       durationMs: Math.max(0, Date.now() - startedAt),
       retrying: attempt < maxTailoredResumeAttempts,
       status: "failed",
-      stepNumber: 3,
+      stepNumber: 4,
       summary: "Generating block-scoped edits",
     });
 
@@ -2271,6 +2492,7 @@ export async function implementTailoredResumePlan(input: {
 
 export async function generateTailoredResume(input: {
   annotatedLatexCode: string;
+  companyName?: string | null;
   jobDescription: string;
   linkOverrides?: TailorResumeLinkRecord[];
   onBuildFailure?: (latexCode: string, error: string, attempt: number) => Promise<void>;
@@ -2329,10 +2551,17 @@ export async function generateTailoredResume(input: {
     };
   }
 
-  const planningStage = await planTailoredResume({
-    annotatedLatexCode: input.annotatedLatexCode,
+  const keywordStage = await extractTailorResumeEmphasizedTechnologiesForQuestioning({
+    employerName: input.companyName,
     jobDescription: input.jobDescription,
     onStepEvent: input.onStepEvent,
+  });
+  const planningStage = await planTailoredResume({
+    annotatedLatexCode: input.annotatedLatexCode,
+    employerName: input.companyName,
+    jobDescription: input.jobDescription,
+    onStepEvent: input.onStepEvent,
+    precomputedEmphasizedTechnologies: keywordStage.emphasizedTechnologies,
     promptSettings: input.promptSettings,
     userMarkdown: input.userMarkdown,
   });
@@ -2348,7 +2577,8 @@ export async function generateTailoredResume(input: {
       companyName: lastMetadata.companyName,
       displayName: lastMetadata.displayName,
       edits: [],
-      generationDurationMs: planningStage.generationDurationMs,
+      generationDurationMs:
+        keywordStage.generationDurationMs + planningStage.generationDurationMs,
       jobIdentifier: lastMetadata.jobIdentifier,
       latexCode: stripTailorResumeSegmentIds(normalizedInput.annotatedLatex),
       model: planningStage.model,
@@ -2372,7 +2602,8 @@ export async function generateTailoredResume(input: {
 
   return implementTailoredResumePlan({
     annotatedLatexCode: input.annotatedLatexCode,
-    generationDurationMsBase: planningStage.generationDurationMs,
+    generationDurationMsBase:
+      keywordStage.generationDurationMs + planningStage.generationDurationMs,
     jobDescription: input.jobDescription,
     linkOverrides,
     model: planningStage.model,

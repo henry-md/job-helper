@@ -121,7 +121,7 @@ export function buildTailorResumeLiveStatusMessage(
 
   if (step.retrying) {
     return (
-      `Stage ${String(step.stepNumber)}/${String(step.stepCount)}: ${step.summary} - ` +
+      `Step ${String(step.stepNumber)}/${String(step.stepCount)}: ${step.summary} - ` +
       formatTailorResumeRetryLabel(displayAttempt)
     );
   }
@@ -129,5 +129,5 @@ export function buildTailorResumeLiveStatusMessage(
   const attemptLabel =
     displayAttempt === null ? "" : ` (attempt ${String(displayAttempt)})`;
 
-  return `Stage ${String(step.stepNumber)}/${String(step.stepCount)}: ${step.summary}${attemptLabel}`;
+  return `Step ${String(step.stepNumber)}/${String(step.stepCount)}: ${step.summary}${attemptLabel}`;
 }

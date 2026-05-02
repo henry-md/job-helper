@@ -61,7 +61,7 @@ function readTailoredResumeReviewEdit(
   const editId = readString(value.editId);
   const reason = readString(value.reason);
   const segmentId = readString(value.segmentId);
-  const generatedByStep = value.generatedByStep === 4 ? 4 : value.generatedByStep === 3 ? 3 : null;
+  const generatedByStep = value.generatedByStep === 5 ? 5 : value.generatedByStep === 4 ? 4 : null;
   const state =
     value.state === "rejected"
       ? "rejected"
