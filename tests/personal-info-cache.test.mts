@@ -12,6 +12,7 @@ function buildPersonalInfo() {
       allowTailorResumeFollowUpQuestions: true,
       includeLowPriorityTermsInKeywordCoverage: false,
       preventPageCountIncrease: true,
+      version: 2,
     },
     originalResume: {
       error: null,

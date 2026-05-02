@@ -90,6 +90,7 @@ import {
   formatTailorRunStepTimeDisplay,
   resolveDisplayedTailorRunIdentity,
   resolveReviewableTailoredResumeId,
+  shouldClearCompletedLocalTailorRun,
   shouldRenderLegacyTailorRunShell as resolveShouldRenderLegacyTailorRunShell,
   shouldRenderTailorRunShell,
 } from "./tailor-run-display";
@@ -719,6 +720,22 @@ function buildTailoringJobLabel(input: {
   return positionTitle || companyName || "this role";
 }
 
+function buildTailoringInterviewHeading(input: {
+  companyName: string | null;
+  fallbackTitle?: string | null;
+  positionTitle: string | null;
+}) {
+  const companyName = input.companyName?.trim();
+  const fallbackTitle = input.fallbackTitle?.trim();
+  const positionTitle = input.positionTitle?.trim();
+
+  if (companyName && positionTitle) {
+    return `${companyName} — ${positionTitle}`;
+  }
+
+  return companyName || positionTitle || fallbackTitle || "Resume questions";
+}
+
 function buildExistingTailoringTitle(
   existingTailoring: TailorResumeExistingTailoringState,
 ) {
@@ -757,6 +774,7 @@ function buildTailorInterviewPreview(
 }
 
 function buildTailoringRunRecord(input: {
+  applicationId?: string | null;
   capturedAt?: string;
   companyName: string | null;
   failureKind?: TailorResumeRunRecord["failureKind"];
@@ -767,6 +785,7 @@ function buildTailoringRunRecord(input: {
   pageContext: JobPageContext | null;
   positionTitle: string | null;
   status: TailorResumeRunRecord["status"];
+  suppressedTailoredResumeId?: string | null;
   tailoredResumeError?: string | null;
   tailoredResumeId?: string | null;
 }) {
@@ -779,7 +798,7 @@ function buildTailoringRunRecord(input: {
     input.positionTitle?.trim() || pageApplicationContext?.jobTitle || null;
 
   return {
-    applicationId: null,
+    applicationId: input.applicationId?.trim() || null,
     capturedAt: input.capturedAt ?? new Date().toISOString(),
     companyName,
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
@@ -792,7 +811,7 @@ function buildTailoringRunRecord(input: {
     pageUrl: input.pageContext?.url || null,
     positionTitle,
     status: input.status,
-    suppressedTailoredResumeId: null,
+    suppressedTailoredResumeId: input.suppressedTailoredResumeId?.trim() || null,
     tailoredResumeError: input.tailoredResumeError ?? null,
     tailoredResumeId: input.tailoredResumeId ?? null,
   } satisfies TailorResumeRunRecord;
@@ -1251,15 +1270,27 @@ function buildTailoringRunRecordFromExistingTailoring(input: {
   const jobIdentifier =
     input.existingTailoring.jobIdentifier ??
     (reusePreviousPageMetadata ? input.previousRun?.jobIdentifier ?? null : null);
+  const activeCapturedAt =
+    reusePreviousPageMetadata && input.previousRun?.capturedAt
+      ? input.previousRun.capturedAt
+      : input.existingTailoring.createdAt || input.existingTailoring.updatedAt;
+  const previousGenerationStepTimings = reusePreviousPageMetadata
+    ? input.previousRun?.generationStepTimings ?? []
+    : [];
 
   if (input.existingTailoring.kind === "pending_interview") {
     return {
       applicationId: input.existingTailoring.applicationId,
-      capturedAt: input.existingTailoring.updatedAt,
+      capturedAt: activeCapturedAt,
       companyName: input.existingTailoring.companyName,
       endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
       generationStep: null,
-      generationStepTimings: [],
+      generationStepTimings: mergeTailorResumeGenerationStepTimingHistory({
+        observedAt: input.existingTailoring.updatedAt,
+        previousTimings: previousGenerationStepTimings,
+        step: null,
+        timings: [],
+      }),
       jobIdentifier,
       message: "Resume questions are waiting in the side panel.",
       pageTitle,
@@ -1296,9 +1327,6 @@ function buildTailoringRunRecordFromExistingTailoring(input: {
   }
 
   const generationStep = input.existingTailoring.lastStep ?? null;
-  const previousGenerationStepTimings = reusePreviousPageMetadata
-    ? input.previousRun?.generationStepTimings ?? []
-    : [];
   const generationStepTimings = mergeTailorResumeGenerationStepTimingHistory({
     observedAt: input.existingTailoring.updatedAt,
     previousTimings: previousGenerationStepTimings,
@@ -1308,7 +1336,7 @@ function buildTailoringRunRecordFromExistingTailoring(input: {
 
   return {
     applicationId: input.existingTailoring.applicationId,
-    capturedAt: input.existingTailoring.updatedAt,
+    capturedAt: activeCapturedAt,
     companyName:
       input.existingTailoring.companyName ??
       (reusePreviousPageMetadata ? input.previousRun?.companyName ?? null : null),
@@ -1851,20 +1879,7 @@ function buildCurrentActiveTailorRunCard(input: {
   };
   const cardId = `current:${input.currentPageRegistryKey ?? titleFallback.url ?? "active"}`;
 
-  if (
-    input.currentPagePersonalInfoTailoring &&
-    input.currentPagePersonalInfoTailoring.kind !== "completed"
-  ) {
-    return buildActiveTailorRunCardFromExistingTailoring({
-      existingTailoring: input.currentPagePersonalInfoTailoring,
-      id: cardId,
-      isCurrentPage: true,
-      pageKey: input.currentPageRegistryKey,
-      previousRun: input.currentPageStoredTailoringRun,
-      titleFallback,
-    });
-  }
-
+  // Keep the current page on the local stream so server polling cannot reset live timers.
   if (isTransientTailoringRun(input.currentPageStoredTailoringRun)) {
     const currentRun = input.currentPageStoredTailoringRun;
 
@@ -1877,6 +1892,20 @@ function buildCurrentActiveTailorRunCard(input: {
       isCurrentPage: true,
       pageKey: input.currentPageRegistryKey,
       run: currentRun,
+      titleFallback,
+    });
+  }
+
+  if (
+    input.currentPagePersonalInfoTailoring &&
+    input.currentPagePersonalInfoTailoring.kind !== "completed"
+  ) {
+    return buildActiveTailorRunCardFromExistingTailoring({
+      existingTailoring: input.currentPagePersonalInfoTailoring,
+      id: cardId,
+      isCurrentPage: true,
+      pageKey: input.currentPageRegistryKey,
+      previousRun: input.currentPageStoredTailoringRun,
       titleFallback,
     });
   }
@@ -2812,6 +2841,14 @@ function App() {
     useState(false);
   const [keywordCoverageSettingError, setKeywordCoverageSettingError] =
     useState<string | null>(null);
+  const [isSavingFollowUpQuestionSetting, setIsSavingFollowUpQuestionSetting] =
+    useState(false);
+  const [followUpQuestionSettingError, setFollowUpQuestionSettingError] =
+    useState<string | null>(null);
+  const [isSavingPageCountProtectionSetting, setIsSavingPageCountProtectionSetting] =
+    useState(false);
+  const [pageCountProtectionSettingError, setPageCountProtectionSettingError] =
+    useState<string | null>(null);
   const [isArchivingAllTailoredResumes, setIsArchivingAllTailoredResumes] =
     useState(false);
   const [tailoredResumeMutationError, setTailoredResumeMutationError] =
@@ -3010,13 +3047,14 @@ function App() {
   }, [applyStoppedTailoringFilter]);
 
   const loadPersonalInfo = useCallback(
-    async (options: { preserveCurrent?: boolean } = {}) => {
+    async (options: { forceFresh?: boolean; preserveCurrent?: boolean } = {}) => {
       if (!options.preserveCurrent) {
         setPersonalInfoState({ personalInfo: null, status: "loading" });
       }
 
       try {
         const response = await chrome.runtime.sendMessage({
+          payload: options.forceFresh ? { forceFresh: true } : undefined,
           type: "JOB_HELPER_PERSONAL_INFO",
         });
 
@@ -3574,6 +3612,37 @@ function App() {
     ],
   );
 
+  useEffect(() => {
+    if (personalInfoState.status !== "ready") {
+      return;
+    }
+
+    const staleCompletedRuns = Object.entries(tailoringRunsByKey).filter(
+      ([, run]) =>
+        shouldClearCompletedLocalTailorRun({
+          activeTailorings: personalInfoState.personalInfo.activeTailorings,
+          run,
+          tailoredResumes: personalInfoState.personalInfo.tailoredResumes,
+          tailoringInterviews: personalInfoState.personalInfo.tailoringInterviews,
+        }),
+    );
+
+    if (staleCompletedRuns.length === 0) {
+      return;
+    }
+
+    for (const [pageKey, run] of staleCompletedRuns) {
+      void clearTailorRegistryEntriesForMatch({
+        jobUrl: run.pageUrl,
+        pageKey,
+      });
+    }
+  }, [
+    clearTailorRegistryEntriesForMatch,
+    personalInfoState,
+    tailoringRunsByKey,
+  ]);
+
   const showTailorPreparationOverlayOnActivePage = useCallback(
     async (message: string) => {
       try {
@@ -3689,6 +3758,10 @@ function App() {
   const includeLowPriorityTermsInKeywordCoverage =
     personalInfo?.generationSettings.includeLowPriorityTermsInKeywordCoverage ??
     false;
+  const allowTailorResumeFollowUpQuestions =
+    personalInfo?.generationSettings.allowTailorResumeFollowUpQuestions ?? true;
+  const preventPageCountIncrease =
+    personalInfo?.generationSettings.preventPageCountIncrease ?? true;
   const displayedApplications = personalInfo?.applications.slice(0, 12) ?? [];
   const pendingPersonalDeleteImpact = buildPendingPersonalDeleteImpact({
     applications: personalInfo?.applications ?? [],
@@ -3782,12 +3855,13 @@ function App() {
         })
       : null;
   const currentPagePersonalInfoInterview =
-    currentPageIdentity && personalInfo
+    personalInfo?.tailoringInterview ??
+    (currentPageIdentity && personalInfo
       ? resolveTailorInterviewForPage({
           pageIdentity: currentPageIdentity,
           tailoringInterviews: personalInfo.tailoringInterviews,
         })
-      : null;
+      : null);
   const currentPageApplicationContext = currentPageContext
     ? buildTailorResumeApplicationContext(currentPageContext)
     : null;
@@ -3887,6 +3961,46 @@ function App() {
   const tailorInterviewPreview = buildTailorInterviewPreview(
     latestTailorInterviewAssistantMessage,
   );
+  const matchingTailorInterviewRun =
+    tailorInterview &&
+    lastTailoringRun &&
+    sameTailoringJobUrl(tailorInterview.jobUrl, lastTailoringRun.pageUrl)
+      ? lastTailoringRun
+      : null;
+  const matchingTailorInterviewActiveRunCard = tailorInterview
+    ? activeTailorRunCards.find(
+        (card) =>
+          (tailorInterview.tailorResumeRunId &&
+            card.existingTailoringId === tailorInterview.tailorResumeRunId) ||
+          sameTailoringJobUrl(tailorInterview.jobUrl, card.url) ||
+          sameTailoringJobUrl(tailorInterview.jobUrl, card.pageKey),
+      ) ?? null
+    : null;
+  const matchingTailorInterviewPageContext =
+    tailorInterview &&
+    currentPageApplicationContext &&
+    currentPageIdentity &&
+    matchesTailorOverwritePageIdentity({
+      jobUrl: tailorInterview.jobUrl,
+      pageIdentity: currentPageIdentity,
+    })
+      ? currentPageApplicationContext
+      : null;
+  const tailorInterviewHeading = tailorInterview
+    ? buildTailoringInterviewHeading({
+        companyName:
+          tailorInterview.companyName ??
+          matchingTailorInterviewRun?.companyName ??
+          matchingTailorInterviewPageContext?.companyName ??
+          null,
+        fallbackTitle: matchingTailorInterviewActiveRunCard?.title ?? null,
+        positionTitle:
+          tailorInterview.positionTitle ??
+          matchingTailorInterviewRun?.positionTitle ??
+          matchingTailorInterviewPageContext?.jobTitle ??
+          null,
+      })
+    : "Resume questions";
   const isTailorInterviewBusy =
     captureState === "finishing" ||
     isStoppingCurrentTailoring ||
@@ -4666,6 +4780,8 @@ function App() {
     setIsSettingsOriginalResumeOpen(false);
     setIsSettingsUserMarkdownOpen(false);
     setSettingsUserMarkdownError(null);
+    setFollowUpQuestionSettingError(null);
+    setPageCountProtectionSettingError(null);
     setKeywordCoverageSettingError(null);
   }
 
@@ -4752,6 +4868,105 @@ function App() {
       setSettingsUserMarkdownError(message);
     } finally {
       setIsSavingSettingsUserMarkdown(false);
+    }
+  }
+
+  async function updateFollowUpQuestionSetting(
+    nextAllowFollowUpQuestions: boolean,
+  ) {
+    if (authState.status !== "signedIn") {
+      setFollowUpQuestionSettingError(
+        "Connect Google before changing Step 2 questions.",
+      );
+      return;
+    }
+
+    if (
+      allowTailorResumeFollowUpQuestions === nextAllowFollowUpQuestions ||
+      isSavingFollowUpQuestionSetting
+    ) {
+      return;
+    }
+
+    const previousPersonalInfo = personalInfo ?? lastReadyPersonalInfoRef.current;
+    const optimisticPersonalInfo = previousPersonalInfo
+      ? {
+          ...previousPersonalInfo,
+          generationSettings: {
+            ...previousPersonalInfo.generationSettings,
+            allowTailorResumeFollowUpQuestions: nextAllowFollowUpQuestions,
+          },
+        }
+      : null;
+
+    setIsSavingFollowUpQuestionSetting(true);
+    setFollowUpQuestionSettingError(null);
+
+    if (optimisticPersonalInfo) {
+      lastReadyPersonalInfoRef.current = optimisticPersonalInfo;
+      setPersonalInfoState({
+        personalInfo: optimisticPersonalInfo,
+        status: "ready",
+      });
+      publishPersonalInfoToSharedCache(optimisticPersonalInfo);
+    }
+
+    try {
+      const result = await patchTailorResume({
+        action: "saveGenerationSettings",
+        generationSettings: {
+          allowTailorResumeFollowUpQuestions: nextAllowFollowUpQuestions,
+        },
+      });
+
+      if (!result.ok) {
+        throw new Error(
+          readTailorResumePayloadError(
+            result.payload,
+            "Unable to save Step 2 questions.",
+          ),
+        );
+      }
+
+      const nextGenerationSettings =
+        readTailorResumeGenerationSettingsSummary(result.payload);
+
+      setPersonalInfoState((currentState) => {
+        if (currentState.status !== "ready") {
+          return currentState;
+        }
+
+        const nextPersonalInfo = {
+          ...currentState.personalInfo,
+          generationSettings: nextGenerationSettings,
+        };
+
+        lastReadyPersonalInfoRef.current = nextPersonalInfo;
+        publishPersonalInfoToSharedCache(nextPersonalInfo);
+
+        return {
+          personalInfo: nextPersonalInfo,
+          status: "ready",
+        };
+      });
+
+      void loadPersonalInfo({ preserveCurrent: true });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to save Step 2 questions.";
+
+      if (previousPersonalInfo) {
+        lastReadyPersonalInfoRef.current = previousPersonalInfo;
+        setPersonalInfoState({
+          personalInfo: previousPersonalInfo,
+          status: "ready",
+        });
+        publishPersonalInfoToSharedCache(previousPersonalInfo);
+      }
+
+      setFollowUpQuestionSettingError(message);
+    } finally {
+      setIsSavingFollowUpQuestionSetting(false);
     }
   }
 
@@ -4853,6 +5068,107 @@ function App() {
       setKeywordCoverageSettingError(message);
     } finally {
       setIsSavingKeywordCoverageSetting(false);
+    }
+  }
+
+  async function updatePageCountProtectionSetting(
+    nextPreventPageCountIncrease: boolean,
+  ) {
+    if (authState.status !== "signedIn") {
+      setPageCountProtectionSettingError(
+        "Connect Google before changing page-count protection.",
+      );
+      return;
+    }
+
+    if (
+      preventPageCountIncrease === nextPreventPageCountIncrease ||
+      isSavingPageCountProtectionSetting
+    ) {
+      return;
+    }
+
+    const previousPersonalInfo = personalInfo ?? lastReadyPersonalInfoRef.current;
+    const optimisticPersonalInfo = previousPersonalInfo
+      ? {
+          ...previousPersonalInfo,
+          generationSettings: {
+            ...previousPersonalInfo.generationSettings,
+            preventPageCountIncrease: nextPreventPageCountIncrease,
+          },
+        }
+      : null;
+
+    setIsSavingPageCountProtectionSetting(true);
+    setPageCountProtectionSettingError(null);
+
+    if (optimisticPersonalInfo) {
+      lastReadyPersonalInfoRef.current = optimisticPersonalInfo;
+      setPersonalInfoState({
+        personalInfo: optimisticPersonalInfo,
+        status: "ready",
+      });
+      publishPersonalInfoToSharedCache(optimisticPersonalInfo);
+    }
+
+    try {
+      const result = await patchTailorResume({
+        action: "saveGenerationSettings",
+        generationSettings: {
+          preventPageCountIncrease: nextPreventPageCountIncrease,
+        },
+      });
+
+      if (!result.ok) {
+        throw new Error(
+          readTailorResumePayloadError(
+            result.payload,
+            "Unable to save page-count protection.",
+          ),
+        );
+      }
+
+      const nextGenerationSettings =
+        readTailorResumeGenerationSettingsSummary(result.payload);
+
+      setPersonalInfoState((currentState) => {
+        if (currentState.status !== "ready") {
+          return currentState;
+        }
+
+        const nextPersonalInfo = {
+          ...currentState.personalInfo,
+          generationSettings: nextGenerationSettings,
+        };
+
+        lastReadyPersonalInfoRef.current = nextPersonalInfo;
+        publishPersonalInfoToSharedCache(nextPersonalInfo);
+
+        return {
+          personalInfo: nextPersonalInfo,
+          status: "ready",
+        };
+      });
+
+      void loadPersonalInfo({ preserveCurrent: true });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to save page-count protection.";
+
+      if (previousPersonalInfo) {
+        lastReadyPersonalInfoRef.current = previousPersonalInfo;
+        setPersonalInfoState({
+          personalInfo: previousPersonalInfo,
+          status: "ready",
+        });
+        publishPersonalInfoToSharedCache(previousPersonalInfo);
+      }
+
+      setPageCountProtectionSettingError(message);
+    } finally {
+      setIsSavingPageCountProtectionSetting(false);
     }
   }
 
@@ -5215,6 +5531,9 @@ function App() {
       setIsTailorInterviewFinishPromptOpen(false);
       setIsTailorInterviewOpen(false);
       setTailorInterviewError(null);
+    } else {
+      setActivePanelTab("tailor");
+      setIsTailorInterviewOpen(true);
     }
   }, [
     currentPagePersonalInfoInterview,
@@ -5595,7 +5914,6 @@ function App() {
       }
 
       void loadTailorStorageRegistries();
-      void loadSnapshot();
     }
 
     chrome.storage.onChanged.addListener(handleStorageChange);
@@ -5603,7 +5921,7 @@ function App() {
     return () => {
       chrome.storage.onChanged.removeListener(handleStorageChange);
     };
-  }, [loadSnapshot, loadTailorStorageRegistries]);
+  }, [loadTailorStorageRegistries]);
 
   useEffect(() => {
     void loadStoppedTailoringRegistry();
@@ -5639,7 +5957,6 @@ function App() {
       }
 
       void loadTailorStorageRegistries();
-      void loadSnapshot();
     }
 
     chrome.storage.onChanged.addListener(handleStorageChange);
@@ -5647,7 +5964,7 @@ function App() {
     return () => {
       chrome.storage.onChanged.removeListener(handleStorageChange);
     };
-  }, [loadSnapshot, loadTailorStorageRegistries]);
+  }, [loadTailorStorageRegistries]);
 
   useEffect(() => {
     function handleStorageChange(
@@ -5659,7 +5976,6 @@ function App() {
       }
 
       void loadTailorStorageRegistries();
-      void loadSnapshot();
     }
 
     chrome.storage.onChanged.addListener(handleStorageChange);
@@ -5667,7 +5983,7 @@ function App() {
     return () => {
       chrome.storage.onChanged.removeListener(handleStorageChange);
     };
-  }, [loadSnapshot, loadTailorStorageRegistries]);
+  }, [loadTailorStorageRegistries]);
 
   useEffect(() => {
     setLastTailoringRun(currentPageStoredTailoringRun);
@@ -5891,18 +6207,61 @@ function App() {
     }
 
     const prompt = existingTailoringPrompt;
-    const nextPrompt = {
-      ...prompt,
-      actionState: "overwriting" as const,
-    };
     const preparingMessage = buildTailorResumePreparationMessage(true);
+    const pageKey =
+      currentPageResolvedRegistryKey ??
+      buildTailorRunRegistryKey(prompt.jobUrl) ??
+      readTailorRunRegistryKeyFromPageContext(prompt.pageContext);
+    const suppressedTailoredResumeId =
+      prompt.existingTailoring.kind === "completed"
+        ? prompt.existingTailoring.tailoredResumeId
+        : null;
+    const optimisticPreparation = buildTailorResumePreparationState({
+      message: preparingMessage,
+      pageContext: prompt.pageContext,
+    });
+    const optimisticRun = buildTailoringRunRecord({
+      applicationId: prompt.existingTailoring.applicationId,
+      companyName: prompt.existingTailoring.companyName,
+      capturedAt: optimisticPreparation.capturedAt,
+      jobIdentifier: prompt.existingTailoring.jobIdentifier,
+      message: buildLiveTailorResumeStatusMessage(
+        null,
+        "Tailoring your resume for this job...",
+      ),
+      pageContext: prompt.pageContext,
+      positionTitle: prompt.existingTailoring.positionTitle,
+      status: "running",
+      suppressedTailoredResumeId,
+    });
 
-    setExistingTailoringPrompt(nextPrompt);
-    await persistTailorPreparationState(
-      buildTailorResumePreparationState({
-        message: preparingMessage,
-        pageContext: prompt.pageContext,
-      }),
+    setExistingTailoringPrompt(null);
+    setExistingTailoringPromptsByKey((currentRegistry) => {
+      if (!pageKey || !(pageKey in currentRegistry)) {
+        return currentRegistry;
+      }
+
+      const nextRegistry = { ...currentRegistry };
+      delete nextRegistry[pageKey];
+      return nextRegistry;
+    });
+    setTailorPreparationState(optimisticPreparation);
+    setTailorPreparationsByKey((currentRegistry) =>
+      pageKey
+        ? {
+            ...currentRegistry,
+            [pageKey]: optimisticPreparation,
+          }
+        : currentRegistry,
+    );
+    setLastTailoringRun(optimisticRun);
+    setTailoringRunsByKey((currentRegistry) =>
+      pageKey
+        ? {
+            ...currentRegistry,
+            [pageKey]: optimisticRun,
+          }
+        : currentRegistry,
     );
     setIsPreparingTailorStart(true);
     setActiveTailoringOverrideState("overwriting");
@@ -5915,34 +6274,49 @@ function App() {
     setTailorGenerationStep(null);
     setTailorGenerationStepTimings([]);
     setCaptureState("running");
-    setLastTailoringRun(null);
+    const removeJobUrl = prompt.jobUrl ?? prompt.existingTailoring.jobUrl ?? null;
+    const buildOptimisticPersonalInfo = (currentPersonalInfo: PersonalInfoSummary) => ({
+      ...currentPersonalInfo,
+      activeTailoring: null,
+      activeTailorings: currentPersonalInfo.activeTailorings.filter(
+        (activeTailoring) =>
+          !sameTailoringJobUrl(activeTailoring.jobUrl, removeJobUrl),
+      ),
+      tailoringInterview: null,
+      tailoringInterviews: currentPersonalInfo.tailoringInterviews.filter(
+        (tailoringInterview) =>
+          !sameTailoringJobUrl(tailoringInterview.jobUrl, removeJobUrl),
+      ),
+    }) satisfies PersonalInfoSummary;
+    const optimisticPersonalInfo = personalInfo
+      ? buildOptimisticPersonalInfo(personalInfo)
+      : null;
+
+    if (optimisticPersonalInfo) {
+      lastReadyPersonalInfoRef.current = optimisticPersonalInfo;
+      publishPersonalInfoToSharedCache(optimisticPersonalInfo);
+    }
+
     setPersonalInfoState((currentState) =>
       currentState.status === "ready"
         ? {
-            personalInfo: {
-              ...currentState.personalInfo,
-              activeTailoring: null,
-              activeTailorings: currentState.personalInfo.activeTailorings.filter(
-                (activeTailoring) =>
-                  !sameTailoringJobUrl(
-                    activeTailoring.jobUrl,
-                    prompt.jobUrl ?? prompt.existingTailoring.jobUrl ?? null,
-                  ),
-              ),
-              tailoringInterview: null,
-              tailoringInterviews:
-                currentState.personalInfo.tailoringInterviews.filter(
-                  (tailoringInterview) =>
-                    !sameTailoringJobUrl(
-                      tailoringInterview.jobUrl,
-                      prompt.jobUrl ?? prompt.existingTailoring.jobUrl ?? null,
-                    ),
-                ),
-            },
+            personalInfo: buildOptimisticPersonalInfo(currentState.personalInfo),
             status: "ready",
           }
         : currentState,
     );
+
+    void persistExistingTailoringPrompt(null, pageKey).catch((error) => {
+      console.error("Could not clear the Tailor Resume overwrite prompt.", error);
+    });
+    void persistTailorPreparationState(optimisticPreparation, pageKey).catch(
+      (error) => {
+        console.error("Could not sync the Tailor Resume preparation state.", error);
+      },
+    );
+    void persistTailoringRun(optimisticRun, pageKey).catch((error) => {
+      console.error("Could not sync the Tailor Resume run state.", error);
+    });
 
     try {
       await triggerTailorCapture({
@@ -5976,6 +6350,7 @@ function App() {
         actionState: "idle",
       };
       setExistingTailoringPrompt(restoredPrompt);
+      await persistExistingTailoringPrompt(restoredPrompt, pageKey);
       await loadPersonalInfo();
     } finally {
       setIsPreparingTailorStart(false);
@@ -6036,14 +6411,15 @@ function App() {
     }
 
     const existingTailoringId =
-      activeTailoring?.kind === "completed" ? null : activeTailoring?.id ?? null;
+      tailorInterview?.tailorResumeRunId ??
+      (activeTailoring?.kind === "completed" ? null : activeTailoring?.id ?? null);
     const jobUrl =
+      tailorInterview?.jobUrl ??
       currentPageUrl ??
       activeTailoring?.jobUrl ??
       existingTailoringPrompt?.jobUrl ??
       lastTailoringRun?.pageUrl ??
       tailorPreparationState?.pageUrl ??
-      tailorInterview?.jobUrl ??
       null;
     const registryPageKey =
       currentPageResolvedRegistryKey ??
@@ -6207,7 +6583,7 @@ function App() {
 
       setPendingTailorInterviewAnswerMessage(null);
       setTailorInterview(profileSummary.tailoringInterview);
-      void loadPersonalInfo();
+      void loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
 
       if (profileSummary.tailoringInterview) {
         const record = buildTailoringRunRecord({
@@ -6338,7 +6714,7 @@ function App() {
       }
 
       setTailorInterview(profileSummary.tailoringInterview);
-      void loadPersonalInfo();
+      await loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
 
       const tailoredResume = resolveTailoredResumeFromPayload(result.payload);
 
@@ -8450,7 +8826,7 @@ function App() {
               >
                 {existingTailoringPrompt.actionState === "overwriting"
                   ? "Overwriting..."
-                  : "Confirm"}
+                  : "Yes"}
               </button>
             </div>
             {tailorInterviewError ? (
@@ -9359,9 +9735,7 @@ function App() {
 
     const action = typeof body.action === "string" ? body.action : "";
     const shouldStream =
-      action === "tailor" ||
-      action === "advanceTailorResumeInterview" ||
-      action === "completeTailorResumeInterview";
+      action === "tailor" || action === "completeTailorResumeInterview";
     const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
       body: JSON.stringify(body),
       credentials: "include",
@@ -9722,6 +10096,72 @@ function App() {
           </div>
           <div className="settings-toggle-row settings-toggle-row-keyword">
             <div className="settings-toggle-copy">
+              <p className="settings-toggle-title">Step 2 questions</p>
+              <p className="settings-toggle-description">
+                Let tailoring pause to ask concise resume follow-up questions
+                before writing final edits.
+              </p>
+            </div>
+            <button
+              aria-checked={allowTailorResumeFollowUpQuestions}
+              aria-label="Step 2 questions"
+              className={`settings-switch ${
+                allowTailorResumeFollowUpQuestions ? "settings-switch-on" : ""
+              }`.trim()}
+              disabled={
+                authState.status !== "signedIn" ||
+                isSavingFollowUpQuestionSetting
+              }
+              role="switch"
+              type="button"
+              onClick={() =>
+                void updateFollowUpQuestionSetting(
+                  !allowTailorResumeFollowUpQuestions,
+                )
+              }
+            >
+              <span className="settings-switch-handle" aria-hidden="true" />
+            </button>
+          </div>
+          {followUpQuestionSettingError ? (
+            <p className="settings-inline-error">
+              {followUpQuestionSettingError}
+            </p>
+          ) : null}
+          <div className="settings-toggle-row settings-toggle-row-keyword">
+            <div className="settings-toggle-copy">
+              <p className="settings-toggle-title">Page count protection</p>
+              <p className="settings-toggle-description">
+                Run compaction when tailored edits would make the resume longer
+                than the original.
+              </p>
+            </div>
+            <button
+              aria-checked={preventPageCountIncrease}
+              aria-label="Page count protection"
+              className={`settings-switch ${
+                preventPageCountIncrease ? "settings-switch-on" : ""
+              }`.trim()}
+              disabled={
+                authState.status !== "signedIn" ||
+                isSavingPageCountProtectionSetting
+              }
+              role="switch"
+              type="button"
+              onClick={() =>
+                void updatePageCountProtectionSetting(!preventPageCountIncrease)
+              }
+            >
+              <span className="settings-switch-handle" aria-hidden="true" />
+            </button>
+          </div>
+          {pageCountProtectionSettingError ? (
+            <p className="settings-inline-error">
+              {pageCountProtectionSettingError}
+            </p>
+          ) : null}
+          <div className="settings-toggle-row settings-toggle-row-keyword">
+            <div className="settings-toggle-copy">
               <p className="settings-toggle-title">Coverage percentage basis</p>
               <p className="settings-toggle-description">
                 Low-priority terms are always tracked and shown. Choose which
@@ -10001,6 +10441,145 @@ function App() {
     );
   }
 
+  if (tailorInterview && isTailorInterviewOpen) {
+    return (
+      <main className="side-panel-shell side-panel-shell-interview">
+        <section className="tailor-interview-page" ref={tailorInterviewCardRef}>
+          <header className="tailor-interview-page-header">
+            <p className="eyebrow">Resume questions</p>
+            <h1 title={tailorInterviewHeading}>{tailorInterviewHeading}</h1>
+            {tailorInterview.questioningSummary?.agenda ? (
+              <p className="interview-agenda">
+                {tailorInterview.questioningSummary.agenda}
+              </p>
+            ) : null}
+          </header>
+
+          <div className="interview-thread tailor-interview-page-thread" aria-live="polite">
+            {displayedTailorInterviewConversation.map((message) => (
+              <div
+                className={`interview-message interview-message-${message.role}`}
+                key={message.id}
+              >
+                <div>{message.text}</div>
+                <ToolCallDetails toolCalls={message.toolCalls} />
+              </div>
+            ))}
+            <div ref={tailorInterviewMessagesEndRef} />
+          </div>
+
+          {tailorInterviewError ? (
+            <p className="interview-error">{tailorInterviewError}</p>
+          ) : null}
+
+          <textarea
+            className="interview-input tailor-interview-page-input"
+            disabled={isTailorInterviewBusy}
+            onChange={(event) =>
+              setDraftTailorInterviewAnswer(event.target.value)
+            }
+            onKeyDown={handleTailorInterviewAnswerKeyDown}
+            placeholder={
+              isTailorInterviewAwaitingCompletion
+                ? "Anything else you want to clarify before we finish?"
+                : "Answer the current question..."
+            }
+            ref={tailorInterviewInputRef}
+            value={draftTailorInterviewAnswer}
+          />
+
+          <div
+            className={`interview-actions tailor-interview-page-actions ${
+              isTailorInterviewAwaitingCompletion
+                ? "interview-actions-with-done"
+                : ""
+            }`}
+          >
+            <button
+              className="secondary-action compact-action"
+              disabled={isStoppingCurrentTailoring}
+              type="button"
+              onClick={() => void cancelTailorInterview()}
+            >
+              {isStoppingCurrentTailoring ? "Stopping..." : "Stop run"}
+            </button>
+            {isTailorInterviewAwaitingCompletion ? (
+              <button
+                className="primary-action compact-action"
+                disabled={isTailorInterviewBusy || isFinishingTailorInterview}
+                type="button"
+                onClick={() => void completeTailorInterview()}
+              >
+                {isFinishingTailorInterview ? "Finishing..." : "Done"}
+              </button>
+            ) : null}
+            <button
+              className="primary-action compact-action"
+              disabled={
+                isTailorInterviewBusy ||
+                draftTailorInterviewAnswer.trim().length === 0
+              }
+              type="button"
+              onClick={() => void submitTailorInterviewAnswer()}
+            >
+              {captureState === "finishing"
+                ? "Thinking..."
+                : isTailorInterviewAwaitingCompletion
+                  ? "Send clarification"
+                  : "Send answer"}
+            </button>
+          </div>
+
+          {captureState === "finishing" && tailorGenerationStep ? (
+            <p className="interview-progress">
+              {buildLiveTailorResumeStatusMessage(
+                tailorGenerationStep,
+                "Finishing the tailored resume",
+              )}
+              {tailorGenerationStep.detail ? ` ${tailorGenerationStep.detail}` : ""}
+            </p>
+          ) : null}
+        </section>
+
+        {tailorInterview && isTailorInterviewFinishPromptOpen ? (
+          <div className="tailor-interview-finish-overlay" role="presentation">
+            <section
+              aria-modal="true"
+              className="tailor-interview-finish-dialog"
+              role="dialog"
+            >
+              <p className="eyebrow">Tailor Resume Follow-Up</p>
+              <h2>Ready to finish?</h2>
+              <p className="tailor-interview-finish-copy">
+                The assistant thinks it has enough detail to finish the tailored
+                resume. Press Done to continue, or keep chatting if you want to
+                clarify anything else first.
+              </p>
+              <div className="tailor-interview-finish-actions">
+                <button
+                  className="secondary-action compact-action"
+                  disabled={isFinishingTailorInterview}
+                  type="button"
+                  onClick={dismissTailorInterviewFinishPrompt}
+                >
+                  Keep chatting
+                </button>
+                <button
+                  className="primary-action compact-action"
+                  disabled={isFinishingTailorInterview}
+                  type="button"
+                  onClick={() => void completeTailorInterview()}
+                >
+                  {isFinishingTailorInterview ? "Finishing..." : "Done"}
+                </button>
+              </div>
+            </section>
+          </div>
+        ) : null}
+      </main>
+    );
+  }
+
   if (showFullscreenTailorRunDetail) {
     return (
       <main className="side-panel-shell side-panel-shell-detail">
@@ -10204,7 +10783,13 @@ function App() {
                 value={draftTailorInterviewAnswer}
               />
 
-              <div className="interview-actions">
+              <div
+                className={`interview-actions ${
+                  isTailorInterviewAwaitingCompletion
+                    ? "interview-actions-with-done"
+                    : ""
+                }`}
+              >
                 <button
                   className="secondary-action compact-action"
                   disabled={isStoppingCurrentTailoring}
@@ -10213,6 +10798,16 @@ function App() {
                 >
                   {isStoppingCurrentTailoring ? "Stopping..." : "Stop run"}
                 </button>
+                {isTailorInterviewAwaitingCompletion ? (
+                  <button
+                    className="primary-action compact-action"
+                    disabled={isTailorInterviewBusy || isFinishingTailorInterview}
+                    type="button"
+                    onClick={() => void completeTailorInterview()}
+                  >
+                    {isFinishingTailorInterview ? "Finishing..." : "Done"}
+                  </button>
+                ) : null}
                 <button
                   className="primary-action compact-action"
                   disabled={

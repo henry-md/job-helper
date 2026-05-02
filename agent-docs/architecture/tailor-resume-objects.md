@@ -114,8 +114,10 @@ Tailor Resume object model:
 - Files: `lib/tailor-resume-generation-settings.ts`, `lib/tailor-resume-types.ts`
 - Stored under `profile.generationSettings`.
 - This keeps per-user boolean generation guardrails that are not prompt text themselves.
-- Current settings include whether Step 2 may pause to ask follow-up questions, and whether tailoring should automatically reject page-count growth by running a compaction follow-up pass when needed.
-- These values are editable from `/dashboard?tab=settings`.
+- Current user-editable settings include whether Step 2 may pause for follow-up questions, whether tailoring should automatically reject page-count growth by running a compaction follow-up pass when needed, plus the keyword-coverage percentage basis.
+- Step 2 follow-up questions are a real product setting, so the toggle must be visible from the extension settings panel as well as the web dashboard before saved `allowTailorResumeFollowUpQuestions` state is allowed to affect a run.
+- Generation settings are versioned; unversioned/older saved Step 2-off values are legacy hidden state and are migrated back to on when read. Once the visible switch saves version 2, off remains an explicit user choice.
+- These values are editable from `/dashboard?tab=settings`; extension-started behavior-affecting settings must also be visible in the extension settings panel.
 
 10. User Memory (`TailorResumeUserMemory`)
 - Files: `prisma/schema.prisma`, `lib/tailor-resume-user-memory.ts`
@@ -142,11 +144,12 @@ Tailoring generation:
 
 - Tailor Resume no longer asks one model call to decide the strategy and write final LaTeX at the same time.
 - The tailoring flow now runs in two required stages plus one optional middle stage:
-  - a planning pass that sees whole-resume plaintext plus document-ordered plaintext blocks keyed by `segmentId`
-  - an optional follow-up questioning pass that can pause the flow and ask the user a few high-value background questions before implementation
+  - parallel Step 1 work: an OpenAI planning pass over whole-resume plaintext and document-ordered blocks, plus deterministic keyword scraping from the job posting
+  - an optional follow-up questioning pass that waits for both Step 1 results, then can pause the flow and ask the user a few high-value background questions before implementation
   - an implementation pass that sees only the selected blocks and translates the approved plaintext plan plus any compressed user learnings back into block-local LaTeX replacements
 - The questioning pass should stay rare. It should only ask when the answer would materially improve the tailored resume, cannot already be inferred from the current resume, and is adjacent enough to existing resume text that the experience is plausibly already there.
-- If the follow-up-question guardrail is turned off, the flow skips interactive questioning and passes `USER.md` memory as non-interactive context to planning and implementation.
+- If the visible Step 2 setting is enabled, Step 2 may still decide to skip questions, but that decision must come from the Step 2 model/tool path using the current resume, job keywords, and `USER.md`, not from hidden persisted profile state.
+- If the visible Step 2 setting is disabled, the flow skips interactive questioning and passes `USER.md` memory as non-interactive context to planning and implementation.
 - When questioning does happen, persist only a compact summary of the learnings for the next model stage rather than forwarding the full chat transcript.
 - Existing `USER.md` memory can be copied into the compact learning summary when it answers a planned edit's factual gap; new durable facts from user answers can be written back to `USER.md` through patch operations.
 - When the page-count guardrail is enabled and the compiled tailored preview exceeds the original resume's page count, the flow runs a third conditional stage:

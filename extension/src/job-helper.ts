@@ -127,11 +127,14 @@ export const defaultExtensionPreferences: ExtensionPreferences = {
   tailorRunTimeDisplayMode: "specific",
 };
 
+const currentTailorResumeGenerationSettingsVersion = 2;
+
 export const defaultTailorResumeGenerationSettingsSummary:
   TailorResumeGenerationSettingsSummary = {
     allowTailorResumeFollowUpQuestions: true,
     includeLowPriorityTermsInKeywordCoverage: false,
     preventPageCountIncrease: true,
+    version: currentTailorResumeGenerationSettingsVersion,
   };
 
 export function buildTailoredResumeReviewUrl(
@@ -266,6 +269,7 @@ export type TailorResumeGenerationSettingsSummary = {
   allowTailorResumeFollowUpQuestions: boolean;
   includeLowPriorityTermsInKeywordCoverage: boolean;
   preventPageCountIncrease: boolean;
+  version: number;
 };
 
 export type TrackedApplicationSummary = {
@@ -343,6 +347,7 @@ export type TailorResumeGenerationStepSummary = {
   attempt: number | null;
   detail: string | null;
   durationMs: number;
+  emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
   retrying: boolean;
   status: "failed" | "running" | "skipped" | "succeeded";
   stepCount: number;
@@ -1003,21 +1008,41 @@ export function readTailorResumeGenerationSettingsSummary(
     return readTailorResumeGenerationSettingsSummary(value.profile);
   }
 
-  const settings = isRecord(value) && isRecord(value.generationSettings)
-    ? isRecord(value.generationSettings.values)
-      ? value.generationSettings.values
-      : value.generationSettings
+  const generationSettingsRecord =
+    isRecord(value) && isRecord(value.generationSettings)
+      ? value.generationSettings
+      : null;
+  const settings = generationSettingsRecord
+    ? isRecord(generationSettingsRecord.values)
+      ? generationSettingsRecord.values
+      : generationSettingsRecord
     : value;
 
   if (!isRecord(settings)) {
     return defaultTailorResumeGenerationSettingsSummary;
   }
 
+  const rawVersion =
+    generationSettingsRecord && typeof generationSettingsRecord.version === "number"
+      ? generationSettingsRecord.version
+      : typeof settings.version === "number"
+        ? settings.version
+        : 1;
+  const version =
+    Number.isFinite(rawVersion) && rawVersion >= 1
+      ? Math.floor(rawVersion)
+      : 1;
+  const allowTailorResumeFollowUpQuestions =
+    typeof settings.allowTailorResumeFollowUpQuestions === "boolean"
+      ? settings.allowTailorResumeFollowUpQuestions
+      : defaultTailorResumeGenerationSettingsSummary.allowTailorResumeFollowUpQuestions;
+
   return {
     allowTailorResumeFollowUpQuestions:
-      typeof settings.allowTailorResumeFollowUpQuestions === "boolean"
-        ? settings.allowTailorResumeFollowUpQuestions
-        : defaultTailorResumeGenerationSettingsSummary.allowTailorResumeFollowUpQuestions,
+      version < currentTailorResumeGenerationSettingsVersion &&
+      allowTailorResumeFollowUpQuestions === false
+        ? true
+        : allowTailorResumeFollowUpQuestions,
     includeLowPriorityTermsInKeywordCoverage:
       typeof settings.includeLowPriorityTermsInKeywordCoverage === "boolean"
         ? settings.includeLowPriorityTermsInKeywordCoverage
@@ -1026,6 +1051,7 @@ export function readTailorResumeGenerationSettingsSummary(
       typeof settings.preventPageCountIncrease === "boolean"
         ? settings.preventPageCountIncrease
         : defaultTailorResumeGenerationSettingsSummary.preventPageCountIncrease,
+    version: currentTailorResumeGenerationSettingsVersion,
   };
 }
 
@@ -1076,6 +1102,9 @@ export function readTailorResumeGenerationStepSummary(
     attempt: attempt > 0 ? Math.floor(attempt) : null,
     detail: readNullableString(value.detail),
     durationMs: Math.max(0, Math.floor(readNumber(value.durationMs))),
+    emphasizedTechnologies: readTailoredResumeEmphasizedTechnologies(
+      value.emphasizedTechnologies,
+    ),
     retrying: value.retrying === true,
     status,
     stepCount: Math.max(1, Math.floor(stepCount)),
@@ -1271,6 +1300,7 @@ export function readTailorResumePendingInterviewSummary(
 
   const id = readString(value.id);
   const updatedAt = readString(value.updatedAt);
+  const status = readString(value.status) || "ready";
   const conversation = Array.isArray(value.conversation)
     ? value.conversation
         .map(readTailorResumeConversationMessage)
@@ -1279,7 +1309,7 @@ export function readTailorResumePendingInterviewSummary(
         )
     : [];
 
-  if (!id || !updatedAt || conversation.length === 0) {
+  if (!id || !updatedAt || status !== "ready" || conversation.length === 0) {
     return null;
   }
 

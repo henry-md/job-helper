@@ -180,7 +180,39 @@ test("emptyTailorResumeProfile defaults to an empty LaTeX draft", () => {
 test("parseTailorResumeProfile keeps saved generation settings", () => {
   const profile = parseTailorResumeProfile({
     generationSettings: {
-      updatedAt: "2026-04-20T12:00:00.000Z",
+      updatedAt: "2026-05-01T22:30:00.000Z",
+      values: {
+        allowTailorResumeFollowUpQuestions: false,
+        includeLowPriorityTermsInKeywordCoverage: true,
+        preventPageCountIncrease: false,
+      },
+      version: 2,
+    },
+  });
+
+  assert.equal(
+    profile.generationSettings.updatedAt,
+    "2026-05-01T22:30:00.000Z",
+  );
+  assert.equal(profile.generationSettings.version, 2);
+  assert.equal(
+    profile.generationSettings.values.allowTailorResumeFollowUpQuestions,
+    false,
+  );
+  assert.equal(
+    profile.generationSettings.values.preventPageCountIncrease,
+    false,
+  );
+  assert.equal(
+    profile.generationSettings.values.includeLowPriorityTermsInKeywordCoverage,
+    true,
+  );
+});
+
+test("parseTailorResumeProfile migrates legacy hidden follow-up disable", () => {
+  const profile = parseTailorResumeProfile({
+    generationSettings: {
+      updatedAt: "2026-04-30T18:12:18.802Z",
       values: {
         allowTailorResumeFollowUpQuestions: false,
         includeLowPriorityTermsInKeywordCoverage: true,
@@ -189,13 +221,10 @@ test("parseTailorResumeProfile keeps saved generation settings", () => {
     },
   });
 
-  assert.equal(
-    profile.generationSettings.updatedAt,
-    "2026-04-20T12:00:00.000Z",
-  );
+  assert.equal(profile.generationSettings.version, 2);
   assert.equal(
     profile.generationSettings.values.allowTailorResumeFollowUpQuestions,
-    false,
+    true,
   );
   assert.equal(
     profile.generationSettings.values.preventPageCountIncrease,

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  currentTailorResumeGenerationSettingsVersion,
   tailorResumeGenerationSettingKeys,
   type TailorResumeGenerationSettings,
 } from "./tailor-resume-generation-settings.ts";
@@ -83,6 +84,9 @@ export function readGenerationSettingsUpdates(value: unknown) {
 export async function saveTailorResumeUserMarkdownAction(
   userId: string,
   body: Record<string, unknown>,
+  options: {
+    onSaved?: () => Promise<void> | void;
+  } = {},
 ) {
   const markdown = "markdown" in body ? body.markdown : null;
   const expectedUpdatedAt =
@@ -137,6 +141,8 @@ export async function saveTailorResumeUserMarkdownAction(
       { status: 409 },
     );
   }
+
+  await options.onSaved?.();
 
   return NextResponse.json({
     userMarkdown: saveResult.state,
@@ -226,6 +232,7 @@ export async function saveTailorResumeGenerationSettingsAction(input: {
         ...input.rawProfile.generationSettings.values,
         ...generationSettingsUpdates,
       },
+      version: currentTailorResumeGenerationSettingsVersion,
     },
   };
 

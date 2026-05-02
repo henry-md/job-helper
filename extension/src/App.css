@@ -1269,9 +1269,9 @@ button:disabled {
 .existing-tailoring-inline-overlay {
   position: absolute;
   inset: 6px;
-  display: grid;
+  display: flex;
   align-items: center;
-  justify-items: center;
+  justify-content: center;
   padding: 18px 14px;
   border-radius: 18px;
   background:
@@ -1280,29 +1280,43 @@ button:disabled {
 }
 
 .existing-tailoring-inline-dialog {
-  display: grid;
-  width: min(100%, 244px);
-  gap: 10px;
-  justify-items: center;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   text-align: center;
+  flex-wrap: wrap;
 }
 
 .existing-tailoring-inline-title {
   margin: 0;
   color: var(--foreground);
-  font-size: 18px;
+  font-size: 12px;
   font-weight: 760;
-  line-height: 1.05;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .existing-tailoring-inline-actions {
-  display: grid;
-  width: 100%;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.existing-tailoring-inline-actions .compact-action {
+  width: auto;
+  min-height: 26px;
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 1;
 }
 
 .existing-tailoring-inline-error {
+  flex-basis: 100%;
   text-align: center;
 }
 
@@ -2267,11 +2281,57 @@ button:disabled {
   gap: 8px;
 }
 
+.interview-actions-with-done {
+  grid-template-columns: auto auto minmax(0, 1fr);
+}
+
 .interview-progress {
   margin: -2px 0 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.side-panel-shell-interview {
+  min-height: 100vh;
+  padding: 14px;
+}
+
+.tailor-interview-page {
+  min-height: calc(100vh - 28px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  gap: 12px;
+}
+
+.tailor-interview-page-header {
+  display: grid;
+  gap: 6px;
+}
+
+.tailor-interview-page-header h1 {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--foreground);
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.tailor-interview-page-thread {
+  max-height: none;
+  min-height: 0;
+  align-content: start;
+}
+
+.tailor-interview-page-input {
+  min-height: 132px;
+  resize: none;
+}
+
+.tailor-interview-page-actions {
+  align-self: end;
 }
 
 .tailor-interview-finish-overlay {

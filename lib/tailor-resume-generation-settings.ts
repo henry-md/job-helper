@@ -4,6 +4,8 @@ export const tailorResumeGenerationSettingKeys = [
   "preventPageCountIncrease",
 ] as const;
 
+export const currentTailorResumeGenerationSettingsVersion = 2;
+
 export type TailorResumeGenerationSettings = {
   allowTailorResumeFollowUpQuestions: boolean;
   includeLowPriorityTermsInKeywordCoverage: boolean;

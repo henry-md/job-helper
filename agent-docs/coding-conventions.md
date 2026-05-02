@@ -60,3 +60,6 @@ Uploads and extraction:
 
 Storage:
 - Screenshots are written to `public/uploads/job-screenshots/<userId>/`. If a task touches storage strategy, gather more context first because this is a local-filesystem assumption.
+
+Comments:
+- Write them! Add single-line comments above large functions, or complex pieces of functionality. Do NOT over-engineer comments with 5 lines of inputs and outputs. Just a singe line explaining what it does: // Does X Y Z. Try to make the codebase approachable to new developers. 

@@ -13,7 +13,7 @@ test("createDefaultTailorResumeGenerationSettings enables page-count protection"
   });
 });
 
-test("mergeTailorResumeGenerationSettings keeps explicit saved overrides", () => {
+test("mergeTailorResumeGenerationSettings keeps visible saved overrides", () => {
   assert.deepEqual(
     mergeTailorResumeGenerationSettings({
       allowTailorResumeFollowUpQuestions: false,

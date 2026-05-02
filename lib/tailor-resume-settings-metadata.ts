@@ -65,7 +65,7 @@ export const tailorResumePromptFieldDefinitions = [
 export const tailorResumeGenerationSettingDefinitions = [
   {
     description:
-      "When enabled, the model may pause after planning to ask one concise question. When disabled, it skips the question step and continues with USER.md plus the saved resume.",
+      "When enabled, tailoring can pause after the plaintext plan to ask concise follow-up questions before writing LaTeX edits.",
     key: "allowTailorResumeFollowUpQuestions",
     title: "Allow Step 2 follow-up questions",
   },
