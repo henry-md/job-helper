@@ -60,6 +60,7 @@ import {
 import {
   resolvePotentialTailorOverwrite,
   resolvePotentialTailorOverwriteFromPersonalInfo,
+  resolveActiveTailoringForPage,
 } from "./tailor-overwrite-guard";
 import { resolveTailoredResumeTabBadge } from "./tailored-resume-tab-badge";
 import {
@@ -114,6 +115,7 @@ const activeTailorResumeAbortControllers = new Map<
 let personalInfoCacheRefreshPromise: Promise<{
   personalInfo: ReturnType<typeof readPersonalInfoPayload>;
 }> | null = null;
+let queuedTailorResumeDrainPromise: Promise<void> | null = null;
 const PERSONAL_INFO_REQUEST_TIMEOUT_MS = 8_000;
 const SYNC_STATE_REQUEST_TIMEOUT_MS = 4_000;
 const TAILORED_RESUME_BADGE_CHECK_DEBOUNCE_MS = 250;
@@ -311,12 +313,12 @@ function buildExistingTailoringMessage(
   if (existingTailoring.kind === "pending_interview") {
     const roleLabel =
       existingTailoring.positionTitle || existingTailoring.companyName || "this role";
-    return `A Tailor Resume run for ${roleLabel} is waiting on stage 2/4. Confirm overwrite in the side panel if you want to replace it.`;
+    return `A Tailor Resume run for ${roleLabel} is waiting on Step 2 questions. Confirm overwrite in the side panel if you want to replace it.`;
   }
 
   const stageLabel = existingTailoring.lastStep
-    ? `stage ${existingTailoring.lastStep.stepNumber}/${existingTailoring.lastStep.stepCount}: ${existingTailoring.lastStep.summary}`
-    : "the first tailoring stage";
+    ? `step ${existingTailoring.lastStep.stepNumber}/${existingTailoring.lastStep.stepCount}: ${existingTailoring.lastStep.summary}`
+    : "the first tailoring step";
 
   return `A Tailor Resume run is already loading at ${stageLabel}. Confirm overwrite in the side panel if you want to replace it.`;
 }
@@ -404,6 +406,17 @@ async function sendEmphasizedTechnologiesBadgeMessage(
 ) {
   try {
     await chrome.tabs.sendMessage(tabId, message);
+    return;
+  } catch {
+    // Some pages do not allow content scripts or have not finished injecting.
+  }
+
+  try {
+    await chrome.scripting.executeScript({
+      files: ["src/content.ts-loader.js"],
+      target: { tabId },
+    });
+    await chrome.tabs.sendMessage(tabId, message);
   } catch {
     // Some pages do not allow content scripts or have not finished injecting.
   }
@@ -431,10 +444,7 @@ async function showStepOneKeywordBadge(input: {
       Boolean(technology.name.trim()),
     ) ?? [];
 
-  if (
-    input.stepEvent.stepNumber !== 1 ||
-    emphasizedTechnologies.length === 0
-  ) {
+  if (emphasizedTechnologies.length === 0) {
     return;
   }
 
@@ -456,6 +466,139 @@ async function showStepOneKeywordBadge(input: {
     },
     type: "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE",
   });
+}
+
+async function showActiveTailoringKeywordBadgeForTab(input: {
+  pageIdentity: Awaited<ReturnType<typeof readTailoredResumeBadgePageIdentity>>;
+  personalInfo: PersonalInfoSummary;
+  tabId: number;
+}) {
+  const activeTailoring = resolveActiveTailoringForPage({
+    activeTailorings: input.personalInfo.activeTailorings,
+    pageIdentity: input.pageIdentity,
+  });
+
+  if (activeTailoring?.kind !== "active_generation") {
+    return;
+  }
+
+  const emphasizedTechnologies =
+    activeTailoring.lastStep?.emphasizedTechnologies?.filter((technology) =>
+      Boolean(technology.name.trim()),
+    ) ?? [];
+
+  if (emphasizedTechnologies.length === 0) {
+    return;
+  }
+
+  await sendEmphasizedTechnologiesBadgeMessage(input.tabId, {
+    payload: {
+      badgeKey: `tailor-run-keywords:${
+        buildTailorRunRegistryKey(activeTailoring.jobUrl) ?? activeTailoring.id
+      }`,
+      displayName: buildStepOneKeywordBadgeDisplayName({
+        companyName: activeTailoring.companyName,
+        positionTitle: activeTailoring.positionTitle,
+      }),
+      emphasizedTechnologies,
+      includeLowPriorityTermsInKeywordCoverage: false,
+      jobUrl: activeTailoring.jobUrl,
+      keywordCoverage: null,
+    },
+    type: "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE",
+  });
+}
+
+async function showActiveTailoringKeywordBadgeForCurrentTab(
+  personalInfo: PersonalInfoSummary,
+) {
+  const activeTab = await getActiveTab().catch(() => null);
+  const tabId = activeTab?.id;
+
+  if (!activeTab || typeof tabId !== "number") {
+    return;
+  }
+
+  const tabUrl = cleanText(activeTab.url) || cleanText(activeTab.pendingUrl);
+
+  if (!isHttpTabUrl(tabUrl) || isJobHelperAppUrl(tabUrl)) {
+    return;
+  }
+
+  const pageIdentity = await readTailoredResumeBadgePageIdentity(activeTab);
+
+  if (
+    isJobHelperAppUrl(pageIdentity.pageUrl) ||
+    isJobHelperAppUrl(pageIdentity.jobUrl) ||
+    isJobHelperAppUrl(pageIdentity.canonicalUrl)
+  ) {
+    return;
+  }
+
+  await showActiveTailoringKeywordBadgeForTab({
+    pageIdentity,
+    personalInfo,
+    tabId,
+  });
+}
+
+async function showActiveTailoringKeywordBadgesForMatchingTabs(
+  personalInfo: PersonalInfoSummary,
+) {
+  const activeTailoringsWithKeywords = personalInfo.activeTailorings.filter(
+    (activeTailoring) =>
+      activeTailoring.kind === "active_generation" &&
+      activeTailoring.lastStep?.emphasizedTechnologies?.some((technology) =>
+        Boolean(technology.name.trim()),
+      ),
+  );
+
+  if (activeTailoringsWithKeywords.length === 0) {
+    return;
+  }
+
+  const tabs = await chrome.tabs.query({
+    url: ["http://*/*", "https://*/*"],
+  });
+
+  await Promise.all(
+    tabs.map(async (tab) => {
+      const tabId = tab.id;
+
+      if (typeof tabId !== "number") {
+        return;
+      }
+
+      const tabUrl = cleanText(tab.url) || cleanText(tab.pendingUrl);
+      const tabComparableUrl = normalizeComparableUrl(tabUrl);
+
+      if (!tabComparableUrl || isJobHelperAppUrl(tabUrl)) {
+        return;
+      }
+
+      const matchingTailoring = activeTailoringsWithKeywords.find(
+        (activeTailoring) =>
+          normalizeComparableUrl(activeTailoring.jobUrl) === tabComparableUrl,
+      );
+
+      if (!matchingTailoring) {
+        return;
+      }
+
+      await showActiveTailoringKeywordBadgeForTab({
+        pageIdentity: {
+          canonicalUrl: tabUrl,
+          jobUrl: tabUrl,
+          pageUrl: tabUrl,
+        },
+        personalInfo: {
+          ...personalInfo,
+          activeTailorings: [matchingTailoring],
+        },
+        tabId,
+      });
+    }),
+  );
 }
 
 function isHttpTabUrl(value: string | null | undefined) {
@@ -570,6 +713,12 @@ async function refreshTailoredResumeBadgeForTab(
   if (latestTailoredResumeBadgeCheckByTabId.get(tabId) !== checkSequence) {
     return;
   }
+
+  await showActiveTailoringKeywordBadgeForTab({
+    pageIdentity,
+    personalInfo,
+    tabId,
+  });
 
   const badge = resolveTailoredResumeTabBadge({
     activeTailorings: personalInfo.activeTailorings,
@@ -1593,7 +1742,7 @@ function hasQueuedTailorResumeChat(personalInfo: PersonalInfoSummary) {
     (activeTailoring) =>
       activeTailoring.kind === "active_generation" &&
       activeTailoring.lastStep?.stepNumber === 2 &&
-      activeTailoring.lastStep.summary === "Chat Queued",
+      activeTailoring.lastStep.summary.trim().toLowerCase() === "chat queued",
   );
 }
 
@@ -1673,11 +1822,60 @@ async function maybeOpenSidePanelForReadyTailorInterview(
   });
 }
 
+async function drainQueuedTailorResumeChat() {
+  if (queuedTailorResumeDrainPromise) {
+    return queuedTailorResumeDrainPromise;
+  }
+
+  queuedTailorResumeDrainPromise = (async () => {
+    const authSession = await ensureJobHelperSession({ interactive: false });
+    const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
+      method: "PATCH",
+      body: JSON.stringify({
+        action: "drainTailorResumeQuestionQueue",
+      }),
+      credentials: "include",
+      headers: {
+        ...authorizationHeaders(authSession),
+        "Content-Type": "application/json",
+      },
+    });
+    const payload = await readJsonResponse(response);
+
+    if (response.status === 401) {
+      await clearStoredAuthSession();
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        readResponseError(payload, "Unable to advance the queued resume chat."),
+      );
+    }
+
+    const activeRefresh = personalInfoCacheRefreshPromise;
+
+    if (activeRefresh) {
+      await activeRefresh.catch(() => undefined);
+    }
+
+    await refreshPersonalInfoCache(authSession);
+  })().finally(() => {
+    queuedTailorResumeDrainPromise = null;
+  });
+
+  return queuedTailorResumeDrainPromise;
+}
+
 async function reconcileTailorInterviewMonitor(personalInfo: PersonalInfoSummary) {
   await maybeOpenSidePanelForReadyTailorInterview(personalInfo);
 
   if (hasQueuedTailorResumeChat(personalInfo)) {
     await scheduleTailorInterviewMonitor();
+    if (!personalInfo.tailoringInterview) {
+      void drainQueuedTailorResumeChat().catch((error) => {
+        console.warn("Could not advance the queued Tailor Resume chat.", error);
+      });
+    }
     return;
   }
 
@@ -1754,6 +1952,26 @@ async function fetchFreshPersonalInfoSummary(session: JobHelperAuthSession) {
     userId: session.user.id,
   });
   await reconcileTailorInterviewMonitor(personalInfo);
+  await showActiveTailoringKeywordBadgeForCurrentTab(personalInfo).catch(
+    (error) => {
+      if (!shouldIgnoreTailoredResumeBadgeCheckError(error)) {
+        console.warn(
+          "Could not replay the Tailor Resume keyword badge for this tab.",
+          error,
+        );
+      }
+    },
+  );
+  await showActiveTailoringKeywordBadgesForMatchingTabs(personalInfo).catch(
+    (error) => {
+      if (!shouldIgnoreTailoredResumeBadgeCheckError(error)) {
+        console.warn(
+          "Could not replay Tailor Resume keyword badges for open job tabs.",
+          error,
+        );
+      }
+    },
+  );
 
   return {
     personalInfo,
@@ -2180,7 +2398,7 @@ async function tailorResumeForTab(input: {
           durationMs: 0,
           retrying: false,
           status: "running",
-          stepCount: 4,
+          stepCount: 5,
           stepNumber: 2,
           summary: "Chat Queued",
         },

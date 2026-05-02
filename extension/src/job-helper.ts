@@ -314,12 +314,19 @@ export type UserMarkdownSummary = {
 export type TailorResumeConversationMessage = {
   id: string;
   role: "assistant" | "user";
+  technologyContexts: TailorResumeTechnologyContext[];
   text: string;
   toolCalls: TailorResumeConversationToolCall[];
 };
 
 export type TailorResumeConversationToolCall = {
   argumentsText: string;
+  name: string;
+};
+
+export type TailorResumeTechnologyContext = {
+  definition: string;
+  examples: [string, string];
   name: string;
 };
 
@@ -334,6 +341,7 @@ export type TailorResumePendingInterviewSummary = {
   companyName: string | null;
   completionRequestedAt: string | null;
   conversation: TailorResumeConversationMessage[];
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
   id: string;
   jobIdentifier: string | null;
   jobUrl: string | null;
@@ -802,9 +810,48 @@ function readTailorResumeConversationMessage(
   return {
     id,
     role,
+    technologyContexts: readTailorResumeTechnologyContexts(
+      value.technologyContexts,
+    ),
     text,
     toolCalls: readTailorResumeConversationToolCalls(value.toolCalls),
   };
+}
+
+function readTailorResumeTechnologyContext(
+  value: unknown,
+): TailorResumeTechnologyContext | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const name = readString(value.name);
+  const definition = readString(value.definition);
+  const examples = Array.isArray(value.examples)
+    ? value.examples.map(readString).filter(Boolean)
+    : [];
+
+  if (!name || !definition || examples.length !== 2) {
+    return null;
+  }
+
+  return {
+    definition,
+    examples: [examples[0]!, examples[1]!],
+    name,
+  };
+}
+
+function readTailorResumeTechnologyContexts(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailorResumeTechnologyContext[];
+  }
+
+  return value
+    .map(readTailorResumeTechnologyContext)
+    .filter((context): context is TailorResumeTechnologyContext =>
+      Boolean(context),
+    );
 }
 
 function readTailorResumeConversationToolCall(
@@ -1322,6 +1369,9 @@ export function readTailorResumePendingInterviewSummary(
     companyName: readNullableString(planningResult.companyName),
     completionRequestedAt: readNullableString(value.completionRequestedAt),
     conversation,
+    emphasizedTechnologies: readTailoredResumeEmphasizedTechnologies(
+      planningResult.emphasizedTechnologies,
+    ),
     id,
     jobIdentifier: readNullableString(planningResult.jobIdentifier),
     jobUrl: readNullableString(value.jobUrl),

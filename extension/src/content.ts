@@ -1047,7 +1047,7 @@ function appendKeywordCoverageDisclosure(
   const tailoredResumeId = cleanText(payload.tailoredResumeId, 160);
 
   if (!buckets || !tailoredResumeId) {
-    return;
+    return false;
   }
 
   const details = document.createElement("details");
@@ -1066,19 +1066,22 @@ function appendKeywordCoverageDisclosure(
   const scopeLabel = formatKeywordCoverageScope(payload);
 
   styleElement(details, {
-    background: "rgba(6, 95, 70, 0.18)",
-    border: "1px solid rgba(52, 211, 153, 0.22)",
-    borderRadius: "13px",
+    background: "transparent",
+    border: "0",
+    borderRadius: "0",
+    boxShadow: "none",
+    boxSizing: "border-box",
     display: "grid",
     gap: "8px",
-    marginTop: "2px",
+    margin: "0",
     overflow: "hidden",
+    padding: "0",
   });
   styleElement(summary, {
     alignItems: "center",
     color: "#d1fae5",
     cursor: "pointer",
-    display: "grid",
+    display: "none",
     gap: "8px",
     gridTemplateColumns: "minmax(0, auto) minmax(0, 1fr) auto",
     listStyle: "none",
@@ -1112,7 +1115,7 @@ function appendKeywordCoverageDisclosure(
   styleElement(panel, {
     display: "grid",
     gap: "9px",
-    padding: "0 10px 10px",
+    padding: "0",
   });
   styleElement(legend, {
     alignItems: "center",
@@ -1187,6 +1190,7 @@ function appendKeywordCoverageDisclosure(
     width: "100%",
   });
 
+  details.open = true;
   summaryTitle.textContent = "See Changes";
   summaryMeta.textContent =
     `${scopeLabel}: ${buckets.summary.originalHitCount}/${buckets.summary.totalTermCount} -> ` +
@@ -1408,6 +1412,7 @@ function appendKeywordCoverageDisclosure(
     window.requestAnimationFrame(reflowPagePromptStack);
   });
   container.append(details);
+  return true;
 }
 
 function showEmphasizedTechnologyBadge(
@@ -1470,9 +1475,10 @@ function showEmphasizedTechnologyBadge(
     rememberDismissedEmphasizedTechnologyBadgeKey(technologyBadgeKey);
     hideEmphasizedTechnologyBadge();
   });
-  appendTechnologyGroup(groups, "High priority", highPriorityTechnologies);
-  appendTechnologyGroup(groups, "Low priority", lowPriorityTechnologies);
-  appendKeywordCoverageDisclosure(groups, payload);
+  if (!appendKeywordCoverageDisclosure(groups, payload)) {
+    appendTechnologyGroup(groups, "High priority", highPriorityTechnologies);
+    appendTechnologyGroup(groups, "Low priority", lowPriorityTechnologies);
+  }
   content.append(eyebrow);
   badge.replaceChildren(content, closeButton, groups);
   attachPagePromptDragHandle(badge, content);

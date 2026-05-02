@@ -87,6 +87,8 @@ import {
   readTailorRunDisplayUrl,
 } from "./tailor-run-identity";
 import {
+  formatTailorRunDurationMs,
+  formatTailorRunElapsedTime,
   formatTailorRunStepTimeDisplay,
   resolveDisplayedTailorRunIdentity,
   resolveReviewableTailoredResumeId,
@@ -202,6 +204,7 @@ type ActiveTailorRunCard = {
   deleteTarget: TailorRunDeleteTarget | null;
   detail: string | null;
   existingTailoringId: string | null;
+  elapsedTimeEndTime: number | null;
   id: string;
   isCurrentPage: boolean;
   message: string | null;
@@ -1396,8 +1399,8 @@ type TailorRunProgressStep = {
 
 const TAILOR_RUN_PROGRESS_STEP_DEFINITIONS = [
   {
-    label: "Plan targeted edits",
-    shortLabel: "Plan",
+    label: "Scrape keywords",
+    shortLabel: "Scrape",
     stepNumber: 1,
   },
   {
@@ -1406,14 +1409,19 @@ const TAILOR_RUN_PROGRESS_STEP_DEFINITIONS = [
     stepNumber: 2,
   },
   {
+    label: "Plan targeted edits",
+    shortLabel: "Plan",
+    stepNumber: 3,
+  },
+  {
     label: "Apply resume changes",
     shortLabel: "Edit",
-    stepNumber: 3,
+    stepNumber: 4,
   },
   {
     label: "Keep the original page count",
     shortLabel: "Fit",
-    stepNumber: 4,
+    stepNumber: 5,
   },
 ] as const;
 
@@ -1434,10 +1442,6 @@ function buildCompletedTailorRunProgressSteps() {
 
 function buildNeedsInputTailorRunProgressSteps() {
   return createTailorRunProgressSteps().map((step) => {
-    if (step.stepNumber === 1) {
-      return { ...step, status: "succeeded" as const };
-    }
-
     if (step.stepNumber === 2) {
       return { ...step, status: "current" as const };
     }
@@ -1501,9 +1505,9 @@ function buildFailedTailorRunProgressSteps(
           durationMs: 0,
           retrying: false,
           status: "failed",
-          stepCount: 4,
+          stepCount: 5,
           stepNumber: 1,
-          summary: "Plan targeted edits",
+          summary: "Scrape keywords",
         },
   );
 }
@@ -1645,6 +1649,49 @@ function buildTailorRunStepTimingDisplayInputs(
   }));
 }
 
+function readLatestTailorRunTimingObservedAtTime(
+  timings: TailorResumeGenerationStepTiming[],
+) {
+  return timings.reduce<number | null>((latestTime, timing) => {
+    const observedAtTime = readActiveTailorRunSortTime(timing.observedAt);
+
+    if (!observedAtTime) {
+      return latestTime;
+    }
+
+    return latestTime === null ? observedAtTime : Math.max(latestTime, observedAtTime);
+  }, null);
+}
+
+function readTailorRunFrozenStepDurationLabel(input: {
+  stepNumber: number;
+  stepTimings: TailorResumeGenerationStepTiming[];
+}) {
+  const matchingTiming = [...input.stepTimings]
+    .reverse()
+    .find((timing) => timing.stepNumber === input.stepNumber);
+
+  if (!matchingTiming) {
+    return null;
+  }
+
+  return formatTailorRunDurationMs(matchingTiming.durationMs);
+}
+
+function readTailorRunElapsedEndTime(input: {
+  isWaiting: boolean;
+  startedAtTime: number;
+  status: TailorResumeRunRecord["status"];
+  stepTimings: TailorResumeGenerationStepTiming[];
+}) {
+  if (input.status === "running" && !input.isWaiting) {
+    return null;
+  }
+
+  return readLatestTailorRunTimingObservedAtTime(input.stepTimings) ??
+    input.startedAtTime;
+}
+
 function readExistingTailoringSortTime(
   existingTailoring: TailorResumeExistingTailoringState,
 ) {
@@ -1659,6 +1706,30 @@ function readExistingTailoringSortTime(
 
 function buildTailorRunDeleteTarget(input: TailorRunDeleteTarget) {
   return input.jobUrl || input.tailoredResumeId || input.tailorRunId ? input : null;
+}
+
+function isQueuedTailorResumeChatStep(
+  step: TailorResumeGenerationStepSummary | null,
+) {
+  return (
+    step?.stepNumber === 2 &&
+    step.summary.trim().toLowerCase() === "chat queued"
+  );
+}
+
+function buildQueuedTailorRunStep(): TailorRunProgressStep {
+  const clarifyStep =
+    TAILOR_RUN_PROGRESS_STEP_DEFINITIONS.find(
+      (step) => step.stepNumber === 2,
+    ) ?? TAILOR_RUN_PROGRESS_STEP_DEFINITIONS[1];
+
+  return {
+    attempt: null,
+    label: "Queued",
+    shortLabel: clarifyStep?.shortLabel ?? "Clarify",
+    status: "current",
+    stepNumber: 2,
+  };
 }
 
 function buildActiveTailorRunCardFromRun(input: {
@@ -1687,6 +1758,9 @@ function buildActiveTailorRunCardFromRun(input: {
 
   const url = input.run.pageUrl ?? input.titleFallback?.url ?? null;
   const startedAtTime = readActiveTailorRunSortTime(input.run.capturedAt);
+  const isQueuedChat = isQueuedTailorResumeChatStep(
+    input.run.generationStep ?? null,
+  );
 
   return {
     applicationId: input.run.applicationId ?? null,
@@ -1696,30 +1770,46 @@ function buildActiveTailorRunCardFromRun(input: {
       tailorRunId: null,
     }),
     detail:
-      input.run.status === "error"
+      isQueuedChat
+        ? null
+        : input.run.status === "error"
         ? input.run.tailoredResumeError?.trim() || input.run.message
         : null,
     existingTailoringId: null,
+    elapsedTimeEndTime: readTailorRunElapsedEndTime({
+      isWaiting: isQueuedChat,
+      startedAtTime,
+      status: input.run.status,
+      stepTimings: input.run.generationStepTimings ?? [],
+    }),
     id: input.id,
     isCurrentPage: input.isCurrentPage ?? false,
-    message: input.run.status === "error" ? "Failed generation" : null,
+    message: isQueuedChat
+      ? "Queued behind the active resume question."
+      : input.run.status === "error"
+        ? "Failed generation"
+        : null,
     pageKey: input.pageKey ?? null,
     sortTime: startedAtTime,
     statusDisplayState:
-      input.run.status === "needs_input"
+      isQueuedChat
+        ? "warning"
+        : input.run.status === "needs_input"
         ? "ready"
         : input.run.status === "error"
           ? "error"
           : "loading",
     startedAtTime,
     suppressedTailoredResumeId: input.run.suppressedTailoredResumeId ?? null,
-    step: readActiveTailorRunStep({
-      captureState: readCaptureStateFromTailoringRun(input.run) ?? "idle",
-      existingTailoring: null,
-      lastTailoringRun: input.run,
-      tailorGenerationStep: input.run.generationStep ?? null,
-      tailorInterview: null,
-    }),
+    step: isQueuedChat
+      ? buildQueuedTailorRunStep()
+      : readActiveTailorRunStep({
+          captureState: readCaptureStateFromTailoringRun(input.run) ?? "idle",
+          existingTailoring: null,
+          lastTailoringRun: input.run,
+          tailorGenerationStep: input.run.generationStep ?? null,
+          tailorInterview: null,
+        }),
     stepTimings: input.run.generationStepTimings ?? [],
     title: buildTailorRunCardTitle({
       companyName: input.run.companyName ?? input.titleFallback?.companyName ?? null,
@@ -1778,11 +1868,23 @@ function buildActiveTailorRunCardFromExistingTailoring(input: {
       tailorRunId: input.existingTailoring.id,
     }),
     existingTailoringId: input.existingTailoring.id,
+    elapsedTimeEndTime: readActiveTailorRunSortTime(
+      input.existingTailoring.updatedAt,
+    ),
     sortTime: startedAtTime,
     statusDisplayState:
       input.statusDisplayState ??
-      (input.existingTailoring.kind === "pending_interview" ? "ready" : "loading"),
+      nextCard.statusDisplayState,
     startedAtTime,
+    step:
+      input.existingTailoring.kind === "pending_interview"
+        ? {
+            ...nextCard.step,
+            label: "Question ready",
+            shortLabel: "Ready",
+            stepNumber: 2,
+          }
+        : nextCard.step,
     suppressedTailoredResumeId: null,
     url,
   };
@@ -1814,6 +1916,7 @@ function buildActiveTailorRunCardFromPreparation(input: {
     }),
     detail: null,
     existingTailoringId: null,
+    elapsedTimeEndTime: null,
     id: input.id,
     isCurrentPage: input.isCurrentPage ?? false,
     message: null,
@@ -2425,6 +2528,20 @@ function resolveTailorInterviewForPage(input: {
   );
 }
 
+function activeTailorRunCardMatchesInterview(input: {
+  card: ActiveTailorRunCard;
+  interview: TailorResumePendingInterviewSummary;
+}) {
+  return (
+    Boolean(
+      input.interview.tailorResumeRunId &&
+        input.card.existingTailoringId === input.interview.tailorResumeRunId,
+    ) ||
+    sameTailoringJobUrl(input.interview.jobUrl, input.card.url) ||
+    sameTailoringJobUrl(input.interview.jobUrl, input.card.pageKey)
+  );
+}
+
 function readChatMessage(value: unknown): ChatMessageRecord | null {
   if (!isRecord(value)) {
     return null;
@@ -2729,19 +2846,77 @@ function ToolCallDetails({ toolCalls }: { toolCalls: ToolCallRecord[] }) {
   );
 }
 
+function TailorInterviewTechnologyContexts({
+  contexts,
+}: {
+  contexts: TailorResumeConversationMessage["technologyContexts"];
+}) {
+  if (contexts.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="interview-technology-contexts">
+      {contexts.map((context) => (
+        <details className="interview-technology-card" key={context.name}>
+          <summary>
+            <span className="interview-technology-name">{context.name}</span>
+            <span className="interview-technology-hint">2 examples</span>
+            <span className="interview-technology-chevron" aria-hidden="true" />
+          </summary>
+          <div className="interview-technology-body">
+            <p>{context.definition}</p>
+            <ul>
+              {context.examples.map((example, index) => (
+                <li key={`${context.name}:${String(index)}`}>{example}</li>
+              ))}
+            </ul>
+          </div>
+        </details>
+      ))}
+    </div>
+  );
+}
+
+function TailorInterviewMessageContent({
+  message,
+}: {
+  message: TailorResumeConversationMessage;
+}) {
+  return (
+    <>
+      <div className="interview-message-body">{message.text}</div>
+      <TailorInterviewTechnologyContexts
+        contexts={message.technologyContexts}
+      />
+      <ToolCallDetails toolCalls={message.toolCalls} />
+    </>
+  );
+}
+
 function ChatMessageMarkdown({
   content,
+  isThinking = false,
   toolCalls,
 }: {
   content: string;
+  isThinking?: boolean;
   toolCalls: ToolCallRecord[];
 }) {
   return (
     <>
       <div className="chat-message-content">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {content || "Thinking..."}
-        </ReactMarkdown>
+        {isThinking ? (
+          <div className="chat-thinking-indicator" aria-label="Job Helper is thinking">
+            <span />
+            <span />
+            <span />
+          </div>
+        ) : (
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {content || "Thinking..."}
+          </ReactMarkdown>
+        )}
       </div>
       <ToolCallDetails toolCalls={toolCalls} />
     </>
@@ -2869,6 +3044,7 @@ function App() {
     useState<TailorResumeGenerationStepSummary | null>(null);
   const [tailorGenerationStepTimings, setTailorGenerationStepTimings] =
     useState<TailorResumeGenerationStepTiming[]>([]);
+  const tailorGenerationStepTimingsRef = useRef<TailorResumeGenerationStepTiming[]>([]);
   const [tailorInterview, setTailorInterview] =
     useState<TailorResumePendingInterviewSummary | null>(null);
   const [isTailorInterviewOpen, setIsTailorInterviewOpen] = useState(false);
@@ -2907,6 +3083,7 @@ function App() {
   const tailorInterviewMessagesEndRef = useRef<HTMLDivElement | null>(null);
   const tailorInterviewCardRef = useRef<HTMLElement | null>(null);
   const tailorInterviewInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const dismissedTailorInterviewPageIdRef = useRef<string | null>(null);
   const chatMessagesEndRef = useRef<HTMLDivElement | null>(null);
   const tailorRunMenuRef = useRef<HTMLDivElement | null>(null);
   const backgroundTailorRunMenuRef = useRef<HTMLDivElement | null>(null);
@@ -3970,10 +4147,10 @@ function App() {
   const matchingTailorInterviewActiveRunCard = tailorInterview
     ? activeTailorRunCards.find(
         (card) =>
-          (tailorInterview.tailorResumeRunId &&
-            card.existingTailoringId === tailorInterview.tailorResumeRunId) ||
-          sameTailoringJobUrl(tailorInterview.jobUrl, card.url) ||
-          sameTailoringJobUrl(tailorInterview.jobUrl, card.pageKey),
+          activeTailorRunCardMatchesInterview({
+            card,
+            interview: tailorInterview,
+          }),
       ) ?? null
     : null;
   const matchingTailorInterviewPageContext =
@@ -4474,6 +4651,7 @@ function App() {
   const isTailorRunShellOverlayActive =
     Boolean(existingTailoringPrompt) || isTailorPreparationPending;
   const shouldRenderLegacyTailorRunShell =
+    !matchingTailorInterviewActiveRunCard &&
     resolveShouldRenderLegacyTailorRunShell({
       hasCurrentPageCompletedTailoring,
       hasCurrentPageExistingTailoringPrompt: Boolean(existingTailoringPrompt),
@@ -4743,6 +4921,7 @@ function App() {
 
   const revealTailorInterview = useCallback(
     (options: { focusComposer?: boolean } = {}) => {
+      dismissedTailorInterviewPageIdRef.current = null;
       setIsTailorInterviewOpen(true);
 
       window.requestAnimationFrame(() => {
@@ -4762,6 +4941,14 @@ function App() {
     },
     [],
   );
+
+  function closeTailorInterviewPage() {
+    if (tailorInterview?.id) {
+      dismissedTailorInterviewPageIdRef.current = tailorInterview.id;
+    }
+
+    setIsTailorInterviewOpen(false);
+  }
 
   function openTailorRunDetailView(
     nextView: TailorRunDetailView,
@@ -5195,13 +5382,16 @@ function App() {
     stepEvent: TailorResumeGenerationStepSummary,
   ) {
     setTailorGenerationStep(stepEvent);
-    setTailorGenerationStepTimings((currentTimings) =>
-      mergeTailorResumeGenerationStepTiming({
+    setTailorGenerationStepTimings((currentTimings) => {
+      const nextTimings = mergeTailorResumeGenerationStepTiming({
         observedAt: new Date().toISOString(),
         step: stepEvent,
         timings: currentTimings,
-      }),
-    );
+      });
+
+      tailorGenerationStepTimingsRef.current = nextTimings;
+      return nextTimings;
+    });
   }
 
   useEffect(() => {
@@ -5526,6 +5716,7 @@ function App() {
     setTailorInterview(currentPagePersonalInfoInterview);
 
     if (!currentPagePersonalInfoInterview) {
+      dismissedTailorInterviewPageIdRef.current = null;
       setDraftTailorInterviewAnswer("");
       setPendingTailorInterviewAnswerMessage(null);
       setIsTailorInterviewFinishPromptOpen(false);
@@ -5533,7 +5724,13 @@ function App() {
       setTailorInterviewError(null);
     } else {
       setActivePanelTab("tailor");
-      setIsTailorInterviewOpen(true);
+
+      if (
+        dismissedTailorInterviewPageIdRef.current !==
+        currentPagePersonalInfoInterview.id
+      ) {
+        setIsTailorInterviewOpen(true);
+      }
     }
   }, [
     currentPagePersonalInfoInterview,
@@ -5994,6 +6191,8 @@ function App() {
         currentPageStoredTailoringRun?.generationStep,
       ) ?? null,
     );
+    tailorGenerationStepTimingsRef.current =
+      currentPageStoredTailoringRun?.generationStepTimings ?? [];
     setTailorGenerationStepTimings(
       currentPageStoredTailoringRun?.generationStepTimings ?? [],
     );
@@ -6538,6 +6737,7 @@ function App() {
     const optimisticAnswerMessage: TailorResumeConversationMessage = {
       id: `pending-tailor-interview-answer-${Date.now()}`,
       role: "user",
+      technologyContexts: [],
       text: trimmedAnswer,
       toolCalls: [],
     };
@@ -6548,6 +6748,7 @@ function App() {
     dismissTailorInterviewFinishPrompt();
     setTailorInterviewError(null);
     setTailorGenerationStep(null);
+    tailorGenerationStepTimingsRef.current = [];
     setTailorGenerationStepTimings([]);
     setCaptureState("finishing");
     const requestController = beginTailorRequest();
@@ -6588,6 +6789,7 @@ function App() {
       if (profileSummary.tailoringInterview) {
         const record = buildTailoringRunRecord({
           companyName: profileSummary.tailoringInterview.companyName,
+          generationStepTimings: tailorGenerationStepTimingsRef.current,
           message: "One more resume question is waiting in the sidebar.",
           pageContext,
           positionTitle: profileSummary.tailoringInterview.positionTitle,
@@ -6596,6 +6798,7 @@ function App() {
 
         await persistTailoringRun(record);
         setTailorGenerationStep(null);
+        tailorGenerationStepTimingsRef.current = [];
         setTailorGenerationStepTimings([]);
         setCaptureState("needs_input");
         return;
@@ -8183,10 +8386,30 @@ function App() {
       attempt: card.step.attempt,
       status: card.step.status,
     });
-    const stepLabel = formatTailorResumeProgressStepLabel({
-      label: card.step.label,
-      status: card.step.status,
-    });
+    const stepLabel =
+      card.step.label === "Queued" || card.step.label === "Question ready"
+        ? card.step.label
+        : formatTailorResumeProgressStepLabel({
+            label: card.step.label,
+            status: card.step.status,
+          });
+    const canOpenInterviewChat = Boolean(
+      tailorInterview &&
+        activeTailorRunCardMatchesInterview({
+          card,
+          interview: tailorInterview,
+        }),
+    );
+    const waitingReachedAtTime =
+      canOpenInterviewChat && tailorInterview
+        ? readActiveTailorRunSortTime(tailorInterview.updatedAt)
+        : card.elapsedTimeEndTime;
+    const frozenWaitingStepDurationLabel = canOpenInterviewChat
+      ? readTailorRunFrozenStepDurationLabel({
+          stepNumber: 2,
+          stepTimings: card.stepTimings,
+        })
+      : null;
     const elapsedTimeLabel =
       card.statusDisplayState === "loading"
         ? formatTailorRunStepTimeDisplay({
@@ -8196,15 +8419,39 @@ function App() {
             runStartedAtTime: card.startedAtTime,
             timings: buildTailorRunStepTimingDisplayInputs(card.stepTimings),
           })
-        : null;
+        : card.statusDisplayState === "ready" ||
+            card.statusDisplayState === "warning"
+          ? canOpenInterviewChat
+            ? frozenWaitingStepDurationLabel
+            : formatTailorRunElapsedTime({
+                nowTime: waitingReachedAtTime ?? card.startedAtTime,
+                startedAtTime: card.startedAtTime,
+              })
+          : null;
+    const elapsedTimeAriaLabel =
+      card.statusDisplayState === "loading"
+        ? tailorRunTimeDisplayMode === "specific"
+          ? `Step timings ${elapsedTimeLabel}`
+          : `Loading for ${elapsedTimeLabel}`
+        : `Waited after ${elapsedTimeLabel}`;
+    const elapsedTimeTitle =
+      card.statusDisplayState === "loading"
+        ? tailorRunTimeDisplayMode === "specific"
+          ? `Step timings: ${elapsedTimeLabel}`
+          : `Loading for ${elapsedTimeLabel}`
+        : `Reached this waiting state after ${elapsedTimeLabel}`;
     const canStopCard = card.statusDisplayState !== "error";
+    const shouldShowCardProgressCopy =
+      card.statusDisplayState === "error" && Boolean(card.message || card.detail);
 
     return (
       <section
         aria-label={card.title}
         className={`snapshot-card tailor-run-shell tailor-run-shell-${card.statusDisplayState} ${
           isCurrentCard ? "tailor-run-shell-current-page" : ""
-        } ${isMenuOpen ? "tailor-run-shell-menu-open" : ""}`.trim()}
+        } ${canOpenInterviewChat ? "tailor-run-shell-chat-ready" : ""} ${
+          isMenuOpen ? "tailor-run-shell-menu-open" : ""
+        }`.trim()}
         key={card.id}
       >
         <div className="tailor-run-shell-body">
@@ -8326,52 +8573,70 @@ function App() {
             </div>
           </div>
 
-          <div className="tailor-progress-focus">
-            <div
-              aria-current={
-                card.step.status === "current" || card.step.status === "retrying"
-                  ? "step"
-                  : undefined
-              }
-              className={`tailor-progress-step tailor-progress-step-${card.step.status} tailor-progress-step-focus ${
-                elapsedTimeLabel ? "tailor-progress-step-with-elapsed" : ""
-              }`.trim()}
-              title={`Step ${card.step.stepNumber}: ${card.step.label} (${formatTailorResumeProgressStatusLabel({
-                attempt: card.step.attempt,
-                status: card.step.status,
-              })})`}
+          {canOpenInterviewChat ? (
+            <button
+              className="tailor-run-answer-block"
+              disabled={isTailorInterviewBusy}
+              type="button"
+              onClick={() => revealTailorInterview({ focusComposer: true })}
             >
-              <span className="tailor-progress-step-topline">
-                <span className="tailor-progress-step-number">
-                  Step {card.step.stepNumber}
-                </span>
-                {attemptBadgeLabel ? (
-                  <span className="tailor-progress-step-attempt-badge">
-                    {attemptBadgeLabel}
-                  </span>
-                ) : null}
+              <span className="tailor-run-answer-block-copy">
+                <span className="tailor-run-answer-block-kicker">Step 2</span>
+                <span className="tailor-run-answer-block-label">Answer</span>
               </span>
-              <span className="tailor-progress-step-label">{stepLabel}</span>
               {elapsedTimeLabel ? (
                 <span
-                  aria-label={
-                    tailorRunTimeDisplayMode === "specific"
-                      ? `Step timings ${elapsedTimeLabel}`
-                      : `Loading for ${elapsedTimeLabel}`
-                  }
-                  className="tailor-progress-step-elapsed"
-                  title={
-                    tailorRunTimeDisplayMode === "specific"
-                      ? `Step timings: ${elapsedTimeLabel}`
-                      : `Loading for ${elapsedTimeLabel}`
-                  }
+                  aria-label={elapsedTimeAriaLabel}
+                  className="tailor-run-answer-block-elapsed"
+                  title={elapsedTimeTitle}
                 >
                   {elapsedTimeLabel}
                 </span>
               ) : null}
+              <span className="tailor-run-answer-block-icon">
+                <ChatBubbleIcon />
+              </span>
+            </button>
+          ) : (
+            <div className="tailor-progress-focus">
+              <div
+                aria-current={
+                  card.step.status === "current" || card.step.status === "retrying"
+                    ? "step"
+                    : undefined
+                }
+                className={`tailor-progress-step tailor-progress-step-${card.step.status} tailor-progress-step-focus ${
+                  elapsedTimeLabel ? "tailor-progress-step-with-elapsed" : ""
+                }`.trim()}
+                title={`Step ${card.step.stepNumber}: ${card.step.label} (${formatTailorResumeProgressStatusLabel({
+                  attempt: card.step.attempt,
+                  status: card.step.status,
+                })})`}
+              >
+                <span className="tailor-progress-step-topline">
+                  <span className="tailor-progress-step-number">
+                    Step {card.step.stepNumber}
+                  </span>
+                  {attemptBadgeLabel ? (
+                    <span className="tailor-progress-step-attempt-badge">
+                      {attemptBadgeLabel}
+                    </span>
+                  ) : null}
+                </span>
+                <span className="tailor-progress-step-label">{stepLabel}</span>
+                {elapsedTimeLabel ? (
+                  <span
+                    aria-label={elapsedTimeAriaLabel}
+                    className="tailor-progress-step-elapsed"
+                    title={elapsedTimeTitle}
+                  >
+                    {elapsedTimeLabel}
+                  </span>
+                ) : null}
+              </div>
             </div>
-          </div>
-          {card.message || card.detail ? (
+          )}
+          {shouldShowCardProgressCopy ? (
             <div className="tailor-progress-copy">
               {card.message ? (
                 <p className="tailor-progress-message">{card.message}</p>
@@ -10446,7 +10711,18 @@ function App() {
       <main className="side-panel-shell side-panel-shell-interview">
         <section className="tailor-interview-page" ref={tailorInterviewCardRef}>
           <header className="tailor-interview-page-header">
-            <p className="eyebrow">Resume questions</p>
+            <div className="tailor-interview-page-kicker">
+              <button
+                aria-label="Back to Tailor Resume"
+                className="secondary-action compact-action tailor-interview-back-action"
+                title="Back to Tailor Resume"
+                type="button"
+                onClick={closeTailorInterviewPage}
+              >
+                <ArrowLeftIcon />
+              </button>
+              <p className="eyebrow">Resume questions</p>
+            </div>
             <h1 title={tailorInterviewHeading}>{tailorInterviewHeading}</h1>
             {tailorInterview.questioningSummary?.agenda ? (
               <p className="interview-agenda">
@@ -10461,8 +10737,7 @@ function App() {
                 className={`interview-message interview-message-${message.role}`}
                 key={message.id}
               >
-                <div>{message.text}</div>
-                <ToolCallDetails toolCalls={message.toolCalls} />
+                <TailorInterviewMessageContent message={message} />
               </div>
             ))}
             <div ref={tailorInterviewMessagesEndRef} />
@@ -10756,8 +11031,7 @@ function App() {
                     className={`interview-message interview-message-${message.role}`}
                     key={message.id}
                   >
-                    <div>{message.text}</div>
-                    <ToolCallDetails toolCalls={message.toolCalls} />
+                    <TailorInterviewMessageContent message={message} />
                   </div>
                 ))}
                 <div ref={tailorInterviewMessagesEndRef} />
@@ -11050,7 +11324,7 @@ function App() {
                     matches, or what the posting really requires.
                   </p>
                 ) : (
-                  chatMessages.map((message) => (
+                  chatMessages.map((message, index) => (
                     <article
                       key={message.id}
                       className={`chat-message chat-message-${message.role}`}
@@ -11060,6 +11334,12 @@ function App() {
                       </div>
                       <ChatMessageMarkdown
                         content={message.content}
+                        isThinking={
+                          chatSendStatus === "streaming" &&
+                          message.role === "assistant" &&
+                          message.content.length === 0 &&
+                          index === chatMessages.length - 1
+                        }
                         toolCalls={message.toolCalls}
                       />
                     </article>

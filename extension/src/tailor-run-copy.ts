@@ -4,7 +4,7 @@ const pageCountComparisonWarning =
   "Unable to compare the tailored resume page count.";
 
 function normalizeTailoringWarning(value: string) {
-  return value.replace(/^Step 4:\s*/i, "").trim();
+  return value.replace(/^Step 5:\s*/i, "").trim();
 }
 
 function buildTailoringWarningMessage(input: {
@@ -18,11 +18,11 @@ function buildTailoringWarningMessage(input: {
   }
 
   if (normalizedError === sameLineCountWarning) {
-    return `Saved a tailored draft for ${input.jobLabel}, but Step 4 couldn't reduce the page size.`;
+    return `Saved a tailored draft for ${input.jobLabel}, but Step 5 couldn't reduce the page size.`;
   }
 
   if (normalizedError === pageCountComparisonWarning) {
-    return `Saved a tailored draft for ${input.jobLabel}, but Step 4 couldn't compare the page size.`;
+    return `Saved a tailored draft for ${input.jobLabel}, but Step 5 couldn't compare the page size.`;
   }
 
   return `Saved a tailored draft for ${input.jobLabel}, but it still needs review: ${normalizedError}`;

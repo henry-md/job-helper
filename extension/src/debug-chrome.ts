@@ -105,10 +105,10 @@ const mockPageContext: JobPageContext = {
 
 function createMockTailoringRun(
   status: TailorResumeRunRecord["status"],
-  variant: "default" | "step4-error" | "step4-running" = "default",
+  variant: "default" | "step5-error" | "step5-running" = "default",
 ) {
-  const isStep4Error = variant === "step4-error";
-  const isStep4Retry = isStep4Error || variant === "step4-running";
+  const isStep5Error = variant === "step5-error";
+  const isStep5Retry = isStep5Error || variant === "step5-running";
   const nowTime = Date.now();
   const step1DurationMs = 44_000;
   const step2DurationMs = 72_000;
@@ -116,7 +116,7 @@ function createMockTailoringRun(
   const step4DurationMs = 17_000;
   const runningStartedAtTime = nowTime - step4DurationMs;
   const capturedAtTime =
-    status === "running" && isStep4Retry
+    status === "running" && isStep5Retry
       ? nowTime -
         step1DurationMs -
         step2DurationMs -
@@ -132,36 +132,36 @@ function createMockTailoringRun(
     message:
       status === "success"
         ? "Tailored resume saved to Job Helper."
-        : isStep4Retry
-            ? "Stage 4/4: Keeping the tailored resume within the original page count - Retrying (attempt 2)"
+        : isStep5Retry
+            ? "Step 5/5: Keeping the tailored resume within the original page count - Retrying (attempt 2)"
         : status === "running"
           ? "Tailoring your resume for this job..."
           : "Tailor Resume failed while generating the PDF.",
-    generationStep: isStep4Retry
+    generationStep: isStep5Retry
       ? {
           attempt: 2,
           detail:
-            "The model did not submit verified compaction candidates after 4 Step 4 tool rounds.",
-          durationMs: isStep4Error ? step4DurationMs : 0,
+            "The model did not submit verified compaction candidates after 4 Step 5 tool rounds.",
+          durationMs: isStep5Error ? step4DurationMs : 0,
           retrying: true,
           status: "running",
-          stepCount: 4,
-          stepNumber: 4,
+          stepCount: 5,
+          stepNumber: 5,
           summary: "Keeping the tailored resume within the original page count",
         }
       : null,
-    generationStepTimings: isStep4Retry
+    generationStepTimings: isStep5Retry
       ? [
           {
             attempt: 1,
-            detail: "Finished planning targeted edits.",
+            detail: "Prepared job keywords for clarification and planning.",
             durationMs: step1DurationMs,
             observedAt: new Date(capturedAtTime + step1DurationMs).toISOString(),
             retrying: false,
             status: "succeeded",
-            stepCount: 4,
+            stepCount: 5,
             stepNumber: 1,
-            summary: "Generating plaintext edit outline",
+            summary: "Scrape keywords",
           },
           {
             attempt: 1,
@@ -172,13 +172,13 @@ function createMockTailoringRun(
             ).toISOString(),
             retrying: false,
             status: "succeeded",
-            stepCount: 4,
+            stepCount: 5,
             stepNumber: 2,
-            summary: "No need to ask the user any follow-up questions",
+            summary: "Clarify missing details",
           },
           {
             attempt: 1,
-            detail: "Generated block-scoped edits.",
+            detail: "Finished planning targeted edits.",
             durationMs: step3DurationMs,
             observedAt: new Date(
               capturedAtTime +
@@ -188,20 +188,37 @@ function createMockTailoringRun(
             ).toISOString(),
             retrying: false,
             status: "succeeded",
-            stepCount: 4,
+            stepCount: 5,
             stepNumber: 3,
-            summary: "Generating block-scoped edits",
+            summary: "Plan targeted edits",
+          },
+          {
+            attempt: 1,
+            detail: "Generated block-scoped edits.",
+            durationMs: step4DurationMs,
+            observedAt: new Date(
+              capturedAtTime +
+                step1DurationMs +
+                step2DurationMs +
+                step3DurationMs +
+                step4DurationMs,
+            ).toISOString(),
+            retrying: false,
+            status: "succeeded",
+            stepCount: 5,
+            stepNumber: 4,
+            summary: "Apply resume changes",
           },
           {
             attempt: 2,
             detail:
-              "The model did not submit verified compaction candidates after 4 Step 4 tool rounds.",
-            durationMs: isStep4Error ? step4DurationMs : 0,
+              "The model did not submit verified compaction candidates after 4 Step 5 tool rounds.",
+            durationMs: isStep5Error ? step4DurationMs : 0,
             observedAt: new Date(runningStartedAtTime).toISOString(),
             retrying: true,
             status: "running",
-            stepCount: 4,
-            stepNumber: 4,
+            stepCount: 5,
+            stepNumber: 5,
             summary: "Keeping the tailored resume within the original page count",
           },
         ]
@@ -214,8 +231,8 @@ function createMockTailoringRun(
 	    suppressedTailoredResumeId: null,
 	    tailoredResumeError:
       status === "error"
-        ? isStep4Error
-          ? "The model did not submit verified compaction candidates after 4 Step 4 tool rounds."
+        ? isStep5Error
+          ? "The model did not submit verified compaction candidates after 4 Step 5 tool rounds."
           : "Debug failure state for visual testing."
         : null,
     tailoredResumeId: status === "success" ? "debug-tailored-resume" : null,
@@ -253,12 +270,12 @@ function readInitialTailoringRun(searchParams: URLSearchParams) {
     return createMockTailoringRun(runState);
   }
 
-  if (runState === "step4-running") {
-    return createMockTailoringRun("running", "step4-running");
+  if (runState === "step4-running" || runState === "step5-running") {
+    return createMockTailoringRun("running", "step5-running");
   }
 
-  if (runState === "step4-error") {
-    return createMockTailoringRun("error", "step4-error");
+  if (runState === "step4-error" || runState === "step5-error") {
+    return createMockTailoringRun("error", "step5-error");
   }
 
   return null;
@@ -562,7 +579,7 @@ export function installDebugChromeRuntime() {
         }
 
         if (type === "JOB_HELPER_REGENERATE_TAILORING") {
-          mockTailoringRun = createMockTailoringRun("running", "step4-running");
+          mockTailoringRun = createMockTailoringRun("running", "step5-running");
           void storageArea.set({
             [TAILORING_RUNS_STORAGE_KEY]: {
               [normalizeComparableUrl(mockPageContext.url) ?? mockPageContext.url]:

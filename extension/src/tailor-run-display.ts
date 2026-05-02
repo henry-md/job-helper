@@ -77,7 +77,7 @@ function readNonNegativeDurationMs(value: number | null | undefined) {
     : 0;
 }
 
-function formatTailorRunDurationMs(durationMs: number) {
+export function formatTailorRunDurationMs(durationMs: number) {
   const totalSeconds = Math.floor(Math.max(0, durationMs) / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
