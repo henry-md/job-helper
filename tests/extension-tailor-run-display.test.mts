@@ -87,7 +87,7 @@ test("formats specific tailor run timing as one value per completed and running 
 
   assert.equal(
     formatTailorRunStepTimeDisplay({
-      activeStepNumber: 4,
+      activeStepNumber: 5,
       mode: "specific",
       nowTime: step4ObservedAtTime + 17_000,
       runStartedAtTime,
@@ -118,7 +118,7 @@ test("formats specific tailor run timing as one value per completed and running 
           observedAtTime: step4ObservedAtTime,
           retrying: false,
           status: "running",
-          stepNumber: 4,
+          stepNumber: 5,
         },
       ],
     }),

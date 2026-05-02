@@ -61,7 +61,7 @@ test("readTailorResumeGenerationStream parses step events and final payload", as
     [
       JSON.stringify({
         stepEvent: {
-          summary: "Plan targeted edits",
+          summary: "Clarify missing details",
         },
         type: "generation-step",
       }),
@@ -92,7 +92,7 @@ test("readTailorResumeGenerationStream parses step events and final payload", as
         : null,
   });
 
-  assert.deepEqual(stepEvents, [{ summary: "Plan targeted edits" }]);
+  assert.deepEqual(stepEvents, [{ summary: "Clarify missing details" }]);
   assert.deepEqual(result, {
     ok: true,
     payload: {

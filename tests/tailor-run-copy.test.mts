@@ -11,14 +11,14 @@ test("buildCompletedTailoringMessage keeps successful completions concise", () =
   );
 });
 
-test("buildCompletedTailoringMessage humanizes the same-line-count step 4 warning", () => {
+test("buildCompletedTailoringMessage humanizes the same-line-count step 5 warning", () => {
   assert.equal(
     buildCompletedTailoringMessage({
       jobLabel: "Software Engineer at Microsoft",
       tailoredResumeError:
-        "Step 4: No proposed compaction candidate reduced its block's measured rendered line count.",
+        "Step 5: No proposed compaction candidate reduced its block's measured rendered line count.",
     }),
-    "Saved a tailored draft for Software Engineer at Microsoft, but Step 4 couldn't reduce the page size.",
+    "Saved a tailored draft for Software Engineer at Microsoft, but Step 5 couldn't reduce the page size.",
   );
 });
 
@@ -26,7 +26,7 @@ test("buildCompletedTailoringMessage falls back to the raw warning when needed",
   assert.equal(
     buildCompletedTailoringMessage({
       jobLabel: "Software Engineer at Microsoft",
-      tailoredResumeError: "Step 4: Another warning.",
+      tailoredResumeError: "Step 5: Another warning.",
     }),
     "Saved a tailored draft for Software Engineer at Microsoft, but it still needs review: Another warning.",
   );
