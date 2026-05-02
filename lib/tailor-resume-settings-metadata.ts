@@ -17,7 +17,7 @@ export const tailorResumePromptFieldDefinitions = [
     title: "Resume To LaTeX",
   },
   {
-    description: "Stage 1 tailoring strategy over plaintext resume blocks.",
+    description: "Step 3 tailoring strategy over plaintext resume blocks.",
     helper: "Runtime tokens: {{FEEDBACK_BLOCK}}.",
     key: "tailorResumePlanning",
     minHeightClassName: "min-h-[420px]",
@@ -25,14 +25,14 @@ export const tailorResumePromptFieldDefinitions = [
   },
   {
     description:
-      "Optional AI-led follow-up questions between the plan and LaTeX implementation stages.",
+      "Optional Step 2 AI-led follow-up questions before tailoring planning.",
     helper: "Runtime tokens: {{FEEDBACK_BLOCK}}.",
     key: "tailorResumeInterview",
     minHeightClassName: "min-h-[320px]",
     title: "Tailoring Follow-Up Interview",
   },
   {
-    description: "Stage 2 LaTeX block generation for the tailored resume.",
+    description: "Step 4 LaTeX block generation for the tailored resume.",
     helper: "Runtime tokens: {{FEEDBACK_BLOCK}}.",
     key: "tailorResumeImplementation",
     minHeightClassName: "min-h-[420px]",
@@ -65,7 +65,7 @@ export const tailorResumePromptFieldDefinitions = [
 export const tailorResumeGenerationSettingDefinitions = [
   {
     description:
-      "When enabled, tailoring can pause after the plaintext plan to ask concise follow-up questions before writing LaTeX edits.",
+      "When enabled, tailoring can ask concise follow-up questions before planning and writing LaTeX edits.",
     key: "allowTailorResumeFollowUpQuestions",
     title: "Allow Step 2 follow-up questions",
   },
