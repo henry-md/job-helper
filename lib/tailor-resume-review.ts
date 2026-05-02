@@ -421,7 +421,7 @@ export function buildTailoredResumeBlockEdits(input: {
         command: block.command,
         customLatexCode: null,
         editId: `${block.id}:model`,
-        generatedByStep: change.generatedByStep ?? 3,
+        generatedByStep: change.generatedByStep ?? 4,
         reason: normalizeTailoredResumeEditReason(change.reason),
         state: "applied",
         segmentId: block.id,

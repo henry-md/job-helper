@@ -87,6 +87,8 @@ import {
 } from "@/lib/tailor-resume-existing-tailoring-state";
 import { countPdfPages } from "@/lib/tailor-resume-layout-measurement";
 import {
+  buildPrePlanningTailoredResumePlanningResult,
+  extractTailorResumeEmphasizedTechnologiesForQuestioning,
   implementTailoredResumePlan,
   planTailoredResume,
 } from "@/lib/tailor-resume-tailoring";
@@ -107,6 +109,7 @@ import {
   type TailorResumeGenerationStepEvent,
   type TailorResumePendingInterview,
   type TailorResumeLockedLinkRecord,
+  type TailorResumeTechnologyContext,
   type TailoredResumePlanningResult as TailorResumePlanningResult,
   type TailoredResumeBlockEditRecord,
   type TailorResumeProfile,
@@ -582,12 +585,14 @@ function buildPageCountLimitLabel(pageCount: number) {
 
 function buildTailorResumeConversationMessage(input: {
   role: "assistant" | "user";
+  technologyContexts?: TailorResumeTechnologyContext[];
   text: string;
   toolCalls?: TailorResumeConversationToolCall[];
 }) {
   return {
     id: randomUUID(),
     role: input.role,
+    technologyContexts: input.technologyContexts ?? [],
     text: input.text.trim(),
     toolCalls: input.toolCalls ?? [],
   };
@@ -634,6 +639,7 @@ type TailorResumeGenerationPreparation =
     }
   | {
       applicationId: string | null;
+      companyName: string | null;
       kind: "ready";
       jobDescription: string;
       jobUrl: string | null;
@@ -703,18 +709,17 @@ async function completeTailorResumeInterviewAndFinalize(input: {
         detail:
           "Collected enough user context, and the user confirmed that we should wrap up the follow-up chat.",
         durationMs: 0,
+        emphasizedTechnologies:
+          input.tailoringInterview.planningResult.emphasizedTechnologies,
         retrying: false,
         status: "succeeded",
-        stepCount: 4,
+        stepCount: 5,
         stepNumber: 2,
         summary: "Finishing the follow-up questions",
       },
     );
   }
 
-  const planningSnapshot = buildTailorResumePlanningSnapshot(
-    input.tailoringInterview.sourceAnnotatedLatexCode,
-  );
   const normalizedBaseLatex = normalizeAnnotatedLatexState(
     input.rawProfile.latex.code,
     new Date().toISOString(),
@@ -730,9 +735,38 @@ async function completeTailorResumeInterviewAndFinalize(input: {
   const generationSourceAnnotatedLatex = normalizeTailorResumeLatex(
     processedBaseAnnotatedLatex.latexCode,
   ).annotatedLatex;
+  const planningStage = await planTailoredResume({
+    annotatedLatexCode: input.tailoringInterview.sourceAnnotatedLatexCode,
+    employerName: input.tailoringInterview.planningResult.companyName || null,
+    jobDescription: input.tailoringInterview.jobDescription,
+    onStepEvent: input.onStepEvent,
+    precomputedEmphasizedTechnologies:
+      input.tailoringInterview.planningResult.emphasizedTechnologies,
+    promptSettings: input.rawProfile.promptSettings.values,
+    questioningSummary: input.tailoringInterview.planningResult.questioningSummary,
+    userMarkdown: input.userMarkdown,
+  });
+
+  if (!planningStage.ok) {
+    throw new Error(
+      buildTailorResumeAttemptFailureMessage({
+        attempts: planningStage.attempts,
+        stepNumber: 3,
+        validationError: planningStage.validationError,
+      }),
+    );
+  }
+
+  const planningResult: TailorResumePlanningResult = {
+    ...planningStage.planningResult,
+    questioningSummary:
+      input.tailoringInterview.planningResult.questioningSummary,
+  };
   const tailoringResult = await implementTailoredResumePlan({
     annotatedLatexCode: input.tailoringInterview.sourceAnnotatedLatexCode,
-    generationDurationMsBase: input.tailoringInterview.accumulatedModelDurationMs,
+    generationDurationMsBase:
+      input.tailoringInterview.accumulatedModelDurationMs +
+      planningStage.generationDurationMs,
     jobDescription: input.tailoringInterview.jobDescription,
     linkOverrides: buildKnownTailorResumeLinks(
       input.rawProfile.links,
@@ -755,9 +789,9 @@ async function completeTailorResumeInterviewAndFinalize(input: {
         attempt,
       }),
     onStepEvent: input.onStepEvent,
-    planningDebug: input.tailoringInterview.planningDebug,
-    planningResult: input.tailoringInterview.planningResult,
-    planningSnapshot,
+    planningDebug: planningStage.planningDebug,
+    planningResult,
+    planningSnapshot: planningStage.planningSnapshot,
     promptSettings: input.rawProfile.promptSettings.values,
     userMarkdown: input.userMarkdown,
   });
@@ -795,15 +829,18 @@ function readTailorResumeInterviewSortTime(interview: TailorResumePendingIntervi
 
 function buildTailorResumeChatQueuedStepEvent(
   detail =
-    "Another resume follow-up chat is active, so this run is queued until USER.md is updated and its Step 2 decision can be re-evaluated.",
+    "Another resume follow-up chat is active, so this run is queued until USER.md is updated and its Step 2 question decision can be re-evaluated.",
+  emphasizedTechnologies?: TailorResumePlanningResult["emphasizedTechnologies"],
+  durationMs = 0,
 ): TailorResumeGenerationStepEvent {
   return {
     attempt: null,
     detail,
-    durationMs: 0,
+    durationMs,
+    ...(emphasizedTechnologies ? { emphasizedTechnologies } : {}),
     retrying: false,
     status: "running",
-    stepCount: 4,
+    stepCount: 5,
     stepNumber: 2,
     summary: "Chat Queued",
   };
@@ -881,8 +918,7 @@ async function reserveTailorResumeQuestionDecision(input: {
     const questionDecisionIsBusy = currentInterviews.some(
       (interview) =>
         isTailorResumeInterviewReady(interview) ||
-        isTailorResumeInterviewDecisionInFlight(interview) ||
-        isTailorResumeInterviewQueued(interview),
+        isTailorResumeInterviewDecisionInFlight(interview),
     );
     const pendingInterview = buildTailorResumeQueuedInterview({
       accumulatedModelDurationMs: input.accumulatedModelDurationMs,
@@ -935,6 +971,7 @@ async function promoteReadyTailorResumeInterview(input: {
     conversation: [
       buildTailorResumeConversationMessage({
         role: "assistant",
+        technologyContexts: input.questioningResult.technologyContexts,
         text: input.assistantMessage,
         toolCalls: input.questioningResult.toolCalls,
       }),
@@ -1006,72 +1043,83 @@ async function claimNextQueuedTailorResumeQuestionDecision(userId: string) {
       return null;
     }
 
-    const queuedInterview =
-      currentInterviews
-        .filter((interview) => isTailorResumeInterviewQueued(interview))
-        .sort(
-          (left, right) =>
-            readTailorResumeInterviewSortTime(left) -
-            readTailorResumeInterviewSortTime(right),
-        )[0] ?? null;
+    const queuedInterviews = currentInterviews
+      .filter((interview) => isTailorResumeInterviewQueued(interview))
+      .sort(
+        (left, right) =>
+          readTailorResumeInterviewSortTime(left) -
+          readTailorResumeInterviewSortTime(right),
+      );
 
-    if (!queuedInterview) {
+    if (queuedInterviews.length === 0) {
       return null;
     }
 
-    const runStillActive = await isTailorResumeRunStillActive({
-      runId: queuedInterview.tailorResumeRunId,
-      userId,
-    });
+    const staleQueuedInterviewIds = new Set<string>();
 
-    if (
-      !runStillActive ||
-      hasTailorResumeGenerationSourceChanged({
-        currentLockedLinks: latestState.lockedLinks,
-        currentRawProfile: latestState.rawProfile,
-        snapshot: queuedInterview.generationSourceSnapshot,
-      })
-    ) {
+    for (const queuedInterview of queuedInterviews) {
+      const runStillActive = await isTailorResumeRunStillActive({
+        runId: queuedInterview.tailorResumeRunId,
+        userId,
+      });
+
+      if (
+        !runStillActive ||
+        hasTailorResumeGenerationSourceChanged({
+          currentLockedLinks: latestState.lockedLinks,
+          currentRawProfile: latestState.rawProfile,
+          snapshot: queuedInterview.generationSourceSnapshot,
+        })
+      ) {
+        staleQueuedInterviewIds.add(queuedInterview.id);
+        await updateTailorResumeRunStatus({
+          error:
+            "The base resume changed, or this queued tailoring run was canceled before its follow-up questions could be prepared.",
+          runId: queuedInterview.tailorResumeRunId,
+          status: "FAILED",
+          userId,
+        });
+        continue;
+      }
+
+      const decidingInterview: TailorResumePendingInterview = {
+        ...queuedInterview,
+        status: "deciding",
+        updatedAt: new Date().toISOString(),
+      };
+      const nextInterviews = currentInterviews
+        .filter((interview) => !staleQueuedInterviewIds.has(interview.id))
+        .map((interview) =>
+          interview.id === decidingInterview.id ? decidingInterview : interview,
+        );
       const nextRawProfile: TailorResumeProfile = {
         ...latestState.rawProfile,
-        workspace: removeTailorResumeWorkspaceInterview(
+        workspace: withTailorResumeWorkspaceInterviews(
           latestState.rawProfile.workspace,
-          (interview) => interview.id === queuedInterview.id,
+          nextInterviews,
+          decidingInterview.updatedAt,
         ),
       };
 
       await writeTailorResumeProfileAndMarkChanged(userId, nextRawProfile);
-      await updateTailorResumeRunStatus({
-        error:
-          "The base resume changed, or this queued tailoring run was canceled before its follow-up questions could be prepared.",
-        runId: queuedInterview.tailorResumeRunId,
-        status: "FAILED",
-        userId,
-      });
-      return null;
+
+      return {
+        interview: decidingInterview,
+        lockedLinks: latestState.lockedLinks,
+        rawProfile: nextRawProfile,
+      };
     }
 
-    const decidingInterview: TailorResumePendingInterview = {
-      ...queuedInterview,
-      status: "deciding",
-      updatedAt: new Date().toISOString(),
-    };
     const nextRawProfile: TailorResumeProfile = {
       ...latestState.rawProfile,
-      workspace: upsertTailorResumeWorkspaceInterview(
+      workspace: removeTailorResumeWorkspaceInterview(
         latestState.rawProfile.workspace,
-        decidingInterview,
-        decidingInterview.updatedAt,
+        (interview) => staleQueuedInterviewIds.has(interview.id),
       ),
     };
 
     await writeTailorResumeProfileAndMarkChanged(userId, nextRawProfile);
-
-    return {
-      interview: decidingInterview,
-      lockedLinks: latestState.lockedLinks,
-      rawProfile: nextRawProfile,
-    };
+    return null;
   });
 }
 
@@ -1138,7 +1186,7 @@ async function continueQueuedTailorResumeQuestionDecision(userId: string) {
           durationMs: 0,
           retrying: false,
           status: "failed",
-          stepCount: 4,
+          stepCount: 5,
           stepNumber: 2,
           summary: "Preparing follow-up question for the user",
         },
@@ -1218,11 +1266,13 @@ async function continueQueuedTailorResumeQuestionDecision(userId: string) {
         event: {
           attempt: 1,
           detail:
-            "A follow-up question is ready, so Step 2 is waiting for the user's answer before the remaining generation steps start.",
+            "A follow-up question is ready, so Step 2 is waiting for the user's answer before planning starts.",
           durationMs: questioningResult.generationDurationMs,
+          emphasizedTechnologies:
+            claimed.interview.planningResult.emphasizedTechnologies,
           retrying: false,
           status: "running",
-          stepCount: 4,
+          stepCount: 5,
           stepNumber: 2,
           summary: "Waiting for a follow-up answer from the user",
         },
@@ -1247,22 +1297,41 @@ async function continueQueuedTailorResumeQuestionDecision(userId: string) {
         }
       : claimed.interview;
 
-    await completeTailorResumeInterviewAndFinalize({
-      applicationId: claimed.interview.applicationId,
-      lockedLinks: claimed.lockedLinks,
-      onStepEvent: (event) =>
-        updateTailorResumeRunStep({
-          event,
-          runId: finalizedInterview.tailorResumeRunId,
-          userId,
+    try {
+      await completeTailorResumeInterviewAndFinalize({
+        applicationId: claimed.interview.applicationId,
+        lockedLinks: claimed.lockedLinks,
+        onStepEvent: (event) =>
+          updateTailorResumeRunStep({
+            event,
+            runId: finalizedInterview.tailorResumeRunId,
+            userId,
         }),
-      rawProfile: claimed.rawProfile,
-      runId: finalizedInterview.tailorResumeRunId,
-      stepTwoCompletionEvent: null,
-      tailoringInterview: finalizedInterview,
-      userId,
-      userMarkdown: userMarkdownSaveResult.userMarkdown,
-    });
+        rawProfile: claimed.rawProfile,
+        runId: finalizedInterview.tailorResumeRunId,
+        stepTwoCompletionEvent: null,
+        tailoringInterview: finalizedInterview,
+        userId,
+        userMarkdown: userMarkdownSaveResult.userMarkdown,
+      });
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Unable to finish the queued tailored resume run.";
+
+      await updateTailorResumeRunStatus({
+        error: errorMessage,
+        runId: finalizedInterview.tailorResumeRunId,
+        status: "FAILED",
+        userId,
+      });
+      await removeTailorResumeQuestionDecisionInterview({
+        interviewId: finalizedInterview.id,
+        userId,
+      });
+      return null;
+    }
 
     return { action: "skip" as const };
   } finally {
@@ -1278,6 +1347,14 @@ async function drainTailorResumeQuestionQueue(userId: string) {
       return;
     }
   }
+}
+
+async function handleDrainTailorResumeQuestionQueue(userId: string) {
+  await drainTailorResumeQuestionQueue(userId);
+
+  return NextResponse.json({
+    tailoringStatus: "question_queue_drained" as const,
+  });
 }
 
 function readExistingTailoringAction(body: Record<string, unknown>) {
@@ -1571,6 +1648,7 @@ async function ensureTailorResumeJobApplication(input: {
   await markApplicationsChanged(input.userId);
 
   return {
+    companyName: applicationDraft.companyName,
     id: application.id,
     jobUrlHash,
   };
@@ -2088,8 +2166,8 @@ async function finalizeTailorResumeGeneration(input: {
       durationMs: 0,
       retrying: false,
       status: "running",
-      stepCount: 4,
-      stepNumber: 4,
+      stepCount: 5,
+      stepNumber: 5,
       summary: "Keeping the tailored resume within the original page count",
     });
 
@@ -2113,8 +2191,8 @@ async function finalizeTailorResumeGeneration(input: {
           durationMs: precheckDurationMs,
           retrying: false,
           status: "skipped",
-          stepCount: 4,
-          stepNumber: 4,
+          stepCount: 5,
+          stepNumber: 5,
           summary: "Keeping the tailored resume within the original page count",
         });
       } else if (generatedPageCount <= targetPageCount) {
@@ -2127,8 +2205,8 @@ async function finalizeTailorResumeGeneration(input: {
           durationMs: precheckDurationMs,
           retrying: false,
           status: "skipped",
-          stepCount: 4,
-          stepNumber: 4,
+          stepCount: 5,
+          stepNumber: 5,
           summary: "Keeping the tailored resume within the original page count",
         });
       } else {
@@ -2192,12 +2270,12 @@ async function finalizeTailorResumeGeneration(input: {
         await input.onStepEvent?.({
           attempt: null,
           detail:
-            `Page-count verification could not be completed, so step 4 did not run: ${errorMessage}`,
+            `Page-count verification could not be completed, so Step 5 did not run: ${errorMessage}`,
           durationMs,
           retrying: false,
           status: "skipped",
-          stepCount: 4,
-          stepNumber: 4,
+          stepCount: 5,
+          stepNumber: 5,
           summary: "Keeping the tailored resume within the original page count",
         });
         tailoringResult = applyTailorResumePageCountFailure(
@@ -2212,8 +2290,8 @@ async function finalizeTailorResumeGeneration(input: {
           durationMs,
           retrying: false,
           status: "skipped",
-          stepCount: 4,
-          stepNumber: 4,
+          stepCount: 5,
+          stepNumber: 5,
           summary: "Keeping the tailored resume within the original page count",
         });
       }
@@ -2227,8 +2305,8 @@ async function finalizeTailorResumeGeneration(input: {
       durationMs: 0,
       retrying: false,
       status: "skipped",
-      stepCount: 4,
-      stepNumber: 4,
+      stepCount: 5,
+      stepNumber: 5,
       summary: "Keeping the tailored resume within the original page count",
     });
   }
@@ -2237,7 +2315,7 @@ async function finalizeTailorResumeGeneration(input: {
     tailoringResult = {
       ...tailoringResult,
       validationError: formatTailorResumeStepError(
-        tailoringResult.previewPdf ? 4 : 3,
+        tailoringResult.previewPdf ? 5 : 4,
         tailoringResult.validationError,
       ),
     };
@@ -2252,8 +2330,8 @@ async function finalizeTailorResumeGeneration(input: {
         durationMs: 0,
         retrying: false,
         status: "skipped",
-        stepCount: 4,
-        stepNumber: 4,
+        stepCount: 5,
+        stepNumber: 5,
         summary: "Keeping the tailored resume within the original page count",
       });
     }
@@ -2287,7 +2365,7 @@ async function finalizeTailorResumeGeneration(input: {
       });
     }
 
-    const failureStepNumber = tailoringResult.previewPdf ? 4 : 3;
+    const failureStepNumber = tailoringResult.previewPdf ? 5 : 4;
     const failureMessage = buildTailorResumeAttemptFailureMessage({
       attempts: tailoringResult.attempts,
       stepNumber: failureStepNumber,
@@ -2748,6 +2826,7 @@ async function handleTailorResumeGeneration(
 
       return {
         applicationId: application?.id ?? null,
+        companyName: application?.companyName ?? null,
         kind: "ready",
         jobDescription,
         jobUrl: jobUrlResult.jobUrl,
@@ -2795,101 +2874,65 @@ async function handleTailorResumeGeneration(
 
   try {
     const normalizedBaseLatex = normalizeAnnotatedLatexState(
-    preparation.rawProfile.latex.code,
-    new Date().toISOString(),
-  );
-  const processedBaseAnnotatedLatex = applyTailorResumeSourceLinkOverridesWithSummary(
-    normalizedBaseLatex.annotatedLatex.code,
-    {
-      currentLinks: preparation.rawProfile.links,
-      lockedLinks: preparation.lockedLinks,
-    },
-  );
-  const generationSourceAnnotatedLatex = normalizeTailorResumeLatex(
-    processedBaseAnnotatedLatex.latexCode,
-  ).annotatedLatex;
-  const generationSourceSnapshot = buildTailorResumeGenerationSourceSnapshot(
-    preparation.rawProfile,
-    preparation.lockedLinks,
-  );
-  const allowFollowUpQuestions =
-    preparation.rawProfile.generationSettings.values
-      .allowTailorResumeFollowUpQuestions;
-  const userMarkdownForNonInteractiveRun = allowFollowUpQuestions
-    ? undefined
-    : await readTailorResumeUserMarkdown(userId);
-  const planningStage = await planTailoredResume({
-    annotatedLatexCode: processedBaseAnnotatedLatex.latexCode,
-    jobDescription: preparation.jobDescription,
-    onStepEvent: handleStepEvent,
-    promptSettings: preparation.rawProfile.promptSettings.values,
-    userMarkdown: userMarkdownForNonInteractiveRun,
-  });
-
-  if (!planningStage.ok) {
-    await withTailorResumeProfileLock(userId, async () => {
-      const latestState = await readTailorResumeProfileState(userId);
-      const failedProfile =
-        preparation.rawProfile.jobDescription !== preparation.jobDescription
-          ? mergeTailorResumeFailedGeneration({
-              currentRawProfile: latestState.rawProfile,
-              jobDescription: preparation.jobDescription,
-              snapshotRawProfile: preparation.rawProfile,
-            })
-          : latestState.rawProfile;
-
-      if (failedProfile !== latestState.rawProfile) {
-        await writeTailorResumeProfileAndMarkChanged(userId, failedProfile);
-      }
-    });
-
-    const failureMessage = buildTailorResumeAttemptFailureMessage({
-      attempts: planningStage.attempts,
-      stepNumber: 1,
-      validationError: planningStage.validationError,
-    });
-
-    await updateTailorResumeRunStatus({
-      error: failureMessage,
-      runId: preparation.runId,
-      status: "FAILED",
-      userId,
-    });
-
-    return NextResponse.json(
-      {
-        error: failureMessage,
-        tailoredResumeDurationMs: planningStage.generationDurationMs,
-      },
-      { status: 422 },
+      preparation.rawProfile.latex.code,
+      new Date().toISOString(),
     );
-  }
-
-  let planningResult = planningStage.planningResult;
-
-  let accumulatedModelDurationMs = planningStage.generationDurationMs;
-  let userMarkdownAfterQuestioning: TailorResumeUserMarkdownState | undefined;
-  let userMarkdownForImplementation = userMarkdownForNonInteractiveRun;
-  let shouldClearTailorResumeInterviewAfterGeneration = false;
-
-  if (planningResult.changes.length > 0 && allowFollowUpQuestions) {
-    const questioningStartedAt = Date.now();
-    const reservation = await reserveTailorResumeQuestionDecision({
-      accumulatedModelDurationMs,
-      applicationId: preparation.applicationId,
-      generationSourceSnapshot,
-      jobDescription: preparation.jobDescription,
-      jobUrl: preparation.jobUrl,
-      planningDebug: planningStage.planningDebug,
-      planningResult,
-      runId: preparation.runId,
-      sourceAnnotatedLatexCode: generationSourceAnnotatedLatex,
-      userId,
+    const processedBaseAnnotatedLatex =
+      applyTailorResumeSourceLinkOverridesWithSummary(
+        normalizedBaseLatex.annotatedLatex.code,
+        {
+          currentLinks: preparation.rawProfile.links,
+          lockedLinks: preparation.lockedLinks,
+        },
+      );
+    const generationSourceAnnotatedLatex = normalizeTailorResumeLatex(
+      processedBaseAnnotatedLatex.latexCode,
+    ).annotatedLatex;
+    const generationSourceSnapshot = buildTailorResumeGenerationSourceSnapshot(
+      preparation.rawProfile,
+      preparation.lockedLinks,
+    );
+    const allowFollowUpQuestions =
+      preparation.rawProfile.generationSettings.values
+        .allowTailorResumeFollowUpQuestions;
+    const keywordStage =
+      await extractTailorResumeEmphasizedTechnologiesForQuestioning({
+        employerName: preparation.companyName,
+        jobDescription: preparation.jobDescription,
+        onStepEvent: handleStepEvent,
+      });
+    let accumulatedModelDurationMs = keywordStage.generationDurationMs;
+    let prePlanningResult = buildPrePlanningTailoredResumePlanningResult({
+      companyName: preparation.companyName,
+      emphasizedTechnologies: keywordStage.emphasizedTechnologies,
     });
+    let userMarkdownAfterQuestioning: TailorResumeUserMarkdownState | undefined;
+    let userMarkdownForPlanning = await readTailorResumeUserMarkdown(userId);
+    let shouldClearTailorResumeInterviewAfterGeneration = false;
+
+    if (allowFollowUpQuestions) {
+      const questioningStartedAt = Date.now();
+      const reservation = await reserveTailorResumeQuestionDecision({
+        accumulatedModelDurationMs,
+        applicationId: preparation.applicationId,
+        generationSourceSnapshot,
+        jobDescription: preparation.jobDescription,
+        jobUrl: preparation.jobUrl,
+        planningDebug: {
+        outputJson: null,
+        prompt: null,
+        skippedReason:
+          "Step 3 planning has not run yet because Step 2 clarification is deciding first.",
+      },
+        planningResult: prePlanningResult,
+        runId: preparation.runId,
+        sourceAnnotatedLatexCode: generationSourceAnnotatedLatex,
+        userId,
+      });
 
     if (reservation.kind === "stale") {
       const errorMessage =
-        "The base resume changed, or this tailoring run was canceled or overwritten while Step 2 was being queued.";
+        "The base resume changed, or this tailoring run was canceled or overwritten while Step 2 questions were being queued.";
 
       await updateTailorResumeRunStatus({
         error: errorMessage,
@@ -2907,7 +2950,14 @@ async function handleTailorResumeGeneration(
     }
 
     if (reservation.kind === "queued") {
-      await handleStepEvent(buildTailorResumeChatQueuedStepEvent());
+      await handleStepEvent(
+        buildTailorResumeChatQueuedStepEvent(
+          undefined,
+          keywordStage.emphasizedTechnologies,
+          accumulatedModelDurationMs,
+        ),
+      );
+      await drainTailorResumeQuestionQueue(userId);
 
       return NextResponse.json({
         profile: mergeTailorResumeProfileWithLockedLinks(
@@ -2923,17 +2973,18 @@ async function handleTailorResumeGeneration(
     }
 
     shouldClearTailorResumeInterviewAfterGeneration = true;
-    const userMarkdownBeforeQuestioning = await readTailorResumeUserMarkdown(userId);
     let questioningResult: Awaited<ReturnType<typeof advanceTailorResumeQuestioning>>;
 
     try {
       questioningResult = await advanceTailorResumeQuestioning({
         conversation: [],
         jobDescription: preparation.jobDescription,
-        planningResult,
-        planningSnapshot: planningStage.planningSnapshot,
+        planningResult: prePlanningResult,
+        planningSnapshot: buildTailorResumePlanningSnapshot(
+          generationSourceAnnotatedLatex,
+        ),
         promptSettings: preparation.rawProfile.promptSettings.values,
-        userMarkdown: userMarkdownBeforeQuestioning,
+        userMarkdown: userMarkdownForPlanning,
       });
     } catch (error) {
       const errorMessage =
@@ -2948,7 +2999,7 @@ async function handleTailorResumeGeneration(
         durationMs,
         retrying: false,
         status: "failed",
-        stepCount: 4,
+        stepCount: 5,
         stepNumber: 2,
         summary: "Preparing follow-up question for the user",
       });
@@ -2965,7 +3016,7 @@ async function handleTailorResumeGeneration(
 
       return NextResponse.json(
         {
-          error: `Unable to continue tailoring after generating the plaintext outline: ${errorMessage}`,
+          error: `Unable to continue tailoring after scanning keywords: ${errorMessage}`,
           tailoredResumeDurationMs: accumulatedModelDurationMs + durationMs,
         },
         { status: 422 },
@@ -2975,7 +3026,7 @@ async function handleTailorResumeGeneration(
     accumulatedModelDurationMs += questioningResult.generationDurationMs;
     const userMarkdownSaveResult =
       await persistTailorResumeUserMarkdownPatchResult({
-        baseState: userMarkdownBeforeQuestioning,
+        baseState: userMarkdownForPlanning,
         patchResult: questioningResult.userMarkdownPatchResult,
         userId,
       });
@@ -2995,32 +3046,33 @@ async function handleTailorResumeGeneration(
     }
 
     userMarkdownAfterQuestioning = userMarkdownSaveResult.userMarkdown;
-    userMarkdownForImplementation = undefined;
+    userMarkdownForPlanning = userMarkdownSaveResult.userMarkdown;
 
     if (questioningResult.action === "ask") {
       await handleStepEvent({
         attempt: 1,
         detail:
-          "A follow-up question is ready, so step 2 is waiting for the user's answer before the remaining generation steps start.",
-        durationMs: Math.max(0, Date.now() - questioningStartedAt),
+          "A follow-up question is ready, so Step 2 is waiting for the user's answer before planning starts.",
+        durationMs: questioningResult.generationDurationMs,
+        emphasizedTechnologies: keywordStage.emphasizedTechnologies,
         retrying: false,
         status: "running",
-        stepCount: 4,
+        stepCount: 5,
         stepNumber: 2,
         summary: "Waiting for a follow-up answer from the user",
       });
-      planningResult = {
-        ...planningResult,
+      prePlanningResult = {
+        ...prePlanningResult,
         questioningSummary: questioningResult.questioningSummary,
       };
       const nextState = await promoteReadyTailorResumeInterview({
         accumulatedModelDurationMs,
         assistantMessage: buildTailorResumeInterviewAssistantText({
           assistantMessage: questioningResult.assistantMessage,
-          planningResult,
+          planningResult: prePlanningResult,
         }),
         interview: reservation.interview,
-        planningResult,
+        planningResult: prePlanningResult,
         questioningResult,
         userId,
       });
@@ -3069,18 +3121,81 @@ async function handleTailorResumeGeneration(
     }
 
     if (questioningResult.questioningSummary) {
-      planningResult = {
-        ...planningResult,
+      prePlanningResult = {
+        ...prePlanningResult,
         questioningSummary: questioningResult.questioningSummary,
       };
     }
-  } else if (planningResult.changes.length > 0) {
-    // Hidden decision pass only; no user-facing Step 2 exists when questions
-    // are disabled.
   } else {
-    // Hidden decision pass only; no user-facing Step 2 exists without planned
-    // edits to clarify.
+    await handleStepEvent({
+      attempt: null,
+      detail:
+        "Step 2 follow-up questions are disabled, so planning will use the existing resume and USER.md.",
+      durationMs: 0,
+      emphasizedTechnologies: keywordStage.emphasizedTechnologies,
+      retrying: false,
+      status: "skipped",
+      stepCount: 5,
+      stepNumber: 2,
+      summary: "Clarify missing details",
+    });
   }
+
+  const planningStage = await planTailoredResume({
+    annotatedLatexCode: processedBaseAnnotatedLatex.latexCode,
+    employerName: preparation.companyName,
+    jobDescription: preparation.jobDescription,
+    onStepEvent: handleStepEvent,
+    precomputedEmphasizedTechnologies: keywordStage.emphasizedTechnologies,
+    promptSettings: preparation.rawProfile.promptSettings.values,
+    questioningSummary: prePlanningResult.questioningSummary,
+    userMarkdown: userMarkdownForPlanning,
+  });
+  accumulatedModelDurationMs += planningStage.generationDurationMs;
+
+  if (!planningStage.ok) {
+    await withTailorResumeProfileLock(userId, async () => {
+      const latestState = await readTailorResumeProfileState(userId);
+      const failedProfile =
+        preparation.rawProfile.jobDescription !== preparation.jobDescription
+          ? mergeTailorResumeFailedGeneration({
+              currentRawProfile: latestState.rawProfile,
+              jobDescription: preparation.jobDescription,
+              snapshotRawProfile: preparation.rawProfile,
+            })
+          : latestState.rawProfile;
+
+      if (failedProfile !== latestState.rawProfile) {
+        await writeTailorResumeProfileAndMarkChanged(userId, failedProfile);
+      }
+    });
+
+    const failureMessage = buildTailorResumeAttemptFailureMessage({
+      attempts: planningStage.attempts,
+      stepNumber: 3,
+      validationError: planningStage.validationError,
+    });
+
+    await updateTailorResumeRunStatus({
+      error: failureMessage,
+      runId: preparation.runId,
+      status: "FAILED",
+      userId,
+    });
+
+    return NextResponse.json(
+      {
+        error: failureMessage,
+        tailoredResumeDurationMs: accumulatedModelDurationMs,
+      },
+      { status: 422 },
+    );
+  }
+
+  const planningResult: TailorResumePlanningResult = {
+    ...planningStage.planningResult,
+    questioningSummary: prePlanningResult.questioningSummary,
+  };
 
   const tailoringResult = await implementTailoredResumePlan({
     annotatedLatexCode: processedBaseAnnotatedLatex.latexCode,
@@ -3111,7 +3226,7 @@ async function handleTailorResumeGeneration(
     planningResult,
     planningSnapshot: planningStage.planningSnapshot,
     promptSettings: preparation.rawProfile.promptSettings.values,
-    userMarkdown: userMarkdownForImplementation,
+    userMarkdown: userMarkdownForPlanning,
   });
 
     const response = await finalizeTailorResumeGeneration({
@@ -3132,7 +3247,7 @@ async function handleTailorResumeGeneration(
       runId: preparation.runId,
       tailoringResult,
       userId,
-      userMarkdown: userMarkdownAfterQuestioning ?? userMarkdownForImplementation,
+      userMarkdown: userMarkdownAfterQuestioning ?? userMarkdownForPlanning,
     });
 
     if (shouldClearTailorResumeInterviewAfterGeneration) {
@@ -3145,7 +3260,7 @@ async function handleTailorResumeGeneration(
       error,
       fallbackMessage: "Unable to tailor the resume.",
       fallbackStepNumber: 1,
-      fallbackSummary: "Generating plaintext edit outline",
+      fallbackSummary: "Scrape keywords",
       lastStepEvent,
       onStepEvent: handleStepEvent,
       runId: preparation.runId,
@@ -3278,7 +3393,7 @@ async function handleAdvanceTailorResumeInterview(
     durationMs: 0,
     retrying: false,
     status: "running",
-    stepCount: 4,
+    stepCount: 5,
     stepNumber: 2,
     summary: "Continuing the follow-up questions",
   });
@@ -3308,7 +3423,7 @@ async function handleAdvanceTailorResumeInterview(
       durationMs: Math.max(0, Date.now() - questioningStartedAt),
       retrying: false,
       status: "failed",
-      stepCount: 4,
+      stepCount: 5,
       stepNumber: 2,
       summary: "Continuing the follow-up questions",
     });
@@ -3362,11 +3477,13 @@ async function handleAdvanceTailorResumeInterview(
         preparation.tailoringInterview.planningResult.questioningSummary,
       ),
       detail:
-        "One more follow-up question is ready, so step 2 is still waiting for the user's answer.",
+        "One more follow-up question is ready, so Step 2 is still waiting for the user's answer.",
       durationMs: questioningResult.generationDurationMs,
+      emphasizedTechnologies:
+        preparation.tailoringInterview.planningResult.emphasizedTechnologies,
       retrying: false,
       status: "running",
-      stepCount: 4,
+      stepCount: 5,
       stepNumber: 2,
       summary: "Waiting for another follow-up answer from the user",
     });
@@ -3382,6 +3499,7 @@ async function handleAdvanceTailorResumeInterview(
         ...nextConversation,
         buildTailorResumeConversationMessage({
           role: "assistant",
+          technologyContexts: questioningResult.technologyContexts,
           text: buildTailorResumeInterviewAssistantText({
             assistantMessage: questioningResult.assistantMessage,
             planningResult: nextPlanningResult,
@@ -3481,9 +3599,11 @@ async function handleAdvanceTailorResumeInterview(
     detail:
       "The assistant thinks it has enough context. Confirm Done to wrap up, or keep chatting to clarify anything else.",
     durationMs: questioningResult.generationDurationMs,
+    emphasizedTechnologies:
+      preparation.tailoringInterview.planningResult.emphasizedTechnologies,
     retrying: false,
     status: "running",
-    stepCount: 4,
+    stepCount: 5,
     stepNumber: 2,
     summary: "Waiting for you to finish or continue the follow-up chat",
   });
@@ -3764,7 +3884,7 @@ async function handleCompleteTailorResumeInterview(
     return failTailorResumeRunAfterBackendError({
       error,
       fallbackMessage: "Unable to finish the tailored resume.",
-      fallbackStepNumber: 3,
+      fallbackStepNumber: 4,
       fallbackSummary: "Generating block-scoped edits",
       lastStepEvent,
       onStepEvent: handleStepEvent,
@@ -3872,6 +3992,17 @@ async function handleCancelCurrentTailoring(userId: string) {
   });
 }
 
+async function drainTailorResumeQuestionQueueAfterSuccessfulCancel(input: {
+  response: NextResponse;
+  userId: string;
+}) {
+  if (input.response.ok) {
+    await drainTailorResumeQuestionQueue(input.userId);
+  }
+
+  return input.response;
+}
+
 async function handleCancelExistingTailoring(
   body: Record<string, unknown>,
   userId: string,
@@ -3888,22 +4019,26 @@ async function handleCancelExistingTailoring(
     );
   }
 
-  return withTailorResumeProfileLock(userId, async () => {
+  const response = await withTailorResumeProfileLock(userId, async () => {
     const { lockedLinks, rawProfile } = await readTailorResumeProfileState(userId);
-    const shouldCancelInterview = Boolean(
-      findTailorResumeWorkspaceInterview(
-        rawProfile.workspace,
-        (interview) =>
-          interview.tailorResumeRunId === existingTailoringId ||
-          interview.id === existingTailoringId,
-      ),
+    const matchingInterview = findTailorResumeWorkspaceInterview(
+      rawProfile.workspace,
+      (interview) =>
+        interview.tailorResumeRunId === existingTailoringId ||
+        interview.id === existingTailoringId,
     );
+    const targetRunIds = uniqueNonEmptyStrings([
+      existingTailoringId,
+      matchingInterview?.tailorResumeRunId ?? null,
+    ]);
     const cancelledRun = await getPrismaClient().tailorResumeRun.updateMany({
       data: {
         status: "CANCELLED",
       },
       where: {
-        id: existingTailoringId,
+        id: {
+          in: targetRunIds,
+        },
         status: {
           in: ["RUNNING", "NEEDS_INPUT"],
         },
@@ -3911,7 +4046,7 @@ async function handleCancelExistingTailoring(
       },
     });
 
-    if (cancelledRun.count === 0 && !shouldCancelInterview) {
+    if (cancelledRun.count === 0 && !matchingInterview) {
       return NextResponse.json(
         { error: "That tailoring run is no longer active." },
         { status: 409 },
@@ -3920,7 +4055,7 @@ async function handleCancelExistingTailoring(
 
     const nextRawProfile: TailorResumeProfile = {
       ...rawProfile,
-      workspace: shouldCancelInterview
+      workspace: matchingInterview
         ? removeTailorResumeWorkspaceInterview(
             rawProfile.workspace,
             (interview) =>
@@ -3943,6 +4078,11 @@ async function handleCancelExistingTailoring(
       tailoringStatus: "existing_tailoring_cancelled" as const,
     });
   });
+
+  return drainTailorResumeQuestionQueueAfterSuccessfulCancel({
+    response,
+    userId,
+  });
 }
 
 async function handleCancelTailoringByJobUrl(
@@ -3961,7 +4101,7 @@ async function handleCancelTailoringByJobUrl(
     );
   }
 
-  return withTailorResumeProfileLock(userId, async () => {
+  const response = await withTailorResumeProfileLock(userId, async () => {
     const { lockedLinks, rawProfile } = await readTailorResumeProfileState(userId);
     const matchingInterview = findTailorResumeWorkspaceInterview(
       rawProfile.workspace,
@@ -4013,6 +4153,11 @@ async function handleCancelTailoringByJobUrl(
       ),
       tailoringStatus: "current_tailoring_cancelled" as const,
     });
+  });
+
+  return drainTailorResumeQuestionQueueAfterSuccessfulCancel({
+    response,
+    userId,
   });
 }
 
@@ -4592,6 +4737,10 @@ export async function PATCH(request: Request) {
 
   if ("action" in body && body.action === "cancelCurrentTailoring") {
     return handleCancelCurrentTailoring(session.user.id);
+  }
+
+  if ("action" in body && body.action === "drainTailorResumeQuestionQueue") {
+    return handleDrainTailorResumeQuestionQueue(session.user.id);
   }
 
   if ("action" in body && body.action === "cancelTailoringByJobUrl") {

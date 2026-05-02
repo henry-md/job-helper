@@ -85,12 +85,19 @@ export type TailorResumeGenerationSourceSnapshot = {
 export type TailorResumeConversationMessage = {
   id: string;
   role: "assistant" | "user";
+  technologyContexts?: TailorResumeTechnologyContext[];
   text: string;
   toolCalls: TailorResumeConversationToolCall[];
 };
 
 export type TailorResumeConversationToolCall = {
   argumentsText: string;
+  name: string;
+};
+
+export type TailorResumeTechnologyContext = {
+  definition: string;
+  examples: string[];
   name: string;
 };
 
@@ -152,7 +159,7 @@ export type TailorResumeGenerationSettingsState = {
   version: number;
 };
 
-export type TailoredResumeBlockGeneratedByStep = 3 | 4;
+export type TailoredResumeBlockGeneratedByStep = 4 | 5;
 
 export type TailoredResumeBlockEditRecord = {
   afterLatexCode: string;
@@ -604,7 +611,7 @@ function parseTailoredResumeBlockEditRecord(
   const command = readNullableString(value.command);
   const rawSource = value.source;
   const source = rawSource === "user" ? "user" : "model";
-  const generatedByStep = value.generatedByStep === 4 ? 4 : 3;
+  const generatedByStep = value.generatedByStep === 5 ? 5 : 4;
   const rawState = value.state;
   const state = rawState === "rejected" ? "rejected" : "applied";
 
@@ -1183,9 +1190,49 @@ function parseTailorResumeConversationMessage(
   return {
     id,
     role,
+    technologyContexts: parseTailorResumeTechnologyContexts(
+      value.technologyContexts,
+    ),
     text,
     toolCalls: parseTailorResumeConversationToolCalls(value.toolCalls),
   };
+}
+
+function parseTailorResumeTechnologyContext(
+  value: unknown,
+): TailorResumeTechnologyContext | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const name = readNullableString(value.name)?.trim() ?? "";
+  const definition = readNullableString(value.definition)?.trim() ?? "";
+  const examples = Array.isArray(value.examples)
+    ? value.examples
+        .map((example) => readNullableString(example)?.trim() ?? "")
+        .filter(Boolean)
+    : [];
+
+  if (!name || !definition || examples.length < 2) {
+    return null;
+  }
+
+  return {
+    definition,
+    examples,
+    name,
+  };
+}
+
+function parseTailorResumeTechnologyContexts(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailorResumeTechnologyContext[];
+  }
+
+  return value.flatMap((entry) => {
+    const parsedEntry = parseTailorResumeTechnologyContext(entry);
+    return parsedEntry ? [parsedEntry] : [];
+  });
 }
 
 function parseTailorResumeConversationToolCall(

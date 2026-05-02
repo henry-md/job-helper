@@ -37,7 +37,7 @@ export function buildTailorResumeTerminalFailureStepEvent(input: {
   const stepCount =
     readPositiveInteger(previousStepEvent?.stepCount) ??
     readPositiveInteger(input.stepCount) ??
-    4;
+    5;
 
   return {
     attempt: readPositiveInteger(previousStepEvent?.attempt),
