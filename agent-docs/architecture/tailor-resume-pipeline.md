@@ -9,26 +9,33 @@ Step 0. Generate LaTeX base resume
 - Compile a preview PDF from that base before any job-specific tailoring starts.
 - The generated LaTeX becomes the authoritative editing surface for later stages.
 
-Step 1. Generate plaintext generalized edits
-- The planning stage sees whole-resume plaintext plus document-ordered plaintext blocks keyed by `segmentId`.
+Step 1A. Generate plaintext generalized edits
+- The OpenAI planning stage sees whole-resume plaintext plus document-ordered plaintext blocks keyed by `segmentId`.
 - It returns a tailoring thesis plus generalized plaintext edits for targeted blocks.
-- It also extracts a deduped list of job-description-emphasized technologies with high/low priority. The model should infer priority from the posting text, especially required/basic/minimum and preferred/nice-to-have sections, but the stored shape should keep only the priority, technology name, and evidence.
 - This stage decides what should change, but it does not write final LaTeX yet.
 
+Step 1B. Scrape emphasized technologies deterministically
+- In parallel with Step 1A, deterministic scraping extracts a deduped list of job-description-emphasized technologies with high/low priority.
+- Priority should come from explicit posting text, especially required/basic/minimum and preferred/nice-to-have sections, and the stored shape should keep only the priority, technology name, and evidence.
+- Step 1A and Step 1B both finish before Step 2 decides whether clarification is useful.
+
 Step 2. Ask user clarifications if useful
-- This stage is optional and should keep a high threshold.
+- This stage is optional, but should strongly prefer asking when high-priority job technologies are missing from both the resume and `USER.md` and are adjacent to existing experience.
 - The settings page has a per-user generation guardrail that controls whether this stage is allowed to pause and ask the user questions. It defaults on. When turned off, generation skips interactive questions and proceeds with the saved resume plus `USER.md` memory as non-interactive context.
 - The stage receives the logged-in user's DB-backed `USER.md` memory and should use it to avoid asking repetitive questions about already-confirmed experience, non-experience, preferences, or constraints.
-- Ask one question at a time only when a grounded answer could materially improve an already-adjacent resume block.
-- Questions should concisely state the job-description signal, the resume gap, and 1-2 brief examples of strong answer shapes tailored to that job-description signal.
+- Ask all useful first-turn technology questions together in one concise grouped chat message. Prefer pointed technology checks such as "Do you have experience with Go, Cassandra, or Spark?" plus compact example bullets that include each keyword.
+- Questions should stay concise and should not become a paragraph per skill. Each technology should include a likely resume insertion hint or example bullet when useful.
 - Technology questions should only cover close neighbors of resume-supported experience that also appear in the job description, such as a framework adjacent to strong JavaScript experience or C adjacent to listed C++ experience.
-- The interview receives the Step 1 emphasized-technology list and should prioritize high-priority adjacent gaps before low-priority terms.
+- The interview receives the Step 1B emphasized-technology list plus the Step 1A plan and should prioritize high-priority adjacent gaps before low-priority terms.
 - Store the questioning agenda, the number of questions already asked, and learned facts mapped back to target `segmentId`s so later stages can use them surgically.
-- When the user's answer reveals durable context likely to matter later, the interview tool may submit `USER.md` markdown patch operations. Normal additions should append under a chosen heading path; restructuring should use exact-match replace/insert/delete operations. Failed exact matches are fed back to the model for a retry instead of allowing full-document replacement.
+- Only one Step 2 chat should be active for a user at a time. Later runs store a queued Step 2 decision and show "Chat Queued" until the current chat finishes and `USER.md` has been updated.
+- The model may request that the chat finish, but the chat only ends after the user presses Done. If the user keeps chatting, generation remains paused.
+- When the user's answer reveals durable context likely to matter later, the interview tool should submit one end-of-chat `USER.md` markdown patch operation set. Normal additions should append under a chosen heading path; restructuring should use exact-match replace/insert/delete operations. Failed exact matches are fed back to the model for a retry instead of allowing full-document replacement.
+- `USER.md` technology notes should say, for each discussed technology, whether the user has no experience, whether it can be listed in skills without changing an experience bullet, or the exact LaTeX experience bullet replacement and skills-section category that can support it.
 
 Step 3. Generate block-scoped edits
 - The implementation stage takes the accepted plan plus any user-confirmed learnings and returns exact LaTeX replacements for only the targeted segments.
-- It also receives the emphasized-technology list as keyword guidance. Include high-priority terms wherever they are factually supported by the source resume, USER.md, interview learnings, or accepted plan; do not invent unsupported technology experience.
+- It also receives the Step 1B emphasized-technology list as keyword guidance. Include high-priority terms wherever they are factually supported by the source resume, USER.md, interview learnings, or accepted plan; do not invent unsupported technology experience.
 - Failures here should retry the block-edit stage rather than forcing the model to rethink the whole thesis.
 - The goal is segment-safe replacements that preserve local LaTeX structure.
 - Block replacements should not polish unrelated details such as punctuation, dates of experience, employers, titles, metrics, separators, capitalization, or links.

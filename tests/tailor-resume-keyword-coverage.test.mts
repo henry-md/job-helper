@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildTailorResumeKeywordPresenceContext,
   buildTailoredResumeKeywordCoverage,
   resumeTextIncludesKeyword,
 } from "../lib/tailor-resume-keyword-coverage.ts";
@@ -96,4 +97,50 @@ test("buildTailoredResumeKeywordCoverage stores high-only and all-priority bucke
   ]);
   assert.equal(coverage.allPriorities.totalTermCount, 3);
   assert.equal(coverage.allPriorities.tailoredHitPercentage, 67);
+});
+
+test("buildTailorResumeKeywordPresenceContext separates resume and USER.md presence", () => {
+  const context = buildTailorResumeKeywordPresenceContext({
+    emphasizedTechnologies: [
+      {
+        evidence: "Required section mentions Java.",
+        name: "Java",
+        priority: "high",
+      },
+      {
+        evidence: "Required section mentions Cassandra.",
+        name: "Cassandra",
+        priority: "high",
+      },
+      {
+        evidence: "Preferred section mentions Redux.",
+        name: "Redux",
+        priority: "low",
+      },
+      {
+        evidence: "Preferred section mentions Gradle.",
+        name: "Gradle",
+        priority: "low",
+      },
+    ],
+    originalResumeText: "Built Java and React services.",
+    userMarkdown: "## Experience\n\n- Redux: Can list in frontend skills.",
+  });
+
+  assert.deepEqual(
+    context.highPriorityMissingFromOriginalResumeAndUserMarkdown,
+    ["Cassandra"],
+  );
+  assert.deepEqual(
+    context.lowPriorityMissingFromOriginalResumeAndUserMarkdown,
+    ["Gradle"],
+  );
+  assert.equal(
+    context.terms.find((term) => term.name === "Java")?.presentInOriginalResume,
+    true,
+  );
+  assert.equal(
+    context.terms.find((term) => term.name === "Redux")?.presentInUserMarkdown,
+    true,
+  );
 });

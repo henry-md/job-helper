@@ -1,10 +1,25 @@
 import { renderTailoredResumeLatexToPlainText } from "./tailor-resume-preview-focus.ts";
 import type {
   TailoredResumeEmphasizedTechnology,
+  TailoredResumeEmphasizedTechnologyPriority,
   TailoredResumeKeywordCoverage,
   TailoredResumeKeywordCoverageBucket,
   TailoredResumeKeywordCoverageTerm,
 } from "./tailor-resume-types.ts";
+
+export type TailorResumeKeywordPresenceContextTerm = {
+  evidence: string;
+  name: string;
+  presentInOriginalResume: boolean;
+  presentInUserMarkdown: boolean;
+  priority: TailoredResumeEmphasizedTechnologyPriority;
+};
+
+export type TailorResumeKeywordPresenceContext = {
+  highPriorityMissingFromOriginalResumeAndUserMarkdown: string[];
+  lowPriorityMissingFromOriginalResumeAndUserMarkdown: string[];
+  terms: TailorResumeKeywordPresenceContextTerm[];
+};
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -70,6 +85,49 @@ function dedupeTechnologies(
   }
 
   return [...technologiesByName.values()];
+}
+
+export function buildTailorResumeKeywordPresenceContext(input: {
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+  originalResumeText: string;
+  userMarkdown: string;
+}): TailorResumeKeywordPresenceContext {
+  const terms = dedupeTechnologies(input.emphasizedTechnologies).map(
+    (technology) => {
+      const presentInOriginalResume = resumeTextIncludesKeyword({
+        term: technology.name,
+        text: input.originalResumeText,
+      });
+      const presentInUserMarkdown = resumeTextIncludesKeyword({
+        term: technology.name,
+        text: input.userMarkdown,
+      });
+
+      return {
+        evidence: technology.evidence,
+        name: technology.name,
+        presentInOriginalResume,
+        presentInUserMarkdown,
+        priority: technology.priority,
+      } satisfies TailorResumeKeywordPresenceContextTerm;
+    },
+  );
+
+  const missingFromOriginalResumeAndUserMarkdown = terms.filter(
+    (term) => !term.presentInOriginalResume && !term.presentInUserMarkdown,
+  );
+
+  return {
+    highPriorityMissingFromOriginalResumeAndUserMarkdown:
+      missingFromOriginalResumeAndUserMarkdown
+        .filter((term) => term.priority === "high")
+        .map((term) => term.name),
+    lowPriorityMissingFromOriginalResumeAndUserMarkdown:
+      missingFromOriginalResumeAndUserMarkdown
+        .filter((term) => term.priority === "low")
+        .map((term) => term.name),
+    terms,
+  };
 }
 
 function calculateHitPercentage(hitCount: number, totalTermCount: number) {

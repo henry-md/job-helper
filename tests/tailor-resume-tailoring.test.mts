@@ -4,7 +4,12 @@ import { tailorResumeLatexExample } from "../lib/tailor-resume-latex-example.ts"
 import {
   applyTailorResumeBlockChanges,
   classifyTailoredResumeGenerationOutcome,
+  extractTailorResumeJobDescriptionTechnologyHints,
+  mergeTailorResumeJobDescriptionTechnologies,
+  parseTailorResumeTechnologyExtractionResponse,
   parseTailoredResumePlanResponse,
+  readRequiredTailorResumeQuestioningKeywords,
+  validateTailoredResumeImplementationIncludesQuestioningLearnings,
 } from "../lib/tailor-resume-tailoring.ts";
 import {
   hasValidTailorResumeSegmentIds,
@@ -252,5 +257,218 @@ test("parseTailoredResumePlanResponse rejects a missing thesis payload", () => {
         positionTitle: "Research Engineer",
       }),
     /thesis/i,
+  );
+});
+
+test("parseTailorResumeTechnologyExtractionResponse reads JD-only technology extraction", () => {
+  const technologies = parseTailorResumeTechnologyExtractionResponse({
+    emphasizedTechnologies: [
+      {
+        evidence: "Required qualifications mention Go.",
+        name: "Go",
+        priority: "high",
+      },
+      {
+        evidence: "Preferred qualifications mention Redux.",
+        name: "Redux",
+        priority: "low",
+      },
+    ],
+  });
+
+  assert.deepEqual(technologies, [
+    {
+      evidence: "Required qualifications mention Go.",
+      name: "Go",
+      priority: "high",
+    },
+    {
+      evidence: "Preferred qualifications mention Redux.",
+      name: "Redux",
+      priority: "low",
+    },
+  ]);
+});
+
+test("mergeTailorResumeJobDescriptionTechnologies prefers JD extraction and filters resume-only planner terms", () => {
+  const technologies = mergeTailorResumeJobDescriptionTechnologies({
+    extractedTechnologies: [
+      {
+        evidence: "Required section names Go.",
+        name: "Go",
+        priority: "high",
+      },
+      {
+        evidence: "Required section names Cassandra.",
+        name: "Cassandra",
+        priority: "high",
+      },
+    ],
+    jobDescription:
+      "Required: experience with Go, Cassandra, Spark, React, and Redux.",
+    plannerTechnologies: [
+      {
+        evidence: "Technical skills list Java.",
+        name: "Java",
+        priority: "high",
+      },
+      {
+        evidence: "Planner also found React in the job description.",
+        name: "React",
+        priority: "low",
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    technologies.map((technology) => technology.name),
+    ["Go", "Cassandra", "React"],
+  );
+});
+
+test("extractTailorResumeJobDescriptionTechnologyHints finds concrete stack terms without a model call", () => {
+  const technologies = extractTailorResumeJobDescriptionTechnologyHints(`
+    Technologies We Use
+    A variety of languages, including Java and Go for backend and Typescript for frontend.
+    Open-source technologies like Cassandra, Spark, Elasticsearch, React, and Redux.
+    Industry-standard build tooling, including Gradle and GitHub.
+    Nice to have: Palantir Foundry.
+  `);
+
+  assert.deepEqual(
+    technologies.map((technology) => [
+      technology.name,
+      technology.priority,
+    ]),
+    [
+      ["Palantir Foundry", "low"],
+      ["Elasticsearch", "high"],
+      ["TypeScript", "high"],
+      ["Cassandra", "high"],
+      ["Gradle", "high"],
+      ["GitHub", "high"],
+      ["React", "high"],
+      ["Redux", "high"],
+      ["Spark", "high"],
+      ["Java", "high"],
+      ["Go", "high"],
+    ],
+  );
+});
+
+test("readRequiredTailorResumeQuestioningKeywords keeps confirmed tech and skips negative learnings", () => {
+  const requirements = readRequiredTailorResumeQuestioningKeywords({
+    changes: [
+      {
+        desiredPlainText: "Skills with confirmed tools",
+        reason: "Adds confirmed tools.",
+        segmentId: "technical-skills.section-1",
+      },
+    ],
+    emphasizedTechnologies: [
+      {
+        evidence: "Job names Go.",
+        name: "Go",
+        priority: "high",
+      },
+      {
+        evidence: "Job names Palantir Foundry.",
+        name: "Palantir Foundry",
+        priority: "high",
+      },
+    ],
+    questioningSummary: {
+      agenda: "Go and Palantir products",
+      askedQuestionCount: 1,
+      debugDecision: null,
+      learnings: [
+        {
+          detail: "Go — confirmed backend/API experience; list under skills.",
+          targetSegmentIds: ["technical-skills.section-1"],
+          topic: "Go",
+        },
+        {
+          detail: "Palantir Foundry — no direct experience; do not add.",
+          targetSegmentIds: ["technical-skills.section-1"],
+          topic: "Palantir Foundry",
+        },
+      ],
+    },
+  });
+
+  assert.deepEqual(requirements, [
+    {
+      detail: "Go — confirmed backend/API experience; list under skills.",
+      keyword: "Go",
+      targetSegmentIds: ["technical-skills.section-1"],
+    },
+  ]);
+});
+
+test("validateTailoredResumeImplementationIncludesQuestioningLearnings rejects ignored confirmed tech", () => {
+  const plan = {
+    changes: [
+      {
+        desiredPlainText: "Skills with confirmed tools",
+        reason: "Adds confirmed tools.",
+        segmentId: "technical-skills.section-1",
+      },
+    ],
+    emphasizedTechnologies: [
+      {
+        evidence: "Job names Go.",
+        name: "Go",
+        priority: "high" as const,
+      },
+      {
+        evidence: "Job names Cassandra.",
+        name: "Cassandra",
+        priority: "high" as const,
+      },
+    ],
+    questioningSummary: {
+      agenda: "Go and Cassandra",
+      askedQuestionCount: 1,
+      debugDecision: null,
+      learnings: [
+        {
+          detail: "Go — confirmed backend/API experience; list under skills.",
+          targetSegmentIds: ["technical-skills.section-1"],
+          topic: "Go",
+        },
+        {
+          detail: "Cassandra — confirmed data-modeling experience; list under skills.",
+          targetSegmentIds: ["technical-skills.section-1"],
+          topic: "Cassandra",
+        },
+      ],
+    },
+  };
+
+  assert.throws(
+    () =>
+      validateTailoredResumeImplementationIncludesQuestioningLearnings({
+        implementationChanges: [
+          {
+            latexCode: String.raw`\resumeSection{TECHNICAL SKILLS} Java, React`,
+            segmentId: "technical-skills.section-1",
+          },
+        ],
+        plan,
+      }),
+    /Go -> technical-skills\.section-1[\s\S]*Cassandra -> technical-skills\.section-1/,
+  );
+
+  assert.doesNotThrow(() =>
+    validateTailoredResumeImplementationIncludesQuestioningLearnings({
+      implementationChanges: [
+        {
+          latexCode:
+            String.raw`\resumeSection{TECHNICAL SKILLS} Java, Go, Cassandra, React`,
+          segmentId: "technical-skills.section-1",
+        },
+      ],
+      plan,
+    }),
   );
 });
