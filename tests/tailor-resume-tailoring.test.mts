@@ -10,6 +10,8 @@ import {
   parseTailoredResumePlanResponse,
   readRequiredTailorResumeQuestioningKeywords,
   validateTailoredResumeImplementationIncludesQuestioningLearnings,
+  validateTailoredResumeImplementationKeywordCoverage,
+  validateTailoredResumePlanningKeywordCoverage,
 } from "../lib/tailor-resume-tailoring.ts";
 import {
   hasValidTailorResumeSegmentIds,
@@ -475,5 +477,45 @@ test("validateTailoredResumeImplementationIncludesQuestioningLearnings rejects i
       ],
       plan,
     }),
+  );
+});
+
+test("validateTailoredResumePlanningKeywordCoverage rejects missing high-priority keywords", () => {
+  assert.throws(
+    () =>
+      validateTailoredResumePlanningKeywordCoverage({
+        keywordCheckResult: {
+          missingHighPriority: ["Cassandra"],
+          missingLowPriority: ["Redux"],
+          presentHighPriority: ["Go"],
+          presentLowPriority: [],
+          terms: [
+            { name: "Go", present: true, priority: "high" },
+            { name: "Cassandra", present: false, priority: "high" },
+            { name: "Redux", present: false, priority: "low" },
+          ],
+        },
+      }),
+    /missing high-priority keywords/i,
+  );
+});
+
+test("validateTailoredResumeImplementationKeywordCoverage rejects high-priority regressions", () => {
+  assert.throws(
+    () =>
+      validateTailoredResumeImplementationKeywordCoverage({
+        keywordCheckResult: {
+          missingHighPriority: ["Spark"],
+          missingLowPriority: [],
+          presentHighPriority: ["Go"],
+          presentLowPriority: ["Redux"],
+          terms: [
+            { name: "Go", present: true, priority: "high" },
+            { name: "Spark", present: false, priority: "high" },
+            { name: "Redux", present: true, priority: "low" },
+          ],
+        },
+      }),
+    /regressed required high-priority keywords/i,
   );
 });

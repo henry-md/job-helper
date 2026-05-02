@@ -138,6 +138,7 @@ test("normalizeTailorResumeInterviewResponseForCurrentTurn does not treat post-s
       assistantMessage: "",
       completionMessage: "",
       debugDecision: "not_applicable",
+      keywordDecisions: [],
       learnings: [],
       userMarkdownEditOperations: [],
     },
@@ -151,6 +152,7 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads finish tool calls"
     output: [
       {
         arguments: JSON.stringify({
+          keywordDecisions: [],
           learnings: [
             {
               detail: "Owned LLM deployment latency work.",
@@ -188,6 +190,7 @@ test("parseTailorResumeInterviewResponseFromModelOutput preserves cumulative USE
     output: [
       {
         arguments: JSON.stringify({
+          keywordDecisions: [],
           learnings: [
             {
               detail: "Confirmed Go, Cassandra, and Spark work at Johns Hopkins.",
@@ -241,6 +244,7 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads probing-question t
       {
         arguments: JSON.stringify({
           debugDecision: "not_applicable",
+          keywordDecisions: [],
           learnings: [
             {
               detail:
@@ -278,6 +282,7 @@ test("parseTailorResumeInterviewResponseFromModelOutput keeps follow-up technolo
           assistantMessage:
             "Your answer sounded close to Cassandra work. Which resume project should this map to?",
           debugDecision: "not_applicable",
+          keywordDecisions: [],
           learnings: [],
           technologyContexts: [
             {
@@ -316,6 +321,7 @@ test("parseTailorResumeInterviewResponseFromModelOutput allows requested extra t
           assistantMessage:
             "Here are four more realistic Go options. Which ones are closest to your experience?",
           debugDecision: "not_applicable",
+          keywordDecisions: [],
           learnings: [],
           technologyContexts: [
             {
@@ -358,6 +364,7 @@ test("parseTailorResumeInterviewResponseFromModelOutput rejects duplicated techn
               assistantMessage:
                 "Two Go bullet suggestions you can use outside NewForm:\n\n- Built a Go microservice for Quizlet imports, replacing a Python ETL and increasing throughput 4x while cutting memory use 60% -- KnoWhiz\n- Implemented a Go-based concurrent worker pool and AWS SQS consumers to process onboarding jobs at 2k jobs/sec, reducing processing lag 80% -- HF Engineering\n\nWhich of these should I add?",
               debugDecision: "not_applicable",
+              keywordDecisions: [],
               learnings: [],
               technologyContexts: [
                 {

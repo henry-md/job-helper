@@ -107,7 +107,8 @@ function buildTailorResumeInterviewToolContractBlock() {
     "11. USER.md edit operations are transactional markdown patches. Supported op values are append, replace_exact, insert_before, insert_after, and delete_exact.\n" +
     "12. For append, set headingPath to the section path you want and markdown to the exact markdown to add. The app will create missing headings. Leave oldMarkdown, newMarkdown, and anchorMarkdown empty strings.\n" +
     "13. For replace_exact, set oldMarkdown and newMarkdown. For insert_before/insert_after, set anchorMarkdown and markdown. For delete_exact, set markdown. Exact-match operations must match exactly once or the app will feed back an error for retry.\n" +
-    "14. Never put placeholders such as \"... rest unchanged\" or \"[existing content]\" inside USER.md edit fields.\n"
+    "14. keywordDecisions is the deterministic place to keep or remove emphasized keywords after the user answers. Use action \"remove\" only when the user explicitly says a keyword is not a real requirement keyword, is nonsense, or should not count for this role.\n" +
+    "15. Never put placeholders such as \"... rest unchanged\" or \"[existing content]\" inside USER.md edit fields.\n"
   );
 }
 
@@ -244,7 +245,9 @@ const defaultSystemPromptSettings = {
     "7. Every change must include a concise reason string that explains why the edit improves fit for this specific job description.\n" +
     "8. Prefer the smallest set of content edits that materially improve fit.\n" +
     "9. When USER.md contains quoted experience evidence for a job-emphasized technology, strongly consider targeting the matching experience bullet instead of only editing the technical skills section.\n" +
-    "10. Because implementation is block-scoped, plan new bullet-shaped evidence as a replacement/swap for an existing lower-signal bullet in the same experience whenever possible. Use an empty desiredPlainText only when deleting one whole bullet or line is the intended edit.\n\n" +
+    "10. Because implementation is block-scoped, plan new bullet-shaped evidence as a replacement/swap for an existing lower-signal bullet in the same experience whenever possible. Use an empty desiredPlainText only when deleting one whole bullet or line is the intended edit.\n" +
+    "11. Your primary goal is to make sure the final planned resume text includes every remaining high-priority keyword that is already supported by the original resume, USER.md, or Step 2 user-confirmed learnings. Make any additional improvements after that coverage obligation is satisfied.\n" +
+    "12. Before you return the final JSON plan, call the check_planned_resume_keyword_coverage tool on your current planned changes. If the tool reports missing high-priority keywords, revise the plan and call the tool again before finalizing. Use low-priority terms when they fit truthfully and naturally, but do not let them crowd out the high-priority coverage goal.\n\n" +
     "Metadata rules:\n" +
     "1. companyName should be the employer if identifiable.\n" +
     "2. positionTitle should be the role title if identifiable.\n" +
@@ -265,7 +268,8 @@ const defaultSystemPromptSettings = {
     "6. Mark priority high for required/basic/minimum technologies, repeated technologies, title/team-defining technologies, and unusually strong preferred signals. Mark priority low for weaker preferred, nice-to-have, incidental, or broad ecosystem terms.\n" +
     "7. Return one atomic technology per item. Hard rule: if a slash, comma, parenthetical, or grouped phrase separates distinct technologies, you must return separate emphasizedTechnologies items for each named technology, such as TypeScript and JavaScript instead of TypeScript/JavaScript, React and Next.js instead of React / Next.js, and Python, Java, C++ as three items. Do not use a broad wrapper label such as front-end frameworks when the posting names specific frameworks.\n" +
     "8. Prefer the core technology term and remove interchangeable vendor or marketing fluff when the inner term is what people actually list on resumes. For example, return Visual Studio instead of Microsoft Visual Studio. We need the smaller stable term so deterministic string matching can find it in resumes.\n" +
-    "9. When choosing planned changes, include high-priority technology keywords when the resume, USER.md, Step 2 user-confirmed learnings, or existing block text already supports them. Do not invent unconfirmed technology experience.\n\n" +
+    "9. When choosing planned changes, include high-priority technology keywords when the resume, USER.md, Step 2 user-confirmed learnings, or existing block text already supports them. Do not invent unconfirmed technology experience.\n" +
+    "10. The high-priority list you receive after Step 2 should already have bad keywords removed and should already be accounted for in either the original resume or USER.md. Your job in Step 3 is to move those grounded keywords into the tailored resume text itself.\n\n" +
     "Reason rules:\n" +
     "1. Keep every reason to 1-2 short sentences maximum.\n" +
     "2. Sentence 1 should briefly summarize the high-level change you made and name the concrete thing that changed, using the employer, project, feature, accomplishment, metric, or technology anchor from that resume block when possible.\n" +
@@ -321,8 +325,10 @@ const defaultSystemPromptSettings = {
     "28. If the latest user answer asks you a question or asks for a sample/example/draft/review, do not finish the interview on that turn. For technology examples, answer with technologyContexts cards plus concise assistantMessage text; for other replies, answer in assistantMessage. Include one confirmation or correction question if more detail is still needed.\n" +
     "29. Call finish_tailor_resume_interview only when you believe the final compressed learnings are ready and you want the user to choose whether the chat should end. The app, not the tool call, gives the user the final Done button.\n" +
     "30. When calling finish_tailor_resume_interview, completionMessage should briefly say that you have enough context, that you are updating USER.md if edits are included, and that the user can keep chatting if they want to clarify anything else. Do not ask whether to add, replace, append, insert, or swap resume bullets. Do not add extra normal assistant text beyond that same concise completion.\n" +
-    "31. If no questions are worth asking on the first turn, call skip_tailor_resume_interview instead of starting a chat.\n" +
-    "32. Set debugDecision to \"not_applicable\" unless a debug override explicitly requires otherwise.\n\n" +
+    "31. Step 2 owns high-priority keyword accounting. Before you finish or skip, every remaining high-priority keyword must be accounted for in either the original resume or USER.md. If a keyword is still missing, ask another grouped question or update USER.md with the supported answer.\n" +
+    "32. If the user says an emphasized keyword is not a real requirement keyword, is nonsense, or should not be used for this role, remove it from the emphasized keyword list with a keywordDecisions entry using action \"remove\" and a brief reason. Only do this when the user explicitly rejects the keyword.\n" +
+    "33. If no questions are worth asking on the first turn, call skip_tailor_resume_interview instead of starting a chat.\n" +
+    "34. Set debugDecision to \"not_applicable\" unless a debug override explicitly requires otherwise.\n\n" +
     "USER.md memory rules:\n" +
     "1. The current USER.md memory is provided in the input. Use it to avoid asking the user repetitive questions.\n" +
     "2. If USER.md already answers a planned edit's factual gap, include that fact in learnings with the relevant targetSegmentIds instead of asking again.\n" +
@@ -355,7 +361,9 @@ const defaultSystemPromptSettings = {
     "13. Treat user-confirmed background learnings as factual additions, but never invent beyond what the user explicitly confirmed.\n" +
     "14. Preserve factual and stylistic details that are outside the planned visible-text change. Do not change dates of experience, employers, titles, metrics, punctuation, separators, capitalization, or link text merely to polish the block.\n" +
     "15. Use the emphasized technology list as keyword guidance. Include exact technology names where they are already supported by the source resume, USER.md, user-confirmed learnings, or the accepted planned desired text, but never add unsupported tools just because the job asks for them.\n" +
-    "16. If the accepted plan replaces a lower-signal bullet with user-confirmed technology experience, return that replacement as the single planned bullet. Do not move the technology only to skills and leave the planned experience bullet unchanged.\n\n" +
+    "16. If the accepted plan replaces a lower-signal bullet with user-confirmed technology experience, return that replacement as the single planned bullet. Do not move the technology only to skills and leave the planned experience bullet unchanged.\n" +
+    "17. Your primary goal is to implement the accepted Step 3 plan faithfully. Your secondary goal is to avoid keyword regressions from that accepted plan while keeping the block-scoped implementation compact. Do not make Step 4 stricter than Step 3 by inventing new coverage obligations that the accepted plan did not already satisfy.\n" +
+    "18. Before you return the final JSON implementation, call the check_implemented_resume_keyword_coverage tool on your current LaTeX replacements. If the tool reports missing high-priority keywords, revise the implementation and call the tool again before finalizing.\n\n" +
     "Common pitfalls:\n" +
     "1. The most common structural failure is crossing a segment boundary. When in doubt, keep the replacement smaller and closer to the source block.\n" +
     "2. If the source block is \\entryheading, \\projectheading, or \\labelline, preserve the existing command form and adapt the text inside its arguments instead of flattening it into a different shape.\n" +

@@ -1323,6 +1323,7 @@ async function continueQueuedTailorResumeQuestionDecision(userId: string) {
     if (questioningResult.action === "ask") {
       const nextPlanningResult: TailorResumePlanningResult = {
         ...claimed.interview.planningResult,
+        emphasizedTechnologies: questioningResult.emphasizedTechnologies,
         questioningSummary: questioningResult.questioningSummary,
       };
       const promoted = await promoteReadyTailorResumeInterview({
@@ -1358,8 +1359,7 @@ async function continueQueuedTailorResumeQuestionDecision(userId: string) {
           detail:
             "A follow-up question is ready, so Step 2 is waiting for the user's answer before planning starts.",
           durationMs: questioningResult.generationDurationMs,
-          emphasizedTechnologies:
-            claimed.interview.planningResult.emphasizedTechnologies,
+          emphasizedTechnologies: questioningResult.emphasizedTechnologies,
           retrying: false,
           status: "running",
           stepCount: 5,
@@ -1382,6 +1382,7 @@ async function continueQueuedTailorResumeQuestionDecision(userId: string) {
           ...claimed.interview,
           planningResult: {
             ...claimed.interview.planningResult,
+            emphasizedTechnologies: questioningResult.emphasizedTechnologies,
             questioningSummary: questioningResult.questioningSummary,
           },
         }
@@ -3153,6 +3154,7 @@ async function handleTailorResumeGeneration(
       });
       prePlanningResult = {
         ...prePlanningResult,
+        emphasizedTechnologies: questioningResult.emphasizedTechnologies,
         questioningSummary: questioningResult.questioningSummary,
       };
       const nextState = await promoteReadyTailorResumeInterview({
@@ -3213,9 +3215,28 @@ async function handleTailorResumeGeneration(
     if (questioningResult.questioningSummary) {
       prePlanningResult = {
         ...prePlanningResult,
+        emphasizedTechnologies: questioningResult.emphasizedTechnologies,
         questioningSummary: questioningResult.questioningSummary,
       };
     }
+
+    await handleStepEvent({
+      attempt: 1,
+      detail:
+        "USER.md already has enough context for the highlighted technologies, so this run does not need a follow-up answer.",
+      durationMs: questioningResult.generationDurationMs,
+      emphasizedTechnologies: keywordStage.emphasizedTechnologies,
+      retrying: false,
+      status: "skipped",
+      stepCount: 5,
+      stepNumber: 2,
+      summary: "Clarify missing details",
+    });
+    await removeTailorResumeQuestionDecisionInterview({
+      interviewId: reservation.interview.id,
+      userId,
+    });
+    await drainTailorResumeQuestionQueue(userId);
   } else {
     await handleStepEvent({
       attempt: null,
@@ -3236,7 +3257,7 @@ async function handleTailorResumeGeneration(
     employerName: preparation.companyName,
     jobDescription: preparation.jobDescription,
     onStepEvent: handleStepEvent,
-    precomputedEmphasizedTechnologies: keywordStage.emphasizedTechnologies,
+    precomputedEmphasizedTechnologies: prePlanningResult.emphasizedTechnologies,
     promptSettings: preparation.rawProfile.promptSettings.values,
     questioningSummary: prePlanningResult.questioningSummary,
     userMarkdown: userMarkdownForPlanning,
@@ -3579,6 +3600,7 @@ async function handleAdvanceTailorResumeInterview(
     });
     const nextPlanningResult: TailorResumePlanningResult = {
       ...preparation.tailoringInterview.planningResult,
+      emphasizedTechnologies: questioningResult.emphasizedTechnologies,
       questioningSummary: questioningResult.questioningSummary,
     };
     const nextInterview: TailorResumePendingInterview = {
@@ -3707,6 +3729,7 @@ async function handleAdvanceTailorResumeInterview(
   const completionRequestedAt = new Date().toISOString();
   const finalizedPlanningResult: TailorResumePlanningResult = {
     ...preparation.tailoringInterview.planningResult,
+    emphasizedTechnologies: questioningResult.emphasizedTechnologies,
     questioningSummary: questioningResult.questioningSummary,
   };
   const nextInterview: TailorResumePendingInterview = {

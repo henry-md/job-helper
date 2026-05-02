@@ -7,12 +7,16 @@ import {
 } from "./system-prompt-settings.ts";
 import { applyTailorResumeLinkOverridesWithSummary } from "./tailor-resume-link-overrides.ts";
 import { validateTailorResumeLatexDocument } from "./tailor-resume-link-validation.ts";
-import { resumeTextIncludesKeyword } from "./tailor-resume-keyword-coverage.ts";
+import {
+  buildTailorResumeKeywordCheckResult,
+  resumeTextIncludesKeyword,
+} from "./tailor-resume-keyword-coverage.ts";
 import {
   buildTailorResumePlanningSnapshot,
   type TailorResumePlanningBlock,
   type TailorResumePlanningSnapshot,
 } from "./tailor-resume-planning.ts";
+import { renderTailoredResumeLatexToPlainText } from "./tailor-resume-preview-focus.ts";
 import { getRetryAttemptsToGenerateLatexEdits } from "./tailor-resume-retry-config.ts";
 import {
   formatTransientModelError,
@@ -26,6 +30,7 @@ import {
   stripTailorResumeSegmentIds,
 } from "./tailor-resume-segmentation.ts";
 import type {
+  TailorResumeKeywordCheckResult,
   TailorResumeGenerationStepEvent,
   TailorResumeLinkRecord,
   TailoredResumeBlockEditRecord,
@@ -153,6 +158,66 @@ const tailorResumeImplementationSchema = {
   required: ["changes"],
 } as const;
 
+const tailorResumePlanningKeywordCheckToolName =
+  "check_planned_resume_keyword_coverage";
+const tailorResumeImplementationKeywordCheckToolName =
+  "check_implemented_resume_keyword_coverage";
+const maxKeywordCheckToolRoundsPerAttempt = 4;
+
+const tailorResumePlanningKeywordCheckTool = {
+  type: "function",
+  name: tailorResumePlanningKeywordCheckToolName,
+  description:
+    "Check keyword coverage for the current Step 3 plaintext plan by applying the proposed desiredPlainText replacements to the full resume and reporting which high- and low-priority terms are present in the resulting visible resume text.",
+  strict: true,
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      changes: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            desiredPlainText: { type: "string" },
+            segmentId: { type: "string" },
+          },
+          required: ["segmentId", "desiredPlainText"],
+        },
+      },
+    },
+    required: ["changes"],
+  },
+} as const;
+
+const tailorResumeImplementationKeywordCheckTool = {
+  type: "function",
+  name: tailorResumeImplementationKeywordCheckToolName,
+  description:
+    "Check keyword coverage for the current Step 4 LaTeX implementation by applying the proposed block replacements to the full resume, rendering visible plain text deterministically, and reporting which high- and low-priority terms are present.",
+  strict: true,
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      changes: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            latexCode: { type: "string" },
+            segmentId: { type: "string" },
+          },
+          required: ["segmentId", "latexCode"],
+        },
+      },
+    },
+    required: ["changes"],
+  },
+} as const;
+
 type TailoredResumeImplementationChange = {
   latexCode: string;
   segmentId: string;
@@ -179,23 +244,53 @@ type TailoredResumeImplementationResponse = {
   changes: TailoredResumeImplementationChange[];
 };
 
+type TailorResumeStepResponseInput = Array<
+  | {
+      content: Array<{
+        text: string;
+        type: "input_text";
+      }>;
+      role: "user";
+    }
+  | {
+      call_id: string;
+      output: string;
+      type: "function_call_output";
+    }
+>;
+
 type TailorResumeQuestioningKeywordRequirement = {
   detail: string;
   keyword: string;
   targetSegmentIds: string[];
 };
 
+type TailorResumePlanningKeywordCheckToolCall = {
+  arguments: string;
+  call_id: string;
+  name: typeof tailorResumePlanningKeywordCheckToolName;
+};
+
+type TailorResumeImplementationKeywordCheckToolCall = {
+  arguments: string;
+  call_id: string;
+  name: typeof tailorResumeImplementationKeywordCheckToolName;
+};
+
 type TailoredResumeResponse = {
   id?: string;
   model?: string;
   output?: Array<{
+    arguments?: unknown;
+    call_id?: unknown;
     content?: Array<{
-      text?: string;
-      type?: string;
+      text?: unknown;
+      type?: unknown;
     }>;
-    type?: string;
+    name?: unknown;
+    type?: unknown;
   }>;
-  output_text?: string;
+  output_text?: unknown;
 };
 
 export type PlanTailoredResumeResult =
@@ -282,7 +377,7 @@ function isTestOpenAIResponseEnabled() {
 }
 
 function readOutputText(response: TailoredResumeResponse) {
-  if (response.output_text) {
+  if (typeof response.output_text === "string") {
     return response.output_text.trim();
   }
 
@@ -303,8 +398,134 @@ function readOutputText(response: TailoredResumeResponse) {
   return chunks.join("").trim();
 }
 
+function findPlanningKeywordCheckToolCall(
+  response: TailoredResumeResponse,
+): TailorResumePlanningKeywordCheckToolCall | null {
+  for (const outputItem of response.output ?? []) {
+    if (
+      outputItem.type === "function_call" &&
+      outputItem.name === tailorResumePlanningKeywordCheckToolName &&
+      typeof outputItem.call_id === "string" &&
+      typeof outputItem.arguments === "string"
+    ) {
+      return {
+        arguments: outputItem.arguments,
+        call_id: outputItem.call_id,
+        name: tailorResumePlanningKeywordCheckToolName,
+      };
+    }
+  }
+
+  return null;
+}
+
+function findImplementationKeywordCheckToolCall(
+  response: TailoredResumeResponse,
+): TailorResumeImplementationKeywordCheckToolCall | null {
+  for (const outputItem of response.output ?? []) {
+    if (
+      outputItem.type === "function_call" &&
+      outputItem.name === tailorResumeImplementationKeywordCheckToolName &&
+      typeof outputItem.call_id === "string" &&
+      typeof outputItem.arguments === "string"
+    ) {
+      return {
+        arguments: outputItem.arguments,
+        call_id: outputItem.call_id,
+        name: tailorResumeImplementationKeywordCheckToolName,
+      };
+    }
+  }
+
+  return null;
+}
+
 function readTrimmedString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function parseKeywordCheckPlanningChanges(
+  value: unknown,
+): Array<Pick<TailoredResumePlanningChange, "desiredPlainText" | "segmentId">> {
+  if (!value || typeof value !== "object" || !("changes" in value)) {
+    throw new Error(
+      "The keyword-check tool call did not include a changes array.",
+    );
+  }
+
+  const rawChanges = value.changes;
+
+  if (!Array.isArray(rawChanges)) {
+    throw new Error(
+      "The keyword-check tool call did not include a changes array.",
+    );
+  }
+
+  return rawChanges.map((change) => {
+    if (!change || typeof change !== "object") {
+      throw new Error("The keyword-check tool call included an invalid change.");
+    }
+
+    const segmentId =
+      "segmentId" in change ? readTrimmedString(change.segmentId) : "";
+    const desiredPlainText =
+      "desiredPlainText" in change && typeof change.desiredPlainText === "string"
+        ? change.desiredPlainText
+        : "";
+
+    if (!segmentId) {
+      throw new Error(
+        "The keyword-check tool call included a change without a segmentId.",
+      );
+    }
+
+    return {
+      desiredPlainText,
+      segmentId,
+    };
+  });
+}
+
+function parseKeywordCheckImplementationChanges(
+  value: unknown,
+): Array<Pick<TailoredResumeImplementationChange, "latexCode" | "segmentId">> {
+  if (!value || typeof value !== "object" || !("changes" in value)) {
+    throw new Error(
+      "The keyword-check tool call did not include a changes array.",
+    );
+  }
+
+  const rawChanges = value.changes;
+
+  if (!Array.isArray(rawChanges)) {
+    throw new Error(
+      "The keyword-check tool call did not include a changes array.",
+    );
+  }
+
+  return rawChanges.map((change) => {
+    if (!change || typeof change !== "object") {
+      throw new Error("The keyword-check tool call included an invalid change.");
+    }
+
+    const segmentId =
+      "segmentId" in change ? readTrimmedString(change.segmentId) : "";
+    const latexCode =
+      "latexCode" in change && typeof change.latexCode === "string"
+        ? change.latexCode
+        : "";
+
+    if (!segmentId) {
+      throw new Error(
+        "The keyword-check tool call included a change without a segmentId.",
+      );
+    }
+
+    return {
+      latexCode,
+      segmentId,
+    };
+  });
 }
 
 function buildDisplayName(input: {
@@ -881,6 +1102,23 @@ function validateTailoredResumePlanChanges(input: {
   }
 }
 
+function buildPlannedResumePlainText(input: {
+  changes: Array<Pick<TailoredResumePlanningChange, "desiredPlainText" | "segmentId">>;
+  planningSnapshot: TailorResumePlanningSnapshot;
+}) {
+  const changesById = new Map(
+    input.changes.map((change) => [change.segmentId, change]),
+  );
+
+  return input.planningSnapshot.blocks
+    .map((block) => {
+      const change = changesById.get(block.segmentId);
+      return change ? change.desiredPlainText.trim() : block.plainText;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 function buildTailoredResumeBlockChanges(input: {
   implementationChanges: TailoredResumeImplementationChange[];
   plannedChanges: TailoredResumePlanningChange[];
@@ -921,6 +1159,10 @@ function buildTailoredResumeBlockChanges(input: {
       segmentId: plannedChange.segmentId,
     } satisfies TailoredResumeBlockChange;
   });
+}
+
+function buildKeywordCheckToolOutput(result: TailorResumeKeywordCheckResult) {
+  return JSON.stringify(result, null, 2);
 }
 
 function serializeTailorResumePlanningBlocks(
@@ -1126,6 +1368,34 @@ export function validateTailoredResumeImplementationIncludesQuestioningLearnings
       ),
     ].join("\n"),
   );
+}
+
+export function validateTailoredResumePlanningKeywordCoverage(input: {
+  keywordCheckResult: TailorResumeKeywordCheckResult;
+}) {
+  if (input.keywordCheckResult.missingHighPriority.length > 0) {
+    throw new Error(
+      [
+        "The Step 3 plan still misses required high-priority keywords in the resulting resume text.",
+        `Missing high-priority keywords: ${input.keywordCheckResult.missingHighPriority.join(", ")}`,
+        "Revise the planned block edits so those keywords appear in the tailored resume when they are already supported by the original resume or USER.md.",
+      ].join("\n"),
+    );
+  }
+}
+
+export function validateTailoredResumeImplementationKeywordCoverage(input: {
+  keywordCheckResult: TailorResumeKeywordCheckResult;
+}) {
+  if (input.keywordCheckResult.missingHighPriority.length > 0) {
+    throw new Error(
+      [
+        "The Step 4 implementation regressed required high-priority keywords from the accepted Step 3 plan.",
+        `Missing high-priority keywords: ${input.keywordCheckResult.missingHighPriority.join(", ")}`,
+        "Keep Step 4 focused on block-scoped implementation and page-count discipline, but preserve the accepted plan's important keywords.",
+      ].join("\n"),
+    );
+  }
 }
 
 function buildUserMarkdownPlanningContext(
@@ -1524,6 +1794,20 @@ function buildTailoringPlanInput(input: {
   ];
 }
 
+function buildImplementationRequiredTechnologies(input: {
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+  plannedResumePlainText: string;
+}) {
+  return input.emphasizedTechnologies.filter(
+    (technology) =>
+      technology.priority === "high" ||
+      resumeTextIncludesKeyword({
+        term: technology.name,
+        text: input.plannedResumePlainText,
+      }),
+  );
+}
+
 function buildTailoringImplementationInput(input: {
   jobDescription: string;
   planningBlocksById: Map<string, TailorResumePlanningBlock>;
@@ -1852,37 +2136,99 @@ export async function planTailoredResume(input: {
       stepNumber: 3,
       summary: "Generating plaintext edit outline",
     });
-    let response: Awaited<ReturnType<typeof client.responses.create>>;
+    let response: TailoredResumeResponse;
 
     try {
-      response = await runTailorResumeStepModelRequest({
-        attempt,
-        onStepEvent: input.onStepEvent,
-        operation: () =>
-          client.responses.create({
-            input: planInput,
-            instructions: planInstructions,
-            model,
-            text: {
-              verbosity: "low",
-              format: {
-                type: "json_schema",
-                name: "tailor_resume_edit_plan",
-                strict: true,
-                schema: tailorResumePlanSchema,
+      let previousResponseId: string | undefined;
+      let responseInput: TailorResumeStepResponseInput = planInput;
+      let finalResponse: TailoredResumeResponse | null = null;
+      let keywordCheckCalled = false;
+
+      for (
+        let toolRound = 1;
+        toolRound <= maxKeywordCheckToolRoundsPerAttempt;
+        toolRound += 1
+      ) {
+        const roundResponse = (await runTailorResumeStepModelRequest({
+          attempt,
+          onStepEvent: input.onStepEvent,
+          operation: () =>
+            client.responses.create({
+              input: responseInput,
+              instructions: planInstructions,
+              model,
+              parallel_tool_calls: false,
+              previous_response_id: previousResponseId,
+              tools: [tailorResumePlanningKeywordCheckTool],
+              text: {
+                verbosity: "low",
+                format: {
+                  type: "json_schema",
+                  name: "tailor_resume_edit_plan",
+                  strict: true,
+                  schema: tailorResumePlanSchema,
+                },
               },
-            },
-          }),
-        readDurationMs: () => Math.max(0, Date.now() - startedAt),
-        stepNumber: 3,
-        summary: "Generating plaintext edit outline",
-      });
-    } catch (error) {
-      if (!isTransientModelError(error)) {
-        throw error;
+            }),
+          readDurationMs: () => Math.max(0, Date.now() - startedAt),
+          stepNumber: 3,
+          summary: "Generating plaintext edit outline",
+        })) as TailoredResumeResponse;
+
+        previousResponseId = roundResponse.id;
+        finalResponse = roundResponse;
+        const keywordCheckToolCall =
+          findPlanningKeywordCheckToolCall(roundResponse);
+
+        if (!keywordCheckToolCall) {
+          break;
+        }
+
+        keywordCheckCalled = true;
+        const candidateChanges = parseKeywordCheckPlanningChanges(
+          JSON.parse(keywordCheckToolCall.arguments),
+        );
+        validateTailoredResumePlanChanges({
+          changes: candidateChanges.map((change) => ({
+            ...change,
+            reason: "[keyword check candidate]",
+          })),
+          planningBlocks: planningSnapshot.blocks,
+        });
+        const candidatePlainText = buildPlannedResumePlainText({
+          changes: candidateChanges,
+          planningSnapshot,
+        });
+        const keywordCheckResult = buildTailorResumeKeywordCheckResult({
+          emphasizedTechnologies: emphasizedTechnologiesForPlanning,
+          text: candidatePlainText,
+        });
+        responseInput = [
+          {
+            call_id: keywordCheckToolCall.call_id,
+            output: buildKeywordCheckToolOutput(keywordCheckResult),
+            type: "function_call_output" as const,
+          },
+        ];
       }
 
-      lastError = formatTransientModelError(error);
+      if (!finalResponse) {
+        throw new Error("The model did not return a planning response.");
+      }
+
+      if (!keywordCheckCalled) {
+        throw new Error(
+          `Call ${tailorResumePlanningKeywordCheckToolName} before returning the final Step 3 plan.`,
+        );
+      }
+
+      response = finalResponse;
+    } catch (error) {
+      lastError = isTransientModelError(error)
+        ? formatTransientModelError(error)
+        : error instanceof Error
+          ? error.message
+          : "The planning pass failed before a valid response was produced.";
       await emitTailorResumeGenerationStep(input.onStepEvent, {
         attempt,
         detail: lastError,
@@ -1897,6 +2243,8 @@ export async function planTailoredResume(input: {
         prompt: planningPrompt,
         skippedReason: null,
       };
+      planningFeedback =
+        `The previous planning attempt failed before producing a valid final plan.\n\nExact issue:\n${lastError}\n\nCall ${tailorResumePlanningKeywordCheckToolName} before returning the final structured response, and then return the full structured response with thesis, metadata, and plaintext block changes.`;
 
       if (attempt < maxPlanningAttempts) {
         continue;
@@ -1905,7 +2253,7 @@ export async function planTailoredResume(input: {
       break;
     }
 
-    lastModel = (response as { model?: string }).model ?? model;
+    lastModel = response.model ?? model;
     const outputText = readOutputText(response);
 
     if (!outputText) {
@@ -1943,6 +2291,15 @@ export async function planTailoredResume(input: {
       validateTailoredResumePlanChanges({
         changes: nextPlanWithJobTechnologies.changes,
         planningBlocks: planningSnapshot.blocks,
+      });
+      validateTailoredResumePlanningKeywordCoverage({
+        keywordCheckResult: buildTailorResumeKeywordCheckResult({
+          emphasizedTechnologies: nextPlanWithJobTechnologies.emphasizedTechnologies,
+          text: buildPlannedResumePlainText({
+            changes: nextPlanWithJobTechnologies.changes,
+            planningSnapshot,
+          }),
+        }),
       });
       lastPlanningResult = nextPlanWithJobTechnologies;
       lastPlanningDebug = {
@@ -2039,6 +2396,14 @@ export async function implementTailoredResumePlan(input: {
   const planningSnapshot =
     input.planningSnapshot ??
     buildTailorResumePlanningSnapshot(normalizedInput.annotatedLatex);
+  const plannedResumePlainText = buildPlannedResumePlainText({
+    changes: input.planningResult.changes,
+    planningSnapshot,
+  });
+  const implementationRequiredTechnologies = buildImplementationRequiredTechnologies({
+    emphasizedTechnologies: input.planningResult.emphasizedTechnologies,
+    plannedResumePlainText,
+  });
   const planningBlocksById = new Map(
     planningSnapshot.blocks.map((block) => [block.segmentId, block]),
   );
@@ -2183,38 +2548,100 @@ export async function implementTailoredResumePlan(input: {
       stepNumber: 4,
       summary: "Generating block-scoped edits",
     });
-    let response: Awaited<ReturnType<typeof client.responses.create>>;
+    let response: TailoredResumeResponse;
 
     try {
-      response = await runTailorResumeStepModelRequest({
-        attempt,
-        onStepEvent: input.onStepEvent,
-        operation: () =>
-          client.responses.create({
-            input: implementationInput,
-            instructions: implementationInstructions,
-            model,
-            text: {
-              verbosity: "low",
-              format: {
-                type: "json_schema",
-                name: "tailor_resume_latex_implementation",
-                strict: true,
-                schema: tailorResumeImplementationSchema,
+      let previousResponseId: string | undefined;
+      let responseInput: TailorResumeStepResponseInput = implementationInput;
+      let finalResponse: TailoredResumeResponse | null = null;
+      let keywordCheckCalled = false;
+
+      for (
+        let toolRound = 1;
+        toolRound <= maxKeywordCheckToolRoundsPerAttempt;
+        toolRound += 1
+      ) {
+        const roundResponse = (await runTailorResumeStepModelRequest({
+          attempt,
+          onStepEvent: input.onStepEvent,
+          operation: () =>
+            client.responses.create({
+              input: responseInput,
+              instructions: implementationInstructions,
+              model,
+              parallel_tool_calls: false,
+              previous_response_id: previousResponseId,
+              tools: [tailorResumeImplementationKeywordCheckTool],
+              text: {
+                verbosity: "low",
+                format: {
+                  type: "json_schema",
+                  name: "tailor_resume_latex_implementation",
+                  strict: true,
+                  schema: tailorResumeImplementationSchema,
+                },
               },
-            },
-          }),
-        readDurationMs: () => Math.max(0, Date.now() - startedAt),
-        stepNumber: 4,
-        summary: "Generating block-scoped edits",
-      });
-    } catch (error) {
-      if (!isTransientModelError(error)) {
-        throw error;
+            }),
+          readDurationMs: () => Math.max(0, Date.now() - startedAt),
+          stepNumber: 4,
+          summary: "Generating block-scoped edits",
+        })) as TailoredResumeResponse;
+
+        previousResponseId = roundResponse.id;
+        finalResponse = roundResponse;
+        const keywordCheckToolCall =
+          findImplementationKeywordCheckToolCall(roundResponse);
+
+        if (!keywordCheckToolCall) {
+          break;
+        }
+
+        keywordCheckCalled = true;
+        const candidateChanges = parseKeywordCheckImplementationChanges(
+          JSON.parse(keywordCheckToolCall.arguments),
+        );
+        const candidateBlockChanges = buildTailoredResumeBlockChanges({
+          implementationChanges: candidateChanges.map((change) => ({
+            latexCode: change.latexCode,
+            segmentId: change.segmentId,
+          })),
+          plannedChanges: input.planningResult.changes,
+        });
+        const candidateAnnotatedLatex = applyTailorResumeBlockChanges({
+          annotatedLatexCode: normalizedInput.annotatedLatex,
+          changes: candidateBlockChanges,
+        }).annotatedLatex;
+        const keywordCheckResult = buildTailorResumeKeywordCheckResult({
+          emphasizedTechnologies: implementationRequiredTechnologies,
+          text: renderTailoredResumeLatexToPlainText(candidateAnnotatedLatex),
+        });
+        responseInput = [
+          {
+            call_id: keywordCheckToolCall.call_id,
+            output: buildKeywordCheckToolOutput(keywordCheckResult),
+            type: "function_call_output" as const,
+          },
+        ];
       }
 
+      if (!finalResponse) {
+        throw new Error("The model did not return an implementation response.");
+      }
+
+      if (!keywordCheckCalled) {
+        throw new Error(
+          `Call ${tailorResumeImplementationKeywordCheckToolName} before returning the final Step 4 JSON implementation.`,
+        );
+      }
+
+      response = finalResponse;
+    } catch (error) {
       completedImplementationAttempts = attempt;
-      lastError = formatTransientModelError(error);
+      lastError = isTransientModelError(error)
+        ? formatTransientModelError(error)
+        : error instanceof Error
+          ? error.message
+          : "The implementation pass failed before a valid response was produced.";
       implementationSkippedReason = null;
       await emitTailorResumeGenerationStep(input.onStepEvent, {
         attempt,
@@ -2225,6 +2652,8 @@ export async function implementTailoredResumePlan(input: {
         stepNumber: 4,
         summary: "Generating block-scoped edits",
       });
+      implementationFeedback =
+        `The previous implementation attempt failed before producing a valid final block-scoped response.\n\nExact issue:\n${lastError}\n\nCall ${tailorResumeImplementationKeywordCheckToolName} before returning the final strict JSON object with one LaTeX replacement per planned segment.`;
 
       if (attempt < maxTailoredResumeAttempts) {
         continue;
@@ -2234,7 +2663,7 @@ export async function implementTailoredResumePlan(input: {
     }
 
     completedImplementationAttempts = attempt;
-    lastModel = (response as { model?: string }).model ?? model;
+    lastModel = response.model ?? model;
     const outputText = readOutputText(response);
 
     if (!outputText) {
@@ -2316,11 +2745,17 @@ export async function implementTailoredResumePlan(input: {
         implementationChanges: candidateChanges,
         plan: input.planningResult,
       });
-      candidateEdits = buildTailoredResumeBlockEdits({
+      appliedCandidate = applyTailorResumeBlockChanges({
         annotatedLatexCode: normalizedInput.annotatedLatex,
         changes: candidateChanges,
       });
-      appliedCandidate = applyTailorResumeBlockChanges({
+      validateTailoredResumeImplementationKeywordCoverage({
+        keywordCheckResult: buildTailorResumeKeywordCheckResult({
+          emphasizedTechnologies: implementationRequiredTechnologies,
+          text: renderTailoredResumeLatexToPlainText(appliedCandidate.annotatedLatex),
+        }),
+      });
+      candidateEdits = buildTailoredResumeBlockEdits({
         annotatedLatexCode: normalizedInput.annotatedLatex,
         changes: candidateChanges,
       });

@@ -110,6 +110,8 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /weakest or least job-relevant existing bullet/i);
   assert.match(prompt, /desiredPlainText to an empty string/i);
   assert.match(prompt, /deleting one whole bullet or line/i);
+  assert.match(prompt, /primary goal is to make sure the final planned resume text includes every remaining high-priority keyword/i);
+  assert.match(prompt, /check_planned_resume_keyword_coverage/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 
@@ -209,6 +211,9 @@ test("buildTailorResumeInterviewSystemPrompt keeps user-facing interview text co
   assert.match(prompt, /Unquoted bullets are factual notes or constraints/i);
   assert.match(prompt, /No direct production Cassandra experience/i);
   assert.match(prompt, /initiate_tailor_resume_probing_questions may edit USER\.md only after the user has answered/i);
+  assert.match(prompt, /Step 2 owns high-priority keyword accounting/i);
+  assert.match(prompt, /keywordDecisions/i);
+  assert.match(prompt, /action "remove"/i);
   assert.equal(
     prompt.includes("make the question text do four jobs"),
     false,
@@ -257,6 +262,8 @@ test("buildTailorResumeImplementationSystemPrompt injects retry feedback", () =>
   assert.match(prompt, /Do not leave an empty \\resumeitem\{\}/i);
   assert.match(prompt, /replaces a lower-signal bullet with user-confirmed technology experience/i);
   assert.match(prompt, /Do not move the technology only to skills/i);
+  assert.match(prompt, /secondary goal is to avoid keyword regressions from that accepted plan/i);
+  assert.match(prompt, /check_implemented_resume_keyword_coverage/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 

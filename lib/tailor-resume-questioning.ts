@@ -5,6 +5,7 @@ import {
   type SystemPromptSettings,
 } from "./system-prompt-settings.ts";
 import type {
+  TailorResumeKeywordDecision,
   TailorResumeConversationToolCall,
   TailorResumeConversationMessage,
   TailorResumeInterviewDebugDecision,
@@ -20,6 +21,7 @@ import type {
 } from "./tailor-resume-planning.ts";
 import {
   buildTailorResumeKeywordPresenceContext,
+  buildTailorResumeKeywordCheckResult,
   type TailorResumeKeywordPresenceContext,
   type TailorResumeKeywordPresenceContextTerm,
 } from "./tailor-resume-keyword-coverage.ts";
@@ -104,6 +106,27 @@ const tailorResumeTechnologyContextSchema = {
   required: ["name", "definition", "examples"],
 } as const;
 
+const tailorResumeKeywordDecisionSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    action: {
+      type: "string",
+      enum: ["keep", "remove"],
+    },
+    name: {
+      type: "string",
+      description: "The exact emphasized keyword this decision applies to.",
+    },
+    reason: {
+      type: "string",
+      description:
+        "A brief explanation, especially when removing a bad or nonsensical keyword after the user rejects it.",
+    },
+  },
+  required: ["name", "action", "reason"],
+} as const;
+
 const initiateTailorResumeProbingQuestionsToolParameters = {
   type: "object",
   additionalProperties: false,
@@ -125,6 +148,10 @@ const initiateTailorResumeProbingQuestionsToolParameters = {
       type: "array",
       items: tailorResumeInterviewLearningSchema,
     },
+    keywordDecisions: {
+      type: "array",
+      items: tailorResumeKeywordDecisionSchema,
+    },
     technologyContexts: {
       type: "array",
       description:
@@ -139,6 +166,7 @@ const initiateTailorResumeProbingQuestionsToolParameters = {
   required: [
     "assistantMessage",
     "debugDecision",
+    "keywordDecisions",
     "learnings",
     "technologyContexts",
     "userMarkdownEditOperations",
@@ -158,12 +186,21 @@ const finishTailorResumeInterviewToolParameters = {
       type: "array",
       items: tailorResumeInterviewLearningSchema,
     },
+    keywordDecisions: {
+      type: "array",
+      items: tailorResumeKeywordDecisionSchema,
+    },
     userMarkdownEditOperations: {
       type: "array",
       items: tailorResumeUserMarkdownEditOperationSchema,
     },
   },
-  required: ["completionMessage", "learnings", "userMarkdownEditOperations"],
+  required: [
+    "completionMessage",
+    "keywordDecisions",
+    "learnings",
+    "userMarkdownEditOperations",
+  ],
 } as const;
 
 const skipTailorResumeInterviewToolParameters = {
@@ -171,12 +208,16 @@ const skipTailorResumeInterviewToolParameters = {
   additionalProperties: false,
   properties: {
     reason: { type: "string" },
+    keywordDecisions: {
+      type: "array",
+      items: tailorResumeKeywordDecisionSchema,
+    },
     userMarkdownEditOperations: {
       type: "array",
       items: tailorResumeUserMarkdownEditOperationSchema,
     },
   },
-  required: ["reason", "userMarkdownEditOperations"],
+  required: ["reason", "keywordDecisions", "userMarkdownEditOperations"],
 } as const;
 
 const tailorResumeInterviewTools = [
@@ -211,6 +252,7 @@ type TailorResumeInterviewResponse = {
   assistantMessage: string;
   completionMessage: string;
   debugDecision: TailorResumeInterviewDebugDecision;
+  keywordDecisions: TailorResumeKeywordDecision[];
   learnings: TailoredResumeQuestionLearning[];
   technologyContexts: TailorResumeTechnologyContext[];
   userMarkdownEditOperations: TailorResumeUserMarkdownPatchOperation[];
@@ -228,6 +270,7 @@ export type AdvanceTailorResumeQuestioningResult =
       action: "ask";
       assistantMessage: string;
       generationDurationMs: number;
+      emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
       questioningSummary: TailoredResumeQuestioningSummary;
       technologyContexts: TailorResumeTechnologyContext[];
       toolCalls: TailorResumeConversationToolCall[];
@@ -236,6 +279,7 @@ export type AdvanceTailorResumeQuestioningResult =
   | {
       action: "done";
       completionMessage: string;
+      emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
       generationDurationMs: number;
       questioningSummary: TailoredResumeQuestioningSummary | null;
       toolCalls: TailorResumeConversationToolCall[];
@@ -244,6 +288,7 @@ export type AdvanceTailorResumeQuestioningResult =
     }
   | {
       action: "skip";
+      emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
       generationDurationMs: number;
       questioningSummary: TailoredResumeQuestioningSummary | null;
       userMarkdownPatchResult: TailorResumeUserMarkdownPatchResult | null;
@@ -506,6 +551,41 @@ function parseTailorResumeUserMarkdownEditOperations(
   });
 }
 
+function parseTailorResumeKeywordDecisions(
+  value: unknown,
+): TailorResumeKeywordDecision[] {
+  if (typeof value === "undefined" || value === null) {
+    return [];
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error("The model returned invalid keyword decisions.");
+  }
+
+  return value.map((entry) => {
+    if (!entry || typeof entry !== "object") {
+      throw new Error("The model returned an invalid keyword decision.");
+    }
+
+    const name = "name" in entry ? readTrimmedString(entry.name) : "";
+    const action =
+      "action" in entry && (entry.action === "keep" || entry.action === "remove")
+        ? entry.action
+        : null;
+    const reason = "reason" in entry ? readTrimmedString(entry.reason) : "";
+
+    if (!name || !action || !reason) {
+      throw new Error("The model returned an incomplete keyword decision.");
+    }
+
+    return {
+      action,
+      name,
+      reason,
+    };
+  });
+}
+
 function parseTailorResumeInterviewResponse(
   value: unknown,
   outputText: string,
@@ -527,6 +607,9 @@ function parseTailorResumeInterviewResponse(
       ? value.debugDecision
       : null;
   const rawLearnings = "learnings" in value ? value.learnings : null;
+  const keywordDecisions = parseTailorResumeKeywordDecisions(
+    "keywordDecisions" in value ? value.keywordDecisions : undefined,
+  );
   const technologyContexts = parseTailorResumeTechnologyContexts(
     "technologyContexts" in value ? value.technologyContexts : undefined,
   );
@@ -551,6 +634,7 @@ function parseTailorResumeInterviewResponse(
         ? outputText || readRecordString(value, "completionMessage")
         : "",
     debugDecision,
+    keywordDecisions,
     learnings: rawLearnings.map(parseTailoredResumeQuestionLearning),
     technologyContexts: action === "ask" ? technologyContexts : [],
     userMarkdownEditOperations,
@@ -691,6 +775,14 @@ export function parseTailorResumeInterviewResponseFromModelOutput(
         assistantMessage: "",
         completionMessage: "",
         debugDecision: "not_applicable",
+        keywordDecisions:
+          argumentsJson && typeof argumentsJson === "object"
+            ? parseTailorResumeKeywordDecisions(
+                "keywordDecisions" in argumentsJson
+                  ? argumentsJson.keywordDecisions
+                  : undefined,
+              )
+            : [],
         learnings: [],
         technologyContexts: [],
         userMarkdownEditOperations,
@@ -777,6 +869,25 @@ function serializeKeywordPresenceContext(
     "Per-term deterministic presence:",
     terms,
   ].join("\n");
+}
+
+function applyKeywordDecisionsToEmphasizedTechnologies(input: {
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+  keywordDecisions: TailorResumeKeywordDecision[];
+}) {
+  const removedNames = new Set(
+    input.keywordDecisions
+      .filter((decision) => decision.action === "remove")
+      .map((decision) => decision.name.trim().toLowerCase()),
+  );
+
+  if (removedNames.size === 0) {
+    return input.emphasizedTechnologies;
+  }
+
+  return input.emphasizedTechnologies.filter(
+    (technology) => !removedNames.has(technology.name.trim().toLowerCase()),
+  );
 }
 
 const productSpecificTermsToAvoidAsking = new Set([
@@ -1154,6 +1265,24 @@ function textMentionsTechnology(text: string, technologyName: string) {
   );
 }
 
+function latestUserMessageExplicitlyRejectsTechnology(input: {
+  messages: TailorResumeConversationMessage[];
+  technologyName: string;
+}) {
+  const latestUserMessage = [...input.messages]
+    .reverse()
+    .find((message) => message.role === "user");
+  const text = latestUserMessage?.text.trim() ?? "";
+
+  if (!text || !textMentionsTechnology(text, input.technologyName)) {
+    return false;
+  }
+
+  return /\b(?:not a real keyword|not a real requirement|not required|not relevant|ignore|remove|drop|nonsense|doesn['’]t apply|does not apply|shouldn['’]t count|should not count)\b/i.test(
+    text,
+  );
+}
+
 export function latestUserMessageDirectlyConfirmsTechnologyExperience(input: {
   messages: TailorResumeConversationMessage[];
   technologyNames: string[];
@@ -1271,7 +1400,35 @@ function validateTailorResumeInterviewResponse(input: {
       throw new Error('Action "skip" must not edit USER.md.');
     }
 
+    if (input.response.keywordDecisions.length > 0) {
+      throw new Error('Action "skip" must not change emphasized keywords.');
+    }
+
     return;
+  }
+
+  const knownTechnologyNames = new Set(
+    input.emphasizedTechnologyNames.map((name) => name.trim().toLowerCase()),
+  );
+
+  for (const decision of input.response.keywordDecisions) {
+    if (!knownTechnologyNames.has(decision.name.trim().toLowerCase())) {
+      throw new Error(
+        `Keyword decision "${decision.name}" must match an emphasized technology.`,
+      );
+    }
+
+    if (
+      decision.action === "remove" &&
+      !latestUserMessageExplicitlyRejectsTechnology({
+        messages: input.conversation,
+        technologyName: decision.name,
+      })
+    ) {
+      throw new Error(
+        `Keyword decision "${decision.name}" can be removed only when the user explicitly rejects it as a bad or irrelevant keyword.`,
+      );
+    }
   }
 
   if (input.response.action === "ask" && !input.response.assistantMessage) {
@@ -1358,6 +1515,16 @@ function validateTailorResumeInterviewResponse(input: {
         'The first action "ask" turn must not edit USER.md before the user answers.',
       );
     }
+  }
+
+  if (
+    input.response.action === "ask" &&
+    !input.previousSummary &&
+    input.response.keywordDecisions.length > 0
+  ) {
+    throw new Error(
+      'The first action "ask" turn must not remove or confirm keywords before the user answers.',
+    );
   }
 
   if (
@@ -1561,9 +1728,39 @@ export async function advanceTailorResumeQuestioning(input: {
       }
     }
 
+    const nextUserMarkdown =
+      userMarkdownPatchResult?.ok === true
+        ? userMarkdownPatchResult.markdown
+        : userMarkdown.markdown;
+    const nextEmphasizedTechnologies =
+      applyKeywordDecisionsToEmphasizedTechnologies({
+        emphasizedTechnologies: input.planningResult.emphasizedTechnologies,
+        keywordDecisions: parsedResponse.keywordDecisions,
+      });
+    const nextKeywordCoverage = buildTailorResumeKeywordCheckResult({
+      emphasizedTechnologies: nextEmphasizedTechnologies.filter(
+        (technology) => technology.priority === "high",
+      ),
+      text: `${input.planningSnapshot.resumePlainText}\n${nextUserMarkdown}`,
+    });
+
+    if (
+      parsedResponse.action !== "ask" &&
+      nextKeywordCoverage.missingHighPriority.length > 0
+    ) {
+      lastError = [
+        "Step 2 must account for every remaining high-priority keyword in either the original resume or USER.md before it can finish or skip.",
+        `Still missing after your proposed USER.md update: ${nextKeywordCoverage.missingHighPriority.join(", ")}`,
+        "Ask another grouped follow-up question, update USER.md with the supported technologies, or explicitly remove a bad keyword only when the user rejects it as not a real requirement keyword.",
+      ].join("\n");
+      feedback = lastError;
+      continue;
+    }
+
     if (parsedResponse.action === "skip") {
       return {
         action: "skip",
+        emphasizedTechnologies: nextEmphasizedTechnologies,
         generationDurationMs: Math.max(0, Date.now() - startedAt),
         questioningSummary: null,
         userMarkdownPatchResult,
@@ -1592,6 +1789,7 @@ export async function advanceTailorResumeQuestioning(input: {
       return {
         action: "ask",
         assistantMessage: parsedResponse.assistantMessage,
+        emphasizedTechnologies: nextEmphasizedTechnologies,
         generationDurationMs: Math.max(0, Date.now() - startedAt),
         questioningSummary,
         technologyContexts: parsedResponse.technologyContexts,
@@ -1603,6 +1801,7 @@ export async function advanceTailorResumeQuestioning(input: {
     return {
       action: "done",
       completionMessage: parsedResponse.completionMessage,
+      emphasizedTechnologies: nextEmphasizedTechnologies,
       generationDurationMs: Math.max(0, Date.now() - startedAt),
       questioningSummary,
       toolCalls: parsedToolCalls,
@@ -1619,6 +1818,7 @@ export async function advanceTailorResumeQuestioning(input: {
     const fallbackToolCallArguments = {
       assistantMessage,
       debugDecision: "not_applicable",
+      keywordDecisions: [],
       learnings: [],
       technologyContexts,
       userMarkdownEditOperations: [],
@@ -1627,6 +1827,7 @@ export async function advanceTailorResumeQuestioning(input: {
     return {
       action: "ask",
       assistantMessage,
+      emphasizedTechnologies: input.planningResult.emphasizedTechnologies,
       generationDurationMs: Math.max(0, Date.now() - startedAt),
       questioningSummary: {
         agenda: `Ask whether the user has experience with ${askWorthyMissingTerms

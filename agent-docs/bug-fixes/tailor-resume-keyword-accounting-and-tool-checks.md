@@ -1,0 +1,5 @@
+Tailor Resume keyword accounting and deterministic tool checks
+
+- Bug: Step 2 could leave required keywords unaccounted for even after USER.md edits, and Step 3/4 relied too heavily on prompt-only keyword guidance. That let grounded terms such as Cassandra disappear from the tailored resume even when the resume or USER.md already supported them.
+- Fix: Step 2 now owns high-priority keyword accounting. Before it can finish or skip, every remaining high-priority keyword must be accounted for in either the original resume or USER.md, unless the user explicitly rejects a bad keyword and Step 2 removes it from the emphasized list. Step 3 and Step 4 now each use a deterministic keyword-check tool call before finalizing.
+- Guardrail: Step 3 must include every remaining supported high-priority keyword in the tailored resume text itself. Step 4 must preserve the accepted Step 3 coverage while doing block-scoped implementation and page-count-sensitive edits, but it should not take on a stricter keyword burden than Step 3.

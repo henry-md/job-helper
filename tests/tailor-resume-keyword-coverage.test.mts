@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildTailorResumeKeywordCheckResult,
   buildTailorResumeKeywordPresenceContext,
   buildTailoredResumeKeywordCoverage,
   resumeTextIncludesKeyword,
@@ -143,4 +144,37 @@ test("buildTailorResumeKeywordPresenceContext separates resume and USER.md prese
     context.terms.find((term) => term.name === "Redux")?.presentInUserMarkdown,
     true,
   );
+});
+
+test("buildTailorResumeKeywordCheckResult separates high and low priority presence", () => {
+  const result = buildTailorResumeKeywordCheckResult({
+    emphasizedTechnologies: [
+      {
+        evidence: "Required section mentions Cassandra.",
+        name: "Cassandra",
+        priority: "high",
+      },
+      {
+        evidence: "Required section mentions Spark.",
+        name: "Spark",
+        priority: "high",
+      },
+      {
+        evidence: "Preferred section mentions Redux.",
+        name: "Redux",
+        priority: "low",
+      },
+    ],
+    text: "Built Cassandra data models and Redux UI state flows.",
+  });
+
+  assert.deepEqual(result.presentHighPriority, ["Cassandra"]);
+  assert.deepEqual(result.missingHighPriority, ["Spark"]);
+  assert.deepEqual(result.presentLowPriority, ["Redux"]);
+  assert.deepEqual(result.missingLowPriority, []);
+  assert.deepEqual(result.terms, [
+    { name: "Cassandra", present: true, priority: "high" },
+    { name: "Spark", present: false, priority: "high" },
+    { name: "Redux", present: true, priority: "low" },
+  ]);
 });

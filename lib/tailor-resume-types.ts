@@ -142,6 +142,12 @@ export type TailoredResumeEmphasizedTechnology = {
   priority: TailoredResumeEmphasizedTechnologyPriority;
 };
 
+export type TailorResumeKeywordDecision = {
+  action: "keep" | "remove";
+  name: string;
+  reason: string;
+};
+
 export type TailorResumeWorkspaceState = {
   tailoringInterview: TailorResumePendingInterview | null;
   tailoringInterviews: TailorResumePendingInterview[];
@@ -219,6 +225,20 @@ export type TailoredResumeKeywordCoverageTerm = {
   presentInOriginal: boolean;
   presentInTailored: boolean;
   priority: TailoredResumeEmphasizedTechnologyPriority;
+};
+
+export type TailorResumeKeywordCheckTerm = {
+  name: string;
+  present: boolean;
+  priority: TailoredResumeEmphasizedTechnologyPriority;
+};
+
+export type TailorResumeKeywordCheckResult = {
+  missingHighPriority: string[];
+  missingLowPriority: string[];
+  presentHighPriority: string[];
+  presentLowPriority: string[];
+  terms: TailorResumeKeywordCheckTerm[];
 };
 
 export type TailoredResumeKeywordCoverageBucket = {

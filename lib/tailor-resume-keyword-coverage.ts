@@ -1,5 +1,7 @@
 import { renderTailoredResumeLatexToPlainText } from "./tailor-resume-preview-focus.ts";
 import type {
+  TailorResumeKeywordCheckResult,
+  TailorResumeKeywordCheckTerm,
   TailoredResumeEmphasizedTechnology,
   TailoredResumeEmphasizedTechnologyPriority,
   TailoredResumeKeywordCoverage,
@@ -126,6 +128,37 @@ export function buildTailorResumeKeywordPresenceContext(input: {
       missingFromOriginalResumeAndUserMarkdown
         .filter((term) => term.priority === "low")
         .map((term) => term.name),
+    terms,
+  };
+}
+
+export function buildTailorResumeKeywordCheckResult(input: {
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+  text: string;
+}): TailorResumeKeywordCheckResult {
+  const technologies = dedupeTechnologies(input.emphasizedTechnologies);
+  const terms = technologies.map<TailorResumeKeywordCheckTerm>((technology) => ({
+    name: technology.name,
+    present: resumeTextIncludesKeyword({
+      term: technology.name,
+      text: input.text,
+    }),
+    priority: technology.priority,
+  }));
+
+  return {
+    missingHighPriority: terms
+      .filter((term) => term.priority === "high" && !term.present)
+      .map((term) => term.name),
+    missingLowPriority: terms
+      .filter((term) => term.priority === "low" && !term.present)
+      .map((term) => term.name),
+    presentHighPriority: terms
+      .filter((term) => term.priority === "high" && term.present)
+      .map((term) => term.name),
+    presentLowPriority: terms
+      .filter((term) => term.priority === "low" && term.present)
+      .map((term) => term.name),
     terms,
   };
 }
