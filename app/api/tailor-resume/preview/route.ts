@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 import { getApiSession } from "@/lib/api-auth";
 import { compileTailorResumeLatex } from "@/lib/tailor-resume-latex";
+import { readTailorResumeProfileState } from "@/lib/tailor-resume-profile-state";
 import { buildTailoredResumeReviewHighlightedLatex } from "@/lib/tailor-resume-preview-highlight";
+import { buildTailorResumeSourcePreview } from "@/lib/tailor-resume-source-preview";
 import { readOrCompileTailoredResumePdf } from "@/lib/tailored-resume-preview-pdf";
 import {
+  readTailorResumeConfigChatArtifactPdf,
   readTailorResumeProfile,
   readTailorResumePreviewPdf,
 } from "@/lib/tailor-resume-storage";
@@ -20,11 +23,18 @@ export async function GET(request: Request) {
 
   try {
     const { searchParams } = new URL(request.url);
+    const configChatArtifactId =
+      searchParams.get("configChatArtifactId")?.trim() ?? "";
     const tailoredResumeId = searchParams.get("tailoredResumeId");
     const withHighlights = searchParams.get("highlights") === "true";
     let previewPdf: Buffer;
 
-    if (tailoredResumeId && withHighlights) {
+    if (configChatArtifactId) {
+      previewPdf = await readTailorResumeConfigChatArtifactPdf(
+        session.user.id,
+        configChatArtifactId,
+      );
+    } else if (tailoredResumeId && withHighlights) {
       const profile = await readTailorResumeProfile(session.user.id);
       const tailoredResume = profile.tailoredResumes.find(
         (record) => record.id === tailoredResumeId,
@@ -106,4 +116,70 @@ export async function GET(request: Request) {
       { status: 500 },
     );
   }
+}
+
+export async function POST(request: Request) {
+  const session = await getApiSession(request);
+
+  if (!session?.user?.id) {
+    return NextResponse.json(
+      { error: "Sign in to view your resume preview." },
+      { status: 401 },
+    );
+  }
+
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Use a valid JSON request body." },
+      { status: 400 },
+    );
+  }
+
+  if (!body || typeof body !== "object") {
+    return NextResponse.json(
+      { error: "Use a valid JSON request body." },
+      { status: 400 },
+    );
+  }
+
+  const payload = body as Record<string, unknown>;
+  const latexCode = typeof payload.latexCode === "string" ? payload.latexCode : "";
+
+  if (!latexCode.trim()) {
+    return NextResponse.json(
+      { error: "Provide LaTeX to preview." },
+      { status: 400 },
+    );
+  }
+
+  const { rawProfile, lockedLinks } = await readTailorResumeProfileState(
+    session.user.id,
+  );
+  const preview = await buildTailorResumeSourcePreview({
+    currentLinks: rawProfile.links,
+    latexCode,
+    lockedLinks,
+  });
+
+  if (!preview.ok) {
+    return NextResponse.json(
+      { error: preview.error },
+      { status: 422 },
+    );
+  }
+
+  return new NextResponse(new Blob([Uint8Array.from(preview.pdfBuffer)], {
+    type: "application/pdf",
+  }), {
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/pdf",
+      "X-JobHelper-Page-Count": String(preview.pageCount),
+    },
+    status: 200,
+  });
 }

@@ -31,6 +31,17 @@ function getTailoredResumePdfPath(userId: string, tailoredResumeId: string) {
   );
 }
 
+function getTailorResumeConfigChatArtifactPdfPath(
+  userId: string,
+  artifactId: string,
+) {
+  return path.join(
+    getTailorResumePrivateDir(userId),
+    "config-chat-artifacts",
+    `${artifactId}.pdf`,
+  );
+}
+
 function buildAtomicTempPath(targetPath: string) {
   return path.join(
     path.dirname(targetPath),
@@ -157,4 +168,27 @@ export async function deleteTailoredResumePdf(
   tailoredResumeId: string,
 ) {
   await rm(getTailoredResumePdfPath(userId, tailoredResumeId), { force: true });
+}
+
+export async function readTailorResumeConfigChatArtifactPdf(
+  userId: string,
+  artifactId: string,
+) {
+  return readFile(getTailorResumeConfigChatArtifactPdfPath(userId, artifactId));
+}
+
+export async function writeTailorResumeConfigChatArtifactPdf(
+  userId: string,
+  artifactId: string,
+  pdfBuffer: Buffer,
+) {
+  const privateDir = path.dirname(
+    getTailorResumeConfigChatArtifactPdfPath(userId, artifactId),
+  );
+
+  await mkdir(privateDir, { recursive: true });
+  await writeFileAtomically(
+    getTailorResumeConfigChatArtifactPdfPath(userId, artifactId),
+    pdfBuffer,
+  );
 }
