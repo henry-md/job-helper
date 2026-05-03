@@ -16,6 +16,8 @@ import {
 import { createPortal } from "react-dom";
 import { Lock, LockOpen, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import SourceResumeConfigChat from "@/components/source-resume-config-chat";
+import SourceResumeDiffEditor from "@/components/source-resume-diff-editor";
 import {
   TailorResumeProgressModal,
   TailorResumeProgressToast,
@@ -766,6 +768,7 @@ export default function TailorResumeWorkspace({
   const lastSeenTailorInterviewFinishRequestRef = useRef<string | null>(null);
   const dismissedTailorInterviewFinishRequestRef = useRef<string | null>(null);
   const tailorInterviewMessagesEndRef = useRef<HTMLDivElement | null>(null);
+  const workspaceLayoutRef = useRef<HTMLElement | null>(null);
   const previousPreviewPdfUrlRef = useRef(
     buildPreviewPdfUrl(initialProfile.latex.pdfUpdatedAt),
   );
@@ -791,6 +794,16 @@ export default function TailorResumeWorkspace({
   const handlePreviewRenderSettled = useCallback(() => {
     setIsPreviewFrameLoading(false);
   }, []);
+  const draftPreviewRequestSequenceRef = useRef(0);
+  const draftPreviewObjectUrlRef = useRef<string | null>(null);
+  const [draftPreviewPageCount, setDraftPreviewPageCount] = useState<number | null>(
+    null,
+  );
+  const [draftPreviewPdfUrl, setDraftPreviewPdfUrl] = useState<string | null>(null);
+  const [draftPreviewError, setDraftPreviewError] = useState<ReturnType<
+    typeof formatTailorResumeLatexError
+  > | null>(null);
+  const [isRefreshingDraftPreview, setIsRefreshingDraftPreview] = useState(false);
   const [isSavingJobDescription, setIsSavingJobDescription] = useState(false);
   const [isSavingLatex, setIsSavingLatex] = useState(false);
   const [isSavingLinks, setIsSavingLinks] = useState(false);
@@ -918,26 +931,43 @@ export default function TailorResumeWorkspace({
       : draftLatexCode;
   const hasUnsavedLatexChanges =
     draftLatexCode !== lastSavedLatexCodeRef.current;
-  const previewPdfUrl = buildPreviewPdfUrl(profile.latex.pdfUpdatedAt);
+  const savedPreviewPdfUrl = buildPreviewPdfUrl(profile.latex.pdfUpdatedAt);
+  const previewPdfUrl =
+    sourceOnly && hasUnsavedLatexChanges
+      ? draftPreviewPdfUrl
+      : savedPreviewPdfUrl;
   const previewError =
-    profile.latex.status === "failed"
-      ? formatTailorResumeLatexError(
-          profile.latex.error ?? "Unable to compile the LaTeX preview.",
-          {
-            maxChars: 900,
-            maxLines: 10,
-          },
-        )
-      : null;
+    sourceOnly && hasUnsavedLatexChanges
+      ? draftPreviewError
+      : profile.latex.status === "failed"
+        ? formatTailorResumeLatexError(
+            profile.latex.error ?? "Unable to compile the LaTeX preview.",
+            {
+              maxChars: 900,
+              maxLines: 10,
+            },
+          )
+        : null;
   const showEditorLoadingOverlay = isUploadingResume;
   const showPreviewLoadingOverlay =
-    isSavingLatex || isUploadingResume || isPreviewFrameLoading;
+    (sourceOnly ? isRefreshingDraftPreview || isSavingLatex : isSavingLatex) ||
+    isUploadingResume ||
+    isPreviewFrameLoading;
   const isSourceResumeSaveDisabled =
     isSavingLatex ||
     !hasUnsavedLatexChanges ||
     draftLatexCode.trim().length === 0;
   useEffect(() => {
     setIsPreviewMounted(true);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (draftPreviewObjectUrlRef.current) {
+        URL.revokeObjectURL(draftPreviewObjectUrlRef.current);
+        draftPreviewObjectUrlRef.current = null;
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -959,18 +989,32 @@ export default function TailorResumeWorkspace({
   }, [isJobDescriptionExtensionNudgeOpen]);
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia("(min-width: 1280px)");
-    const syncLayoutMode = () => {
-      setIsWideLayout(mediaQuery.matches);
+    const layoutHost = workspaceLayoutRef.current;
+
+    if (!layoutHost) {
+      return;
+    }
+
+    const syncLayoutMode = (width: number) => {
+      setIsWideLayout(width >= (sourceOnly ? 720 : 1280));
     };
 
-    syncLayoutMode();
-    mediaQuery.addEventListener("change", syncLayoutMode);
+    syncLayoutMode(layoutHost.getBoundingClientRect().width);
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      const nextWidth = entries[0]?.contentRect.width;
+
+      if (typeof nextWidth === "number" && Number.isFinite(nextWidth)) {
+        syncLayoutMode(nextWidth);
+      }
+    });
+
+    resizeObserver.observe(layoutHost);
 
     return () => {
-      mediaQuery.removeEventListener("change", syncLayoutMode);
+      resizeObserver.disconnect();
     };
-  }, []);
+  }, [sourceOnly]);
 
   useEffect(() => {
     const resolvedLatexCode = resolveSavedLatexCode(initialProfile);
@@ -994,6 +1038,10 @@ export default function TailorResumeWorkspace({
     setPendingDeletedLinkKeys([]);
     setIsLinkEditorOpen(false);
     setIsPreviewFrameLoading(false);
+    setDraftPreviewPageCount(null);
+    setDraftPreviewPdfUrl(null);
+    setDraftPreviewError(null);
+    setIsRefreshingDraftPreview(false);
     setIsSavingLinks(false);
     setIsTailorInterviewOpen(false);
     setIsTailorResumeProgressOpen(false);
@@ -1014,8 +1062,120 @@ export default function TailorResumeWorkspace({
     setJobDescriptionState(
       initialProfile.jobDescription.trim().length > 0 ? "saved" : "idle",
     );
+    draftPreviewRequestSequenceRef.current = 0;
+
+    if (draftPreviewObjectUrlRef.current) {
+      URL.revokeObjectURL(draftPreviewObjectUrlRef.current);
+      draftPreviewObjectUrlRef.current = null;
+    }
     setLatexState("idle");
   }, [initialProfile, sourceOnly]);
+
+  useEffect(() => {
+    if (!sourceOnly) {
+      return;
+    }
+
+    if (!hasUnsavedLatexChanges || draftLatexCode.trim().length === 0) {
+      draftPreviewRequestSequenceRef.current += 1;
+      setIsRefreshingDraftPreview(false);
+      setDraftPreviewPageCount(null);
+      setDraftPreviewError(null);
+      setDraftPreviewPdfUrl(null);
+
+      if (draftPreviewObjectUrlRef.current) {
+        URL.revokeObjectURL(draftPreviewObjectUrlRef.current);
+        draftPreviewObjectUrlRef.current = null;
+      }
+
+      return;
+    }
+
+    const requestSequence = draftPreviewRequestSequenceRef.current + 1;
+    draftPreviewRequestSequenceRef.current = requestSequence;
+    const abortController = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      setIsRefreshingDraftPreview(true);
+
+      void (async () => {
+        try {
+          const response = await fetch("/api/tailor-resume/preview", {
+            body: JSON.stringify({
+              latexCode: draftLatexCode,
+            }),
+            headers: {
+              "Content-Type": "application/json",
+            },
+            method: "POST",
+            signal: abortController.signal,
+          });
+
+          if (!response.ok) {
+            const payload = (await response.json()) as { error?: string };
+            throw new Error(payload.error ?? "Unable to compile the draft preview.");
+          }
+
+          const previewBlob = await response.blob();
+          const pageCountHeader = response.headers.get("X-JobHelper-Page-Count");
+          const nextDraftPreviewPdfUrl = URL.createObjectURL(previewBlob);
+
+          if (draftPreviewRequestSequenceRef.current !== requestSequence) {
+            URL.revokeObjectURL(nextDraftPreviewPdfUrl);
+            return;
+          }
+
+          if (draftPreviewObjectUrlRef.current) {
+            URL.revokeObjectURL(draftPreviewObjectUrlRef.current);
+          }
+
+          draftPreviewObjectUrlRef.current = nextDraftPreviewPdfUrl;
+          setDraftPreviewPdfUrl(nextDraftPreviewPdfUrl);
+          setDraftPreviewError(null);
+          setDraftPreviewPageCount(
+            pageCountHeader && !Number.isNaN(Number(pageCountHeader))
+              ? Number(pageCountHeader)
+              : null,
+          );
+        } catch (error) {
+          if (abortController.signal.aborted) {
+            return;
+          }
+
+          if (draftPreviewRequestSequenceRef.current !== requestSequence) {
+            return;
+          }
+
+          if (draftPreviewObjectUrlRef.current) {
+            URL.revokeObjectURL(draftPreviewObjectUrlRef.current);
+            draftPreviewObjectUrlRef.current = null;
+          }
+
+          setDraftPreviewPdfUrl(null);
+          setDraftPreviewPageCount(null);
+          setDraftPreviewError(
+            formatTailorResumeLatexError(
+              error instanceof Error
+                ? error.message
+                : "Unable to compile the draft preview.",
+              {
+                maxChars: 900,
+                maxLines: 10,
+              },
+            ),
+          );
+        } finally {
+          if (draftPreviewRequestSequenceRef.current === requestSequence) {
+            setIsRefreshingDraftPreview(false);
+          }
+        }
+      })();
+    }, 350);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      abortController.abort();
+    };
+  }, [draftLatexCode, hasUnsavedLatexChanges, sourceOnly]);
 
   useEffect(() => {
     if (!tailoringInterview) {
@@ -2527,7 +2687,24 @@ export default function TailorResumeWorkspace({
     }
   }
 
-  const editorPanelContent = (
+  const editorPanelContent = sourceOnly ? (
+    <div className="relative h-full">
+      <SourceResumeDiffEditor
+        baselineLatexCode={lastSavedLatexCodeRef.current}
+        className="h-full"
+        disabled={editorDisabled}
+        draftLatexCode={draftLatexCode}
+        onChange={setDraftLatexCode}
+      />
+      {showEditorLoadingOverlay ? (
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[1.25rem] bg-zinc-950/65 px-6 backdrop-blur-[2px]">
+          <div className="rounded-full border border-white/12 bg-black/42 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.28)]">
+            <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-white/15 border-t-emerald-300" />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  ) : (
     <section
       aria-busy={editorDisabled}
       className="flex min-w-0 flex-col rounded-[1.25rem] border border-white/8 px-3 pb-3 pt-2 sm:h-full sm:px-4 sm:pb-4 xl:min-h-[560px]"
@@ -2607,20 +2784,35 @@ export default function TailorResumeWorkspace({
   const previewPanelContent = (
     <section
       aria-busy={showPreviewLoadingOverlay}
-      className="flex min-w-0 flex-col rounded-[1.25rem] border border-white/8 px-3 pb-3 pt-2 sm:h-full sm:px-4 sm:pb-4 xl:min-h-[560px]"
+      className={`flex min-w-0 flex-col rounded-[1.25rem] border border-white/8 px-3 pb-3 pt-2 sm:h-full sm:px-4 sm:pb-4 ${
+        sourceOnly ? "min-[720px]:min-h-0" : "xl:min-h-[560px]"
+      }`}
     >
-      <div className="mb-3">
+      <div className="mb-3 flex items-center justify-between gap-3">
         <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-          Preview
+          {sourceOnly ? "Rendered PDF" : "Preview"}
         </p>
+        {sourceOnly && draftPreviewPageCount ? (
+          <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+            {draftPreviewPageCount} page{draftPreviewPageCount === 1 ? "" : "s"}
+          </p>
+        ) : null}
       </div>
 
-      <div className="relative flex min-h-[320px] flex-1 overflow-hidden rounded-[1.25rem] sm:min-h-[500px]">
+      <div
+        className={`relative flex min-h-[320px] flex-1 overflow-hidden rounded-[1.25rem] ${
+          sourceOnly ? "sm:min-h-[420px]" : "sm:min-h-[500px]"
+        }`}
+      >
         {showPreviewLoadingOverlay ? (
           <div className="pointer-events-none absolute inset-0 rounded-[1.25rem] bg-black/20" />
         ) : null}
 
-        <div className="relative z-10 flex min-h-[320px] flex-1 overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate sm:min-h-[500px]">
+        <div
+          className={`relative z-10 flex min-h-[320px] flex-1 overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/20 isolation-isolate ${
+            sourceOnly ? "sm:min-h-[420px]" : "sm:min-h-[500px]"
+          }`}
+        >
           {previewError ? (
             <div className="h-full w-full overflow-auto rounded-[1.25rem] border border-rose-300/12 bg-[linear-gradient(180deg,rgba(251,113,133,0.16),rgba(159,18,57,0.2))] p-5 text-sm leading-6 text-rose-50/92 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
               <p className="font-medium text-rose-50">
@@ -2636,7 +2828,11 @@ export default function TailorResumeWorkspace({
               </pre>
             </div>
           ) : previewPdfUrl ? (
-            <div className="h-full min-h-[320px] w-full overflow-hidden rounded-[1.25rem] bg-white sm:min-h-[500px]">
+            <div
+              className={`h-full min-h-[320px] w-full overflow-hidden rounded-[1.25rem] bg-white ${
+                sourceOnly ? "sm:min-h-[420px]" : "sm:min-h-[500px]"
+              }`}
+            >
               <TailoredResumeInteractivePreview
                 displayName="source resume"
                 focusKey={null}
@@ -2696,8 +2892,13 @@ export default function TailorResumeWorkspace({
     </div>
   );
 
+  const shouldUseWideResumeLayout = sourceOnly || isWideLayout;
+
   return (
-    <section className="grid gap-[clamp(0.75rem,1.2vh,1rem)]">
+    <section
+      className="grid gap-[clamp(0.75rem,1.2vh,1rem)]"
+      ref={workspaceLayoutRef}
+    >
       <input
         accept="application/pdf,image/png,image/jpeg,image/webp"
         className="sr-only"
@@ -2710,7 +2911,11 @@ export default function TailorResumeWorkspace({
 
       {resume ? (
         <section className="glass-panel soft-ring overflow-hidden rounded-[1.5rem]">
-          <div className="flex flex-wrap items-start justify-between gap-4 px-4 py-4 sm:px-5 sm:py-5">
+          <div
+            className={`flex flex-wrap items-start justify-between gap-4 ${
+              sourceOnly ? "px-4 py-3 sm:px-5 sm:py-4" : "px-4 py-4 sm:px-5 sm:py-5"
+            }`}
+          >
             <div>
               <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
                 {sourceOnly ? "Config" : "Step 1"}
@@ -2720,12 +2925,21 @@ export default function TailorResumeWorkspace({
               </h2>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">
                 {sourceOnly
-                  ? "Edit the LaTeX source and review the compiled resume used by the Chrome extension."
+                  ? "Edit the working LaTeX draft, compare it against the saved version, and use config chat for layout-focused resume changes."
                   : "Start in the split-screen editor, confirm the LaTeX and preview look right, then mark this step complete to collapse it before tailoring for a specific job."}
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              {sourceOnly ? (
+                <StatusPill>
+                  {isSavingLatex
+                    ? "Saving..."
+                    : hasUnsavedLatexChanges
+                      ? "Unsaved changes"
+                      : "Saved"}
+                </StatusPill>
+              ) : null}
               {sourceOnly ? null : (
                 <StatusPill>
                   {isUpdatingBaseResumeStep
@@ -2795,16 +3009,46 @@ export default function TailorResumeWorkspace({
 
           {isBaseResumeStepOpen ? (
             <div className="px-3 pb-3 sm:px-4 sm:pb-4">
-              {isWideLayout ? (
-                <section className="min-h-[560px] pt-1">
+              {shouldUseWideResumeLayout ? (
+                <section
+                  className={
+                    sourceOnly
+                      ? "min-h-0 overflow-x-auto pt-1"
+                      : "min-h-[560px] pt-1"
+                  }
+                >
+                  {/*
+                    react-resizable-panels applies inline `height: auto` on horizontal panel groups,
+                    overriding any Tailwind height class. A CSS grid wrapper fixes this: grid tracks
+                    honor explicit sizing regardless of children's inline height style.
+                  */}
+                  <div
+                    className={sourceOnly ? "min-w-[900px]" : undefined}
+                    style={
+                      sourceOnly
+                        ? {
+                            display: "grid",
+                            gridTemplateRows: "min(58dvh, 620px)",
+                            minHeight: "420px",
+                          }
+                        : undefined
+                    }
+                  >
                   <ResizablePanelGroup
-                    className="min-h-[560px] gap-0"
+                    className={
+                      sourceOnly
+                        ? "min-h-0 gap-0"
+                        : "min-h-[560px] gap-0"
+                    }
+                    key={sourceOnly && hasUnsavedLatexChanges ? "dirty" : "clean"}
                     orientation="horizontal"
                   >
                     <ResizablePanel
                       className="min-w-0 overflow-hidden pr-1"
-                      defaultSize={defaultEditorPaneSize}
-                      minSize={42}
+                      defaultSize={
+                        sourceOnly && hasUnsavedLatexChanges ? 67 : defaultEditorPaneSize
+                      }
+                      minSize={sourceOnly && hasUnsavedLatexChanges ? 50 : 42}
                     >
                       {editorPanelContent}
                     </ResizablePanel>
@@ -2815,12 +3059,15 @@ export default function TailorResumeWorkspace({
                       className="min-w-0 overflow-hidden pl-1"
                       collapsedSize={0}
                       collapsible
-                      defaultSize={defaultPreviewPaneSize}
+                      defaultSize={
+                        sourceOnly && hasUnsavedLatexChanges ? 33 : defaultPreviewPaneSize
+                      }
                       minSize={22}
                     >
                       {previewPanelContent}
                     </ResizablePanel>
                   </ResizablePanelGroup>
+                  </div>
                 </section>
               ) : (
                 <section className="grid gap-[clamp(0.75rem,1.2vh,1rem)] pt-1">
@@ -2928,6 +3175,15 @@ export default function TailorResumeWorkspace({
           )}
         </section>
       )}
+
+      {sourceOnly && resume ? (
+        <SourceResumeConfigChat
+          disabled={editorDisabled || !openAIReady}
+          draftLatexCode={draftLatexCode}
+          hasResume
+          onApplyDraftLatex={setDraftLatexCode}
+        />
+      ) : null}
 
       {!sourceOnly && resume ? (
         <>
