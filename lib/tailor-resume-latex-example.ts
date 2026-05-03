@@ -1,15 +1,16 @@
 export const tailorResumeLatexTemplate = String.raw`\documentclass[10pt]{article}
 
 \usepackage[
-  top=0.36in,
+  top=0.4in,
   bottom=0.44in,
   left=0.47in,
   right=0.47in
 ]{geometry}
 
 \usepackage[T1]{fontenc}
-\usepackage{newtxtext,newtxmath}
-\usepackage{microtype}
+\usepackage{cmap}
+\usepackage{tgtermes}
+\usepackage[protrusion=true,expansion=false]{microtype}
 \usepackage{enumitem}
 \usepackage{xcolor}
 \usepackage[normalem]{ulem}
@@ -21,33 +22,40 @@ export const tailorResumeLatexTemplate = String.raw`\documentclass[10pt]{article
 
 \input{glyphtounicode}
 \pdfgentounicode=1
+\pdfinterwordspaceon
 
 \pagestyle{empty}
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{0pt}
 \urlstyle{same}
 
-\linespread{1.08}
+\linespread{1.08} % ENV: global line-spacing
 
+% ---------- COLORS ----------
 \definecolor{LinkBlue}{RGB}{45,95,210}
 
+% ---------- UNDERLINE ----------
 \renewcommand{\ULdepth}{0.7pt}
 \renewcommand{\ULthickness}{0.3pt}
 \newcommand{\tightul}[1]{\uline{\smash{#1}}}
 
+% ---------- TYPOGRAPHY ----------
 \newcommand{\NameFont}{\fontsize{14}{15}\selectfont}
 \newcommand{\BodyFont}{\fontsize{10.2}{11.8}\selectfont}
 \newcommand{\SectionFont}{\fontsize{10}{11}\selectfont}
+\frenchspacing
 
+% ---------- BULLETS ----------
 \setlist[itemize]{
   leftmargin=18pt,
   itemsep=1pt,
-  topsep=1pt,
+  topsep=0pt,
   parsep=0pt,
   partopsep=0pt,
-  after=\vspace{2pt}
+  after={} % ENV: space after last bullet
 }
 
+% ---------- SECTION ----------
 \newcommand{\resumeSection}[1]{%
   \vspace{5pt}
   {\SectionFont\textbf{#1}}\par
@@ -56,34 +64,57 @@ export const tailorResumeLatexTemplate = String.raw`\documentclass[10pt]{article
   \vspace{3.8pt}
 }
 
+% ---------- HEADER ----------
+\newcommand{\resumeHeader}{%
+  \begin{center}
+    {\NameFont\textbf{HENRY DEUTSCH}}\par
+    \vspace{2.4pt}
+    {\BodyFont
+      \href{mailto:HenryMDeutsch@gmail.com}{\tightul{HenryMDeutsch@gmail.com}} $\cdot$ 914-272-5561 $\cdot$
+      \href{https://linkedin.com/in/henry-deutsch}{\tightul{linkedin.com/in/henry-deutsch}} $\cdot$
+      \href{https://github.com/henry-md}{\tightul{github.com/henry-md}}\par
+      \vspace{1.1pt}
+      Portfolio: \href{https://henry-deutsch.com}{\tightul{\textbf{henry-deutsch.com}}
+      \vspace{-20pt}} % ENV: space between header and 'WORK EXPERIENCE'
+    }
+  \end{center}
+  \vspace{4.2pt}
+}
+
+% ---------- HEADINGS ----------
 \newcommand{\entryheading}[3]{%
   \noindent
   \begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
     {\BodyFont\textbf{#1}~|~\textit{#2}} & {\BodyFont #3}
-  \end{tabular*}\par
+  \end{tabular*}\par\vspace{0pt}
 }
 
 \newcommand{\projectheading}[2]{%
   \noindent
   \begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
     {\BodyFont #1} & {\BodyFont #2}
-  \end{tabular*}\par
+  \end{tabular*}\par\vspace{0pt}
 }
 
 \newcommand{\descline}[1]{{\BodyFont #1\par}}
 
 \newenvironment{resumebullets}{
-  \vspace{0pt}
+  % \vspace{0} % ENV: If you want space between description and bullets
   \begin{itemize}\BodyFont
 }{
   \end{itemize}
 }
 
 \newcommand{\resumeitem}[1]{\item #1}
+\newcommand{\EntryGap}{\vspace{6.8pt}} % ENV: space between experiences
+
+% labeled line for education/skills
 \newcommand{\labelline}[2]{%
   {\BodyFont\noindent\makebox[74pt][l]{\textbf{#1}}#2\par}
 }
 
+\input{glyphtounicode}
+\pdfgentounicode=1
 \begin{document}
 \BodyFont
 
@@ -95,15 +126,16 @@ export const tailorResumeLatexTemplate = String.raw`\documentclass[10pt]{article
 export const tailorResumeLatexExample = String.raw`\documentclass[10pt]{article}
 
 \usepackage[
-  top=0.36in,
+  top=0.4in,
   bottom=0.44in,
   left=0.47in,
   right=0.47in
 ]{geometry}
 
 \usepackage[T1]{fontenc}
-\usepackage{newtxtext,newtxmath}
-\usepackage{microtype}
+\usepackage{cmap}
+\usepackage{tgtermes}
+\usepackage[protrusion=true,expansion=false]{microtype}
 \usepackage{enumitem}
 \usepackage{xcolor}
 \usepackage[normalem]{ulem}
@@ -115,33 +147,40 @@ export const tailorResumeLatexExample = String.raw`\documentclass[10pt]{article}
 
 \input{glyphtounicode}
 \pdfgentounicode=1
+\pdfinterwordspaceon
 
 \pagestyle{empty}
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{0pt}
 \urlstyle{same}
 
-\linespread{1.08}
+\linespread{1.08} % ENV: global line-spacing
 
+% ---------- COLORS ----------
 \definecolor{LinkBlue}{RGB}{45,95,210}
 
+% ---------- UNDERLINE ----------
 \renewcommand{\ULdepth}{0.7pt}
 \renewcommand{\ULthickness}{0.3pt}
 \newcommand{\tightul}[1]{\uline{\smash{#1}}}
 
+% ---------- TYPOGRAPHY ----------
 \newcommand{\NameFont}{\fontsize{14}{15}\selectfont}
 \newcommand{\BodyFont}{\fontsize{10.2}{11.8}\selectfont}
 \newcommand{\SectionFont}{\fontsize{10}{11}\selectfont}
+\frenchspacing
 
+% ---------- BULLETS ----------
 \setlist[itemize]{
   leftmargin=18pt,
   itemsep=1pt,
-  topsep=1pt,
+  topsep=0pt,
   parsep=0pt,
   partopsep=0pt,
-  after=\vspace{2pt}
+  after={} % ENV: space after last bullet
 }
 
+% ---------- SECTION ----------
 \newcommand{\resumeSection}[1]{%
   \vspace{5pt}
   {\SectionFont\textbf{#1}}\par
@@ -150,42 +189,13 @@ export const tailorResumeLatexExample = String.raw`\documentclass[10pt]{article}
   \vspace{3.8pt}
 }
 
-\newcommand{\entryheading}[3]{%
-  \noindent
-  \begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
-    {\BodyFont\textbf{#1}~|~\textit{#2}} & {\BodyFont #3}
-  \end{tabular*}\par
-}
-
-\newcommand{\projectheading}[2]{%
-  \noindent
-  \begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
-    {\BodyFont #1} & {\BodyFont #2}
-  \end{tabular*}\par
-}
-
-\newcommand{\descline}[1]{{\BodyFont #1\par}}
-
-\newenvironment{resumebullets}{
-  \vspace{0} % ENV: If you want space between description and bullets
-  \begin{itemize}\BodyFont
-}{
-  \end{itemize}
-}
-
-\newcommand{\resumeitem}[1]{\item #1}
-\newcommand{\EntryGap}{\vspace{3.8pt}}
-\newcommand{\labelline}[2]{%
-  {\BodyFont\noindent\makebox[74pt][l]{\textbf{#1}}#2\par}
-}
-
 % ---------- HEADER ----------
 \newcommand{\resumeHeader}{%
   \begin{center}
     {\NameFont\textbf{HENRY DEUTSCH}}\par
     \vspace{2.4pt}
     {\BodyFont
-      HenryMDeutsch@gmail.com $\cdot$ 914-272-5561 $\cdot$
+      \href{mailto:HenryMDeutsch@gmail.com}{\tightul{HenryMDeutsch@gmail.com}} $\cdot$ 914-272-5561 $\cdot$
       \href{https://linkedin.com/in/henry-deutsch}{\tightul{linkedin.com/in/henry-deutsch}} $\cdot$
       \href{https://github.com/henry-md}{\tightul{github.com/henry-md}}\par
       \vspace{1.1pt}
@@ -196,7 +206,44 @@ export const tailorResumeLatexExample = String.raw`\documentclass[10pt]{article}
   \vspace{4.2pt}
 }
 
+% ---------- HEADINGS ----------
+\newcommand{\entryheading}[3]{%
+  \noindent
+  \begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
+    {\BodyFont\textbf{#1}~|~\textit{#2}} & {\BodyFont #3}
+  \end{tabular*}\par\vspace{0pt}
+}
+
+\newcommand{\projectheading}[2]{%
+  \noindent
+  \begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
+    {\BodyFont #1} & {\BodyFont #2}
+  \end{tabular*}\par\vspace{0pt}
+}
+
+\newcommand{\descline}[1]{{\BodyFont #1\par}}
+
+\newenvironment{resumebullets}{
+  % \vspace{0} % ENV: If you want space between description and bullets
+  \begin{itemize}\BodyFont
+}{
+  \end{itemize}
+}
+
+\newcommand{\resumeitem}[1]{\item #1}
+\newcommand{\EntryGap}{\vspace{6.8pt}} % ENV: space between experiences
+
+% labeled line for education/skills
+\newcommand{\labelline}[2]{%
+  {\BodyFont\noindent\makebox[74pt][l]{\textbf{#1}}#2\par}
+}
+
+\input{glyphtounicode}
+\pdfgentounicode=1
 \begin{document}
+% removed for ATS
+% \spaceskip=0.25em plus 0.2em minus 0.1em
+% \xspaceskip=\spaceskip
 \BodyFont
 
 \resumeHeader
@@ -246,7 +293,7 @@ export const tailorResumeLatexExample = String.raw`\documentclass[10pt]{article}
 \begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
   {\BodyFont\textbf{Johns Hopkins University}~|~Bachelor of Science in Computer Science~|~Baltimore, MD} &
   {\BodyFont Aug 2021 - May 2025}
-\end{tabular*}\par
+\end{tabular*}\par\vspace{0pt}
 
 {\BodyFont\hspace*{20pt}\textbf{Graduated with Departmental Honors in Computer Science}\par}
 
@@ -265,7 +312,7 @@ Placed 3rd of 43 teams, won \$250 prize at HopHacks Hackathon for \href{https://
 % ================= SOFTWARE PROJECTS =================
 \resumeSection{SOFTWARE PROJECTS}
 
-\projectheading{\href{https://chiefoffd.com/}{\tightul{\textbf{Chief of NYC Fire Dept Website}}}~|~Paid Contract --- Full Stack Developer}{Sep 2021 - Present}
+\projectheading{\href{https://vincentdunn.com/}{\tightul{\textbf{Chief of NYC Fire Dept Website}}}~|~Paid Contract --- Full Stack Developer}{Sep 2021 - Present}
 \begin{resumebullets}
   \resumeitem{Improved SEO, increasing traffic from \textbf{\textless100 to \textgreater3.6k visits per mo.} and book royalties from \textbf{8K to \textasciitilde24K YoY (2.99x)}}
   \resumeitem{Used custom \textbf{Java-based PDF parser} to extract structured content from 200+ pages and generate \textbf{HTML and CSS} layouts}
@@ -273,7 +320,7 @@ Placed 3rd of 43 teams, won \$250 prize at HopHacks Hackathon for \href{https://
 \end{resumebullets}
 \EntryGap
 
-{\BodyFont\href{https://github.com/henry-md}{\tightul{\textbf{C++ Ray Tracing Engine}}}\par}
+\projectheading{\href{https://github.com/henry-md/ray-tracer}{\tightul{\textbf{C++ Ray Tracing Engine}}}~}{}
 \begin{resumebullets}
   \resumeitem{Architected ray tracing engine with \textbf{C++}, \textbf{OpenGL}, and \textbf{multithreading} --- achieved 2.5x speedup over single-thread approach}
   \resumeitem{Engineered 3D rendering pipeline with \textbf{GLSL} shaders and parallel \textbf{computational geometry} intersection algorithms}
@@ -281,7 +328,7 @@ Placed 3rd of 43 teams, won \$250 prize at HopHacks Hackathon for \href{https://
 \end{resumebullets}
 \EntryGap
 
-{\BodyFont\href{https://github.com/henry-md}{\tightul{\textbf{N-Body Orbit Simulations}}}~|~Research at Johns Hopkins\par}
+{\BodyFont\href{https://github.com/sciserver/BOOM}{\tightul{\textbf{N-Body Orbit Simulations}}}~|~Research at Johns Hopkins\par}
 \descline{Developed AI-powered orbit analysis system using autoencoder \textbf{neural network}, and latent space analysis with clustering algorithms}
 \begin{resumebullets}
   \resumeitem{Built convolutional autoencoder with \textbf{PyTorch and NumPy}. Achieved 200:1 compression with .02 MSE loss on orbit data}
@@ -289,6 +336,7 @@ Placed 3rd of 43 teams, won \$250 prize at HopHacks Hackathon for \href{https://
   \resumeitem{Deployed scalable ML infrastructure on \textbf{AWS EC2} cloud stores enabling parallel processing of 10k+ orbit simulations}
 \end{resumebullets}
 
+% ================= TECHNICAL SKILLS =================
 \resumeSection{TECHNICAL SKILLS}
 
 {\BodyFont
