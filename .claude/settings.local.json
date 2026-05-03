@@ -8,7 +8,12 @@
       "Bash(git apply:*)",
       "Bash(git commit -m ':*)",
       "Bash(railway status *)",
-      "Bash(railway logs *)"
+      "Bash(railway logs *)",
+      "Bash(mkdir -p ~/.claude/skills/check/scripts)",
+      "Bash(cp ~/.codex/skills/check/scripts/check-page.sh ~/.claude/skills/check/scripts/)",
+      "Bash(cp ~/.codex/skills/check/scripts/ensure-auth-state.sh ~/.claude/skills/check/scripts/)",
+      "Bash(cp ~/.codex/skills/check/scripts/check-thread-account.sh ~/.claude/skills/check/scripts/)",
+      "Bash(cp ~/.codex/skills/check/scripts/repo-paths.sh ~/.claude/skills/check/scripts/)"
     ]
   }
 }
