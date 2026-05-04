@@ -56,6 +56,12 @@ import {
   getTailoredResumeGenerationFailureLabel,
 } from "@/lib/tailored-resume-generation-state";
 import { stripTailorResumeSegmentIds } from "@/lib/tailor-resume-segmentation";
+import type { TailoredResumeInteractivePreviewQuery } from "@/lib/tailor-resume-preview-focus";
+
+// Stable reference so the interactive preview's highlight effect doesn't
+// re-fire on every modal render when diff highlighting is off (passing a
+// fresh `[]` literal each render fed an infinite focus-recompute loop).
+const EMPTY_HIGHLIGHT_QUERIES: TailoredResumeInteractivePreviewQuery[] = [];
 
 function resolveSelectedEdit(
   edits: TailoredResumeBlockEditRecord[],
@@ -639,11 +645,24 @@ export default function TailoredResumeReviewModal({
   const [previewSnapshotDataUrlByPage, setPreviewSnapshotDataUrlByPage] = useState<
     Record<number, string>
   >({});
-  const [isWideLayout, setIsWideLayout] = useState(
-    () =>
-      typeof window !== "undefined" &&
-      window.matchMedia("(min-width: 1280px)").matches,
-  );
+  // Initialize false on both server and client so the SSR'd HTML matches the
+  // first client render. The useEffect below syncs the real value after mount.
+  // (Previously this read window.matchMedia in the lazy initializer, which
+  // produced false on the server and the actual breakpoint match on the
+  // client → hydration mismatch → forced re-render that re-fired downstream
+  // effects.)
+  const [isWideLayout, setIsWideLayout] = useState(false);
+  // Mount guard: the modal's render path is gated on `typeof document` (it
+  // calls createPortal). On the server that returns null; on the *first*
+  // client render document exists, so the modal would return a portal element
+  // — React hydration compares those returned React elements and flags it as
+  // a structural mismatch even though the portal targets document.body. By
+  // returning null until mounted, the first client render matches the server,
+  // and the portal appears on the second render.
+  const [hasMounted, setHasMounted] = useState(false);
+  useEffect(() => {
+    setHasMounted(true);
+  }, []);
   const editRailRef = useRef<HTMLDivElement | null>(null);
   const editButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const {
@@ -1643,7 +1662,7 @@ export default function TailoredResumeReviewModal({
     };
   }, [record?.id, record?.edits.length]);
 
-  if (typeof document === "undefined" || !record) {
+  if (!hasMounted || typeof document === "undefined" || !record) {
     return null;
   }
 
@@ -2469,8 +2488,9 @@ export default function TailoredResumeReviewModal({
             focusRequest={interactivePreviewFocusRequest}
             highlightQueries={
               isDiffHighlightingEnabled
-                ? interactivePreviewQueries?.highlightQueries ?? []
-                : []
+                ? interactivePreviewQueries?.highlightQueries ??
+                  EMPTY_HIGHLIGHT_QUERIES
+                : EMPTY_HIGHLIGHT_QUERIES
             }
             onPageSnapshot={({ dataUrl, pageNumber }) => {
               setPreviewSnapshotDataUrlByPage((currentSnapshots) => {
