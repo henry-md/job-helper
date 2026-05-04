@@ -13,7 +13,9 @@
       "Bash(cp ~/.codex/skills/check/scripts/check-page.sh ~/.claude/skills/check/scripts/)",
       "Bash(cp ~/.codex/skills/check/scripts/ensure-auth-state.sh ~/.claude/skills/check/scripts/)",
       "Bash(cp ~/.codex/skills/check/scripts/check-thread-account.sh ~/.claude/skills/check/scripts/)",
-      "Bash(cp ~/.codex/skills/check/scripts/repo-paths.sh ~/.claude/skills/check/scripts/)"
+      "Bash(cp ~/.codex/skills/check/scripts/repo-paths.sh ~/.claude/skills/check/scripts/)",
+      "Bash(mkdir -p /Users/Henry/Developer/job-helper/.claude/checks-screenshots)",
+      "Bash(cp /Users/Henry/.claude/skills/checks/repos/job-helper/screenshots/highlight-character-accuracy-proof.png /Users/Henry/.claude/skills/checks/repos/job-helper/screenshots/extension-tailor-panel-after-fix.png /Users/Henry/Developer/job-helper/.claude/checks-screenshots/)"
     ]
   }
 }
