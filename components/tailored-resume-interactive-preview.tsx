@@ -1,5 +1,6 @@
 "use client";
 
+import "./tailored-resume-interactive-preview.css";
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import type {
   PDFDocumentLoadingTask,
@@ -19,12 +20,15 @@ import { resolveTailoredResumePreviewFocusRanges } from "@/lib/tailor-resume-pre
 type PdfJsModule = typeof import("pdfjs-dist/webpack.mjs");
 type PdfPageViewport = ReturnType<PDFPageProxy["getViewport"]>;
 
-type TailoredResumeInteractivePreviewProps = {
+export type TailoredResumeInteractivePreviewProps = {
   displayName: string;
-  focusKey: string | null;
-  focusMatchKey: string | null;
-  focusQuery: TailoredResumePreviewFocusQuery | null;
-  focusRequest: number;
+  // Focus props are optional — the chrome extension doesn't have a click-to-
+  // focus edit card, so it omits these. The dashboard review modal supplies
+  // them to scroll/pulse a specific edit when its card is clicked.
+  focusKey?: string | null;
+  focusMatchKey?: string | null;
+  focusQuery?: TailoredResumePreviewFocusQuery | null;
+  focusRequest?: number;
   highlightQueries: TailoredResumeInteractivePreviewQuery[];
   onPageSnapshot?: (input: { dataUrl: string | null; pageNumber: number }) => void;
   onRenderFailure?: () => void;
@@ -1095,10 +1099,10 @@ function InteractivePreviewPage({
 
 export default function TailoredResumeInteractivePreview({
   displayName,
-  focusRequest,
-  focusKey,
-  focusMatchKey,
-  focusQuery,
+  focusRequest = 0,
+  focusKey = null,
+  focusMatchKey = null,
+  focusQuery = null,
   highlightQueries,
   onPageSnapshot,
   onRenderFailure,

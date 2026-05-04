@@ -27,6 +27,11 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), crx({ manifest: createManifest(env) })],
+    resolve: {
+      alias: {
+        "@": repoRootDir,
+      },
+    },
     define: {
       __DEBUG_UI__: JSON.stringify(
         isTruthyEnvValue(env.DEBUG_UI ?? env.VITE_DEBUG_UI),
