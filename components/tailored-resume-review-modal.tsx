@@ -1,6 +1,15 @@
 "use client";
 
-import { Bot, Check, ChevronUp, Download, Lightbulb, Pencil, X } from "lucide-react";
+import {
+  Bot,
+  Check,
+  ChevronUp,
+  Download,
+  Highlighter,
+  Lightbulb,
+  Pencil,
+  X,
+} from "lucide-react";
 import { createPortal } from "react-dom";
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -34,8 +43,11 @@ import type {
 import {
   buildTailoredResumeDiffRows,
   formatTailoredResumeEditLabel,
-  type TailoredResumeDiffSegment,
 } from "@/lib/tailor-resume-review";
+import {
+  TailoredResumeDiffCell,
+  useTailoredResumeDiffScrollSync,
+} from "@/components/tailored-resume-diff-pane";
 import {
   buildTailoredResumePreviewPdfUrl,
 } from "@/lib/tailored-resume-preview-url";
@@ -80,15 +92,8 @@ function isEditableKeyboardTarget(target: EventTarget | null) {
 }
 
 type TailoredResumeAcceptedBlockChoice = "original" | "tailored";
-type TailoredResumeDiffBlockSide = "original" | "tailored";
 type TailoredResumeEditState = TailoredResumeBlockEditRecord["state"];
-
-type TailoredResumeDiffBlockScrollSyncState = {
-  expectedScrollTop: number;
-  frame: number | null;
-  ignoredSide: TailoredResumeDiffBlockSide | null;
-  releaseTimeout: number | null;
-};
+type TailoredResumeDiffViewMode = "block" | "full";
 
 function normalizeComparedTailoredResumeBlock(latexCode: string | null | undefined) {
   return stripTailorResumeSegmentIds(latexCode ?? "").replace(/\n+$/, "");
@@ -160,59 +165,6 @@ function resolveAcceptedBlockChoice(input: {
   }
 
   return null;
-}
-
-function DiffCell({
-  lineNumber,
-  segments,
-  text,
-  tone,
-}: {
-  lineNumber: number | null;
-  segments?: TailoredResumeDiffSegment[];
-  text: string | null;
-  tone: "added" | "context" | "modified" | "removed";
-}) {
-  const toneClassName =
-    tone === "added"
-      ? "bg-emerald-400/10 text-emerald-100"
-      : tone === "modified"
-        ? "bg-black/15 text-zinc-200"
-      : tone === "removed"
-        ? "bg-rose-400/10 text-rose-100"
-        : "bg-black/15 text-zinc-200";
-
-  const hasInlineSegments = tone === "modified" && (segments?.length ?? 0) > 0;
-
-  return (
-    <div
-      className={`grid min-h-8 grid-cols-[2.75rem_minmax(0,1fr)] items-start gap-2 px-2.5 py-1.5 ${toneClassName}`}
-    >
-      <div className="select-none border-r border-white/8 pr-2.5 text-right font-mono text-[10px] leading-[1.15rem] text-zinc-500">
-        {lineNumber ?? ""}
-      </div>
-      <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-[1.15rem]">
-        {hasInlineSegments
-          ? segments?.map((segment, index) => {
-              const segmentClassName =
-                tone === "modified" && segment.type !== "context"
-                  ? "rounded [box-decoration-break:clone] bg-amber-300/18 text-amber-50"
-                  : segment.type === "added"
-                  ? "rounded [box-decoration-break:clone] bg-emerald-400/18 text-emerald-50"
-                  : segment.type === "removed"
-                    ? "rounded [box-decoration-break:clone] bg-rose-400/18 text-rose-50"
-                    : undefined;
-
-              return (
-                <span className={segmentClassName} key={`${segment.type}-${index}`}>
-                  {segment.text}
-                </span>
-              );
-            })
-          : (text ?? " ")}
-      </pre>
-    </div>
-  );
 }
 
 type TailoredResumeMutationResponse = {
@@ -331,141 +283,6 @@ function scrollTailoredResumeEditRailIntoView(input: {
     behavior: input.behavior,
     left: targetScrollLeft,
   });
-}
-
-function clampScrollValue(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(value, max));
-}
-
-function measureElementTopWithinScrollContainer(
-  element: HTMLElement,
-  scrollContainer: HTMLElement,
-) {
-  const elementRect = element.getBoundingClientRect();
-  const scrollContainerRect = scrollContainer.getBoundingClientRect();
-
-  return elementRect.top - scrollContainerRect.top + scrollContainer.scrollTop;
-}
-
-function findVisibleDiffBlockRowAnchor(input: {
-  rowElements: Map<number, HTMLDivElement>;
-  scrollContainer: HTMLDivElement;
-}) {
-  const sortedRows = [...input.rowElements.entries()].sort(
-    ([leftIndex], [rightIndex]) => leftIndex - rightIndex,
-  );
-
-  if (sortedRows.length === 0) {
-    return null;
-  }
-
-  const scrollTop = input.scrollContainer.scrollTop;
-  let fallbackAnchor: {
-    index: number;
-    relativeOffset: number;
-  } | null = null;
-
-  for (const [index, rowElement] of sortedRows) {
-    const rowTop = measureElementTopWithinScrollContainer(
-      rowElement,
-      input.scrollContainer,
-    );
-    const rowHeight = Math.max(rowElement.offsetHeight, 1);
-    const rowBottom = rowTop + rowHeight;
-
-    fallbackAnchor = {
-      index,
-      relativeOffset: 1,
-    };
-
-    if (rowBottom < scrollTop + 1) {
-      continue;
-    }
-
-    return {
-      index,
-      relativeOffset: clampScrollValue((scrollTop - rowTop) / rowHeight, 0, 1),
-    };
-  }
-
-  return fallbackAnchor;
-}
-
-function clearDiffBlockScrollSyncGuard(
-  state: TailoredResumeDiffBlockScrollSyncState,
-) {
-  if (state.frame !== null) {
-    window.cancelAnimationFrame(state.frame);
-    state.frame = null;
-  }
-
-  if (state.releaseTimeout !== null) {
-    window.clearTimeout(state.releaseTimeout);
-    state.releaseTimeout = null;
-  }
-
-  state.ignoredSide = null;
-}
-
-function syncDiffBlockScrollToAnalogousRow(input: {
-  sourceRowElements: Map<number, HTMLDivElement>;
-  sourceScrollContainer: HTMLDivElement;
-  state: TailoredResumeDiffBlockScrollSyncState;
-  targetRowElements: Map<number, HTMLDivElement>;
-  targetScrollContainer: HTMLDivElement;
-  targetSide: TailoredResumeDiffBlockSide;
-}) {
-  const sourceAnchor = findVisibleDiffBlockRowAnchor({
-    rowElements: input.sourceRowElements,
-    scrollContainer: input.sourceScrollContainer,
-  });
-
-  if (!sourceAnchor) {
-    return;
-  }
-
-  const targetRowElement = input.targetRowElements.get(sourceAnchor.index);
-
-  if (!targetRowElement) {
-    return;
-  }
-
-  const targetRowTop = measureElementTopWithinScrollContainer(
-    targetRowElement,
-    input.targetScrollContainer,
-  );
-  const targetRowHeight = Math.max(targetRowElement.offsetHeight, 1);
-  const maxTargetScrollTop = Math.max(
-    0,
-    input.targetScrollContainer.scrollHeight -
-      input.targetScrollContainer.clientHeight,
-  );
-  const nextScrollTop = clampScrollValue(
-    targetRowTop + targetRowHeight * sourceAnchor.relativeOffset,
-    0,
-    maxTargetScrollTop,
-  );
-
-  if (Math.abs(input.targetScrollContainer.scrollTop - nextScrollTop) < 1) {
-    return;
-  }
-
-  if (input.state.releaseTimeout !== null) {
-    window.clearTimeout(input.state.releaseTimeout);
-  }
-
-  input.state.ignoredSide = input.targetSide;
-  input.state.expectedScrollTop = nextScrollTop;
-  input.targetScrollContainer.scrollTop = nextScrollTop;
-  input.state.releaseTimeout = window.setTimeout(() => {
-    if (
-      input.state.ignoredSide === input.targetSide &&
-      Math.abs(input.targetScrollContainer.scrollTop - nextScrollTop) <= 2
-    ) {
-      input.state.ignoredSide = null;
-      input.state.releaseTimeout = null;
-    }
-  }, 80);
 }
 
 function trimInlineReasonPreviewText(reason: string, maxLength: number) {
@@ -787,6 +604,8 @@ export default function TailoredResumeReviewModal({
   const [isEditingLatexSegment, setIsEditingLatexSegment] = useState(false);
   const [isRenamingDisplayName, setIsRenamingDisplayName] = useState(false);
   const [isThesisOpen, setIsThesisOpen] = useState(false);
+  const [diffViewMode, setDiffViewMode] =
+    useState<TailoredResumeDiffViewMode>("block");
   const [isDevInspectorOpen, setIsDevInspectorOpen] = useState(false);
   const [interactivePreviewFocusRequest, setInteractivePreviewFocusRequest] =
     useState(0);
@@ -796,6 +615,7 @@ export default function TailoredResumeReviewModal({
   const [draftEditedLatexCode, setDraftEditedLatexCode] = useState("");
   const [draftAiRefinementPrompt, setDraftAiRefinementPrompt] = useState("");
   const [isDownloadingPreviewPdf, setIsDownloadingPreviewPdf] = useState(false);
+  const [isDiffHighlightingEnabled, setIsDiffHighlightingEnabled] = useState(true);
   const [isAiRefinementOpen, setIsAiRefinementOpen] = useState(false);
   const [isRefiningTailoredResume, setIsRefiningTailoredResume] = useState(false);
   const [isSavingDisplayName, setIsSavingDisplayName] = useState(false);
@@ -826,17 +646,13 @@ export default function TailoredResumeReviewModal({
   );
   const editRailRef = useRef<HTMLDivElement | null>(null);
   const editButtonRefs = useRef(new Map<string, HTMLButtonElement>());
-  const originalDiffBlockScrollRef = useRef<HTMLDivElement | null>(null);
-  const tailoredDiffBlockScrollRef = useRef<HTMLDivElement | null>(null);
-  const originalDiffBlockRowRefs = useRef(new Map<number, HTMLDivElement>());
-  const tailoredDiffBlockRowRefs = useRef(new Map<number, HTMLDivElement>());
-  const diffBlockScrollSyncStateRef =
-    useRef<TailoredResumeDiffBlockScrollSyncState>({
-      expectedScrollTop: 0,
-      frame: null,
-      ignoredSide: null,
-      releaseTimeout: null,
-    });
+  const {
+    handleScroll: handleDiffBlockScroll,
+    originalScrollRef: originalDiffBlockScrollRef,
+    registerRow: registerDiffBlockRowElement,
+    resetScrollAndGuard: resetDiffBlockScrollAndGuard,
+    tailoredScrollRef: tailoredDiffBlockScrollRef,
+  } = useTailoredResumeDiffScrollSync();
   const displayNameInputRef = useRef<HTMLInputElement | null>(null);
   const devInspectorCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const expandedReasonCloseButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -845,83 +661,6 @@ export default function TailoredResumeReviewModal({
   const aiRefinementTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const lastPreviewRecoveryRecordIdRef = useRef<string | null>(null);
   const thesisPopoverRef = useRef<HTMLDivElement | null>(null);
-
-  function registerDiffBlockRowElement(
-    side: TailoredResumeDiffBlockSide,
-    index: number,
-    element: HTMLDivElement | null,
-  ) {
-    const rowRefs =
-      side === "original"
-        ? originalDiffBlockRowRefs.current
-        : tailoredDiffBlockRowRefs.current;
-
-    if (element) {
-      rowRefs.set(index, element);
-      return;
-    }
-
-    rowRefs.delete(index);
-  }
-
-  function handleDiffBlockScroll(sourceSide: TailoredResumeDiffBlockSide) {
-    const state = diffBlockScrollSyncStateRef.current;
-    const sourceScrollContainer =
-      sourceSide === "original"
-        ? originalDiffBlockScrollRef.current
-        : tailoredDiffBlockScrollRef.current;
-
-    if (!sourceScrollContainer) {
-      return;
-    }
-
-    if (state.ignoredSide === sourceSide) {
-      if (Math.abs(sourceScrollContainer.scrollTop - state.expectedScrollTop) <= 2) {
-        return;
-      }
-
-      clearDiffBlockScrollSyncGuard(state);
-    }
-
-    if (state.frame !== null) {
-      window.cancelAnimationFrame(state.frame);
-    }
-
-    state.frame = window.requestAnimationFrame(() => {
-      const latestState = diffBlockScrollSyncStateRef.current;
-      const latestSourceScrollContainer =
-        sourceSide === "original"
-          ? originalDiffBlockScrollRef.current
-          : tailoredDiffBlockScrollRef.current;
-      const targetSide: TailoredResumeDiffBlockSide =
-        sourceSide === "original" ? "tailored" : "original";
-      const targetScrollContainer =
-        targetSide === "original"
-          ? originalDiffBlockScrollRef.current
-          : tailoredDiffBlockScrollRef.current;
-
-      latestState.frame = null;
-
-      if (!latestSourceScrollContainer || !targetScrollContainer) {
-        return;
-      }
-
-      syncDiffBlockScrollToAnalogousRow({
-        sourceRowElements:
-          sourceSide === "original"
-            ? originalDiffBlockRowRefs.current
-            : tailoredDiffBlockRowRefs.current,
-        sourceScrollContainer: latestSourceScrollContainer,
-        state: latestState,
-        targetRowElements:
-          targetSide === "original"
-            ? originalDiffBlockRowRefs.current
-            : tailoredDiffBlockRowRefs.current,
-        targetScrollContainer,
-        targetSide,
-      });
-    });
-  }
 
   function selectEdit(
     editId: string,
@@ -1152,26 +891,21 @@ export default function TailoredResumeReviewModal({
         : [],
     [selectedEdit],
   );
-  useEffect(() => {
-    const state = diffBlockScrollSyncStateRef.current;
-
-    clearDiffBlockScrollSyncGuard(state);
-
-    if (originalDiffBlockScrollRef.current) {
-      originalDiffBlockScrollRef.current.scrollTop = 0;
+  const fullDiffRows = useMemo(() => {
+    if (!record) {
+      return [];
     }
 
-    if (tailoredDiffBlockScrollRef.current) {
-      tailoredDiffBlockScrollRef.current.scrollTop = 0;
-    }
-  }, [selectedEdit?.editId]);
-  useEffect(() => {
-    const state = diffBlockScrollSyncStateRef.current;
+    const originalLatexCode = stripTailorResumeSegmentIds(
+      record.sourceAnnotatedLatexCode ?? "",
+    );
+    const modifiedLatexCode = record.latexCode ?? "";
 
-    return () => {
-      clearDiffBlockScrollSyncGuard(state);
-    };
-  }, []);
+    return buildTailoredResumeDiffRows(originalLatexCode, modifiedLatexCode);
+  }, [record]);
+  useEffect(() => {
+    resetDiffBlockScrollAndGuard();
+  }, [diffViewMode, resetDiffBlockScrollAndGuard, selectedEdit?.editId]);
   const interactiveFocusQuery = useMemo(
     () =>
       selectedEdit
@@ -1928,24 +1662,51 @@ export default function TailoredResumeReviewModal({
   const reviewDetailsPane = (
     <section className="flex h-full min-h-0 flex-col gap-px bg-white/8">
       <div className="shrink-0 bg-zinc-950/96 px-4 py-3 sm:px-5">
-        {reviewEdits.length === 0 ? (
-          <div className="rounded-[1.25rem] border border-white/8 bg-black/20 px-4 py-5 text-sm leading-6 text-zinc-400">
-            No block-level edit snapshots were saved for this tailored
-            resume. The PDF is still available on the right.
-          </div>
-        ) : (
-          <div className="space-y-2">
-            <div className="min-h-0 rounded-[1.15rem] border border-white/8 bg-black/20 p-2.5">
-              <div className="flex items-start justify-between gap-3 px-1.5 pb-2">
-                <p
-                  className="pt-1 text-[11px] uppercase tracking-[0.2em] text-zinc-500"
-                  title="Browse changed blocks horizontally with clicks or the left and right arrow keys."
-                >
-                  Changed edits
-                </p>
+        <div className="space-y-2">
+          <div className="min-h-0 rounded-[1.15rem] border border-white/8 bg-black/20 p-2.5">
+            <div className="flex items-start justify-between gap-3 px-1.5 pb-2">
+              <p
+                className="pt-1 text-[11px] uppercase tracking-[0.2em] text-zinc-500"
+                title={
+                  diffViewMode === "full"
+                    ? "Compare the full source resume against the tailored output."
+                    : "Browse changed blocks horizontally with clicks or the left and right arrow keys."
+                }
+              >
+                {diffViewMode === "full" ? "Full diff" : "Changed edits"}
+              </p>
 
-                <div className="flex items-center gap-2">
-                  {debugUiEnabled ? (
+              <div className="flex items-center gap-2">
+                <div
+                  aria-label="Switch between block edits and full diff."
+                  className="inline-flex items-center rounded-full border border-white/10 bg-white/5 p-0.5"
+                  role="group"
+                >
+                  {(
+                    [
+                      { label: "Block Edits", mode: "block" as const },
+                      { label: "Full Diff", mode: "full" as const },
+                    ]
+                  ).map(({ label, mode }) => (
+                    <button
+                      aria-pressed={diffViewMode === mode}
+                      className={`rounded-full px-2.5 py-1 text-[9px] uppercase tracking-[0.18em] transition ${
+                        diffViewMode === mode
+                          ? "bg-emerald-400/12 text-emerald-100 shadow-[inset_0_0_0_1px_rgba(110,231,183,0.32)]"
+                          : "text-zinc-400 hover:text-zinc-100"
+                      }`}
+                      key={mode}
+                      onClick={() => {
+                        setIsThesisOpen(false);
+                        setDiffViewMode(mode);
+                      }}
+                      type="button"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {debugUiEnabled ? (
                     <button
                       aria-controls={devInspectorDialogId}
                       aria-expanded={isDevInspectorOpen}
@@ -2036,76 +1797,169 @@ export default function TailoredResumeReviewModal({
                 </div>
               </div>
 
-              <div className="relative">
-                <div
-                  className={`pointer-events-none absolute inset-y-0 left-0 z-10 w-14 bg-gradient-to-r from-black/85 via-zinc-950/55 to-transparent transition-opacity ${
-                    editRailScrollState.canScrollLeft ? "opacity-100" : "opacity-0"
-                  }`}
-                />
-                <div
-                  className={`pointer-events-none absolute inset-y-0 right-0 z-10 w-14 bg-gradient-to-l from-black/85 via-zinc-950/55 to-transparent transition-opacity ${
-                    editRailScrollState.canScrollRight ? "opacity-100" : "opacity-0"
-                  }`}
-                />
-
-                <div
-                  className="app-scrollbar overflow-x-auto overflow-y-hidden pb-2 outline-none [scrollbar-gutter:stable] touch-pan-x"
-                  aria-label="Changed edits. Use the left and right arrow keys to navigate."
-                  ref={editRailRef}
-                  tabIndex={-1}
-                >
-                  <div
-                    className={`flex min-w-max items-stretch ${editRailGutterClassName}`}
-                  >
-                    {reviewEdits.map((edit, index) => {
-                      const displayedEditState =
-                        optimisticEditStateById[edit.editId] ?? edit.state;
-                      const isSelected = selectedEdit?.editId === edit.editId;
-
-                      return (
-                        <TailoredResumeEditSummaryCard
-                          debugUiEnabled={debugUiEnabled}
-                          displayedEditState={displayedEditState}
-                          edit={edit}
-                          index={index}
-                          isSelected={isSelected}
-                          key={edit.editId}
-                          onOpenReason={() => {
-                            setSuppressedAcceptedBlockChoiceEditId(null);
-                            selectEdit(edit.editId, {
-                              behavior: "smooth",
-                            });
-                            setExpandedEditReasonEditId(edit.editId);
-                          }}
-                          onSelect={() => {
-                            setSuppressedAcceptedBlockChoiceEditId(null);
-                            selectEdit(edit.editId, {
-                              behavior: "smooth",
-                            });
-                          }}
-                          registerButtonRef={(element) => {
-                            if (element) {
-                              editButtonRefs.current.set(edit.editId, element);
-                              return;
-                            }
-
-                            editButtonRefs.current.delete(edit.editId);
-                          }}
-                          totalEdits={reviewEdits.length}
-                        />
-                      );
-                    })}
+              {diffViewMode === "block" ? (
+                reviewEdits.length === 0 ? (
+                  <div className="rounded-[1rem] border border-white/8 bg-black/20 px-3 py-4 text-sm leading-6 text-zinc-400">
+                    No block-level edit snapshots were saved for this tailored
+                    resume. Switch to Full Diff to compare the source LaTeX
+                    directly, or view the rendered PDF on the right.
                   </div>
-                </div>
-              </div>
+                ) : (
+                  <div className="relative">
+                    <div
+                      className={`pointer-events-none absolute inset-y-0 left-0 z-10 w-14 bg-gradient-to-r from-black/85 via-zinc-950/55 to-transparent transition-opacity ${
+                        editRailScrollState.canScrollLeft ? "opacity-100" : "opacity-0"
+                      }`}
+                    />
+                    <div
+                      className={`pointer-events-none absolute inset-y-0 right-0 z-10 w-14 bg-gradient-to-l from-black/85 via-zinc-950/55 to-transparent transition-opacity ${
+                        editRailScrollState.canScrollRight ? "opacity-100" : "opacity-0"
+                      }`}
+                    />
+
+                    <div
+                      className="app-scrollbar overflow-x-auto overflow-y-hidden pb-2 outline-none [scrollbar-gutter:stable] touch-pan-x"
+                      aria-label="Changed edits. Use the left and right arrow keys to navigate."
+                      ref={editRailRef}
+                      tabIndex={-1}
+                    >
+                      <div
+                        className={`flex min-w-max items-stretch ${editRailGutterClassName}`}
+                      >
+                        {reviewEdits.map((edit, index) => {
+                          const displayedEditState =
+                            optimisticEditStateById[edit.editId] ?? edit.state;
+                          const isSelected = selectedEdit?.editId === edit.editId;
+
+                          return (
+                            <TailoredResumeEditSummaryCard
+                              debugUiEnabled={debugUiEnabled}
+                              displayedEditState={displayedEditState}
+                              edit={edit}
+                              index={index}
+                              isSelected={isSelected}
+                              key={edit.editId}
+                              onOpenReason={() => {
+                                setSuppressedAcceptedBlockChoiceEditId(null);
+                                selectEdit(edit.editId, {
+                                  behavior: "smooth",
+                                });
+                                setExpandedEditReasonEditId(edit.editId);
+                              }}
+                              onSelect={() => {
+                                setSuppressedAcceptedBlockChoiceEditId(null);
+                                selectEdit(edit.editId, {
+                                  behavior: "smooth",
+                                });
+                              }}
+                              registerButtonRef={(element) => {
+                                if (element) {
+                                  editButtonRefs.current.set(edit.editId, element);
+                                  return;
+                                }
+
+                                editButtonRefs.current.delete(edit.editId);
+                              }}
+                              totalEdits={reviewEdits.length}
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )
+              ) : null}
             </div>
           </div>
-        )}
       </div>
 
       <div className="min-h-0 flex-1 bg-zinc-950/96 px-4 pb-4 sm:px-5 sm:pb-5">
         <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[1.25rem] border border-white/8 bg-black/20">
-          {selectedEdit ? (
+          {diffViewMode === "full" ? (
+            <div className="grid min-h-0 flex-1 grid-cols-2 gap-px rounded-[1rem] bg-white/8 p-px">
+              <div className="flex min-h-0 flex-col overflow-hidden rounded-l-[1rem] bg-black/15">
+                <div className="border-b border-white/8 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                  Original LaTeX
+                </div>
+                {fullDiffRows.length > 0 ? (
+                  <div
+                    className="app-scrollbar min-h-0 flex-1 overflow-auto overscroll-contain"
+                    data-tailor-resume-diff-scroll="original"
+                    onScroll={() => handleDiffBlockScroll("original")}
+                    ref={originalDiffBlockScrollRef}
+                  >
+                    {fullDiffRows.map((row, index) => (
+                      <div
+                        data-tailor-resume-diff-row={index}
+                        key={`full-original-${index}`}
+                        ref={(element) =>
+                          registerDiffBlockRowElement("original", index, element)
+                        }
+                      >
+                        <TailoredResumeDiffCell
+                          lineNumber={row.originalLineNumber}
+                          segments={row.originalSegments}
+                          text={row.originalText}
+                          tone={
+                            row.type === "added"
+                              ? "context"
+                              : row.type === "modified"
+                                ? "modified"
+                                : row.type
+                          }
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-10 text-sm text-zinc-400">
+                    The source LaTeX is identical to the tailored output.
+                  </div>
+                )}
+              </div>
+
+              <div className="flex min-h-0 flex-col overflow-hidden rounded-r-[1rem] bg-black/15">
+                <div className="border-b border-white/8 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                  Tailored LaTeX
+                </div>
+                {fullDiffRows.length > 0 ? (
+                  <div
+                    className="app-scrollbar min-h-0 flex-1 overflow-auto overscroll-contain"
+                    data-tailor-resume-diff-scroll="tailored"
+                    onScroll={() => handleDiffBlockScroll("tailored")}
+                    ref={tailoredDiffBlockScrollRef}
+                  >
+                    {fullDiffRows.map((row, index) => (
+                      <div
+                        data-tailor-resume-diff-row={index}
+                        key={`full-modified-${index}`}
+                        ref={(element) =>
+                          registerDiffBlockRowElement("tailored", index, element)
+                        }
+                      >
+                        <TailoredResumeDiffCell
+                          lineNumber={row.modifiedLineNumber}
+                          segments={row.modifiedSegments}
+                          text={row.modifiedText}
+                          tone={
+                            row.type === "removed"
+                              ? "context"
+                              : row.type === "modified"
+                                ? "modified"
+                                : row.type
+                          }
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-10 text-sm text-zinc-400">
+                    The tailored LaTeX is identical to the source.
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : selectedEdit ? (
             <>
               <div className="grid min-h-0 flex-1 grid-cols-2 gap-px rounded-t-[1rem] bg-white/8 p-px">
                 <button
@@ -2143,7 +1997,7 @@ export default function TailoredResumeReviewModal({
                             registerDiffBlockRowElement("original", index, element)
                           }
                         >
-                          <DiffCell
+                          <TailoredResumeDiffCell
                             lineNumber={row.originalLineNumber}
                             segments={row.originalSegments}
                             text={row.originalText}
@@ -2200,7 +2054,7 @@ export default function TailoredResumeReviewModal({
                             registerDiffBlockRowElement("tailored", index, element)
                           }
                         >
-                          <DiffCell
+                          <TailoredResumeDiffCell
                             lineNumber={row.modifiedLineNumber}
                             segments={row.modifiedSegments}
                             text={row.modifiedText}
@@ -2300,7 +2154,7 @@ export default function TailoredResumeReviewModal({
         </div>
       </div>
 
-      {reviewEdits.length > 0 ? (
+      {reviewEdits.length > 0 || diffViewMode === "full" ? (
         <div className="shrink-0 bg-zinc-950/96 px-4 py-1.5 sm:px-5">
           <div className="flex justify-center">
             <button
@@ -2524,6 +2378,32 @@ export default function TailoredResumeReviewModal({
                   <Pencil aria-hidden="true" className="h-4 w-4" />
                 </button>
               ) : null}
+              {(interactivePreviewQueries?.highlightQueries.length ?? 0) > 0 ? (
+                <button
+                  aria-label={
+                    isDiffHighlightingEnabled
+                      ? "Hide diff highlighting"
+                      : "Show diff highlighting"
+                  }
+                  aria-pressed={isDiffHighlightingEnabled}
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-full border transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                    isDiffHighlightingEnabled
+                      ? "border-amber-300/40 bg-amber-300/15 text-amber-100 hover:border-amber-200/60 hover:bg-amber-300/25"
+                      : "border-white/10 bg-white/5 text-zinc-300 hover:border-white/20 hover:bg-white/10 hover:text-zinc-100"
+                  }`}
+                  onClick={() =>
+                    setIsDiffHighlightingEnabled((current) => !current)
+                  }
+                  title={
+                    isDiffHighlightingEnabled
+                      ? "Hide diff highlighting"
+                      : "Show diff highlighting"
+                  }
+                  type="button"
+                >
+                  <Highlighter aria-hidden="true" className="h-4 w-4" />
+                </button>
+              ) : null}
               {plainPdfUrl ? (
                 <button
                   aria-label="Download tailored resume PDF"
@@ -2587,7 +2467,11 @@ export default function TailoredResumeReviewModal({
             }
             focusQuery={interactiveFocusQuery}
             focusRequest={interactivePreviewFocusRequest}
-            highlightQueries={interactivePreviewQueries?.highlightQueries ?? []}
+            highlightQueries={
+              isDiffHighlightingEnabled
+                ? interactivePreviewQueries?.highlightQueries ?? []
+                : []
+            }
             onPageSnapshot={({ dataUrl, pageNumber }) => {
               setPreviewSnapshotDataUrlByPage((currentSnapshots) => {
                 if (!dataUrl) {
