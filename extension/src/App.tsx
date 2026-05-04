@@ -10309,8 +10309,13 @@ function App() {
             {canToggleTailoredPreviewDiffHighlighting ? (
               <div className="tailored-preview-toolbar-actions">
                 <button
+                  aria-label={
+                    isShowingHighlightedPreview
+                      ? "Hide diff highlighting"
+                      : "Show diff highlighting"
+                  }
                   aria-pressed={isShowingHighlightedPreview}
-                  className={`secondary-action compact-action tailored-preview-highlight-toggle ${
+                  className={`tailored-preview-highlight-toggle tailored-preview-highlight-toggle-icon ${
                     isShowingHighlightedPreview
                       ? "tailored-preview-highlight-toggle-active"
                       : ""
@@ -10322,14 +10327,25 @@ function App() {
                   }
                   title={
                     isShowingHighlightedPreview
-                      ? "Show the clean rendered PDF."
-                      : "Show the rendered PDF with diff highlights."
+                      ? "Hide diff highlighting"
+                      : "Show diff highlighting"
                   }
                   type="button"
                 >
-                  {isShowingHighlightedPreview
-                    ? "Hide diff highlighting"
-                    : "Show diff highlighting"}
+                  <svg
+                    aria-hidden="true"
+                    fill="none"
+                    height="16"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    viewBox="0 0 24 24"
+                    width="16"
+                  >
+                    <path d="m9 11-6 6v3h9l3-3" />
+                    <path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4" />
+                  </svg>
                 </button>
               </div>
             ) : null}
