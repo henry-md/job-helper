@@ -69,7 +69,10 @@ import { readTailorResumeProfileState } from "@/lib/tailor-resume-profile-state"
 import { compactTailoredResumePageCount } from "@/lib/tailor-resume-page-count-compaction";
 import { buildTailorResumePlanningSnapshot } from "@/lib/tailor-resume-planning";
 import { applyTailorResumePageCountFailure } from "@/lib/tailor-resume-page-count-failure";
-import { advanceTailorResumeQuestioning } from "@/lib/tailor-resume-questioning";
+import {
+  advanceTailorResumeQuestioning,
+  type TailorResumeInterviewStreamEvent,
+} from "@/lib/tailor-resume-questioning";
 import { refineTailoredResume } from "@/lib/tailor-resume-refinement";
 import {
   buildTailorResumeRunStepUpdate,
@@ -2676,6 +2679,9 @@ async function handleTailorResumeGeneration(
   body: Record<string, unknown>,
   userId: string,
   options: {
+    onInterviewStreamEvent?: (
+      event: TailorResumeInterviewStreamEvent,
+    ) => void | Promise<void>;
     onStepEvent?: (
       event: TailorResumeGenerationStepEvent,
     ) => void | Promise<void>;
@@ -3070,6 +3076,7 @@ async function handleTailorResumeGeneration(
       questioningResult = await advanceTailorResumeQuestioning({
         conversation: [],
         jobDescription: preparation.jobDescription,
+        onStreamEvent: options.onInterviewStreamEvent,
         planningResult: prePlanningResult,
         planningSnapshot: buildTailorResumePlanningSnapshot(
           generationSourceAnnotatedLatex,
@@ -3386,6 +3393,9 @@ async function handleAdvanceTailorResumeInterview(
   body: Record<string, unknown>,
   userId: string,
   options: {
+    onInterviewStreamEvent?: (
+      event: TailorResumeInterviewStreamEvent,
+    ) => void | Promise<void>;
     onStepEvent?: (
       event: TailorResumeGenerationStepEvent,
     ) => void | Promise<void>;
@@ -3513,6 +3523,7 @@ async function handleAdvanceTailorResumeInterview(
     questioningResult = await advanceTailorResumeQuestioning({
       conversation: nextConversation,
       jobDescription: preparation.tailoringInterview.jobDescription,
+      onStreamEvent: options.onInterviewStreamEvent,
       planningResult: preparation.tailoringInterview.planningResult,
       planningSnapshot,
       promptSettings: preparation.rawProfile.promptSettings.values,
@@ -4279,6 +4290,9 @@ function buildTailorResumeGenerationStreamResponse(
     onStepEvent: (
       event: TailorResumeGenerationStepEvent,
     ) => void | Promise<void>,
+    onInterviewStreamEvent: (
+      event: TailorResumeInterviewStreamEvent,
+    ) => void | Promise<void>,
   ) => Promise<Response | undefined>,
 ) {
   const stream = new ReadableStream({
@@ -4287,12 +4301,20 @@ function buildTailorResumeGenerationStreamResponse(
 
       void (async () => {
         try {
-          const response = await run((stepEvent) => {
-            writer.sendEvent({
-              stepEvent,
-              type: "generation-step",
-            });
-          });
+          const response = await run(
+            (stepEvent) => {
+              writer.sendEvent({
+                stepEvent,
+                type: "generation-step",
+              });
+            },
+            (interviewStreamEvent) => {
+              writer.sendEvent({
+                event: interviewStreamEvent,
+                type: "interview-stream",
+              });
+            },
+          );
 
           if (!response) {
             throw new Error("Tailor Resume generation did not return a response.");
@@ -4796,10 +4818,12 @@ export async function PATCH(request: Request) {
 
   if ("action" in body && body.action === "tailor") {
     if (wantsTailorResumeStream(request)) {
-      return buildTailorResumeGenerationStreamResponse((onStepEvent) =>
-        handleTailorResumeGeneration(body as Record<string, unknown>, session.user.id, {
-          onStepEvent,
-        }),
+      return buildTailorResumeGenerationStreamResponse(
+        (onStepEvent, onInterviewStreamEvent) =>
+          handleTailorResumeGeneration(body as Record<string, unknown>, session.user.id, {
+            onInterviewStreamEvent,
+            onStepEvent,
+          }),
       );
     }
 
@@ -4808,14 +4832,16 @@ export async function PATCH(request: Request) {
 
   if ("action" in body && body.action === "advanceTailorResumeInterview") {
     if (wantsTailorResumeStream(request)) {
-      return buildTailorResumeGenerationStreamResponse((onStepEvent) =>
-        handleAdvanceTailorResumeInterview(
-          body as Record<string, unknown>,
-          session.user.id,
-          {
-            onStepEvent,
-          },
-        ),
+      return buildTailorResumeGenerationStreamResponse(
+        (onStepEvent, onInterviewStreamEvent) =>
+          handleAdvanceTailorResumeInterview(
+            body as Record<string, unknown>,
+            session.user.id,
+            {
+              onInterviewStreamEvent,
+              onStepEvent,
+            },
+          ),
       );
     }
 

@@ -4,6 +4,12 @@ import {
   createDefaultSystemPromptSettings,
   type SystemPromptSettings,
 } from "./system-prompt-settings.ts";
+import {
+  TailorResumeInterviewArgsStreamer,
+  type TailorResumeInterviewStreamEvent,
+} from "./tailor-resume-interview-stream-parser.ts";
+
+export type { TailorResumeInterviewStreamEvent } from "./tailor-resume-interview-stream-parser.ts";
 import type {
   TailorResumeKeywordDecision,
   TailorResumeConversationToolCall,
@@ -1610,6 +1616,9 @@ function buildUserMarkdownPatchFailureFeedback(
 export async function advanceTailorResumeQuestioning(input: {
   conversation: TailorResumeConversationMessage[];
   jobDescription: string;
+  onStreamEvent?: (
+    event: TailorResumeInterviewStreamEvent,
+  ) => void | Promise<void>;
   planningResult: TailoredResumePlanningResult;
   planningSnapshot: TailorResumePlanningSnapshot;
   promptSettings?: SystemPromptSettings;
@@ -1657,8 +1666,11 @@ export async function advanceTailorResumeQuestioning(input: {
       promptSettings: input.promptSettings,
     });
     const response = await runWithTransientModelRetries({
-      operation: () =>
-        client.responses.create({
+      operation: async () => {
+        await input.onStreamEvent?.({ kind: "reset" });
+
+        const streamer = new TailorResumeInterviewArgsStreamer();
+        const stream = client.responses.stream({
           input: interviewInput,
           instructions,
           model,
@@ -1667,7 +1679,27 @@ export async function advanceTailorResumeQuestioning(input: {
           text: {
             verbosity: "low",
           },
-        }),
+        });
+        const finalResponsePromise = stream.finalResponse();
+
+        for await (const event of stream) {
+          if (
+            event.type === "response.function_call_arguments.delta" &&
+            typeof event.delta === "string" &&
+            event.delta.length > 0
+          ) {
+            const emitted = streamer.feed(event.delta);
+
+            if (input.onStreamEvent) {
+              for (const emittedEvent of emitted) {
+                await input.onStreamEvent(emittedEvent);
+              }
+            }
+          }
+        }
+
+        return (await finalResponsePromise) as TailoredResumeResponse;
+      },
     });
 
     let parsedResponse: TailorResumeInterviewResponse;

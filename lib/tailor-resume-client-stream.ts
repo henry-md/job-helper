@@ -33,6 +33,10 @@ type TailorResumeRunStreamEvent<StepEvent> =
       type: "generation-step";
     }
   | {
+      event?: unknown;
+      type: "interview-stream";
+    }
+  | {
       error?: unknown;
       type: "error";
     }
@@ -141,11 +145,14 @@ export async function readTailorResumeUploadStream<
 
 export async function readTailorResumeGenerationStream<
   StepEvent = unknown,
+  InterviewStreamEvent = unknown,
   Payload = Record<string, unknown>,
 >(
   response: Response,
   handlers: {
+    onInterviewStreamEvent?: (event: InterviewStreamEvent) => void;
     onStepEvent?: (stepEvent: StepEvent) => void;
+    parseInterviewStreamEvent?: (value: unknown) => InterviewStreamEvent | null;
     parsePayload?: (value: unknown) => Payload;
     parseStepEvent: (value: unknown) => StepEvent | null;
   },
@@ -176,6 +183,20 @@ export async function readTailorResumeGenerationStream<
 
       if (stepEvent) {
         handlers.onStepEvent?.(stepEvent);
+      }
+
+      return;
+    }
+
+    if (event.type === "interview-stream") {
+      if (handlers.parseInterviewStreamEvent && handlers.onInterviewStreamEvent) {
+        const interviewStreamEvent = handlers.parseInterviewStreamEvent(
+          event.event,
+        );
+
+        if (interviewStreamEvent) {
+          handlers.onInterviewStreamEvent(interviewStreamEvent);
+        }
       }
 
       return;

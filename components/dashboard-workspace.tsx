@@ -960,17 +960,17 @@ export default function DashboardWorkspace({
   }
 
   const configWorkspacePane = (
-    <div className="grid content-start gap-[clamp(0.75rem,1.2vh,1rem)] overflow-visible sm:app-scrollbar sm:h-full sm:min-h-0 sm:overflow-y-auto sm:pr-1">
+    <div className="flex flex-col gap-[clamp(0.75rem,1.2vh,1rem)]">
+      <UserMarkdownCard
+        initialUserMarkdown={tailorResumeUserMarkdownState}
+        onUserMarkdownChange={setTailorResumeUserMarkdownState}
+      />
       <TailorResumeWorkspace
         debugUiEnabled={tailorResumeDebugUiEnabled}
         openAIReady={tailorResumeOpenAIReady}
         initialProfile={tailorResumeProfileState}
         onTailoredResumesChange={setTailoredResumes}
         sourceOnly
-      />
-      <UserMarkdownCard
-        initialUserMarkdown={tailorResumeUserMarkdownState}
-        onUserMarkdownChange={setTailorResumeUserMarkdownState}
       />
     </div>
   );
@@ -1544,7 +1544,7 @@ export default function DashboardWorkspace({
 
       <div className="flex-1 overflow-visible sm:min-h-0 sm:overflow-hidden">
         {activeTab === "config" ? (
-          <section className="sm:h-full sm:min-h-0">{configWorkspacePane}</section>
+          <section className="sm:app-scrollbar sm:h-full sm:min-h-0 sm:overflow-y-auto sm:pr-1">{configWorkspacePane}</section>
         ) : activeTab === "saved" ? (
           <section className="sm:h-full sm:min-h-0">{savedWorkspacePane}</section>
         ) : (

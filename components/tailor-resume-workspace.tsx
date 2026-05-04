@@ -50,6 +50,7 @@ import {
   formatTailorResumeRetryLabel,
   readTailorResumeDisplayAttempt,
 } from "@/lib/tailor-resume-step-display";
+import type { TailorResumeInterviewStreamEvent } from "@/lib/tailor-resume-interview-stream-parser";
 import type {
   SavedResumeRecord,
   TailorResumeConversationMessage,
@@ -57,6 +58,7 @@ import type {
   TailorResumeLinkRecord,
   TailorResumeProfile,
   TailorResumeSavedLinkUpdate,
+  TailorResumeTechnologyContext,
 } from "@/lib/tailor-resume-types";
 import type { TailorResumeUserMarkdownState } from "@/lib/tailor-resume-user-memory";
 
@@ -850,6 +852,9 @@ export default function TailorResumeWorkspace({
   const [draftTailorInterviewAnswer, setDraftTailorInterviewAnswer] = useState("");
   const [pendingTailorInterviewAnswerMessage, setPendingTailorInterviewAnswerMessage] =
     useState<TailorResumeConversationMessage | null>(null);
+  const [streamingInterviewMessage, setStreamingInterviewMessage] = useState<
+    { cards: TailorResumeTechnologyContext[]; text: string } | null
+  >(null);
 
   const resume = profile.resume;
   const tailoringInterview = profile.workspace.tailoringInterview;
@@ -1343,6 +1348,26 @@ export default function TailorResumeWorkspace({
       setTailorResumeGenerationProgress((currentProgress) =>
         applyTailorResumeStepEventToProgressState(currentProgress, stepEvent),
       );
+    },
+    [],
+  );
+
+  const handleInterviewStreamEvent = useCallback(
+    (event: TailorResumeInterviewStreamEvent) => {
+      if (event.kind === "reset") {
+        setStreamingInterviewMessage({ cards: [], text: "" });
+        return;
+      }
+
+      setStreamingInterviewMessage((current) => {
+        const base = current ?? { cards: [], text: "" };
+
+        if (event.kind === "text-delta") {
+          return { ...base, text: base.text + event.delta };
+        }
+
+        return { ...base, cards: [...base.cards, event.card] };
+      });
     },
     [],
   );
@@ -2217,7 +2242,12 @@ export default function TailorResumeWorkspace({
       });
       const streamedResult = isNdjsonResponse(response)
         ? await readTailorResumeGenerationStream(response, {
+            onInterviewStreamEvent: handleInterviewStreamEvent,
             onStepEvent: handleTailorResumeStepEvent,
+            parseInterviewStreamEvent: (value) =>
+              typeof value === "object" && value !== null
+                ? (value as TailorResumeInterviewStreamEvent)
+                : null,
             parsePayload: (value) =>
               (typeof value === "object" && value !== null
                 ? value
@@ -2375,7 +2405,12 @@ export default function TailorResumeWorkspace({
       });
       const streamedResult = isNdjsonResponse(response)
         ? await readTailorResumeGenerationStream(response, {
+            onInterviewStreamEvent: handleInterviewStreamEvent,
             onStepEvent: handleTailorResumeStepEvent,
+            parseInterviewStreamEvent: (value) =>
+              typeof value === "object" && value !== null
+                ? (value as TailorResumeInterviewStreamEvent)
+                : null,
             parsePayload: (value) =>
               (typeof value === "object" && value !== null
                 ? value
@@ -2403,6 +2438,7 @@ export default function TailorResumeWorkspace({
       }
 
       setPendingTailorInterviewAnswerMessage(null);
+      setStreamingInterviewMessage(null);
       setProfile(payload.profile);
       lastSavedJobDescriptionRef.current = payload.profile.jobDescription;
       onTailoredResumesChange?.(payload.profile.tailoredResumes);
@@ -2467,6 +2503,7 @@ export default function TailorResumeWorkspace({
           ? error.message
           : "Unable to continue the tailoring follow-up questions.";
       setPendingTailorInterviewAnswerMessage(null);
+      setStreamingInterviewMessage(null);
       setDraftTailorInterviewAnswer(trimmedAnswer);
       setIsTailorInterviewOpen(true);
       closeTailorResumeProgress();
@@ -3509,9 +3546,32 @@ export default function TailorResumeWorkspace({
                       </div>
                     ))}
                     {isTailorInterviewThinking ? (
-                      <div className="max-w-[85%] rounded-[1.15rem] border border-emerald-300/18 bg-emerald-400/10 px-4 py-3 text-sm leading-6 text-emerald-50 shadow-[0_18px_40px_rgba(0,0,0,0.18)]">
-                        <ChatThinkingDots label="Job Helper is thinking" />
-                      </div>
+                      streamingInterviewMessage &&
+                      (streamingInterviewMessage.text.length > 0 ||
+                        streamingInterviewMessage.cards.length > 0) ? (
+                        <div className="max-w-[85%] rounded-[1.15rem] border border-emerald-300/18 bg-emerald-400/10 px-4 py-3 text-sm leading-6 text-emerald-50 shadow-[0_18px_40px_rgba(0,0,0,0.18)]">
+                          <p className="whitespace-pre-wrap">
+                            {streamingInterviewMessage.text}
+                            <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-emerald-300 align-[-1px]" />
+                          </p>
+                          {streamingInterviewMessage.cards.length > 0 ? (
+                            <TailorResumeTechnologyContexts
+                              contexts={streamingInterviewMessage.cards}
+                              messageId="tailor-interview-streaming"
+                              openContextKey={
+                                openTailorInterviewTechnologyContextKey
+                              }
+                              setOpenContextKey={
+                                setOpenTailorInterviewTechnologyContextKey
+                              }
+                            />
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div className="max-w-[85%] rounded-[1.15rem] border border-emerald-300/18 bg-emerald-400/10 px-4 py-3 text-sm leading-6 text-emerald-50 shadow-[0_18px_40px_rgba(0,0,0,0.18)]">
+                          <ChatThinkingDots label="Job Helper is thinking" />
+                        </div>
+                      )
                     ) : null}
                     <div ref={tailorInterviewMessagesEndRef} />
                   </div>
