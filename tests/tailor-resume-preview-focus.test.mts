@@ -127,12 +127,12 @@ test("buildTailoredResumePreviewFocusQuery preserves shared anchors as neutral c
     anchorText:
       "Led major refactor that enabled $50K+/mo in TikTok ad spend by adding TikTok support across our suite; refactored 31K+ LOC in 365 files and reworked 140+ tRPC endpoints & Bayesian inference engine to create platform-agnostic objects, improving developer onboarding and automation workflows",
     highlightRanges: [
-      { end: 31, start: 18, tone: "changed" },
-      { end: 69, start: 62, tone: "changed" },
-      { end: 91, start: 84, tone: "changed" },
+      { end: 31, start: 19, tone: "changed" },
+      { end: 69, start: 63, tone: "changed" },
+      { end: 91, start: 85, tone: "changed" },
       { end: 113, start: 101, tone: "changed" },
-      { end: 148, start: 135, tone: "changed" },
-      { end: 206, start: 196, tone: "changed" },
+      { end: 148, start: 136, tone: "changed" },
+      { end: 206, start: 197, tone: "changed" },
       { end: 289, start: 232, tone: "changed" },
     ],
     mode: "changed",

@@ -439,6 +439,80 @@ function normalizePreviewWhitespace(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function measureNormalizedPrefixLength(value: string, prefixLength: number) {
+  if (prefixLength <= 0) {
+    return 0;
+  }
+
+  const normalizedValue = value.normalize("NFKC");
+  const normalizedPrefix = value.slice(0, prefixLength).normalize("NFKC");
+  const trimmedLeading = normalizedValue.replace(/^\s+/, "");
+  const leadingTrimmed = normalizedValue.length - trimmedLeading.length;
+  const positionWithinTrimmed = Math.max(
+    0,
+    normalizedPrefix.length - leadingTrimmed,
+  );
+  let collapsed = 0;
+  let previousWasWhitespace = false;
+
+  for (let index = 0; index < positionWithinTrimmed; index += 1) {
+    const character = trimmedLeading[index] ?? "";
+    const isWhitespace = /\s/.test(character);
+
+    if (isWhitespace) {
+      if (previousWasWhitespace) {
+        continue;
+      }
+
+      collapsed += 1;
+      previousWasWhitespace = true;
+      continue;
+    }
+
+    collapsed += 1;
+    previousWasWhitespace = false;
+  }
+
+  return collapsed;
+}
+
+// Characters that PDF rendering may insert at line breaks (soft hyphenation)
+// but that the LaTeX-derived anchor text does not include. We strip these from
+// the compact index so anchor lookups still succeed when the PDF has wrapped
+// a long word (e.g. "Elastic-search" vs "Elasticsearch"). The original-position
+// map still points at the real characters in pageText, so highlights cover the
+// hyphenated rendering correctly.
+const compactPreviewIgnorableCharacters = new Set([
+  "-",
+  "­", // SOFT HYPHEN
+  "‐", // HYPHEN
+  "‑", // NON-BREAKING HYPHEN
+  "‒", // FIGURE DASH
+  "–", // EN DASH
+  "—", // EM DASH
+  "−", // MINUS SIGN
+  "​", // ZERO WIDTH SPACE
+  "‌", // ZERO WIDTH NON-JOINER
+  "‍", // ZERO WIDTH JOINER
+  "﻿", // ZERO WIDTH NO-BREAK SPACE / BOM
+]);
+
+function isCompactPreviewIgnorable(character: string) {
+  if (!character) {
+    return true;
+  }
+
+  if (/\s/.test(character)) {
+    return true;
+  }
+
+  if (character === "•") {
+    return true;
+  }
+
+  return compactPreviewIgnorableCharacters.has(character);
+}
+
 function buildCompactPreviewTextIndex(value: string): CompactPreviewTextIndex {
   const compactPositions: number[] = [];
   const compactTextParts: string[] = [];
@@ -448,7 +522,7 @@ function buildCompactPreviewTextIndex(value: string): CompactPreviewTextIndex {
   for (let index = 0; index < value.length; index += 1) {
     const currentCharacter = value[index] ?? "";
 
-    if (!/\s/.test(currentCharacter) && currentCharacter !== "•") {
+    if (!isCompactPreviewIgnorable(currentCharacter)) {
       compactTextParts.push(currentCharacter);
       compactPositions.push(index);
       compactLength += 1;
@@ -716,12 +790,14 @@ export function buildTailoredResumePreviewFocusQuery(input: {
   }
 
   const highlightRanges = rawHighlightRanges.flatMap((range) => {
-    const normalizedStart = normalizeTailoredResumePreviewMatchText(
-      currentPlainText.slice(0, range.start),
-    ).length;
-    const normalizedEnd = normalizeTailoredResumePreviewMatchText(
-      currentPlainText.slice(0, range.end),
-    ).length;
+    const normalizedStart = measureNormalizedPrefixLength(
+      currentPlainText,
+      range.start,
+    );
+    const normalizedEnd = measureNormalizedPrefixLength(
+      currentPlainText,
+      range.end,
+    );
 
     if (normalizedEnd <= normalizedStart) {
       return [];

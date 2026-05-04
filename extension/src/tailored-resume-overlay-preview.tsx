@@ -241,20 +241,38 @@ function resolveTextItemRect(input: {
   );
   const style = input.textContent.styles[input.item.fontName ?? ""];
   const fontHeight = Math.hypot(transform[2] ?? 0, transform[3] ?? 0);
-  const ascentRatio = style?.ascent ?? (style?.descent ? 1 + style.descent : 0.8);
+  // Some pdfjs font styles report ascent/descent as 0 (e.g. embedded subset
+  // fonts without metrics). Treat 0 as "missing" and fall back to typical
+  // sans-serif ratios so the rect still has a sensible height.
+  const rawAscent =
+    typeof style?.ascent === "number" && style.ascent > 0 ? style.ascent : null;
+  const rawDescent =
+    typeof style?.descent === "number" && style.descent !== 0 ? style.descent : null;
+  const ascentRatio =
+    rawAscent ?? (rawDescent !== null ? 1 + rawDescent : 0.8);
+  const descentRatio =
+    rawDescent !== null
+      ? Math.abs(rawDescent)
+      : Math.max(0.05, 1 - ascentRatio);
   const itemWidth =
     Math.abs((style?.vertical ? input.item.height : input.item.width) ?? 0) *
     input.viewport.scale;
   const left = Math.min(transform[4] ?? 0, (transform[4] ?? 0) + itemWidth);
   const width = Math.abs(itemWidth);
-  const top = (transform[5] ?? 0) - fontHeight * ascentRatio;
+  const ascentPixels = fontHeight * ascentRatio;
+  const descentPixels = fontHeight * descentRatio;
+  const top = (transform[5] ?? 0) - ascentPixels;
+  // Tighten height to actual font bbox (ascent + |descent|) instead of the
+  // full em-square fontHeight, which often overshoots the visible glyph and
+  // pushes the bottom edge into the leading area below the baseline.
+  const tightHeight = Math.max(ascentPixels + descentPixels, fontHeight * 0.6);
 
   if (!Number.isFinite(left) || !Number.isFinite(top)) {
     return null;
   }
 
   return {
-    height: Math.max(fontHeight, 1),
+    height: tightHeight,
     left,
     top,
     width: Math.max(width, 1),
