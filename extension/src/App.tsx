@@ -127,6 +127,11 @@ import { buildTailoringRunsRefreshKey } from "./tailor-run-refresh";
 import { filterVisibleTailoredResumes } from "./tailored-resume-visibility";
 import { buildCompanyResumeDownloadName } from "./tailored-resume-download-name";
 import {
+  deriveKeywordBadgeDismissalKey,
+  KEYWORD_BADGE_DISMISSAL_STORAGE_KEY,
+  readDismissedKeywordBadgeMap,
+} from "./keyword-badge-dismissal";
+import {
   buildPersonalInfoCacheEntry,
   PERSONAL_INFO_CACHE_STORAGE_KEY,
   readPersonalInfoCacheEntry,
@@ -3023,6 +3028,9 @@ function App() {
     useState<FloatingMenuPosition | null>(null);
   const [tailoredResumeArchiveActionIds, setTailoredResumeArchiveActionIds] =
     useState<Set<string>>(() => new Set());
+  const [dismissedKeywordBadgeKeys, setDismissedKeywordBadgeKeys] = useState<
+    Set<string>
+  >(() => new Set());
   const [isSavingKeywordCoverageSetting, setIsSavingKeywordCoverageSetting] =
     useState(false);
   const [keywordCoverageSettingError, setKeywordCoverageSettingError] =
@@ -5580,6 +5588,47 @@ function App() {
   }, [applyStoppedTailoringFilter, authState, isSuppressingActiveTailoringHydration]);
 
   useEffect(() => {
+    void (async () => {
+      try {
+        const result = await chrome.storage.local.get(
+          KEYWORD_BADGE_DISMISSAL_STORAGE_KEY,
+        );
+        setDismissedKeywordBadgeKeys(
+          readDismissedKeywordBadgeMap(
+            result?.[KEYWORD_BADGE_DISMISSAL_STORAGE_KEY],
+          ),
+        );
+      } catch {
+        // Empty set means the menu item just won't appear until storage works.
+      }
+    })();
+
+    function handleStorageChange(
+      changes: Record<string, chrome.storage.StorageChange>,
+      areaName: string,
+    ) {
+      if (
+        areaName !== "local" ||
+        !changes[KEYWORD_BADGE_DISMISSAL_STORAGE_KEY]
+      ) {
+        return;
+      }
+
+      setDismissedKeywordBadgeKeys(
+        readDismissedKeywordBadgeMap(
+          changes[KEYWORD_BADGE_DISMISSAL_STORAGE_KEY].newValue,
+        ),
+      );
+    }
+
+    chrome.storage.onChanged.addListener(handleStorageChange);
+
+    return () => {
+      chrome.storage.onChanged.removeListener(handleStorageChange);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!pendingPersonalDelete) {
       return;
     }
@@ -5990,22 +6039,35 @@ function App() {
     }
   }, [focusedTailoredResumeId]);
 
+  const tailoredResumePreviewSessionToken =
+    authState.status === "signedIn" ? authState.session.sessionToken : null;
+  const tailoredResumePreviewPdfUpdatedAt =
+    activeTailoredResumeReviewRecord?.pdfUpdatedAt ?? null;
+  const tailoredResumePreviewObjectUrlRef = useRef<string | null>(null);
+
   useEffect(() => {
-    const sessionToken =
-      authState.status === "signedIn" ? authState.session.sessionToken : null;
+    const sessionToken = tailoredResumePreviewSessionToken;
     const tailoredResumeId = focusedTailoredResumeId ?? "";
-    const tailoredResumePdfUpdatedAt = activeTailoredResumeReviewRecord?.pdfUpdatedAt ?? null;
+    const tailoredResumePdfUpdatedAt = tailoredResumePreviewPdfUpdatedAt;
 
     if (!sessionToken || !tailoredResumeId) {
+      const previousObjectUrl = tailoredResumePreviewObjectUrlRef.current;
+      tailoredResumePreviewObjectUrlRef.current = null;
       setTailoredResumePreviewState({ objectUrl: null, status: "idle" });
+      if (previousObjectUrl) {
+        URL.revokeObjectURL(previousObjectUrl);
+      }
       return;
     }
 
-    let isMounted = true;
-    let objectUrl: string | null = null;
+    let isCancelled = false;
 
     async function loadTailoredResumePreview() {
-      setTailoredResumePreviewState({ objectUrl: null, status: "loading" });
+      setTailoredResumePreviewState((currentState) =>
+        currentState.status === "loading"
+          ? currentState
+          : { objectUrl: null, status: "loading" },
+      );
 
       try {
         const response = await fetch(
@@ -6020,6 +6082,10 @@ function App() {
             },
           },
         );
+
+        if (isCancelled) {
+          return;
+        }
 
         if (response.status === 401) {
           await invalidateAuthSession();
@@ -6037,42 +6103,58 @@ function App() {
         }
 
         const previewBlob = await response.blob();
-        objectUrl = URL.createObjectURL(previewBlob);
 
-        if (isMounted) {
-          setTailoredResumePreviewState({ objectUrl, status: "ready" });
-        } else {
-          URL.revokeObjectURL(objectUrl);
+        if (isCancelled) {
+          return;
+        }
+
+        const newObjectUrl = URL.createObjectURL(previewBlob);
+        const previousObjectUrl = tailoredResumePreviewObjectUrlRef.current;
+        tailoredResumePreviewObjectUrlRef.current = newObjectUrl;
+        setTailoredResumePreviewState({
+          objectUrl: newObjectUrl,
+          status: "ready",
+        });
+
+        if (previousObjectUrl && previousObjectUrl !== newObjectUrl) {
+          URL.revokeObjectURL(previousObjectUrl);
         }
       } catch (error) {
-        if (isMounted) {
-          setTailoredResumePreviewState({
-            error:
-              error instanceof Error
-                ? error.message
-                : "Could not load the tailored resume preview.",
-            objectUrl: null,
-            status: "error",
-          });
+        if (isCancelled) {
+          return;
         }
+        setTailoredResumePreviewState({
+          error:
+            error instanceof Error
+              ? error.message
+              : "Could not load the tailored resume preview.",
+          objectUrl: null,
+          status: "error",
+        });
       }
     }
 
     void loadTailoredResumePreview();
 
     return () => {
-      isMounted = false;
+      isCancelled = true;
+    };
+  }, [
+    focusedTailoredResumeId,
+    invalidateAuthSession,
+    tailoredResumePreviewPdfUpdatedAt,
+    tailoredResumePreviewSessionToken,
+  ]);
 
+  useEffect(() => {
+    return () => {
+      const objectUrl = tailoredResumePreviewObjectUrlRef.current;
+      tailoredResumePreviewObjectUrlRef.current = null;
       if (objectUrl) {
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [
-    activeTailoredResumeReviewRecord?.pdfUpdatedAt,
-    authState,
-    focusedTailoredResumeId,
-    invalidateAuthSession,
-  ]);
+  }, []);
 
   useEffect(() => {
     function handleActiveTabChange() {
@@ -7500,6 +7582,33 @@ function App() {
 
     setTailoredResumeMenuError(result.error);
     setTailoredResumeMenuErrorResumeId(input.tailoredResumeId);
+  }
+
+  async function handleRevealKeywordBadge(input: {
+    jobUrl: string | null;
+    tailoredResumeId: string;
+  }) {
+    setTailoredResumeMenuError(null);
+    setTailoredResumeMenuErrorResumeId(null);
+
+    try {
+      await chrome.runtime.sendMessage({
+        payload: {
+          jobUrl: input.jobUrl,
+          tailoredResumeId: input.tailoredResumeId,
+        },
+        type: "JOB_HELPER_REVEAL_KEYWORD_BADGE",
+      });
+      setTailoredResumeMenuId(null);
+      setTailoredResumeMenuPosition(null);
+    } catch (error) {
+      setTailoredResumeMenuError(
+        error instanceof Error
+          ? error.message
+          : "Could not show the keywords popup.",
+      );
+      setTailoredResumeMenuErrorResumeId(input.tailoredResumeId);
+    }
   }
 
   async function handleOpenTrackedApplication(
@@ -9370,6 +9479,13 @@ function App() {
               isDeletingPersonalItem ||
               isArchivingAllTailoredResumes ||
               isActionPending;
+            const keywordBadgeDismissalKey = deriveKeywordBadgeDismissalKey({
+              jobUrl: tailoredResume.jobUrl ?? null,
+              tailoredResumeId: tailoredResume.id,
+            });
+            const isKeywordBadgeDismissed = keywordBadgeDismissalKey
+              ? dismissedKeywordBadgeKeys.has(keywordBadgeDismissalKey)
+              : false;
 
             return (
               <div
@@ -9462,6 +9578,21 @@ function App() {
                                   ? "Downloading..."
                                   : "Download"}
                               </button>
+                              {isKeywordBadgeDismissed ? (
+                                <button
+                                  className="tailor-run-menu-item"
+                                  disabled={isMenuBusy}
+                                  type="button"
+                                  onClick={() =>
+                                    void handleRevealKeywordBadge({
+                                      jobUrl: tailoredResume.jobUrl ?? null,
+                                      tailoredResumeId: tailoredResume.id,
+                                    })
+                                  }
+                                >
+                                  Show keywords
+                                </button>
+                              ) : null}
                               {canGoToTab ? (
                                 <button
                                   className="tailor-run-menu-item"

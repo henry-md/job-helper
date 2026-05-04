@@ -4,6 +4,11 @@ import {
   type JobPageContext,
   type JobPostingStructuredHint,
 } from "./job-helper";
+import {
+  deriveKeywordBadgeDismissalKey as computeKeywordBadgeDismissalKey,
+  KEYWORD_BADGE_DISMISSAL_STORAGE_KEY,
+  readDismissedKeywordBadgeMap,
+} from "./keyword-badge-dismissal";
 
 type OverlayTone = "error" | "info" | "success" | "warning";
 
@@ -69,8 +74,6 @@ const emphasizedTechnologyBadgeRootId =
 const pagePromptStyleId = "job-helper-page-prompt-styles";
 const resumeBadgeDismissedStorageKey =
   "jobHelperDismissedTailoredResumeBadges";
-const emphasizedTechnologyBadgeDismissedStorageKey =
-  "jobHelperDismissedEmphasizedTechnologyBadges";
 const pagePromptEdgeInset = 16;
 const pagePromptGap = 12;
 const pagePromptWidth = "min(420px, calc(100vw - 32px))";
@@ -79,9 +82,98 @@ let lastShortcutAt = 0;
 const dismissedResumeBadgeKeys = readDismissedPagePromptKeys(
   resumeBadgeDismissedStorageKey,
 );
-const dismissedEmphasizedTechnologyBadgeKeys = readDismissedPagePromptKeys(
-  emphasizedTechnologyBadgeDismissedStorageKey,
-);
+const dismissedKeywordBadgeKeys = new Set<string>();
+let lastShownKeywordBadgePayload: {
+  badgeKey: string;
+  payload: TailoredResumeBadgePayload;
+} | null = null;
+
+void chrome.storage.local
+  .get(KEYWORD_BADGE_DISMISSAL_STORAGE_KEY)
+  .then((result) => {
+    const initial = readDismissedKeywordBadgeMap(
+      result?.[KEYWORD_BADGE_DISMISSAL_STORAGE_KEY],
+    );
+    for (const key of initial) {
+      dismissedKeywordBadgeKeys.add(key);
+    }
+
+    if (lastShownKeywordBadgePayload) {
+      reapplyKeywordBadgeDismissalState();
+    }
+  })
+  .catch(() => undefined);
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local") {
+    return;
+  }
+
+  const change = changes[KEYWORD_BADGE_DISMISSAL_STORAGE_KEY];
+  if (!change) {
+    return;
+  }
+
+  dismissedKeywordBadgeKeys.clear();
+  for (const key of readDismissedKeywordBadgeMap(change.newValue)) {
+    dismissedKeywordBadgeKeys.add(key);
+  }
+
+  reapplyKeywordBadgeDismissalState();
+});
+
+function reapplyKeywordBadgeDismissalState() {
+  if (!lastShownKeywordBadgePayload) {
+    return;
+  }
+
+  const { badgeKey, payload } = lastShownKeywordBadgePayload;
+  const dismissalKey = resolveKeywordBadgeDismissalKey(payload, badgeKey);
+
+  if (dismissedKeywordBadgeKeys.has(dismissalKey)) {
+    hideEmphasizedTechnologyBadge();
+    return;
+  }
+
+  if (!document.getElementById(emphasizedTechnologyBadgeRootId)) {
+    showEmphasizedTechnologyBadge(payload, badgeKey);
+  }
+}
+
+function resolveKeywordBadgeDismissalKey(
+  payload: TailoredResumeBadgePayload,
+  badgeKey: string,
+) {
+  return (
+    computeKeywordBadgeDismissalKey({
+      badgeKey,
+      jobUrl: payload.jobUrl ?? null,
+      tailoredResumeId: payload.tailoredResumeId ?? null,
+    }) ?? `badge:${badgeKey}`
+  );
+}
+
+async function rememberDismissedKeywordBadgeKey(dismissalKey: string) {
+  dismissedKeywordBadgeKeys.add(dismissalKey);
+
+  try {
+    const current = await chrome.storage.local.get(
+      KEYWORD_BADGE_DISMISSAL_STORAGE_KEY,
+    );
+    const existing =
+      (current?.[KEYWORD_BADGE_DISMISSAL_STORAGE_KEY] as
+        | Record<string, boolean>
+        | undefined) ?? {};
+    await chrome.storage.local.set({
+      [KEYWORD_BADGE_DISMISSAL_STORAGE_KEY]: {
+        ...existing,
+        [dismissalKey]: true,
+      },
+    });
+  } catch {
+    // Dismissal still works in-memory for this session even if storage fails.
+  }
+}
 
 function cleanText(value: string | null | undefined, maxLength = 0) {
   const collapsed = (value ?? "").replace(/\s+/g, " ").trim();
@@ -647,14 +739,6 @@ function rememberDismissedResumeBadgeKey(badgeKey: string) {
   rememberDismissedPagePromptKey(
     resumeBadgeDismissedStorageKey,
     dismissedResumeBadgeKeys,
-    badgeKey,
-  );
-}
-
-function rememberDismissedEmphasizedTechnologyBadgeKey(badgeKey: string) {
-  rememberDismissedPagePromptKey(
-    emphasizedTechnologyBadgeDismissedStorageKey,
-    dismissedEmphasizedTechnologyBadgeKeys,
     badgeKey,
   );
 }
@@ -1423,13 +1507,16 @@ function showEmphasizedTechnologyBadge(
     payload.emphasizedTechnologies,
   );
   const technologyBadgeKey = `emphasized-technologies:${badgeKey}`;
+  const dismissalKey = resolveKeywordBadgeDismissalKey(payload, badgeKey);
 
   if (technologies.length === 0) {
     hideEmphasizedTechnologyBadge();
     return;
   }
 
-  if (dismissedEmphasizedTechnologyBadgeKeys.has(technologyBadgeKey)) {
+  lastShownKeywordBadgePayload = { badgeKey, payload };
+
+  if (dismissedKeywordBadgeKeys.has(dismissalKey)) {
     hideEmphasizedTechnologyBadge();
     return;
   }
@@ -1469,10 +1556,11 @@ function showEmphasizedTechnologyBadge(
   });
 
   eyebrow.textContent = "Job keywords";
+  badge.dataset.jobHelperDismissalKey = dismissalKey;
   closeButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    rememberDismissedEmphasizedTechnologyBadgeKey(technologyBadgeKey);
+    void rememberDismissedKeywordBadgeKey(dismissalKey);
     hideEmphasizedTechnologyBadge();
   });
   if (!appendKeywordCoverageDisclosure(groups, payload)) {

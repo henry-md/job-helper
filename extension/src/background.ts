@@ -64,6 +64,10 @@ import {
 } from "./tailor-overwrite-guard";
 import { resolveTailoredResumeTabBadge } from "./tailored-resume-tab-badge";
 import {
+  deriveKeywordBadgeDismissalKey,
+  KEYWORD_BADGE_DISMISSAL_STORAGE_KEY,
+} from "./keyword-badge-dismissal";
+import {
   buildCompanyResumeDownloadName,
   sanitizeResumeDownloadFilenameBase,
 } from "./tailored-resume-download-name";
@@ -599,6 +603,79 @@ async function showActiveTailoringKeywordBadgesForMatchingTabs(
       });
     }),
   );
+}
+
+async function revealDismissedKeywordBadge(input: {
+  jobUrl: string | null;
+  tailoredResumeId: string | null;
+}) {
+  let resolvedJobUrl = input.jobUrl;
+
+  if (!resolvedJobUrl && input.tailoredResumeId) {
+    try {
+      const { personalInfo } = await getPersonalInfoSummary();
+      const matchingResume = personalInfo.tailoredResumes.find(
+        (resume) => resume.id === input.tailoredResumeId,
+      );
+      resolvedJobUrl = matchingResume?.jobUrl ?? null;
+    } catch {
+      // If personal info fails to load, fall through and try with whatever we have.
+    }
+  }
+
+  const dismissalKey = deriveKeywordBadgeDismissalKey({
+    jobUrl: resolvedJobUrl,
+    tailoredResumeId: input.tailoredResumeId,
+  });
+
+  if (dismissalKey) {
+    try {
+      const current = await chrome.storage.local.get(
+        KEYWORD_BADGE_DISMISSAL_STORAGE_KEY,
+      );
+      const existing =
+        (current?.[KEYWORD_BADGE_DISMISSAL_STORAGE_KEY] as
+          | Record<string, boolean>
+          | undefined) ?? {};
+
+      if (existing[dismissalKey]) {
+        const { [dismissalKey]: _removed, ...rest } = existing;
+        await chrome.storage.local.set({
+          [KEYWORD_BADGE_DISMISSAL_STORAGE_KEY]: rest,
+        });
+      }
+    } catch {
+      // If storage fails the in-page listener cannot react; fall through to refresh tabs.
+    }
+  }
+
+  const normalizedTargetUrl = normalizeComparableUrl(resolvedJobUrl);
+  if (!normalizedTargetUrl) {
+    return;
+  }
+
+  try {
+    const tabs = await chrome.tabs.query({
+      url: ["http://*/*", "https://*/*"],
+    });
+
+    await Promise.all(
+      tabs.map(async (tab) => {
+        const tabUrl = cleanText(tab.url) || cleanText(tab.pendingUrl);
+        if (!tabUrl) {
+          return;
+        }
+
+        if (normalizeComparableUrl(tabUrl) !== normalizedTargetUrl) {
+          return;
+        }
+
+        scheduleTailoredResumeBadgeCheck(tab);
+      }),
+    );
+  } catch {
+    // No tabs to refresh is fine — the storage listener will cover any open tabs.
+  }
 }
 
 function isHttpTabUrl(value: string | null | undefined) {
@@ -2967,6 +3044,26 @@ chrome.runtime.onMessage.addListener((
         ),
       }),
     );
+  }
+
+  if (typedMessage?.type === "JOB_HELPER_REVEAL_KEYWORD_BADGE") {
+    return sendAsyncResponse(sendResponse, async () => {
+      const tailoredResumeId = readPayloadString(
+        typedMessage.payload,
+        "tailoredResumeId",
+      );
+      const jobUrlFromPayload = readPayloadString(
+        typedMessage.payload,
+        "jobUrl",
+      );
+
+      await revealDismissedKeywordBadge({
+        jobUrl: jobUrlFromPayload,
+        tailoredResumeId,
+      });
+
+      return {};
+    });
   }
 
   if (typedMessage?.type === "JOB_HELPER_REGENERATE_TAILORING") {
