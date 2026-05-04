@@ -1,4 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { GlobalWorkerOptions } from "pdfjs-dist";
+// Vite serves this as a real reachable URL in dev (`/@fs/.../pdf.worker.mjs`)
+// and emits it as a hashed asset in production. Required because
+// `pdfjs-dist/webpack.mjs` resolves the worker to
+// `/node_modules/.vite/deps/build/pdf.worker.mjs?worker_file&type=module` in
+// crxjs dev mode, which 404s — leaving the Loading… spinner forever.
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
 import type {
   PDFDocumentLoadingTask,
   PDFDocumentProxy,
@@ -166,7 +173,25 @@ async function loadPdfJsModule(): Promise<PdfJsModule> {
   }
 
   installPdfJsCollectionPolyfills();
-  pdfJsModulePromise ??= import("pdfjs-dist/webpack.mjs") as Promise<PdfJsModule>;
+  pdfJsModulePromise ??= (async () => {
+    const mod = (await import(
+      "pdfjs-dist/webpack.mjs"
+    )) as PdfJsModule;
+    // webpack.mjs unconditionally assigns a Worker pointing at a 404 URL in
+    // crxjs dev mode; replace it with a Vite-emitted worker URL so
+    // getDocument() can resolve.
+    if (typeof window !== "undefined" && pdfWorkerUrl) {
+      try {
+        GlobalWorkerOptions.workerPort?.terminate?.();
+      } catch {
+        // ignore — the original worker may already be in a terminal state
+      }
+      GlobalWorkerOptions.workerPort = new Worker(pdfWorkerUrl, {
+        type: "module",
+      });
+    }
+    return mod;
+  })();
 
   return pdfJsModulePromise;
 }
