@@ -1,7 +1,15 @@
 import type { TailorResumeTechnologyContext } from "./tailor-resume-types.ts";
 
 export type InterviewStreamEmittedEvent =
-  | { delta: string; kind: "text-delta" }
+  | {
+      field: (typeof interviewTextKeys)[number];
+      kind: "text-start";
+    }
+  | {
+      delta: string;
+      field: (typeof interviewTextKeys)[number];
+      kind: "text-delta";
+    }
   | { card: TailorResumeTechnologyContext; kind: "card" };
 
 export type TailorResumeInterviewStreamEvent =
@@ -13,19 +21,33 @@ const interviewTextKeys = ["assistantMessage", "completionMessage"] as const;
 export class TailorResumeInterviewArgsStreamer {
   private buffer = "";
   private emittedTextLength = 0;
+  private emittedTextKey: (typeof interviewTextKeys)[number] | null = null;
   private emittedCardCount = 0;
 
   feed(chunk: string): InterviewStreamEmittedEvent[] {
     this.buffer += chunk;
     const events: InterviewStreamEmittedEvent[] = [];
 
-    const text = this.extractStreamingText();
-    if (text !== null && text.length > this.emittedTextLength) {
+    const streamingText = this.extractStreamingText();
+    if (streamingText !== null && streamingText.key !== this.emittedTextKey) {
+      this.emittedTextKey = streamingText.key;
+      this.emittedTextLength = 0;
       events.push({
-        delta: text.slice(this.emittedTextLength),
+        field: streamingText.key,
+        kind: "text-start",
+      });
+    }
+
+    if (
+      streamingText !== null &&
+      streamingText.text.length > this.emittedTextLength
+    ) {
+      events.push({
+        delta: streamingText.text.slice(this.emittedTextLength),
+        field: streamingText.key,
         kind: "text-delta",
       });
-      this.emittedTextLength = text.length;
+      this.emittedTextLength = streamingText.text.length;
     }
 
     const cards = this.extractCompletedCards();
@@ -123,12 +145,17 @@ export class TailorResumeInterviewArgsStreamer {
     return result;
   }
 
-  private extractStreamingText(): string | null {
+  private extractStreamingText(): {
+    key: (typeof interviewTextKeys)[number];
+    text: string;
+  } | null {
     for (const key of interviewTextKeys) {
       const valueStart = this.findKeyValueStart(key);
 
       if (valueStart >= 0) {
-        return this.extractStringValueFrom(valueStart);
+        const text = this.extractStringValueFrom(valueStart);
+
+        return text === null ? null : { key, text };
       }
     }
 

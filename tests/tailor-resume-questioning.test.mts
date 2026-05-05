@@ -238,6 +238,49 @@ test("parseTailorResumeInterviewResponseFromModelOutput preserves cumulative USE
   );
 });
 
+test("parseTailorResumeInterviewResponseFromModelOutput reads non-technology update tool calls", () => {
+  const response = parseTailorResumeInterviewResponseFromModelOutput({
+    output: [
+      {
+        arguments: JSON.stringify({
+          completionMessage:
+            "I added Chromium and Internationalization to the non-technology list and removed them from this run. Press Done when you're ready.",
+          keywordDecisions: [
+            {
+              action: "remove",
+              name: "Chromium",
+              reason: "The user said these are not real skills.",
+            },
+            {
+              action: "remove",
+              name: "internationalization",
+              reason: "The user said these are not real skills.",
+            },
+          ],
+          learnings: [],
+          nonTechnologyTerms: ["Chromium", "internationalization"],
+          userMarkdownEditOperations: [],
+        }),
+        call_id: "call-non-tech",
+        name: "update_tailor_resume_non_technologies",
+        type: "function_call",
+      },
+    ],
+    output_text:
+      "I added Chromium and Internationalization to the non-technology list and removed them from this run. Press Done when you're ready.",
+  });
+
+  assert.equal(response.response.action, "done");
+  assert.deepEqual(response.response.nonTechnologyTerms, [
+    "chromium",
+    "internationalization",
+  ]);
+  assert.equal(
+    response.toolCalls[0]?.name,
+    "update_tailor_resume_non_technologies",
+  );
+});
+
 test("parseTailorResumeInterviewResponseFromModelOutput reads probing-question tool calls with assistant text", () => {
   const response = parseTailorResumeInterviewResponseFromModelOutput({
     output: [
@@ -292,7 +335,7 @@ test("parseTailorResumeInterviewResponseFromModelOutput keeps follow-up technolo
                 "Designed Cassandra data models for high-volume event writes -- NewForm",
                 "Migrated time-series metrics into Cassandra-backed storage -- KnoWhiz",
               ],
-              name: "Cassandra",
+              name: "cassandra",
             },
           ],
           userMarkdownEditOperations: [],

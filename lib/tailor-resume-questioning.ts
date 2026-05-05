@@ -31,6 +31,10 @@ import {
   type TailorResumeKeywordPresenceContext,
   type TailorResumeKeywordPresenceContextTerm,
 } from "./tailor-resume-keyword-coverage.ts";
+import {
+  formatTailorResumeTermWithCapitalFirst,
+  normalizeTailorResumeNonTechnologyTerms,
+} from "./tailor-resume-non-technologies.ts";
 import { runWithTransientModelRetries } from "./tailor-resume-transient-retry.ts";
 import {
   applyTailorResumeUserMarkdownPatch,
@@ -133,6 +137,13 @@ const tailorResumeKeywordDecisionSchema = {
   required: ["name", "action", "reason"],
 } as const;
 
+const tailorResumeNonTechnologyTermsSchema = {
+  type: "array",
+  description:
+    "Terms the user has rejected as not real technologies or not resume-searchable skills. Use exact emphasized keyword names from the current chat; the app stores them case-insensitively and removes them from future keyword scraping.",
+  items: { type: "string" },
+} as const;
+
 const initiateTailorResumeProbingQuestionsToolParameters = {
   type: "object",
   additionalProperties: false,
@@ -158,6 +169,7 @@ const initiateTailorResumeProbingQuestionsToolParameters = {
       type: "array",
       items: tailorResumeKeywordDecisionSchema,
     },
+    nonTechnologyTerms: tailorResumeNonTechnologyTermsSchema,
     technologyContexts: {
       type: "array",
       description:
@@ -174,6 +186,7 @@ const initiateTailorResumeProbingQuestionsToolParameters = {
     "debugDecision",
     "keywordDecisions",
     "learnings",
+    "nonTechnologyTerms",
     "technologyContexts",
     "userMarkdownEditOperations",
   ],
@@ -196,6 +209,7 @@ const finishTailorResumeInterviewToolParameters = {
       type: "array",
       items: tailorResumeKeywordDecisionSchema,
     },
+    nonTechnologyTerms: tailorResumeNonTechnologyTermsSchema,
     userMarkdownEditOperations: {
       type: "array",
       items: tailorResumeUserMarkdownEditOperationSchema,
@@ -205,6 +219,7 @@ const finishTailorResumeInterviewToolParameters = {
     "completionMessage",
     "keywordDecisions",
     "learnings",
+    "nonTechnologyTerms",
     "userMarkdownEditOperations",
   ],
 } as const;
@@ -218,12 +233,50 @@ const skipTailorResumeInterviewToolParameters = {
       type: "array",
       items: tailorResumeKeywordDecisionSchema,
     },
+    nonTechnologyTerms: tailorResumeNonTechnologyTermsSchema,
     userMarkdownEditOperations: {
       type: "array",
       items: tailorResumeUserMarkdownEditOperationSchema,
     },
   },
-  required: ["reason", "keywordDecisions", "userMarkdownEditOperations"],
+  required: [
+    "reason",
+    "keywordDecisions",
+    "nonTechnologyTerms",
+    "userMarkdownEditOperations",
+  ],
+} as const;
+
+const updateTailorResumeNonTechnologiesToolParameters = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    completionMessage: {
+      type: "string",
+      description:
+        "A concise user-facing message saying the rejected terms were added to the non-technology list and asking the user to press Done or keep chatting.",
+    },
+    keywordDecisions: {
+      type: "array",
+      items: tailorResumeKeywordDecisionSchema,
+    },
+    learnings: {
+      type: "array",
+      items: tailorResumeInterviewLearningSchema,
+    },
+    nonTechnologyTerms: tailorResumeNonTechnologyTermsSchema,
+    userMarkdownEditOperations: {
+      type: "array",
+      items: tailorResumeUserMarkdownEditOperationSchema,
+    },
+  },
+  required: [
+    "completionMessage",
+    "keywordDecisions",
+    "learnings",
+    "nonTechnologyTerms",
+    "userMarkdownEditOperations",
+  ],
 } as const;
 
 const tailorResumeInterviewTools = [
@@ -251,6 +304,14 @@ const tailorResumeInterviewTools = [
     parameters: skipTailorResumeInterviewToolParameters,
     strict: true,
   },
+  {
+    type: "function" as const,
+    name: "update_tailor_resume_non_technologies",
+    description:
+      "Add user-rejected emphasized keyword terms to the saved non-technology list and remove them from this tailoring run.",
+    parameters: updateTailorResumeNonTechnologiesToolParameters,
+    strict: true,
+  },
 ];
 
 type TailorResumeInterviewResponse = {
@@ -260,6 +321,7 @@ type TailorResumeInterviewResponse = {
   debugDecision: TailorResumeInterviewDebugDecision;
   keywordDecisions: TailorResumeKeywordDecision[];
   learnings: TailoredResumeQuestionLearning[];
+  nonTechnologyTerms: string[];
   technologyContexts: TailorResumeTechnologyContext[];
   userMarkdownEditOperations: TailorResumeUserMarkdownPatchOperation[];
 };
@@ -277,6 +339,7 @@ export type AdvanceTailorResumeQuestioningResult =
       assistantMessage: string;
       generationDurationMs: number;
       emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+      nonTechnologyTerms: string[];
       questioningSummary: TailoredResumeQuestioningSummary;
       technologyContexts: TailorResumeTechnologyContext[];
       toolCalls: TailorResumeConversationToolCall[];
@@ -287,6 +350,7 @@ export type AdvanceTailorResumeQuestioningResult =
       completionMessage: string;
       emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
       generationDurationMs: number;
+      nonTechnologyTerms: string[];
       questioningSummary: TailoredResumeQuestioningSummary | null;
       toolCalls: TailorResumeConversationToolCall[];
       userMarkdownEditOperations: TailorResumeUserMarkdownPatchOperation[];
@@ -296,6 +360,7 @@ export type AdvanceTailorResumeQuestioningResult =
       action: "skip";
       emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
       generationDurationMs: number;
+      nonTechnologyTerms: string[];
       questioningSummary: TailoredResumeQuestioningSummary | null;
       userMarkdownPatchResult: TailorResumeUserMarkdownPatchResult | null;
     };
@@ -430,7 +495,10 @@ function parseTailorResumeTechnologyContexts(
       throw new Error("The model returned an invalid technology context card.");
     }
 
-    const name = "name" in entry ? readTrimmedString(entry.name) : "";
+    const name =
+      "name" in entry
+        ? formatTailorResumeTermWithCapitalFirst(readTrimmedString(entry.name))
+        : "";
     const definition =
       "definition" in entry ? readTrimmedString(entry.definition) : "";
     const examples =
@@ -592,6 +660,20 @@ function parseTailorResumeKeywordDecisions(
   });
 }
 
+function parseTailorResumeNonTechnologyTerms(value: unknown) {
+  if (typeof value === "undefined" || value === null) {
+    return [];
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error("The model returned invalid non-technology terms.");
+  }
+
+  return normalizeTailorResumeNonTechnologyTerms(
+    value.filter((term): term is string => typeof term === "string"),
+  );
+}
+
 function parseTailorResumeInterviewResponse(
   value: unknown,
   outputText: string,
@@ -615,6 +697,9 @@ function parseTailorResumeInterviewResponse(
   const rawLearnings = "learnings" in value ? value.learnings : null;
   const keywordDecisions = parseTailorResumeKeywordDecisions(
     "keywordDecisions" in value ? value.keywordDecisions : undefined,
+  );
+  const nonTechnologyTerms = parseTailorResumeNonTechnologyTerms(
+    "nonTechnologyTerms" in value ? value.nonTechnologyTerms : undefined,
   );
   const technologyContexts = parseTailorResumeTechnologyContexts(
     "technologyContexts" in value ? value.technologyContexts : undefined,
@@ -642,6 +727,7 @@ function parseTailorResumeInterviewResponse(
     debugDecision,
     keywordDecisions,
     learnings: rawLearnings.map(parseTailoredResumeQuestionLearning),
+    nonTechnologyTerms,
     technologyContexts: action === "ask" ? technologyContexts : [],
     userMarkdownEditOperations,
   };
@@ -774,6 +860,14 @@ export function parseTailorResumeInterviewResponseFromModelOutput(
               : undefined,
           )
         : [];
+    const nonTechnologyTerms =
+      argumentsJson && typeof argumentsJson === "object"
+        ? parseTailorResumeNonTechnologyTerms(
+            "nonTechnologyTerms" in argumentsJson
+              ? argumentsJson.nonTechnologyTerms
+              : undefined,
+          )
+        : [];
 
     return {
       response: {
@@ -790,9 +884,23 @@ export function parseTailorResumeInterviewResponseFromModelOutput(
               )
             : [],
         learnings: [],
+        nonTechnologyTerms,
         technologyContexts: [],
         userMarkdownEditOperations,
       },
+      toolCalls: conversationToolCalls,
+    };
+  }
+
+  if (toolCall.name === "update_tailor_resume_non_technologies") {
+    return {
+      response: parseTailorResumeInterviewResponse({
+        ...(argumentsJson && typeof argumentsJson === "object"
+          ? argumentsJson
+          : {}),
+        action: "done",
+        debugDecision: "not_applicable",
+      }, outputText),
       toolCalls: conversationToolCalls,
     };
   }
@@ -880,11 +988,15 @@ function serializeKeywordPresenceContext(
 function applyKeywordDecisionsToEmphasizedTechnologies(input: {
   emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
   keywordDecisions: TailorResumeKeywordDecision[];
+  nonTechnologyTerms?: string[];
 }) {
   const removedNames = new Set(
-    input.keywordDecisions
-      .filter((decision) => decision.action === "remove")
-      .map((decision) => decision.name.trim().toLowerCase()),
+    [
+      ...input.keywordDecisions
+        .filter((decision) => decision.action === "remove")
+        .map((decision) => decision.name),
+      ...(input.nonTechnologyTerms ?? []),
+    ].map((name) => name.trim().toLowerCase()),
   );
 
   if (removedNames.size === 0) {
@@ -1051,7 +1163,9 @@ function getFallbackTechnologyExamples(term: string) {
 }
 
 function buildFallbackTailorResumeProbeQuestion(terms: string[]) {
-  const selectedTerms = terms.slice(0, 6);
+  const selectedTerms = terms
+    .slice(0, 6)
+    .map(formatTailorResumeTermWithCapitalFirst);
 
   return [
     `Not mentioned in your resume or USER.md: ${selectedTerms.join(", ")}.`,
@@ -1059,16 +1173,18 @@ function buildFallbackTailorResumeProbeQuestion(terms: string[]) {
   ].join("\n");
 }
 
-function buildFallbackTechnologyContexts(
+export function buildFallbackTechnologyContexts(
   terms: string[],
 ): TailorResumeTechnologyContext[] {
   return terms.slice(0, 6).map((term) => {
-    const [firstExample, secondExample] = getFallbackTechnologyExamples(term);
+    const displayTerm = formatTailorResumeTermWithCapitalFirst(term);
+    const [firstExample, secondExample] =
+      getFallbackTechnologyExamples(displayTerm);
 
     return {
-      definition: getFallbackTechnologyDefinition(term),
+      definition: getFallbackTechnologyDefinition(displayTerm),
       examples: [firstExample, secondExample],
-      name: term,
+      name: displayTerm,
     };
   });
 }
@@ -1079,7 +1195,16 @@ function serializeConversation(messages: TailorResumeConversationMessage[]) {
   }
 
   return messages
-    .map((message, index) => `${index + 1}. ${message.role}: ${message.text}`)
+    .map((message, index) => {
+      const contextNames =
+        message.technologyContexts && message.technologyContexts.length > 0
+          ? `\n   technologyContexts: ${message.technologyContexts
+              .map((context) => context.name)
+              .join(", ")}`
+          : "";
+
+      return `${index + 1}. ${message.role}: ${message.text}${contextNames}`;
+    })
     .join("\n");
 }
 
@@ -1155,6 +1280,15 @@ function buildTailorResumeInterviewInput(input: {
             (input.userMarkdown.markdown.trim()
               ? input.userMarkdown.markdown
               : "[empty USER.md]"),
+        },
+        {
+          type: "input_text" as const,
+          text:
+            "Saved non-technology terms for this user:\n" +
+            (input.userMarkdown.nonTechnologies.length > 0
+              ? input.userMarkdown.nonTechnologies.join(", ")
+              : "[none]") +
+            "\nTreat this list as case-insensitive. Terms in it have already been removed from current keyword scraping when possible, and future user rejections should be added through nonTechnologyTerms.",
         },
         {
           type: "input_text" as const,
@@ -1271,6 +1405,37 @@ function textMentionsTechnology(text: string, technologyName: string) {
   );
 }
 
+function latestAssistantDisplayedTechnology(input: {
+  messages: TailorResumeConversationMessage[];
+  technologyName: string;
+}) {
+  const latestAssistantMessage = [...input.messages]
+    .reverse()
+    .find((message) => message.role === "assistant");
+
+  if (!latestAssistantMessage) {
+    return false;
+  }
+
+  return (
+    (latestAssistantMessage.technologyContexts ?? []).some(
+      (technologyContext) =>
+        textMentionsTechnology(technologyContext.name, input.technologyName),
+    ) || textMentionsTechnology(latestAssistantMessage.text, input.technologyName)
+  );
+}
+
+function latestUserMessageBroadlyRejectsDisplayedTechnologies(text: string) {
+  return (
+    /\b(?:those|these|they|them|all\s+of\s+them|all\s+of\s+these|the\s+(?:terms|keywords|skills))\b/i.test(
+      text,
+    ) &&
+    /\b(?:not\s+(?:a\s+)?real\s+(?:skill|skills|keyword|keywords|requirement|requirements|technolog(?:y|ies))|aren['’]?t\s+(?:real\s+)?(?:skills|keywords|requirements|technologies)|are\s+not\s+(?:real\s+)?(?:skills|keywords|requirements|technologies)|don['’]?t\s+include|do\s+not\s+include|shouldn['’]?t\s+count|should\s+not\s+count|remove|drop|ignore)\b/i.test(
+      text,
+    )
+  );
+}
+
 function latestUserMessageExplicitlyRejectsTechnology(input: {
   messages: TailorResumeConversationMessage[];
   technologyName: string;
@@ -1280,13 +1445,25 @@ function latestUserMessageExplicitlyRejectsTechnology(input: {
     .find((message) => message.role === "user");
   const text = latestUserMessage?.text.trim() ?? "";
 
-  if (!text || !textMentionsTechnology(text, input.technologyName)) {
+  if (!text) {
     return false;
   }
 
-  return /\b(?:not a real keyword|not a real requirement|not required|not relevant|ignore|remove|drop|nonsense|doesn['’]t apply|does not apply|shouldn['’]t count|should not count)\b/i.test(
+  const directlyMentionsTechnology = textMentionsTechnology(
     text,
+    input.technologyName,
   );
+  const broadlyRejectsDisplayedTechnology =
+    latestUserMessageBroadlyRejectsDisplayedTechnologies(text) &&
+    latestAssistantDisplayedTechnology(input);
+
+  if (!directlyMentionsTechnology && !broadlyRejectsDisplayedTechnology) {
+    return false;
+  }
+
+  return /\b(?:not\s+(?:a\s+)?real\s+(?:skill|skills|keyword|keywords|requirement|requirements|technolog(?:y|ies))|not required|not relevant|ignore|remove|drop|nonsense|doesn['’]t apply|does not apply|don['’]?t include|do not include|shouldn['’]t count|should not count)\b/i.test(
+    text,
+  ) || latestUserMessageBroadlyRejectsDisplayedTechnologies(text);
 }
 
 export function latestUserMessageDirectlyConfirmsTechnologyExperience(input: {
@@ -1410,6 +1587,10 @@ function validateTailorResumeInterviewResponse(input: {
       throw new Error('Action "skip" must not change emphasized keywords.');
     }
 
+    if (input.response.nonTechnologyTerms.length > 0) {
+      throw new Error('Action "skip" must not update non-technology terms.');
+    }
+
     return;
   }
 
@@ -1433,6 +1614,25 @@ function validateTailorResumeInterviewResponse(input: {
     ) {
       throw new Error(
         `Keyword decision "${decision.name}" can be removed only when the user explicitly rejects it as a bad or irrelevant keyword.`,
+      );
+    }
+  }
+
+  for (const nonTechnologyTerm of input.response.nonTechnologyTerms) {
+    if (!knownTechnologyNames.has(nonTechnologyTerm.trim().toLowerCase())) {
+      throw new Error(
+        `Non-technology term "${nonTechnologyTerm}" must match an emphasized technology.`,
+      );
+    }
+
+    if (
+      !latestUserMessageExplicitlyRejectsTechnology({
+        messages: input.conversation,
+        technologyName: nonTechnologyTerm,
+      })
+    ) {
+      throw new Error(
+        `Non-technology term "${nonTechnologyTerm}" can be saved only when the user rejects it as not a real technology or skill.`,
       );
     }
   }
@@ -1592,6 +1792,15 @@ function validateTailorResumeInterviewResponse(input: {
       "When USER.md is edited, the user-facing message must explicitly mention USER.md.",
     );
   }
+
+  if (
+    input.response.nonTechnologyTerms.length > 0 &&
+    !/\bnon[- ]?technolog/i.test(readUserFacingInterviewText(input.response))
+  ) {
+    throw new Error(
+      "When non-technology terms are saved, the user-facing message must explicitly mention the non-technology list.",
+    );
+  }
 }
 
 function buildUserMarkdownPatchFailureFeedback(
@@ -1627,6 +1836,7 @@ export async function advanceTailorResumeQuestioning(input: {
   const startedAt = Date.now();
   const userMarkdown = input.userMarkdown ?? {
     markdown: defaultTailorResumeUserMarkdown,
+    nonTechnologies: [],
     updatedAt: null,
   };
   const model = process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
@@ -1768,6 +1978,7 @@ export async function advanceTailorResumeQuestioning(input: {
       applyKeywordDecisionsToEmphasizedTechnologies({
         emphasizedTechnologies: input.planningResult.emphasizedTechnologies,
         keywordDecisions: parsedResponse.keywordDecisions,
+        nonTechnologyTerms: parsedResponse.nonTechnologyTerms,
       });
     const nextKeywordCoverage = buildTailorResumeKeywordCheckResult({
       emphasizedTechnologies: nextEmphasizedTechnologies.filter(
@@ -1794,6 +2005,7 @@ export async function advanceTailorResumeQuestioning(input: {
         action: "skip",
         emphasizedTechnologies: nextEmphasizedTechnologies,
         generationDurationMs: Math.max(0, Date.now() - startedAt),
+        nonTechnologyTerms: parsedResponse.nonTechnologyTerms,
         questioningSummary: null,
         userMarkdownPatchResult,
       };
@@ -1823,6 +2035,7 @@ export async function advanceTailorResumeQuestioning(input: {
         assistantMessage: parsedResponse.assistantMessage,
         emphasizedTechnologies: nextEmphasizedTechnologies,
         generationDurationMs: Math.max(0, Date.now() - startedAt),
+        nonTechnologyTerms: parsedResponse.nonTechnologyTerms,
         questioningSummary,
         technologyContexts: parsedResponse.technologyContexts,
         toolCalls: parsedToolCalls,
@@ -1835,6 +2048,7 @@ export async function advanceTailorResumeQuestioning(input: {
       completionMessage: parsedResponse.completionMessage,
       emphasizedTechnologies: nextEmphasizedTechnologies,
       generationDurationMs: Math.max(0, Date.now() - startedAt),
+      nonTechnologyTerms: parsedResponse.nonTechnologyTerms,
       questioningSummary,
       toolCalls: parsedToolCalls,
       userMarkdownEditOperations: parsedResponse.userMarkdownEditOperations,
@@ -1852,6 +2066,7 @@ export async function advanceTailorResumeQuestioning(input: {
       debugDecision: "not_applicable",
       keywordDecisions: [],
       learnings: [],
+      nonTechnologyTerms: [],
       technologyContexts,
       userMarkdownEditOperations: [],
     };
@@ -1861,6 +2076,7 @@ export async function advanceTailorResumeQuestioning(input: {
       assistantMessage,
       emphasizedTechnologies: input.planningResult.emphasizedTechnologies,
       generationDurationMs: Math.max(0, Date.now() - startedAt),
+      nonTechnologyTerms: [],
       questioningSummary: {
         agenda: `Ask whether the user has experience with ${askWorthyMissingTerms
           .slice(0, 6)

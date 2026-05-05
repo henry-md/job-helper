@@ -30,7 +30,13 @@ test("emits text deltas as assistantMessage grows and cards as they close", () =
 
   const streamer = new TailorResumeInterviewArgsStreamer();
   const events: Array<
-    { delta: string; kind: "text-delta" } | { card: unknown; kind: "card" }
+    | { field: "assistantMessage" | "completionMessage"; kind: "text-start" }
+    | {
+        delta: string;
+        field: "assistantMessage" | "completionMessage";
+        kind: "text-delta";
+      }
+    | { card: unknown; kind: "card" }
   > = [];
 
   for (let i = 0; i < fullArgs.length; i += 17) {
@@ -39,6 +45,7 @@ test("emits text deltas as assistantMessage grows and cards as they close", () =
   }
 
   const textDeltas = events.filter((e) => e.kind === "text-delta");
+  const textStarts = events.filter((e) => e.kind === "text-start");
   const cards = events.filter((e) => e.kind === "card");
   const reconstructed = textDeltas
     .map((e) => (e.kind === "text-delta" ? e.delta : ""))
@@ -47,6 +54,14 @@ test("emits text deltas as assistantMessage grows and cards as they close", () =
   assert.equal(
     reconstructed,
     "Do you have experience with Go, Cassandra, or Spark? Reply with yes/no for each.",
+  );
+  assert.equal(textStarts.length, 1);
+  assert.equal(textStarts[0]?.field, "assistantMessage");
+  assert.ok(
+    textDeltas.every(
+      (event) => event.kind === "text-delta" && event.field === "assistantMessage",
+    ),
+    "expected assistantMessage text deltas",
   );
   assert.ok(textDeltas.length > 1, "expected multiple text deltas");
   assert.equal(cards.length, 2);
@@ -64,7 +79,13 @@ test("handles escape sequences and partial unicode escapes safely", () => {
   const streamer = new TailorResumeInterviewArgsStreamer();
   const fullArgs = `{"assistantMessage":"Hello\\n\\"world\\""}`;
   const events: Array<
-    { delta: string; kind: "text-delta" } | { card: unknown; kind: "card" }
+    | { field: "assistantMessage" | "completionMessage"; kind: "text-start" }
+    | {
+        delta: string;
+        field: "assistantMessage" | "completionMessage";
+        kind: "text-delta";
+      }
+    | { card: unknown; kind: "card" }
   > = [];
 
   for (let i = 0; i < fullArgs.length; i += 3) {
@@ -87,7 +108,13 @@ test("emits text from completionMessage when finish tool is called", () => {
   });
 
   const events: Array<
-    { delta: string; kind: "text-delta" } | { card: unknown; kind: "card" }
+    | { field: "assistantMessage" | "completionMessage"; kind: "text-start" }
+    | {
+        delta: string;
+        field: "assistantMessage" | "completionMessage";
+        kind: "text-delta";
+      }
+    | { card: unknown; kind: "card" }
   > = [];
 
   for (let i = 0; i < fullArgs.length; i += 11) {
@@ -97,5 +124,15 @@ test("emits text from completionMessage when finish tool is called", () => {
   const reconstructed = events
     .map((e) => (e.kind === "text-delta" ? e.delta : ""))
     .join("");
+  const textStarts = events.filter((e) => e.kind === "text-start");
+  const textDeltas = events.filter((e) => e.kind === "text-delta");
+  assert.equal(textStarts.length, 1);
+  assert.equal(textStarts[0]?.field, "completionMessage");
+  assert.ok(
+    textDeltas.every(
+      (event) => event.kind === "text-delta" && event.field === "completionMessage",
+    ),
+    "expected completionMessage text deltas",
+  );
   assert.equal(reconstructed, "Want to wrap up the chat now?");
 });

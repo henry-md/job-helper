@@ -15,7 +15,9 @@ import type {
   TailorResumeProfile,
 } from "./tailor-resume-types.ts";
 import {
+  buildTailorResumeUserMemoryState,
   maxTailorResumeUserMarkdownLength,
+  normalizeTailorResumeNonTechnologyTerms,
   saveTailorResumeUserMarkdown,
 } from "./tailor-resume-user-memory.ts";
 
@@ -97,6 +99,13 @@ export async function saveTailorResumeUserMarkdownAction(
           ? null
           : undefined
       : undefined;
+  let nonTechnologies: string[] | undefined;
+  const nonTechnologyNamesInput =
+    "nonTechnologyNames" in body
+      ? body.nonTechnologyNames
+      : "nonTechnologies" in body
+        ? body.nonTechnologies
+        : undefined;
 
   if (typeof markdown !== "string") {
     return NextResponse.json(
@@ -114,13 +123,43 @@ export async function saveTailorResumeUserMarkdownAction(
     );
   }
 
+  if (nonTechnologyNamesInput !== undefined) {
+    if (!Array.isArray(nonTechnologyNamesInput)) {
+      return NextResponse.json(
+        { error: "Provide non-technology names as a list." },
+        { status: 400 },
+      );
+    }
+
+    try {
+      nonTechnologies = normalizeTailorResumeNonTechnologyTerms(
+        nonTechnologyNamesInput.filter(
+          (term): term is string => typeof term === "string",
+        ),
+      );
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unable to save non-technology terms.",
+        },
+        { status: 413 },
+      );
+    }
+  }
+
   let saveResult: Awaited<ReturnType<typeof saveTailorResumeUserMarkdown>>;
 
   try {
     saveResult = await saveTailorResumeUserMarkdown(
       userId,
       markdown,
-      expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt },
+      {
+        ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }),
+        ...(nonTechnologies === undefined ? {} : { nonTechnologies }),
+      },
     );
   } catch (error) {
     return NextResponse.json(
@@ -132,20 +171,27 @@ export async function saveTailorResumeUserMarkdownAction(
   }
 
   if (!saveResult.ok) {
+    const userMemory = buildTailorResumeUserMemoryState(saveResult.state);
+
     return NextResponse.json(
       {
         error:
           "USER.md changed since you opened it. Review the latest version before saving.",
-        userMarkdown: saveResult.state,
+        nonTechnologyNames: userMemory.nonTechnologyNames,
+        userMarkdown: userMemory.userMarkdown,
+        userMemory,
       },
       { status: 409 },
     );
   }
 
   await options.onSaved?.();
+  const userMemory = buildTailorResumeUserMemoryState(saveResult.state);
 
   return NextResponse.json({
-    userMarkdown: saveResult.state,
+    nonTechnologyNames: userMemory.nonTechnologyNames,
+    userMarkdown: userMemory.userMarkdown,
+    userMemory,
   });
 }
 
