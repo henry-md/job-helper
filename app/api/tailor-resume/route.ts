@@ -71,7 +71,8 @@ import { buildTailorResumePlanningSnapshot } from "@/lib/tailor-resume-planning"
 import { applyTailorResumePageCountFailure } from "@/lib/tailor-resume-page-count-failure";
 import {
   advanceTailorResumeQuestioning,
-  buildFallbackTechnologyContexts,
+  generateTailorResumeTechnologyExamples,
+  streamTailorResumeTechnologyExamplesOpeningQuestion,
   type TailorResumeInterviewStreamEvent,
 } from "@/lib/tailor-resume-questioning";
 import { refineTailoredResume } from "@/lib/tailor-resume-refinement";
@@ -101,10 +102,7 @@ import {
   buildTailoredResumeKeywordCoverage,
 } from "@/lib/tailor-resume-keyword-coverage";
 import { formatTailorResumeTermWithCapitalFirst } from "@/lib/tailor-resume-non-technologies";
-import {
-  tailorResumeGenerateExamplesRequestText,
-  tailorResumeScrapedTechnologiesMessage,
-} from "@/lib/tailor-resume-interview-constants";
+import { tailorResumeScrapedTechnologiesMessage } from "@/lib/tailor-resume-interview-constants";
 import {
   tailorResumeDebugErrorSources,
 } from "@/lib/tailor-resume-debug-errors";
@@ -117,6 +115,7 @@ import {
   emptyTailorResumeExtractionState,
   emptyTailorResumeLatexState,
   emptyTailorResumeWorkspaceState,
+  type TailorResumeConversationMessage,
   type TailorResumeConversationToolCall,
   type TailorResumeGenerationStepEvent,
   type TailorResumePendingInterview,
@@ -639,6 +638,18 @@ function buildTailorResumeConversationMessage(input: {
   };
 }
 
+function hasTailorResumeGeneratedTechnologyExamples(
+  conversation: readonly TailorResumeConversationMessage[],
+) {
+  return conversation.some(
+    (message) =>
+      message.role === "assistant" &&
+      (message.technologyContexts ?? []).some(
+        (context) => context.examples.length > 0,
+      ),
+  );
+}
+
 function buildTailorResumeInterviewAssistantText(input: {
   assistantMessage: string;
   planningResult: TailorResumePlanningResult;
@@ -943,19 +954,6 @@ function buildTailorResumeScrapedTechnologyContexts(
       name,
     };
   });
-}
-
-function buildTailorResumeGenerateExamplesConversationPrompt(
-  technologies: TailoredResumeEmphasizedTechnology[],
-) {
-  const names = technologies
-    .slice(0, 12)
-    .map((technology) => formatTailorResumeTermWithCapitalFirst(technology.name))
-    .filter(Boolean);
-
-  return names.length > 0
-    ? `${tailorResumeGenerateExamplesRequestText}\n\nScraped technologies: ${names.join(", ")}.`
-    : tailorResumeGenerateExamplesRequestText;
 }
 
 function buildTailorResumeQuestionStartInterview(input: {
@@ -1500,6 +1498,39 @@ function readTailorResumeInterviewIdFromBody(body: Record<string, unknown>) {
     : "";
 }
 
+function readTailorResumeGenerateExamplesTechnologyNames(
+  body: Record<string, unknown>,
+) {
+  if (!Array.isArray(body.technologyNames)) {
+    return [];
+  }
+
+  const names: string[] = [];
+  const seenNames = new Set<string>();
+
+  for (const value of body.technologyNames) {
+    if (typeof value !== "string") {
+      continue;
+    }
+
+    const name = formatTailorResumeTermWithCapitalFirst(value.trim());
+    const dedupeKey = name.toLowerCase();
+
+    if (!name || seenNames.has(dedupeKey)) {
+      continue;
+    }
+
+    seenNames.add(dedupeKey);
+    names.push(name);
+
+    if (names.length >= 8) {
+      break;
+    }
+  }
+
+  return names;
+}
+
 async function handleRequestTailorResumeInterviewCompletion(
   body: Record<string, unknown>,
   userId: string,
@@ -1636,6 +1667,16 @@ async function handleGenerateTailorResumeInterviewExamples(
     );
   }
 
+  const earlyTechnologyNames =
+    readTailorResumeGenerateExamplesTechnologyNames(body);
+  const earlyOpeningMessagePromise =
+    options.onInterviewStreamEvent && earlyTechnologyNames.length > 0
+      ? streamTailorResumeTechnologyExamplesOpeningQuestion({
+          onStreamEvent: options.onInterviewStreamEvent,
+          technologyNames: earlyTechnologyNames,
+        }).catch(() => "")
+      : Promise.resolve("");
+
   const preparation: TailorResumeInterviewPreparation =
     await withTailorResumeProfileLock(userId, async () => {
       const { lockedLinks, rawProfile } = await readTailorResumeProfileState(
@@ -1707,6 +1748,33 @@ async function handleGenerateTailorResumeInterviewExamples(
     return preparation.response!;
   }
 
+  if (
+    hasTailorResumeGeneratedTechnologyExamples(
+      preparation.tailoringInterview.conversation,
+    )
+  ) {
+    await updateTailorResumeRunStatus({
+      runId: preparation.runId,
+      status: "NEEDS_INPUT",
+      userId,
+    });
+    const userMarkdown = await readTailorResumeUserMarkdown(userId);
+
+    return NextResponse.json({
+      profile: mergeTailorResumeProfileWithLockedLinks(
+        preparation.rawProfile,
+        preparation.lockedLinks,
+        {
+          includeLockedOnly: true,
+        },
+      ),
+      tailoredResumeDurationMs:
+        preparation.tailoringInterview.accumulatedModelDurationMs,
+      tailoringStatus: "needs_user_input" as const,
+      ...buildUserMemoryResponseFields(userMarkdown),
+    });
+  }
+
   let lastStepEvent: TailorResumeGenerationStepEvent | null = null;
   const handleStepEvent = async (event: TailorResumeGenerationStepEvent) => {
     lastStepEvent = event;
@@ -1723,35 +1791,16 @@ async function handleGenerateTailorResumeInterviewExamples(
   });
 
   try {
-    const planningSnapshot = buildTailorResumePlanningSnapshot(
-      preparation.tailoringInterview.sourceAnnotatedLatexCode,
-    );
-    const userMarkdownBeforeQuestioning = await readTailorResumeUserMarkdown(userId);
+    const userMarkdownBeforeQuestioningPromise =
+      readTailorResumeUserMarkdown(userId);
     const uncoveredEmphasizedTechnologies =
-      buildUncoveredTailorResumeQuestionTechnologies({
-        emphasizedTechnologies:
-          preparation.tailoringInterview.planningResult.emphasizedTechnologies,
-        resumePlainText: planningSnapshot.resumePlainText,
-        userMarkdown: userMarkdownBeforeQuestioning,
-      });
-    const planningResultForQuestioning: TailorResumePlanningResult = {
-      ...preparation.tailoringInterview.planningResult,
-      emphasizedTechnologies:
-        filterTailorResumeNonTechnologiesFromEmphasizedTechnologies(
-          preparation.tailoringInterview.planningResult.emphasizedTechnologies,
-          userMarkdownBeforeQuestioning.nonTechnologies,
-        ),
-    };
-    const conversationForModel = [
-      ...preparation.tailoringInterview.conversation,
-      buildTailorResumeConversationMessage({
-        role: "user",
-        text: buildTailorResumeGenerateExamplesConversationPrompt(
-          uncoveredEmphasizedTechnologies,
-        ),
-      }),
-    ];
-    const questioningStartedAt = Date.now();
+      preparation.tailoringInterview.uncoveredEmphasizedTechnologies ?? [];
+    const technologiesForExamples =
+      uncoveredEmphasizedTechnologies.length > 0
+        ? uncoveredEmphasizedTechnologies
+        : preparation.tailoringInterview.planningResult.emphasizedTechnologies;
+    const examplesStartedAt = Date.now();
+    const earlyOpeningMessage = await earlyOpeningMessagePromise;
 
     await handleStepEvent({
       attempt: readTailorResumeInterviewAttempt(
@@ -1760,7 +1809,8 @@ async function handleGenerateTailorResumeInterviewExamples(
       detail:
         "Generating example resume usages for the scraped technology cards.",
       durationMs: 0,
-      emphasizedTechnologies: planningResultForQuestioning.emphasizedTechnologies,
+      emphasizedTechnologies:
+        preparation.tailoringInterview.planningResult.emphasizedTechnologies,
       retrying: false,
       status: "running",
       stepCount: 5,
@@ -1768,17 +1818,17 @@ async function handleGenerateTailorResumeInterviewExamples(
       summary: "Generating technology examples",
     });
 
-    let questioningResult: Awaited<ReturnType<typeof advanceTailorResumeQuestioning>>;
+    let examplesResult: Awaited<
+      ReturnType<typeof generateTailorResumeTechnologyExamples>
+    >;
 
     try {
-      questioningResult = await advanceTailorResumeQuestioning({
-        conversation: conversationForModel,
+      examplesResult = await generateTailorResumeTechnologyExamples({
         jobDescription: preparation.tailoringInterview.jobDescription,
         onStreamEvent: options.onInterviewStreamEvent,
-        planningResult: planningResultForQuestioning,
-        planningSnapshot,
-        promptSettings: preparation.rawProfile.promptSettings.values,
-        userMarkdown: userMarkdownBeforeQuestioning,
+        openingMessage: earlyOpeningMessage,
+        streamOpening: !earlyOpeningMessage,
+        technologies: technologiesForExamples,
       });
     } catch (error) {
       const errorMessage = formatTailorResumeStepError(
@@ -1793,7 +1843,7 @@ async function handleGenerateTailorResumeInterviewExamples(
           preparation.tailoringInterview.planningResult.questioningSummary,
         ),
         detail: errorMessage,
-        durationMs: Math.max(0, Date.now() - questioningStartedAt),
+        durationMs: Math.max(0, Date.now() - examplesStartedAt),
         retrying: false,
         status: "failed",
         stepCount: 5,
@@ -1819,82 +1869,53 @@ async function handleGenerateTailorResumeInterviewExamples(
 
     const accumulatedModelDurationMs =
       preparation.tailoringInterview.accumulatedModelDurationMs +
-      questioningResult.generationDurationMs;
-    const userMarkdownSaveResult =
-      await persistTailorResumeUserMarkdownPatchResult({
-        baseState: userMarkdownBeforeQuestioning,
-        nonTechnologyTerms: questioningResult.nonTechnologyTerms,
-        patchResult:
-          questioningResult.action === "done"
-            ? null
-            : questioningResult.userMarkdownPatchResult,
-        userId,
-      });
-
-    if (!userMarkdownSaveResult.ok) {
-      await updateTailorResumeRunStatus({
-        error: "Unable to save the tailoring follow-up memory update.",
-        runId: preparation.runId,
-        status: "FAILED",
-        userId,
-      });
-      return userMarkdownSaveResult.response;
-    }
-
-    const userMarkdownAfterQuestioning = userMarkdownSaveResult.userMarkdown;
+      examplesResult.generationDurationMs;
+    const userMarkdownBeforeQuestioning =
+      await userMarkdownBeforeQuestioningPromise;
+    const userMarkdownAfterQuestioning = userMarkdownBeforeQuestioning;
+    const planningResultForQuestioning: TailorResumePlanningResult = {
+      ...preparation.tailoringInterview.planningResult,
+      emphasizedTechnologies:
+        filterTailorResumeNonTechnologiesFromEmphasizedTechnologies(
+          preparation.tailoringInterview.planningResult.emphasizedTechnologies,
+          userMarkdownBeforeQuestioning.nonTechnologies,
+        ),
+    };
+    const previousQuestioningSummary =
+      planningResultForQuestioning.questioningSummary;
     const nextPlanningResult: TailorResumePlanningResult = {
       ...planningResultForQuestioning,
-      emphasizedTechnologies:
-        questioningResult.action === "ask" ||
-        questioningResult.action === "done" ||
-        questioningResult.action === "skip"
-          ? questioningResult.emphasizedTechnologies
-          : planningResultForQuestioning.emphasizedTechnologies,
-      questioningSummary:
-        questioningResult.action === "ask" || questioningResult.action === "done"
-          ? questioningResult.questioningSummary
-          : planningResultForQuestioning.questioningSummary,
+      questioningSummary: {
+        agenda:
+          previousQuestioningSummary?.agenda ??
+          "Clarify which scraped technologies match the user's experience.",
+        askedQuestionCount: Math.max(
+          1,
+          previousQuestioningSummary?.askedQuestionCount ?? 0,
+        ),
+        debugDecision: previousQuestioningSummary?.debugDecision ?? null,
+        learnings: previousQuestioningSummary?.learnings ?? [],
+      },
     };
-    const assistantMessage =
-      questioningResult.action === "ask"
-        ? buildTailorResumeInterviewAssistantText({
-            assistantMessage: questioningResult.assistantMessage,
-            planningResult: nextPlanningResult,
-          })
-        : "Here are example shapes for the scraped technologies. Do any of these match your actual experience?";
-    const technologyContexts =
-      questioningResult.action === "ask"
-        ? questioningResult.technologyContexts
-        : buildFallbackTechnologyContexts(
-            uncoveredEmphasizedTechnologies.map((technology) => technology.name),
-          );
-    const completionRequestedAt =
-      questioningResult.action === "done" ? new Date().toISOString() : null;
+    const assistantMessage = buildTailorResumeInterviewAssistantText({
+      assistantMessage: examplesResult.assistantMessage,
+      planningResult: nextPlanningResult,
+    });
     const nextInterview: TailorResumePendingInterview = {
       ...preparation.tailoringInterview,
       accumulatedModelDurationMs,
-      completionRequestedAt,
+      completionRequestedAt: null,
       conversation: [
         ...preparation.tailoringInterview.conversation,
         buildTailorResumeConversationMessage({
           role: "assistant",
-          technologyContexts,
-          text:
-            questioningResult.action === "done"
-              ? questioningResult.completionMessage
-              : assistantMessage,
-          toolCalls:
-            questioningResult.action === "ask" ||
-            questioningResult.action === "done"
-              ? questioningResult.toolCalls
-              : [],
+          technologyContexts: examplesResult.technologyContexts,
+          text: assistantMessage,
+          toolCalls: examplesResult.toolCalls,
         }),
       ],
       planningResult: nextPlanningResult,
-      pendingUserMarkdownEditOperations:
-        questioningResult.action === "done"
-          ? questioningResult.userMarkdownEditOperations
-          : [],
+      pendingUserMarkdownEditOperations: [],
       status: "ready",
       updatedAt: new Date().toISOString(),
     };
@@ -1920,6 +1941,17 @@ async function handleGenerateTailorResumeInterviewExamples(
         })
       ) {
         return null;
+      }
+
+      if (
+        hasTailorResumeGeneratedTechnologyExamples(
+          latestInterview.conversation,
+        )
+      ) {
+        return {
+          lockedLinks: latestState.lockedLinks,
+          rawProfile: latestState.rawProfile,
+        };
       }
 
       const nextRawProfile: TailorResumeProfile = {
@@ -1962,18 +1994,15 @@ async function handleGenerateTailorResumeInterviewExamples(
       attempt: readNextTailorResumeInterviewAttempt(
         preparation.tailoringInterview.planningResult.questioningSummary,
       ),
-      detail: completionRequestedAt
-        ? "The assistant thinks it has enough context. Confirm Done to wrap up, or keep chatting to clarify anything else."
-        : "Technology examples are ready, so Step 2 is waiting for the user's answer.",
-      durationMs: questioningResult.generationDurationMs,
+      detail:
+        "Technology examples are ready, so Step 2 is waiting for the user's answer.",
+      durationMs: examplesResult.generationDurationMs,
       emphasizedTechnologies: nextPlanningResult.emphasizedTechnologies,
       retrying: false,
       status: "running",
       stepCount: 5,
       stepNumber: 2,
-      summary: completionRequestedAt
-        ? "Waiting for you to finish or continue the follow-up chat"
-        : "Waiting for a follow-up answer from the user",
+      summary: "Waiting for a follow-up answer from the user",
     });
     await updateTailorResumeRunStatus({
       runId: preparation.runId,
@@ -5162,6 +5191,33 @@ export async function GET(request: Request) {
     profile,
     syncState,
     ...buildUserMemoryResponseFields(userMarkdown),
+  });
+}
+
+function buildTailorResumeCorsHeaders(request: Request) {
+  const origin = request.headers.get("origin")?.trim() ?? "";
+  const requestedHeaders =
+    request.headers.get("access-control-request-headers")?.trim() ??
+    "authorization, content-type, x-tailor-resume-stream";
+  const headers: Record<string, string> = {
+    "Access-Control-Allow-Headers": requestedHeaders,
+    "Access-Control-Allow-Methods": "GET, PATCH, POST, OPTIONS",
+    "Access-Control-Max-Age": "600",
+    Vary: "Origin, Access-Control-Request-Headers",
+  };
+
+  if (origin) {
+    headers["Access-Control-Allow-Credentials"] = "true";
+    headers["Access-Control-Allow-Origin"] = origin;
+  }
+
+  return headers;
+}
+
+export async function OPTIONS(request: Request) {
+  return new NextResponse(null, {
+    headers: buildTailorResumeCorsHeaders(request),
+    status: 204,
   });
 }
 

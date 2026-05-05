@@ -3464,6 +3464,7 @@ function App() {
   const lastAutoFocusedTailorArtifactKeyRef = useRef<string | null>(null);
   const activeTailorRequestAbortControllerRef =
     useRef<AbortController | null>(null);
+  const isGenerateTailorInterviewExamplesInFlightRef = useRef(false);
   const availablePanelTabs = [
     { id: "tailor" as const, label: "Tailor", title: "Tailor Resume" },
     { id: "applications" as const, label: "Applications", title: "Applications" },
@@ -5853,6 +5854,7 @@ function App() {
   async function generateTailorInterviewExamples() {
     if (
       !tailorInterview ||
+      isGenerateTailorInterviewExamplesInFlightRef.current ||
       isGeneratingTailorInterviewExamples ||
       isTailorInterviewBusy
     ) {
@@ -5860,44 +5862,32 @@ function App() {
     }
 
     const interviewId = tailorInterview.id;
-    const streamedMessage: TailorResumeConversationMessage = {
-      id: `streaming-tailor-examples:${interviewId}:${Date.now()}`,
-      role: "assistant",
-      technologyContexts: [],
-      text: "",
-      toolCalls: [],
-    };
+    const streamedMessageId = `streaming-tailor-examples:${interviewId}:${Date.now()}`;
+    const updatePendingExamplesMessage = (
+      update: (
+        message: TailorResumeConversationMessage,
+      ) => TailorResumeConversationMessage,
+    ) => {
+      setPendingTailorInterviewAssistantMessage((currentMessage) => {
+        const baseMessage =
+          currentMessage?.id === streamedMessageId
+            ? currentMessage
+            : {
+                id: streamedMessageId,
+                role: "assistant" as const,
+                technologyContexts: [],
+                text: "",
+                toolCalls: [],
+              };
 
-    const publishStreamedMessage = () => {
-      setTailorInterview((currentInterview) => {
-        if (!currentInterview || currentInterview.id !== interviewId) {
-          return currentInterview;
-        }
-
-        const conversationWithoutStream = currentInterview.conversation.filter(
-          (message) => message.id !== streamedMessage.id,
-        );
-
-        return {
-          ...currentInterview,
-          conversation: [
-            ...conversationWithoutStream,
-            {
-              ...streamedMessage,
-              technologyContexts: [...streamedMessage.technologyContexts],
-              toolCalls: [...streamedMessage.toolCalls],
-            },
-          ],
-          updatedAt: new Date().toISOString(),
-        };
+        return update(baseMessage);
       });
     };
     const handleInterviewStreamEvent = (
       event: TailorResumeInterviewStreamEvent,
     ) => {
       if (event.kind === "reset") {
-        streamedMessage.text = "";
-        streamedMessage.technologyContexts = [];
+        setPendingTailorInterviewAssistantMessage(null);
         return;
       }
 
@@ -5909,21 +5899,41 @@ function App() {
       }
 
       if (event.kind === "text-delta") {
-        streamedMessage.text = `${streamedMessage.text}${event.delta}`;
-        publishStreamedMessage();
+        updatePendingExamplesMessage((message) => ({
+          ...message,
+          text: `${message.text}${event.delta}`,
+        }));
         return;
       }
 
       if (event.kind === "card") {
-        streamedMessage.technologyContexts = [
-          ...streamedMessage.technologyContexts,
-          event.card,
-        ];
-        publishStreamedMessage();
+        updatePendingExamplesMessage((message) => ({
+          ...message,
+          technologyContexts: [
+            ...message.technologyContexts,
+            event.card,
+          ],
+        }));
       }
     };
     const requestController = beginTailorRequest();
+    const technologyNames = Array.from(
+      new Set(
+        [
+          ...tailorInterview.emphasizedTechnologies.map(
+            (technology) => technology.name,
+          ),
+          ...tailorInterview.conversation.flatMap((message) =>
+            message.technologyContexts.map((context) => context.name),
+          ),
+        ]
+          .map((name) => name.trim())
+          .filter(Boolean),
+      ),
+    );
 
+    isGenerateTailorInterviewExamplesInFlightRef.current = true;
+    setPendingTailorInterviewAssistantMessage(null);
     setTailorInterviewError(null);
     setIsGeneratingTailorInterviewExamples(true);
     setIsTailorInterviewFinishPromptOpen(false);
@@ -5933,6 +5943,7 @@ function App() {
         {
           action: "generateTailorResumeInterviewExamples",
           interviewId,
+          technologyNames,
         },
         {
           onInterviewStreamEvent: handleInterviewStreamEvent,
@@ -5963,6 +5974,7 @@ function App() {
         ) ??
         profileSummary.tailoringInterview;
 
+      setPendingTailorInterviewAssistantMessage(null);
       setTailorInterview(matchingInterview);
       syncTailoredResumeSummariesFromPayload(result.payload);
       void loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
@@ -5973,6 +5985,7 @@ function App() {
       }
     } catch (error) {
       if (isAbortError(error)) {
+        setPendingTailorInterviewAssistantMessage(null);
         return;
       }
 
@@ -5981,7 +5994,9 @@ function App() {
           ? error.message
           : "Unable to generate technology examples.",
       );
+      setPendingTailorInterviewAssistantMessage(null);
     } finally {
+      isGenerateTailorInterviewExamplesInFlightRef.current = false;
       clearTailorRequest(requestController);
       setIsGeneratingTailorInterviewExamples(false);
     }

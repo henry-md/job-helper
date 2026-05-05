@@ -53,6 +53,12 @@ export type TailorResumeRunStreamResult<Payload> = {
   status: number;
 };
 
+function waitForNextStreamPaintOpportunity() {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 function readObjectPayload<Payload>(
   value: unknown,
   fallbackValue: Payload,
@@ -169,7 +175,7 @@ export async function readTailorResumeGenerationStream<
   let buffer = "";
   let finalResult: TailorResumeRunStreamResult<Payload> | null = null;
 
-  function processLine(line: string) {
+  async function processLine(line: string) {
     const trimmedLine = line.trim();
 
     if (!trimmedLine) {
@@ -196,6 +202,7 @@ export async function readTailorResumeGenerationStream<
 
         if (interviewStreamEvent) {
           handlers.onInterviewStreamEvent(interviewStreamEvent);
+          await waitForNextStreamPaintOpportunity();
         }
       }
 
@@ -224,7 +231,7 @@ export async function readTailorResumeGenerationStream<
     buffer = lines.pop() ?? "";
 
     for (const line of lines) {
-      processLine(line);
+      await processLine(line);
     }
 
     if (done) {
@@ -232,7 +239,7 @@ export async function readTailorResumeGenerationStream<
     }
   }
 
-  processLine(buffer);
+  await processLine(buffer);
 
   if (!finalResult) {
     throw new Error("The tailoring run finished without a final response payload.");

@@ -279,6 +279,25 @@ const updateTailorResumeNonTechnologiesToolParameters = {
   ],
 } as const;
 
+const generateTailorResumeTechnologyExamplesToolParameters = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    assistantMessage: {
+      type: "string",
+      description:
+        "A compact user-facing message asking which generated examples match the user's actual experience. Do not repeat definitions or example bullets here.",
+    },
+    technologyContexts: {
+      type: "array",
+      description:
+        "Structured technology cards for the requested scraped technologies. Each card needs a concise definition and two concise, FAANG-level resume bullets with positive impact in the same sentence.",
+      items: tailorResumeTechnologyContextSchema,
+    },
+  },
+  required: ["assistantMessage", "technologyContexts"],
+} as const;
+
 const tailorResumeInterviewTools = [
   {
     type: "function" as const,
@@ -310,6 +329,17 @@ const tailorResumeInterviewTools = [
     description:
       "Add user-rejected emphasized keyword terms to the saved non-technology list and remove them from this tailoring run.",
     parameters: updateTailorResumeNonTechnologiesToolParameters,
+    strict: true,
+  },
+];
+
+const tailorResumeTechnologyExamplesTools = [
+  {
+    type: "function" as const,
+    name: "generate_tailor_resume_technology_examples",
+    description:
+      "Generate concise Step 2 technology explanation cards and example resume bullets, then keep the chat open for the user to confirm which examples match their real experience.",
+    parameters: generateTailorResumeTechnologyExamplesToolParameters,
     strict: true,
   },
 ];
@@ -399,6 +429,425 @@ function getOpenAIClient() {
   }
 
   return new OpenAI({ apiKey });
+}
+
+function modelSupportsReasoningEffort(model: string) {
+  const normalizedModel = model.trim().toLowerCase();
+
+  return (
+    normalizedModel.startsWith("gpt-5") ||
+    /^o[134](?:-|$)/.test(normalizedModel)
+  );
+}
+
+function resolveTailorResumeInterviewReasoning(model: string) {
+  const rawEffort =
+    process.env.OPENAI_TAILOR_RESUME_INTERVIEW_REASONING_EFFORT?.trim() ||
+    "minimal";
+  const effort = rawEffort.toLowerCase();
+  const supportedEfforts = new Set([
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+  ]);
+
+  if (!modelSupportsReasoningEffort(model) || effort === "default") {
+    return null;
+  }
+
+  return supportedEfforts.has(effort)
+    ? {
+        effort: effort as "minimal" | "low" | "medium" | "high" | "xhigh",
+      }
+    : { effort: "minimal" as const };
+}
+
+function buildLowVerbosityTextConfig(model: string) {
+  return model.trim().toLowerCase().startsWith("gpt-5")
+    ? {
+        text: {
+          verbosity: "low" as const,
+        },
+      }
+    : {};
+}
+
+function resolveTailorResumeTechnologyExamplesOpeningModel() {
+  return (
+    process.env.OPENAI_TAILOR_RESUME_INTERVIEW_OPENING_MODEL ??
+    process.env.OPENAI_TAILOR_RESUME_INTERVIEW_EXAMPLES_OPENING_MODEL ??
+    "gpt-4.1-nano"
+  );
+}
+
+export async function generateTailorResumeTechnologyExamples(input: {
+  jobDescription: string;
+  onStreamEvent?: (
+    event: TailorResumeInterviewStreamEvent,
+  ) => void | Promise<void>;
+  openingMessage?: string;
+  streamOpening?: boolean;
+  technologies: TailoredResumeEmphasizedTechnology[];
+}): Promise<{
+  assistantMessage: string;
+  generationDurationMs: number;
+  technologyContexts: TailorResumeTechnologyContext[];
+  toolCalls: TailorResumeConversationToolCall[];
+}> {
+  const startedAt = Date.now();
+  const model =
+    process.env.OPENAI_TAILOR_RESUME_INTERVIEW_EXAMPLES_MODEL ??
+    process.env.OPENAI_TAILOR_RESUME_MODEL ??
+    "gpt-5-mini";
+  const client = getOpenAIClient();
+  const examplesInput = buildTailorResumeTechnologyExamplesInput({
+    jobDescription: input.jobDescription,
+    technologies: input.technologies,
+  });
+  let feedback = "";
+  let lastError = "Unable to generate technology examples.";
+  let openingMessage = input.openingMessage?.trim() ?? "";
+
+  if (input.streamOpening !== false || !openingMessage) {
+    openingMessage = await streamTailorResumeTechnologyExamplesOpeningQuestion({
+      client,
+      jobDescription: input.jobDescription,
+      onStreamEvent: input.onStreamEvent,
+      technologies: input.technologies,
+    });
+  }
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const instructions = buildTailorResumeTechnologyExamplesInstructions(feedback);
+    const response = await runWithTransientModelRetries({
+      operation: async () => {
+        const streamer = new TailorResumeInterviewArgsStreamer();
+        const reasoning = resolveTailorResumeInterviewReasoning(model);
+        const stream = client.responses.stream({
+          input: examplesInput,
+          instructions,
+          ...(reasoning ? { reasoning } : {}),
+          ...buildLowVerbosityTextConfig(model),
+          model,
+          tool_choice: "required",
+          tools: tailorResumeTechnologyExamplesTools,
+        });
+        const finalResponsePromise = stream.finalResponse();
+
+        for await (const event of stream) {
+          if (
+            event.type === "response.function_call_arguments.delta" &&
+            typeof event.delta === "string" &&
+            event.delta.length > 0
+          ) {
+            const emitted = streamer.feed(event.delta);
+
+            if (input.onStreamEvent) {
+              for (const emittedEvent of emitted) {
+                if (emittedEvent.kind === "card") {
+                  await input.onStreamEvent(emittedEvent);
+                }
+              }
+            }
+          }
+        }
+
+        return (await finalResponsePromise) as TailoredResumeResponse;
+      },
+    });
+
+    try {
+      const parsed =
+        parseTailorResumeTechnologyExamplesResponseFromModelOutput(response);
+
+      return {
+        assistantMessage: openingMessage || parsed.response.assistantMessage,
+        generationDurationMs: Math.max(0, Date.now() - startedAt),
+        technologyContexts: parsed.response.technologyContexts,
+        toolCalls: parsed.toolCalls,
+      };
+    } catch (error) {
+      lastError =
+        error instanceof Error
+          ? error.message
+          : "The model returned invalid technology examples.";
+      feedback =
+        `${lastError}\nCall exactly one valid examples tool. Keep assistantMessage short, and put definitions/examples only in technologyContexts.`;
+    }
+  }
+
+  throw new Error(lastError);
+}
+
+export async function streamTailorResumeTechnologyExamplesOpeningQuestion(input: {
+  client?: OpenAI;
+  jobDescription?: string;
+  onStreamEvent?: (
+    event: TailorResumeInterviewStreamEvent,
+  ) => void | Promise<void>;
+  technologies?: TailoredResumeEmphasizedTechnology[];
+  technologyNames?: string[];
+}) {
+  await input.onStreamEvent?.({ kind: "reset" });
+
+  const technologies =
+    input.technologies ??
+    buildTailorResumeEmphasizedTechnologiesFromNames(
+      input.technologyNames ?? [],
+    );
+  const result = await streamTailorResumeTechnologyExamplesOpeningMessage({
+    client: input.client ?? getOpenAIClient(),
+    jobDescription: input.jobDescription ?? "",
+    onStreamEvent: input.onStreamEvent,
+    technologies,
+  });
+
+  return result.assistantMessage;
+}
+
+async function streamTailorResumeTechnologyExamplesOpeningMessage(input: {
+  client: OpenAI;
+  jobDescription: string;
+  onStreamEvent?: (
+    event: TailorResumeInterviewStreamEvent,
+  ) => void | Promise<void>;
+  technologies: TailoredResumeEmphasizedTechnology[];
+}) {
+  const model = resolveTailorResumeTechnologyExamplesOpeningModel();
+  const normalizedModel = model.trim().toLowerCase();
+
+  if (!normalizedModel.startsWith("gpt-5")) {
+    return streamTailorResumeTechnologyExamplesOpeningChatCompletion({
+      ...input,
+      model,
+    });
+  }
+
+  const reasoning = resolveTailorResumeInterviewReasoning(model);
+  const chunks: string[] = [];
+  const stream = input.client.responses.stream({
+    input: buildTailorResumeTechnologyExamplesOpeningInput(input),
+    instructions: buildTailorResumeTechnologyExamplesOpeningInstructions(),
+    max_output_tokens: 56,
+    ...(reasoning ? { reasoning } : {}),
+    ...buildLowVerbosityTextConfig(model),
+    model,
+  });
+  const finalResponsePromise = stream.finalResponse();
+  let textStarted = false;
+
+  for await (const event of stream) {
+    if (
+      event.type === "response.output_text.delta" &&
+      typeof event.delta === "string" &&
+      event.delta.length > 0
+    ) {
+      if (!textStarted) {
+        textStarted = true;
+        await input.onStreamEvent?.({
+          field: "assistantMessage",
+          kind: "text-start",
+        });
+      }
+
+      chunks.push(event.delta);
+      await input.onStreamEvent?.({
+        delta: event.delta,
+        field: "assistantMessage",
+        kind: "text-delta",
+      });
+    }
+  }
+
+  const finalResponse = (await finalResponsePromise) as TailoredResumeResponse;
+  const streamedText = chunks.join("").trim();
+  const finalText = readOutputText(finalResponse) || streamedText;
+
+  if (!finalText) {
+    throw new Error("The opening examples question was empty.");
+  }
+
+  return {
+    assistantMessage: finalText,
+  };
+}
+
+async function streamTailorResumeTechnologyExamplesOpeningChatCompletion(input: {
+  client: OpenAI;
+  jobDescription: string;
+  model: string;
+  onStreamEvent?: (
+    event: TailorResumeInterviewStreamEvent,
+  ) => void | Promise<void>;
+  technologies: TailoredResumeEmphasizedTechnology[];
+}) {
+  let textStarted = false;
+  const leadIn = await streamTailorResumeTechnologyExamplesOpeningChatText({
+    client: input.client,
+    maxTokens: 8,
+    messages: [
+      {
+        content: "Say exactly: Which generated example bullets",
+        role: "user",
+      },
+    ],
+    model: input.model,
+    onStreamEvent: input.onStreamEvent,
+    textStarted,
+  });
+
+  textStarted = leadIn.textStarted;
+
+  const continuation = await streamTailorResumeTechnologyExamplesOpeningChatText({
+    client: input.client,
+    maxTokens: 56,
+    messages: [
+      {
+        content:
+          "Continue the visible Step 2 question in 18-28 words. Do not repeat the existing prefix. Ask which bullets match actual experience and request technology names plus one-line specifics. No markdown.",
+        role: "system",
+      },
+      {
+        content:
+          buildTailorResumeTechnologyExamplesOpeningPromptText(input) +
+          `\nVisible prefix already shown: "${leadIn.text}". Continue after that prefix.`,
+        role: "user",
+      },
+    ],
+    model: input.model,
+    onStreamEvent: input.onStreamEvent,
+    stripLeadingText: leadIn.text,
+    textStarted,
+  });
+  const finalText = `${leadIn.text} ${continuation.text}`
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!finalText) {
+    throw new Error("The opening examples question was empty.");
+  }
+
+  return {
+    assistantMessage: finalText,
+  };
+}
+
+async function streamTailorResumeTechnologyExamplesOpeningChatText(input: {
+  client: OpenAI;
+  maxTokens: number;
+  messages: Array<{ content: string; role: "system" | "user" }>;
+  model: string;
+  onStreamEvent?: (
+    event: TailorResumeInterviewStreamEvent,
+  ) => void | Promise<void>;
+  stripLeadingText?: string;
+  textStarted: boolean;
+}) {
+  const chunks: string[] = [];
+  const stream = await input.client.chat.completions.create({
+    max_tokens: input.maxTokens,
+    messages: input.messages,
+    model: input.model,
+    stream: true,
+    temperature: 0,
+  });
+  let textStarted = input.textStarted;
+  let pendingStripText = "";
+  let strippedLeadingText = !input.stripLeadingText;
+
+  for await (const chunk of stream) {
+    let delta = chunk.choices[0]?.delta?.content;
+
+    if (!delta) {
+      continue;
+    }
+
+    if (!strippedLeadingText && input.stripLeadingText) {
+      pendingStripText += delta;
+
+      if (
+        normalizeOpeningPrefix(input.stripLeadingText).startsWith(
+          normalizeOpeningPrefix(pendingStripText),
+        ) &&
+        normalizeOpeningPrefix(pendingStripText).length <
+          normalizeOpeningPrefix(input.stripLeadingText).length
+      ) {
+        continue;
+      }
+
+      delta = stripOpeningPrefix(pendingStripText, input.stripLeadingText);
+      pendingStripText = "";
+      strippedLeadingText = true;
+
+      if (!delta) {
+        continue;
+      }
+    }
+
+    if (!textStarted) {
+      textStarted = true;
+      await input.onStreamEvent?.({
+        field: "assistantMessage",
+        kind: "text-start",
+      });
+    }
+
+    chunks.push(delta);
+    await input.onStreamEvent?.({
+      delta,
+      field: "assistantMessage",
+      kind: "text-delta",
+    });
+  }
+
+  return {
+    text: chunks.join("").trim(),
+    textStarted,
+  };
+}
+
+function normalizeOpeningPrefix(value: string) {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function stripOpeningPrefix(value: string, prefix: string) {
+  const escapedPrefix = prefix
+    .trim()
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\s+/g, "\\s+");
+
+  return value.replace(new RegExp(`^\\s*${escapedPrefix}\\s*`, "i"), "");
+}
+
+function buildTailorResumeEmphasizedTechnologiesFromNames(
+  technologyNames: string[],
+): TailoredResumeEmphasizedTechnology[] {
+  const seenTechnologyNames = new Set<string>();
+  const technologies: TailoredResumeEmphasizedTechnology[] = [];
+
+  for (const technologyName of technologyNames) {
+    const name = formatTailorResumeTermWithCapitalFirst(technologyName.trim());
+    const dedupeKey = name.toLowerCase();
+
+    if (!name || seenTechnologyNames.has(dedupeKey)) {
+      continue;
+    }
+
+    seenTechnologyNames.add(dedupeKey);
+    technologies.push({
+      evidence: "Scraped technology",
+      name,
+      priority: "high",
+    });
+
+    if (technologies.length >= 8) {
+      break;
+    }
+  }
+
+  return technologies;
 }
 
 function readOutputText(response: TailoredResumeResponse) {
@@ -758,6 +1207,61 @@ function parseToolCallArguments(toolCall: TailoredResumeFunctionToolCall) {
       `The model called ${toolCall.name} with unreadable JSON arguments.`,
     );
   }
+}
+
+function parseTailorResumeTechnologyExamplesResponseFromModelOutput(
+  response: TailoredResumeResponse,
+) {
+  const toolCalls = readFunctionToolCalls(response);
+
+  if (toolCalls.length !== 1) {
+    throw new Error("The model did not call exactly one examples tool.");
+  }
+
+  const toolCall = toolCalls[0]!;
+
+  if (toolCall.name !== "generate_tailor_resume_technology_examples") {
+    throw new Error(`The model called unknown examples tool ${toolCall.name}.`);
+  }
+
+  const value = parseToolCallArguments(toolCall);
+
+  if (!value || typeof value !== "object") {
+    throw new Error("The model returned invalid technology examples.");
+  }
+
+  const assistantMessage =
+    "assistantMessage" in value
+      ? readTrimmedString(value.assistantMessage)
+      : "";
+  const technologyContexts = parseTailorResumeTechnologyContexts(
+    "technologyContexts" in value ? value.technologyContexts : undefined,
+  );
+
+  if (!assistantMessage || technologyContexts.length === 0) {
+    throw new Error("The model returned incomplete technology examples.");
+  }
+
+  for (const technologyContext of technologyContexts) {
+    if (
+      assistantMessageRepeatsTechnologyContext({
+        assistantMessage,
+        technologyContext,
+      })
+    ) {
+      throw new Error(
+        `Examples assistantMessage must not repeat the rendered definition or example bullets for "${technologyContext.name}".`,
+      );
+    }
+  }
+
+  return {
+    response: {
+      assistantMessage,
+      technologyContexts,
+    },
+    toolCalls: toolCalls.map(serializeTailorResumeConversationToolCall),
+  };
 }
 
 function readFunctionToolCalls(
@@ -1329,6 +1833,89 @@ function buildTailorResumeInterviewInput(input: {
   ];
 }
 
+function buildTailorResumeTechnologyExamplesInput(input: {
+  jobDescription: string;
+  technologies: TailoredResumeEmphasizedTechnology[];
+}) {
+  return [
+    {
+      role: "user" as const,
+      content: [
+        {
+          type: "input_text" as const,
+          text:
+            "Generate Step 2 resume example cards for these scraped technologies:\n" +
+            serializeEmphasizedTechnologies(input.technologies.slice(0, 8)),
+        },
+        {
+          type: "input_text" as const,
+          text:
+            "Job posting context, used only to keep examples relevant:\n" +
+            input.jobDescription.slice(0, 8_000),
+        },
+      ],
+    },
+  ];
+}
+
+function buildTailorResumeTechnologyExamplesOpeningInput(input: {
+  jobDescription: string;
+  technologies: TailoredResumeEmphasizedTechnology[];
+}) {
+  return [
+    {
+      role: "user" as const,
+      content: [
+        {
+          type: "input_text" as const,
+          text: buildTailorResumeTechnologyExamplesOpeningPromptText(input),
+        },
+      ],
+    },
+  ];
+}
+
+function buildTailorResumeTechnologyExamplesOpeningPromptText(input: {
+  technologies: TailoredResumeEmphasizedTechnology[];
+}) {
+  const names = input.technologies
+    .slice(0, 8)
+    .map((technology) => technology.name.trim())
+    .filter(Boolean);
+
+  return (
+    "Write the one visible Step 2 chat question shown above generated resume example cards.\n" +
+    `Technologies: ${names.join(", ") || "the scraped technologies"}.`
+  );
+}
+
+function buildTailorResumeTechnologyExamplesOpeningInstructions() {
+  return [
+    "Write one concise user-facing Step 2 question in one paragraph of 25-35 words.",
+    "Start with the word Which.",
+    "Mention a few provided technology names naturally.",
+    "Ask which generated example bullets match the user's actual experience.",
+    "Ask for technology names plus one-line specifics about role, ownership, scale, metric, or outcome.",
+    "Do not include definitions, bullet examples, markdown, or a standalone list of technologies.",
+    "Do not say the examples are ready; they are still streaming below.",
+  ].join("\n");
+}
+
+function buildTailorResumeTechnologyExamplesInstructions(feedback = "") {
+  return [
+    "You generate concise Step 2 resume-question examples for a browser extension.",
+    "Call generate_tailor_resume_technology_examples exactly once.",
+    "assistantMessage must be short and ask which examples match the user's actual experience.",
+    "Do not repeat definitions or example bullets in assistantMessage because technologyContexts render them visibly.",
+    "For each technology, return a plain-English definition and exactly two concise FAANG-level resume bullets.",
+    "Every bullet must include action, technical scope, and a positive result in the same sentence, preferably with a metric.",
+    "Do not invent that the user has this experience; these are examples for the user to accept or reject.",
+    feedback ? `Previous invalid response feedback:\n${feedback}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function buildTailorResumeInterviewInstructions(input: {
   debugForceConversation?: boolean;
   feedback?: string;
@@ -1880,15 +2467,15 @@ export async function advanceTailorResumeQuestioning(input: {
         await input.onStreamEvent?.({ kind: "reset" });
 
         const streamer = new TailorResumeInterviewArgsStreamer();
+        const reasoning = resolveTailorResumeInterviewReasoning(model);
         const stream = client.responses.stream({
           input: interviewInput,
           instructions,
+          ...(reasoning ? { reasoning } : {}),
+          ...buildLowVerbosityTextConfig(model),
           model,
           tool_choice: "required",
           tools: tailorResumeInterviewTools,
-          text: {
-            verbosity: "low",
-          },
         });
         const finalResponsePromise = stream.finalResponse();
 
