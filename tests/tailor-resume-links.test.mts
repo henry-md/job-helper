@@ -41,7 +41,10 @@ const linksExpectedToPass = [
   "mailto:HenryMDeutsch@gmail.com",
   "tel:9142725561",
   "https://github.com/henry-md",
+  "https://github.com/henry-md/ray-tracer",
+  "https://github.com/sciserver/BOOM",
   "https://henry-deutsch.com",
+  "https://vincentdunn.com/",
   "https://devpost.com/software/check-it-out",
 ] as const;
 

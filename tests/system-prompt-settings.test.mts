@@ -81,6 +81,9 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /emphasizedTechnologies/);
   assert.match(prompt, /priority must be exactly high or low/i);
   assert.match(prompt, /resume-searchable skills/i);
+  assert.match(prompt, /Skills or Technical Skills section/i);
+  assert.match(prompt, /never return Production Infrastructure or Production clusters/i);
+  assert.match(prompt, /return Kubernetes for Kubernetes-based PaaS/i);
   assert.match(prompt, /company-specific internal products/i);
   assert.match(prompt, /employer-branded terms/i);
   assert.match(prompt, /required\/basic\/minimum/i);
@@ -102,6 +105,8 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   );
   assert.match(prompt, /Visual Studio instead of Microsoft Visual Studio/i);
   assert.match(prompt, /deterministic string matching/i);
+  assert.match(prompt, /commit previews, blueprints, storage systems/i);
+  assert.match(prompt, /Chromium/i);
   assert.match(prompt, /Quoted bullets under technology-specific USER\.md headings/i);
   assert.match(prompt, /strong grounded candidates for experience-bullet edits/i);
   assert.match(prompt, /only by adding it to the skills section/i);
@@ -111,8 +116,34 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /desiredPlainText to an empty string/i);
   assert.match(prompt, /deleting one whole bullet or line/i);
   assert.match(prompt, /primary goal is to make sure the final planned resume text includes every remaining high-priority keyword/i);
+  assert.match(prompt, /highly encourage a skills-section update/i);
+  assert.match(prompt, /evidence of user experience in the original resume or USER\.md/i);
+  assert.match(prompt, /low-priority extracted technology keywords unless USER\.md explicitly says/i);
+  assert.match(prompt, /no experience, no exposure, or does not want the keyword included/i);
+  assert.match(prompt, /Use light discretion for capability phrases/i);
+  assert.match(prompt, /RESTful APIs may be better in a bullet or keyword coverage/i);
+  assert.match(prompt, /in addition to any experience-bullet sentence/i);
+  assert.match(prompt, /Skills-section coverage is strongly encouraged/i);
+  assert.match(prompt, /closest existing category/i);
+  assert.match(prompt, /relying only on a sentence or bullet mention/i);
   assert.match(prompt, /check_planned_resume_keyword_coverage/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
+});
+
+test("buildTailorResumePlanningSystemPrompt appends skills keyword coverage to saved prompts", () => {
+  const prompt = buildTailorResumePlanningSystemPrompt(
+    mergeSystemPromptSettings({
+      tailorResumePlanning: "Custom planning prompt.",
+    }),
+    {},
+  );
+
+  assert.match(prompt, /Custom planning prompt\./);
+  assert.match(prompt, /Skills-section coverage is strongly encouraged/i);
+  assert.match(
+    prompt,
+    /RESTful APIs may belong in a bullet or ATS coverage check/i,
+  );
 });
 
 test("buildTailorResumePlanningSystemPrompt does not ask for job identifiers", () => {
@@ -159,6 +190,11 @@ test("buildTailorResumeInterviewSystemPrompt keeps user-facing interview text co
   assert.match(prompt, /possible answer shapes, not claims about what the user did/i);
   assert.match(prompt, /initiate_tailor_resume_probing_questions/i);
   assert.match(prompt, /finish_tailor_resume_interview/i);
+  assert.match(prompt, /update_tailor_resume_non_technologies/i);
+  assert.match(prompt, /nonTechnologyTerms/i);
+  assert.match(prompt, /non-technology list/i);
+  assert.match(prompt, /case-insensitive deny-list/i);
+  assert.match(prompt, /stored alongside USER\.md, not inside USER\.md/i);
   assert.match(prompt, /gives the user the final Done button/i);
   assert.match(prompt, /sample bullet, example, draft, clarification, or review/i);
   assert.match(prompt, /Go beside backend\/API work/i);
@@ -263,6 +299,9 @@ test("buildTailorResumeImplementationSystemPrompt injects retry feedback", () =>
   assert.match(prompt, /replaces a lower-signal bullet with user-confirmed technology experience/i);
   assert.match(prompt, /Do not move the technology only to skills/i);
   assert.match(prompt, /secondary goal is to avoid keyword regressions from that accepted plan/i);
+  assert.match(prompt, /preserve the planned skills keywords/i);
+  assert.match(prompt, /light discretion to keep a capability phrase such as RESTful APIs/i);
+  assert.match(prompt, /do not drop a keyword just because it also appears in an experience sentence/i);
   assert.match(prompt, /check_implemented_resume_keyword_coverage/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });

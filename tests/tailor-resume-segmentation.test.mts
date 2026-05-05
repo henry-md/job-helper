@@ -58,7 +58,7 @@ test("normalizeTailorResumeLatex splits top-level body blocks inside technical s
     "technical-skills.end-document-1",
   );
   assert.equal(
-    technicalSkillBlocks.filter((block) => block.command === "block").length,
+    technicalSkillBlocks.filter((block) => block.command === "labelline").length,
     3,
   );
 });

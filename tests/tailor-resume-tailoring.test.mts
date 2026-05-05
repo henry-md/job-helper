@@ -3,6 +3,8 @@ import test from "node:test";
 import { tailorResumeLatexExample } from "../lib/tailor-resume-latex-example.ts";
 import {
   applyTailorResumeBlockChanges,
+  buildTechnologyExtractionInstructions,
+  buildTechnologyExtractionReasoning,
   classifyTailoredResumeGenerationOutcome,
   extractTailorResumeJobDescriptionTechnologyHints,
   mergeTailorResumeJobDescriptionTechnologies,
@@ -18,6 +20,27 @@ import {
   normalizeTailorResumeLatex,
   stripTailorResumeSegmentIds,
 } from "../lib/tailor-resume-segmentation.ts";
+
+test("buildTechnologyExtractionInstructions frames Step 1 as resume-tailoring keyword scraping", () => {
+  const prompt = buildTechnologyExtractionInstructions();
+
+  assert.match(prompt, /resume-tailoring keywords/i);
+  assert.match(prompt, /shown to the user/i);
+  assert.match(prompt, /resume edits or follow-up questions/i);
+  assert.match(prompt, /scraped-page junk creates bad resume edits/i);
+  assert.match(prompt, /high recall for real job-fit signals/i);
+  assert.match(prompt, /high precision against scraped-page noise/i);
+  assert.match(prompt, /sidebar or extension UI/i);
+  assert.match(prompt, /Skills or Technical Skills section/i);
+  assert.match(prompt, /never return Production Infrastructure or Production clusters/i);
+  assert.match(prompt, /return Kubernetes for Kubernetes-based PaaS/i);
+  assert.match(prompt, /core resume skill/i);
+  assert.match(prompt, /one atomic keyword per item/i);
+});
+
+test("buildTechnologyExtractionReasoning keeps Step 1 on low reasoning", () => {
+  assert.deepEqual(buildTechnologyExtractionReasoning(), { effort: "low" });
+});
 
 test("applyTailorResumeBlockChanges replaces a segment and re-normalizes ids", () => {
   const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
@@ -272,8 +295,23 @@ test("parseTailorResumeTechnologyExtractionResponse reads JD-only technology ext
       },
       {
         evidence: "Preferred qualifications mention Redux.",
-        name: "Redux",
+        name: "redux",
         priority: "low",
+      },
+      {
+        evidence: "Environment Platform is a Kubernetes-based PaaS.",
+        name: "Kubernetes-based PaaS",
+        priority: "high",
+      },
+      {
+        evidence: "Production Infrastructure team.",
+        name: "Production Infrastructure",
+        priority: "high",
+      },
+      {
+        evidence: "Hundreds of production clusters.",
+        name: "Production clusters",
+        priority: "high",
       },
     ],
   });
@@ -288,6 +326,11 @@ test("parseTailorResumeTechnologyExtractionResponse reads JD-only technology ext
       evidence: "Preferred qualifications mention Redux.",
       name: "Redux",
       priority: "low",
+    },
+    {
+      evidence: "Environment Platform is a Kubernetes-based PaaS.",
+      name: "Kubernetes",
+      priority: "high",
     },
   ]);
 });
@@ -331,6 +374,83 @@ test("mergeTailorResumeJobDescriptionTechnologies prefers JD extraction and filt
   assert.deepEqual(
     technologies.map((technology) => technology.name),
     ["Go", "Cassandra", "React"],
+  );
+});
+
+test("mergeTailorResumeJobDescriptionTechnologies filters saved non-technologies case-insensitively", () => {
+  const technologies = mergeTailorResumeJobDescriptionTechnologies({
+    extractedTechnologies: [
+      {
+        evidence: "Required section names Chromium.",
+        name: "Chromium",
+        priority: "high",
+      },
+      {
+        evidence: "Required section names React.",
+        name: "React",
+        priority: "high",
+      },
+    ],
+    jobDescription: "Required: Chromium, React, and Internationalization.",
+    nonTechnologies: ["chromium", "internationalization"],
+    plannerTechnologies: [
+      {
+        evidence: "Planner also found Internationalization.",
+        name: "Internationalization",
+        priority: "low",
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    technologies.map((technology) => technology.name),
+    ["React"],
+  );
+});
+
+test("mergeTailorResumeJobDescriptionTechnologies applies deterministic denylist only when enabled", (t) => {
+  const previousValue = process.env.USE_DENY_LIST_FOR_KEYWORDS;
+
+  t.after(() => {
+    if (typeof previousValue === "undefined") {
+      delete process.env.USE_DENY_LIST_FOR_KEYWORDS;
+      return;
+    }
+
+    process.env.USE_DENY_LIST_FOR_KEYWORDS = previousValue;
+  });
+
+  const input = {
+    extractedTechnologies: [
+      {
+        evidence: "Required section names Blueprint.",
+        name: "Blueprint",
+        priority: "high" as const,
+      },
+      {
+        evidence: "Required section names React.",
+        name: "React",
+        priority: "high" as const,
+      },
+    ],
+    jobDescription: "Required: Blueprint and React.",
+    plannerTechnologies: [],
+  };
+
+  process.env.USE_DENY_LIST_FOR_KEYWORDS = "false";
+  assert.deepEqual(
+    mergeTailorResumeJobDescriptionTechnologies(input).map(
+      (technology) => technology.name,
+    ),
+    ["Blueprint", "React"],
+  );
+
+  process.env.USE_DENY_LIST_FOR_KEYWORDS = "true";
+  assert.deepEqual(
+    mergeTailorResumeJobDescriptionTechnologies(input).map(
+      (technology) => technology.name,
+    ),
+    ["React"],
   );
 });
 

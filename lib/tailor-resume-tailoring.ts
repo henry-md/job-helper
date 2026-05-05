@@ -11,6 +11,7 @@ import {
   buildTailorResumeKeywordCheckResult,
   resumeTextIncludesKeyword,
 } from "./tailor-resume-keyword-coverage.ts";
+import { formatTailorResumeTermWithCapitalFirst } from "./tailor-resume-non-technologies.ts";
 import {
   buildTailorResumePlanningSnapshot,
   type TailorResumePlanningBlock,
@@ -42,7 +43,10 @@ import type {
   TailoredResumeThesis,
   TailorResumeSavedLinkUpdate,
 } from "./tailor-resume-types.ts";
-import type { TailorResumeUserMarkdownState } from "./tailor-resume-user-memory.ts";
+import {
+  filterTailorResumeNonTechnologiesFromEmphasizedTechnologies,
+  type TailorResumeUserMarkdownState,
+} from "./tailor-resume-user-memory.ts";
 
 const TEST_OPENAI_RESPONSE_MODEL = "test-openai-response";
 const tailorResumeGenerationStepCount = 5;
@@ -626,6 +630,29 @@ function parseTailoredResumePlanChange(
   };
 }
 
+const nonResumeSkillKeywordNames = new Set([
+  "production cluster",
+  "production clusters",
+  "production infrastructure",
+]);
+
+function normalizeTailorResumeKeywordName(value: string) {
+  const trimmedValue = value.trim();
+
+  if (
+    /\bkubernetes\s*[- ]\s*based\b/i.test(trimmedValue) &&
+    /\bpaas\b/i.test(trimmedValue)
+  ) {
+    return "Kubernetes";
+  }
+
+  return trimmedValue;
+}
+
+function isResumeSkillKeywordName(value: string) {
+  return !nonResumeSkillKeywordNames.has(normalizeEmployerKeyword(value));
+}
+
 function parseTailoredResumeEmphasizedTechnology(
   value: unknown,
 ): TailoredResumeEmphasizedTechnology {
@@ -633,7 +660,12 @@ function parseTailoredResumeEmphasizedTechnology(
     throw new Error("The model returned an invalid emphasized technology.");
   }
 
-  const name = "name" in value ? readTrimmedString(value.name) : "";
+  const name =
+    "name" in value
+      ? formatTailorResumeTermWithCapitalFirst(
+          normalizeTailorResumeKeywordName(readTrimmedString(value.name)),
+        )
+      : "";
   const priority =
     "priority" in value && (value.priority === "high" || value.priority === "low")
       ? value.priority
@@ -664,6 +696,10 @@ function normalizeTailoredResumeEmphasizedTechnologies(
     new Map<string, TailoredResumeEmphasizedTechnology>();
 
   for (const technology of technologies) {
+    if (!isResumeSkillKeywordName(technology.name)) {
+      continue;
+    }
+
     const key = technology.name.toLowerCase();
     const existingTechnology = normalizedTechnologies.get(key);
 
@@ -887,6 +923,32 @@ const highPriorityTechnologyEvidencePattern =
 const lowPriorityTechnologyEvidencePattern =
   /\b(preferred|nice[- ]to[- ]have|nice to have|bonus|plus|familiar(?:ity)?|exposure)\b/i;
 
+const deterministicTailorResumeKeywordDenyListTerms = [
+  "blueprint",
+  "chromium",
+  "commit previews",
+  "frontend frameworks",
+  "internationalization",
+  "storage systems",
+  "developer experience",
+  "internet terminology",
+  "open-source",
+] as const;
+
+function isDeterministicTailorResumeKeywordDenyListEnabled() {
+  return /^(1|true|yes|on)$/i.test(
+    process.env.USE_DENY_LIST_FOR_KEYWORDS?.trim() ?? "",
+  );
+}
+
+function readTailorResumeKeywordNonTechnologies(
+  nonTechnologies: readonly string[] | null | undefined,
+) {
+  return isDeterministicTailorResumeKeywordDenyListEnabled()
+    ? [...(nonTechnologies ?? []), ...deterministicTailorResumeKeywordDenyListTerms]
+    : nonTechnologies;
+}
+
 function truncateTechnologyEvidence(value: string) {
   const normalizedValue = value.replace(/\s+/g, " ").trim();
 
@@ -945,7 +1007,10 @@ function readTechnologyHintPriority(input: { context: string; evidence: string }
 
 export function extractTailorResumeJobDescriptionTechnologyHints(
   jobDescription: string,
-  options: { employerName?: string | null } = {},
+  options: {
+    employerName?: string | null;
+    nonTechnologies?: readonly string[] | null;
+  } = {},
 ): TailoredResumeEmphasizedTechnology[] {
   const chunks = buildTechnologyEvidenceChunks(jobDescription);
   const technologies: TailoredResumeEmphasizedTechnology[] = [];
@@ -976,6 +1041,7 @@ export function extractTailorResumeJobDescriptionTechnologyHints(
     extractedTechnologies: technologies,
     employerName: options.employerName,
     jobDescription,
+    nonTechnologies: options.nonTechnologies,
     plannerTechnologies: [],
   });
 }
@@ -984,26 +1050,30 @@ export function mergeTailorResumeJobDescriptionTechnologies(input: {
   employerName?: string | null;
   extractedTechnologies: TailoredResumeEmphasizedTechnology[];
   jobDescription: string;
+  nonTechnologies?: readonly string[] | null;
   plannerTechnologies: TailoredResumeEmphasizedTechnology[];
 }) {
-  return normalizeTailoredResumeEmphasizedTechnologies([
-    ...input.extractedTechnologies.filter(
-      (technology) =>
-        technologyAppearsInJobDescription({
-          employerName: input.employerName,
-          jobDescription: input.jobDescription,
-          technology,
-        }),
-    ),
-    ...input.plannerTechnologies.filter(
-      (technology) =>
-        technologyAppearsInJobDescription({
-          employerName: input.employerName,
-          jobDescription: input.jobDescription,
-          technology,
-        }),
-    ),
-  ]);
+  return filterTailorResumeNonTechnologiesFromEmphasizedTechnologies(
+    normalizeTailoredResumeEmphasizedTechnologies([
+      ...input.extractedTechnologies.filter(
+        (technology) =>
+          technologyAppearsInJobDescription({
+            employerName: input.employerName,
+            jobDescription: input.jobDescription,
+            technology,
+          }),
+      ),
+      ...input.plannerTechnologies.filter(
+        (technology) =>
+          technologyAppearsInJobDescription({
+            employerName: input.employerName,
+            jobDescription: input.jobDescription,
+            technology,
+          }),
+      ),
+    ]),
+    readTailorResumeKeywordNonTechnologies(input.nonTechnologies),
+  );
 }
 
 export function parseTailoredResumePlanResponse(
@@ -1480,19 +1550,32 @@ function buildTechnologyExtractionInput(input: {
   ];
 }
 
-function buildTechnologyExtractionInstructions() {
+export function buildTechnologyExtractionInstructions() {
   return (
-    "Extract concrete technologies emphasized by the single target job posting. " +
-    "Use only the provided job description text; do not infer from any resume. " +
-    "Return concrete languages, frameworks, libraries, databases, platforms, infrastructure tools, developer tools, and technical methods. " +
-    "Only return terms a realistic candidate might already list on a resume as skills or experience areas. " +
+    "Extract resume-tailoring keywords from the job posting: " +
+    "These scraped terms are shown to the user and drive resume edits or follow-up questions, so scraped-page junk creates bad resume edits. " +
+    "Optimize for high recall for real job-fit signals and high precision against scraped-page noise. " +
+    "You are extracting these terms so that we can include them in the resume and have a better chance of getting past the ATS, and get the job. These terms will primarily go in the skills section of the resume, but we may extract some small portion of terms like 'RESTful' to pepper the resume with keywords for the ATS, which maybe we don't quite want to put in the skills section. " +
+    "You should distinguish between high-priority and low-priority categories in your response. High-priority keywords are the things they definitely want — required skills AND preferred skills. Low-priority keywords are things they mention off-hand as examples, or things they *may* be looking for or use on the job, but not for sure (ex. 'Looking for experience with databases, such as PostgreSQL or MySQL' — we can extract 'PostgreSQL' and 'MySQL' as low-priority keywords)" +
+    
+    "\nSome guidelines on extraction: " +
+    "Focus only on the target job posting body, responsibilities, qualifications, and explicit tech-stack sections. Ignore navigation, footer text, browser UI, sidebar or extension UI, unrelated role listings, benefits boilerplate, and equal-opportunity boilerplate. " +
+    "It's important to extract only the core resume skill — the thing a user would list under their skills section. So for example, return Kubernetes for Kubernetes-based PaaS. " +
+    "Return only resume-searchable skills a realistic candidate could add to a resume Skills or Technical Skills section: concrete languages, named frameworks, named libraries, named databases, cloud platforms, named infrastructure tools, observability tools, CI/CD tools, developer tools, and named technical methods, with only some small leeway here to scrape terms like 'RESTful', but make sure ALL keywords you install you believe the ATS is tracking. " +
+    "Do not return general domains, responsibilities, processes, or environment descriptions that are not concrete skills; never return Production Infrastructure or Production clusters. " +
+    "Prefer named concrete tools over umbrella categories, and do not invent broad labels when the posting names specific tools. " +
     "Do not return employer-branded internal products, product suites, customer-facing product brands, team names, or nouns that describe what the company builds unless the posting explicitly asks candidates to have prior experience using that product. " +
-    "Include every named concrete technology in required/basic/minimum sections. " +
-    "Use high priority for required/basic/minimum terms, repeated terms, title/team-defining terms, and strongly emphasized preferred terms. " +
-    "Use low priority for weaker preferred, nice-to-have, incidental, or broad ecosystem terms. " +
+    "Do not return feature/workflow nouns, UI labels, roadmap items, product capabilities, or generic system categories such as commit 'previews', 'blueprints', 'storage systems', 'frontend frameworks', 'platform', 'infrastructure', 'developer experience', 'production infrastructure' 'production clusters', or 'internationalization' — those would all be bad! " +
+    "Do not return browser or project names such as Chromium merely because the company builds on or for them; return them only when the posting asks for candidate experience using or developing that technology. " +
     "Do not include generic practices, traits, or vague phrases such as collaboration, ownership, software engineering fundamentals, internet terminology, or fast-paced environment. " +
-    "Return one atomic technology per item, preserving the exact name and capitalization where possible."
+    "Include every named concrete technology in required/basic/minimum sections. " +
+    "Include repeated or title/team-defining technical themes even when they are phrased in responsibilities rather than qualifications. " +
+    "Return one atomic keyword per item, preserving the exact core skill name and capitalization where possible."
   );
+}
+
+export function buildTechnologyExtractionReasoning() {
+  return { effort: "low" as const };
 }
 
 async function extractTailorResumeJobDescriptionTechnologies(input: {
@@ -1510,6 +1593,7 @@ async function extractTailorResumeJobDescriptionTechnologies(input: {
         }),
         instructions: buildTechnologyExtractionInstructions(),
         model: input.model,
+        reasoning: buildTechnologyExtractionReasoning(),
         text: {
           verbosity: "low",
           format: {
@@ -1965,6 +2049,7 @@ function buildFallbackTailoredResumeOpenAiDebug() {
 export async function extractTailorResumeEmphasizedTechnologiesForQuestioning(input: {
   employerName?: string | null;
   jobDescription: string;
+  nonTechnologies?: readonly string[] | null;
   onStepEvent?: (
     event: TailorResumeGenerationStepEvent,
   ) => void | Promise<void>;
@@ -1973,11 +2058,12 @@ export async function extractTailorResumeEmphasizedTechnologiesForQuestioning(in
   const model =
     process.env.OPENAI_TAILOR_RESUME_KEYWORD_MODEL ??
     process.env.OPENAI_TAILOR_RESUME_MODEL ??
-    "gpt-5-mini";
+    "gpt-5.5";
   const client = getOpenAIClient();
   const technologyHintTechnologies =
     extractTailorResumeJobDescriptionTechnologyHints(input.jobDescription, {
       employerName: input.employerName,
+      nonTechnologies: input.nonTechnologies,
     });
 
   if (technologyHintTechnologies.length > 0) {
@@ -2026,6 +2112,7 @@ export async function extractTailorResumeEmphasizedTechnologiesForQuestioning(in
       ...extractedTechnologies,
     ],
     jobDescription: input.jobDescription,
+    nonTechnologies: input.nonTechnologies,
     plannerTechnologies: [],
   });
 
@@ -2088,7 +2175,7 @@ export async function planTailoredResume(input: {
         client,
         employerName: input.employerName,
         jobDescription: input.jobDescription,
-        model: process.env.OPENAI_TAILOR_RESUME_KEYWORD_MODEL ?? model,
+        model: process.env.OPENAI_TAILOR_RESUME_KEYWORD_MODEL ?? "gpt-5.5",
       })
         .catch(() => [] as TailoredResumeEmphasizedTechnology[])
         .then((extractedTechnologies) =>
@@ -2097,16 +2184,24 @@ export async function planTailoredResume(input: {
             extractedTechnologies: [
               ...extractTailorResumeJobDescriptionTechnologyHints(
                 input.jobDescription,
-                { employerName: input.employerName },
+                {
+                  employerName: input.employerName,
+                  nonTechnologies: input.userMarkdown?.nonTechnologies,
+                },
               ),
               ...extractedTechnologies,
             ],
             jobDescription: input.jobDescription,
+            nonTechnologies: input.userMarkdown?.nonTechnologies,
             plannerTechnologies: [],
           }),
         );
 
-  const emphasizedTechnologiesForPlanning = await technologyExtractionPromise;
+  const emphasizedTechnologiesForPlanning =
+    filterTailorResumeNonTechnologiesFromEmphasizedTechnologies(
+      await technologyExtractionPromise,
+      input.userMarkdown?.nonTechnologies,
+    );
 
   for (let attempt = 1; attempt <= maxPlanningAttempts; attempt += 1) {
     const planInput = buildTailoringPlanInput({
@@ -2285,6 +2380,7 @@ export async function planTailoredResume(input: {
           employerName: input.employerName,
           extractedTechnologies: emphasizedTechnologiesForPlanning,
           jobDescription: input.jobDescription,
+          nonTechnologies: input.userMarkdown?.nonTechnologies,
           plannerTechnologies: nextPlan.emphasizedTechnologies,
         }),
       };
@@ -2989,6 +3085,7 @@ export async function generateTailoredResume(input: {
   const keywordStage = await extractTailorResumeEmphasizedTechnologiesForQuestioning({
     employerName: input.companyName,
     jobDescription: input.jobDescription,
+    nonTechnologies: input.userMarkdown?.nonTechnologies,
     onStepEvent: input.onStepEvent,
   });
   const planningStage = await planTailoredResume({

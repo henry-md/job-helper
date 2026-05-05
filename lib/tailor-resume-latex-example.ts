@@ -1,4 +1,4 @@
-export const tailorResumeLatexTemplate = String.raw`\documentclass[10pt]{article}
+const defaultTailorResumeLatex = String.raw`\documentclass[10pt]{article}
 
 \usepackage[
   top=0.4in,
@@ -13,6 +13,7 @@ export const tailorResumeLatexTemplate = String.raw`\documentclass[10pt]{article
 \usepackage[protrusion=true,expansion=false]{microtype}
 \usepackage{enumitem}
 \usepackage{xcolor}
+\usepackage{calc}
 \usepackage[normalem]{ulem}
 \usepackage[
   colorlinks=true,
@@ -65,12 +66,12 @@ export const tailorResumeLatexTemplate = String.raw`\documentclass[10pt]{article
 }
 
 % ---------- HEADER ----------
-\newcommand{\resumeHeader}{%
+\newcommand{\resumeHeader}{
   \begin{center}
     {\NameFont\textbf{HENRY DEUTSCH}}\par
     \vspace{2.4pt}
     {\BodyFont
-      \href{mailto:HenryMDeutsch@gmail.com}{\tightul{HenryMDeutsch@gmail.com}} $\cdot$ 914-272-5561 $\cdot$
+      HenryMDeutsch@gmail.com $\cdot$ 914-272-5561 $\cdot$
       \href{https://linkedin.com/in/henry-deutsch}{\tightul{linkedin.com/in/henry-deutsch}} $\cdot$
       \href{https://github.com/henry-md}{\tightul{github.com/henry-md}}\par
       \vspace{1.1pt}
@@ -107,135 +108,16 @@ export const tailorResumeLatexTemplate = String.raw`\documentclass[10pt]{article
 
 \newcommand{\resumeitem}[1]{\item #1}
 \newcommand{\EntryGap}{\vspace{6.8pt}} % ENV: space between experiences
+\newlength{\labelwidthtemp}
 
 % labeled line for education/skills
 \newcommand{\labelline}[2]{%
-  {\BodyFont\noindent\makebox[74pt][l]{\textbf{#1}}#2\par}
-}
-
-\input{glyphtounicode}
-\pdfgentounicode=1
-\begin{document}
-\BodyFont
-
-% Fill in the resume body here.
-
-\end{document}
-`;
-
-export const tailorResumeLatexExample = String.raw`\documentclass[10pt]{article}
-
-\usepackage[
-  top=0.4in,
-  bottom=0.44in,
-  left=0.47in,
-  right=0.47in
-]{geometry}
-
-\usepackage[T1]{fontenc}
-\usepackage{cmap}
-\usepackage{tgtermes}
-\usepackage[protrusion=true,expansion=false]{microtype}
-\usepackage{enumitem}
-\usepackage{xcolor}
-\usepackage[normalem]{ulem}
-\usepackage[
-  colorlinks=true,
-  urlcolor=LinkBlue,
-  linkcolor=LinkBlue
-]{hyperref}
-
-\input{glyphtounicode}
-\pdfgentounicode=1
-\pdfinterwordspaceon
-
-\pagestyle{empty}
-\setlength{\parindent}{0pt}
-\setlength{\parskip}{0pt}
-\urlstyle{same}
-
-\linespread{1.08} % ENV: global line-spacing
-
-% ---------- COLORS ----------
-\definecolor{LinkBlue}{RGB}{45,95,210}
-
-% ---------- UNDERLINE ----------
-\renewcommand{\ULdepth}{0.7pt}
-\renewcommand{\ULthickness}{0.3pt}
-\newcommand{\tightul}[1]{\uline{\smash{#1}}}
-
-% ---------- TYPOGRAPHY ----------
-\newcommand{\NameFont}{\fontsize{14}{15}\selectfont}
-\newcommand{\BodyFont}{\fontsize{10.2}{11.8}\selectfont}
-\newcommand{\SectionFont}{\fontsize{10}{11}\selectfont}
-\frenchspacing
-
-% ---------- BULLETS ----------
-\setlist[itemize]{
-  leftmargin=18pt,
-  itemsep=1pt,
-  topsep=0pt,
-  parsep=0pt,
-  partopsep=0pt,
-  after={} % ENV: space after last bullet
-}
-
-% ---------- SECTION ----------
-\newcommand{\resumeSection}[1]{%
-  \vspace{5pt}
-  {\SectionFont\textbf{#1}}\par
-  \vspace{1.2pt}
-  \hrule height 0.5pt
-  \vspace{3.8pt}
-}
-
-% ---------- HEADER ----------
-\newcommand{\resumeHeader}{%
-  \begin{center}
-    {\NameFont\textbf{HENRY DEUTSCH}}\par
-    \vspace{2.4pt}
-    {\BodyFont
-      \href{mailto:HenryMDeutsch@gmail.com}{\tightul{HenryMDeutsch@gmail.com}} $\cdot$ 914-272-5561 $\cdot$
-      \href{https://linkedin.com/in/henry-deutsch}{\tightul{linkedin.com/in/henry-deutsch}} $\cdot$
-      \href{https://github.com/henry-md}{\tightul{github.com/henry-md}}\par
-      \vspace{1.1pt}
-      Portfolio: \href{https://henry-deutsch.com}{\tightul{\textbf{henry-deutsch.com}}
-      \vspace{-20pt}} % ENV: space between header and 'WORK EXPERIENCE'
-    }
-  \end{center}
-  \vspace{4.2pt}
-}
-
-% ---------- HEADINGS ----------
-\newcommand{\entryheading}[3]{%
-  \noindent
-  \begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
-    {\BodyFont\textbf{#1}~|~\textit{#2}} & {\BodyFont #3}
-  \end{tabular*}\par\vspace{0pt}
-}
-
-\newcommand{\projectheading}[2]{%
-  \noindent
-  \begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
-    {\BodyFont #1} & {\BodyFont #2}
-  \end{tabular*}\par\vspace{0pt}
-}
-
-\newcommand{\descline}[1]{{\BodyFont #1\par}}
-
-\newenvironment{resumebullets}{
-  % \vspace{0} % ENV: If you want space between description and bullets
-  \begin{itemize}\BodyFont
-}{
-  \end{itemize}
-}
-
-\newcommand{\resumeitem}[1]{\item #1}
-\newcommand{\EntryGap}{\vspace{6.8pt}} % ENV: space between experiences
-
-% labeled line for education/skills
-\newcommand{\labelline}[2]{%
-  {\BodyFont\noindent\makebox[74pt][l]{\textbf{#1}}#2\par}
+  {\BodyFont
+  \settowidth{\labelwidthtemp}{\textbf{#1 }}%
+  \noindent\textbf{#1 }%
+  \hangindent=\labelwidthtemp
+  \hangafter=1
+  #2\par}
 }
 
 \input{glyphtounicode}
@@ -256,7 +138,7 @@ export const tailorResumeLatexExample = String.raw`\documentclass[10pt]{article}
 \descline{Reported to the CTO and took ownership of 6 major initiatives from inception to implementation in direct collaboration with C-suite}
 \begin{resumebullets}
   \resumeitem{Led major refactor enabling \textbf{\$50K+/mo in TikTok ad spend} by incorporating TikTok support for our entire suite of software. Refactored \textbf{31K+ LOC in 365 files}, reworking \textbf{140+ tRPC endpoints \& Bayesian inference engine} for platform-agnostic objects}
-  \resumeitem{Conceived and led ad similarity detection service, authoring white paper and deploying \textbf{p-hashing to 359K ads across 20 clients}}
+  \resumeitem{Designed and deployed  a high-throughput ad similarity detection service using p-hashing, authoring a white paper and processing 359K ads across 20 clients to enable scalable similarity queries}
   \resumeitem{Built and migrated \textbf{100\% of internal account managers and external clients} to a streamlined messaging and reporting system}
 \end{resumebullets}
 \EntryGap
@@ -339,26 +221,14 @@ Placed 3rd of 43 teams, won \$250 prize at HopHacks Hackathon for \href{https://
 % ================= TECHNICAL SKILLS =================
 \resumeSection{TECHNICAL SKILLS}
 
-{\BodyFont
-\noindent\textbf{Full-Stack Web Dev: }%
-\hangindent=112pt
-\hangafter=1
-Next.js, React, Node.js, Express.js, Prisma, Redis, tRPC, MongoDB (MERN stack), SQL, Tailwind, Vite\par
-}
+\labelline{Full-Stack Web Dev:}{Next.js, React, Node.js, Express.js, Prisma, Redis, tRPC, MongoDB (MERN stack), SQL, Tailwind, Vite}
 
-{\BodyFont
-\noindent\textbf{Languages: }%
-\hangindent=74pt
-\hangafter=1
-TypeScript, JavaScript, Python, Java, C++, SQL, HTML, CSS\par
-}
+\labelline{Languages:}{TypeScript, JavaScript, Python, Java, C++, SQL, HTML, CSS}
 
-{\BodyFont
-\noindent\textbf{Other Software: }%
-\hangindent=104pt
-\hangafter=1
-Firebase, Supabase, Git, Jira, Unix/Linux, Kubernetes, Docker, Plotly Dash, AWS (EC2, Amplify), PyTorch\par
-}
+\labelline{Other Software:}{Firebase, Supabase, Git, Jira, Unix/Linux, Kubernetes, Docker, Plotly Dash, AWS (EC2, Amplify), PyTorch}
 
 \end{document}
 `;
+
+export const tailorResumeLatexTemplate = defaultTailorResumeLatex;
+export const tailorResumeLatexExample = defaultTailorResumeLatex;

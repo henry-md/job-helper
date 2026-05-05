@@ -26,7 +26,7 @@ async function buildLineReductionFixture() {
   const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
   const segmentId = findSegmentIdBySnippet(
     normalized.annotatedLatex,
-    "Led major refactor enabling",
+    "Designed and deployed",
   );
   const sourceLayout = await measureTailorResumeLayout({
     annotatedLatexCode: normalized.annotatedLatex,
@@ -36,7 +36,7 @@ async function buildLineReductionFixture() {
     changes: [
       {
         latexCode:
-          String.raw`\resumeitem{Led major refactor that enabled \textbf{\$50K+/mo in TikTok ad spend} by adding TikTok support across the full software suite; refactored \textbf{31K+ LOC (365 files)} and \textbf{140+ tRPC endpoints \& Bayesian inference engine} into platform-agnostic objects, improving maintainability, diagnosability, service reliability, onboarding speed, and cross-team developer experience for platform teams.}`,
+          String.raw`\resumeitem{Designed and deployed a high-throughput ad similarity detection service using perceptual hashing, p-hashing, distributed media processing, white-paper methodology, cross-client duplicate detection, and scalable similarity querying across 359K ads and 20 clients to improve creative analysis, platform reliability, matching quality, investigative speed, and reporting confidence for account managers and executives.}`,
         reason: "Long current Step 3 replacement.",
         segmentId,
       },
@@ -81,14 +81,26 @@ async function buildCompactionOverflowFixture() {
     "Expected at least four editable bullet blocks for the overflow fixture.",
   );
 
+  const targetBlock = bulletBlocks.find((block) =>
+    block.latexCode.includes("Designed and deployed"),
+  );
+  assert.ok(targetBlock, "Expected the overflow fixture to include the ad similarity bullet.");
+  const overflowBlocks = [
+    targetBlock,
+    ...bulletBlocks.filter((block) => block.id !== targetBlock.id),
+  ].slice(0, 4);
+  const longTargetBullet =
+    "Designed and deployed a high-throughput ad similarity detection service using perceptual hashing, distributed media processing, cross-client duplicate detection, scalable similarity querying, account workflows, executive reporting, and creative analysis across 359K ads and 20 clients.";
   const giantSentence =
     "Built role-aligned platform delivery narratives across engineering, reliability, onboarding, experimentation, observability, incident response, and developer workflow improvements for distributed teams ";
-  const step3Changes = bulletBlocks.slice(0, 4).map((block, index) => ({
+  const step3Changes = overflowBlocks.map((block, index) => ({
     generatedByStep: 4 as const,
     latexCode:
-      String.raw`\resumeitem{` +
-      `${giantSentence.repeat(index === 0 ? 8 : 12)}` +
-      `while preserving the original project scope and quantitative anchors for the tailored resume.}`,
+      index === 0
+        ? String.raw`\resumeitem{` + longTargetBullet + `}`
+        : String.raw`\resumeitem{` +
+          `${giantSentence.repeat(12)}` +
+          `while preserving the original project scope and quantitative anchors for the tailored resume.}`,
     reason: `Long Step 4 expansion ${index + 1}.`,
     segmentId: block.id,
   }));
@@ -107,9 +119,9 @@ async function buildCompactionOverflowFixture() {
 
   const candidate = {
     latexCode:
-      String.raw`\resumeitem{Led TikTok refactor enabling \textbf{\$50K+/mo in ad spend} across the software suite.}`,
+      String.raw`\resumeitem{Built p-hashing ad similarity service across 359K ads and 20 clients.}`,
     reason:
-      "Keeps the TikTok monetization metric central for the role, while trimming the block.",
+      "Keeps the ad similarity scale signal central for the role, while trimming the block.",
     segmentId: step3Changes[0]!.segmentId,
   };
   const measurementResult = await measureTailorResumeLineReductionCandidates({
@@ -155,7 +167,7 @@ test("line reduction gate accepts candidates that reduce the current rendered li
     candidates: [
       {
         latexCode:
-          String.raw`\resumeitem{Led major refactor that enabled \textbf{\$50K+/mo in TikTok ad spend} by adding TikTok support; refactored \textbf{31K+ LOC (365 files)} and \textbf{140+ tRPC endpoints \& Bayesian inference engine} into platform-agnostic objects, improving maintainability and diagnosability.}`,
+          String.raw`\resumeitem{Designed and deployed a high-throughput p-hashing ad similarity service, authoring a white paper and processing 359K ads across 20 clients to improve scalable similarity queries.}`,
         reason:
           "Adds maintainability and diagnosability framing for the role, while trimming the longer draft.",
         segmentId: fixture.segmentId,
@@ -183,9 +195,9 @@ test("line reduction gate accepts candidates with a user-visible rendered line r
     candidates: [
       {
         latexCode:
-          String.raw`\resumeitem{Led TikTok refactor enabling \textbf{\$50K+/mo in ad spend} across the software suite.}`,
+          String.raw`\resumeitem{Built p-hashing ad similarity service across 359K ads and 20 clients.}`,
         reason:
-          "Keeps the TikTok monetization metric central for the role, while trimming the block.",
+          "Keeps the ad similarity scale signal central for the role, while trimming the block.",
         segmentId: fixture.segmentId,
       },
     ],
@@ -302,7 +314,7 @@ test("page-count compaction keeps verified line-saving edits even when the exact
     assert.equal(compactedEdit?.generatedByStep, 5);
     assert.equal(
       compactedEdit?.afterLatexCode.includes(
-        String.raw`\resumeitem{Led TikTok refactor enabling \textbf{\$50K+/mo in ad spend} across the software suite.}`,
+        String.raw`\resumeitem{Built p-hashing ad similarity service across 359K ads and 20 clients.}`,
       ),
       true,
     );
@@ -341,7 +353,7 @@ test("page-count compaction retries from kept reductions and can finish on a lat
   const toolNamesSeen: string[][] = [];
   let responseIndex = 0;
   const shortLatex =
-    String.raw`\resumeitem{Led role-aligned platform engineering delivery with measurable reliability impact.}`;
+    String.raw`\resumeitem{Led platform delivery with measurable reliability impact.}`;
   const firstCandidate = fixture.candidate;
   const remainingCandidates = fixture.edits
     .filter((edit) => edit.segmentId !== firstCandidate.segmentId)

@@ -1,9 +1,37 @@
+import {
+  normalizeTailorResumeNonTechnologyTerms,
+} from "./tailor-resume-non-technologies.ts";
+
+export {
+  filterTailorResumeNonTechnologiesFromEmphasizedTechnologies,
+  formatTailorResumeNonTechnologyTerm,
+  formatTailorResumeTermWithCapitalFirst,
+  isTailorResumeNonTechnologyTerm,
+  maxTailorResumeNonTechnologyTermCount,
+  maxTailorResumeNonTechnologyTermLength,
+  mergeTailorResumeNonTechnologyTerms,
+  normalizeTailorResumeNonTechnologyTerm,
+  normalizeTailorResumeNonTechnologyTerms,
+} from "./tailor-resume-non-technologies.ts";
+
 export const defaultTailorResumeUserMarkdown = "# USER.md\n\n";
 export const maxTailorResumeUserMarkdownLength = 100_000;
 
 export type TailorResumeUserMarkdownState = {
   markdown: string;
+  nonTechnologies: string[];
   updatedAt: string | null;
+};
+
+export type TailorResumeUserMarkdownDocumentState = {
+  markdown: string;
+  updatedAt: string | null;
+};
+
+export type TailorResumeUserMemoryState = {
+  nonTechnologyNames: string[];
+  updatedAt: string | null;
+  userMarkdown: TailorResumeUserMarkdownDocumentState;
 };
 
 export type TailorResumeUserMarkdownPatchOperation = {
@@ -65,18 +93,38 @@ function normalizeStoredMarkdown(markdown: string) {
 
 function buildUserMarkdownState(record: {
   markdown: string;
+  nonTechnologies?: string[] | null;
   updatedAt: Date;
 } | null): TailorResumeUserMarkdownState {
   if (!record) {
     return {
       markdown: defaultTailorResumeUserMarkdown,
+      nonTechnologies: [],
       updatedAt: null,
     };
   }
 
   return {
     markdown: normalizeStoredMarkdown(record.markdown),
+    nonTechnologies: normalizeTailorResumeNonTechnologyTerms(
+      record.nonTechnologies ?? [],
+    ),
     updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+export function buildTailorResumeUserMemoryState(
+  state: TailorResumeUserMarkdownState,
+): TailorResumeUserMemoryState {
+  return {
+    nonTechnologyNames: normalizeTailorResumeNonTechnologyTerms(
+      state.nonTechnologies,
+    ),
+    updatedAt: state.updatedAt,
+    userMarkdown: {
+      markdown: state.markdown,
+      updatedAt: state.updatedAt,
+    },
   };
 }
 
@@ -515,6 +563,7 @@ export async function readTailorResumeUserMarkdown(
   const record = await prisma.tailorResumeUserMemory.findUnique({
     select: {
       markdown: true,
+      nonTechnologies: true,
       updatedAt: true,
     },
     where: { userId },
@@ -523,11 +572,20 @@ export async function readTailorResumeUserMarkdown(
   return buildUserMarkdownState(record);
 }
 
+export async function readTailorResumeUserMemory(
+  userId: string,
+): Promise<TailorResumeUserMemoryState> {
+  return buildTailorResumeUserMemoryState(
+    await readTailorResumeUserMarkdown(userId),
+  );
+}
+
 export async function saveTailorResumeUserMarkdown(
   userId: string,
   markdown: string,
   options: {
     expectedUpdatedAt?: string | null;
+    nonTechnologies?: readonly string[] | null;
   } = {},
 ): Promise<SaveTailorResumeUserMarkdownResult> {
   const { getPrismaClient } = await import("./prisma.ts");
@@ -535,6 +593,7 @@ export async function saveTailorResumeUserMarkdown(
   const currentRecord = await prisma.tailorResumeUserMemory.findUnique({
     select: {
       markdown: true,
+      nonTechnologies: true,
       updatedAt: true,
     },
     where: { userId },
@@ -553,6 +612,10 @@ export async function saveTailorResumeUserMarkdown(
   }
 
   const normalizedMarkdown = normalizeStoredMarkdown(markdown);
+  const normalizedNonTechnologies =
+    "nonTechnologies" in options
+      ? normalizeTailorResumeNonTechnologyTerms(options.nonTechnologies)
+      : currentState.nonTechnologies;
 
   if (normalizedMarkdown.length > maxTailorResumeUserMarkdownLength) {
     throw new Error(
@@ -563,10 +626,12 @@ export async function saveTailorResumeUserMarkdown(
   const savedRecord = await prisma.tailorResumeUserMemory.upsert({
     create: {
       markdown: normalizedMarkdown,
+      nonTechnologies: normalizedNonTechnologies,
       userId,
     },
     update: {
       markdown: normalizedMarkdown,
+      nonTechnologies: normalizedNonTechnologies,
     },
     where: { userId },
   });

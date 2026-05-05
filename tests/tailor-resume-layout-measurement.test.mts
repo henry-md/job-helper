@@ -21,7 +21,7 @@ test("measureTailorResumeLayout counts rendered lines for in-context replacement
   const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
   const segmentId = findSegmentIdBySnippet(
     normalized.annotatedLatex,
-    "Led major refactor enabling",
+    "Designed and deployed",
   );
   const sourceLayout = await measureTailorResumeLayout({
     annotatedLatexCode: normalized.annotatedLatex,
@@ -38,8 +38,8 @@ test("measureTailorResumeLayout counts rendered lines for in-context replacement
     changes: [
       {
         latexCode:
-          String.raw`\resumeitem{Led TikTok refactor enabling \textbf{\$50K+/mo in ad spend} across the software suite.}`,
-        reason: "Keeps the strongest metric while removing detail that pushed the bullet onto another line.",
+          String.raw`\resumeitem{Built p-hashing ad similarity service across 359K ads and 20 clients.}`,
+        reason: "Keeps the strongest scale signal while removing detail that pushed the bullet onto another line.",
         segmentId,
       },
     ],

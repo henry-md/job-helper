@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyTailorResumeUserMarkdownPatch,
+  filterTailorResumeNonTechnologiesFromEmphasizedTechnologies,
+  formatTailorResumeNonTechnologyTerm,
+  normalizeTailorResumeNonTechnologyTerms,
 } from "../lib/tailor-resume-user-memory.ts";
 
 test("applyTailorResumeUserMarkdownPatch appends under a created heading path", () => {
@@ -67,4 +70,39 @@ test("applyTailorResumeUserMarkdownPatch rejects placeholder replacements", () =
 
   assert.equal(result.ok, false);
   assert.equal(result.results[0]?.errorCode, "placeholder_text_rejected");
+});
+
+test("normalizeTailorResumeNonTechnologyTerms dedupes case-insensitively", () => {
+  assert.deepEqual(
+    normalizeTailorResumeNonTechnologyTerms([
+      " Chromium ",
+      "chromium",
+      "Internationalization",
+    ]),
+    ["chromium", "internationalization"],
+  );
+});
+
+test("formatTailorResumeNonTechnologyTerm displays a capital first letter", () => {
+  assert.equal(formatTailorResumeNonTechnologyTerm("chromium"), "Chromium");
+  assert.equal(
+    formatTailorResumeNonTechnologyTerm("internationalization"),
+    "Internationalization",
+  );
+});
+
+test("filterTailorResumeNonTechnologiesFromEmphasizedTechnologies is case-insensitive", () => {
+  const technologies = filterTailorResumeNonTechnologiesFromEmphasizedTechnologies(
+    [
+      { name: "Chromium", priority: "high" },
+      { name: "React", priority: "high" },
+      { name: "internationalization", priority: "low" },
+    ],
+    ["chromium", "Internationalization"],
+  );
+
+  assert.deepEqual(
+    technologies.map((technology) => technology.name),
+    ["React"],
+  );
 });
