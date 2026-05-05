@@ -7511,6 +7511,7 @@ function App() {
     setIsStoppingCurrentTailoring(true);
     setActiveTailoringOverrideState("idle");
     void persistStoppedTailoringRecord(stoppedTailoringRecord);
+    void requestHideTailoredResumeBadgesForUrls([jobUrl, registryPageKey]);
     activeTailorRequestAbortControllerRef.current?.abort();
     activeTailorRequestAbortControllerRef.current = null;
     setExistingTailoringPrompt(null);
@@ -7620,9 +7621,74 @@ function App() {
       text: trimmedAnswer,
       toolCalls: [],
     };
+    const optimisticAssistantMessageId = `streaming-tailor-interview-answer-${tailorInterview.id}:${Date.now()}`;
     const pageContext = state.status === "ready" ? state.snapshot : null;
+    const requestController = beginTailorRequest();
+
+    const updatePendingAssistantMessage = (
+      update: (message: TailorResumeConversationMessage) => TailorResumeConversationMessage,
+    ) => {
+      if (activeTailorRequestAbortControllerRef.current !== requestController) {
+        return;
+      }
+
+      setPendingTailorInterviewAssistantMessage((currentMessage) => {
+        const baseMessage =
+          currentMessage?.id === optimisticAssistantMessageId
+            ? currentMessage
+            : {
+                id: optimisticAssistantMessageId,
+                role: "assistant" as const,
+                technologyContexts: [],
+                text: "",
+                toolCalls: [],
+              };
+
+        return update(baseMessage);
+      });
+    };
+
+    const handleInterviewStreamEvent = (
+      event: TailorResumeInterviewStreamEvent,
+    ) => {
+      if (activeTailorRequestAbortControllerRef.current !== requestController) {
+        return;
+      }
+
+      if (event.kind === "reset") {
+        setPendingTailorInterviewAssistantMessage(null);
+        return;
+      }
+
+      if (
+        (event.kind === "text-start" || event.kind === "text-delta") &&
+        event.field !== "assistantMessage" &&
+        event.field !== "completionMessage"
+      ) {
+        return;
+      }
+
+      if (event.kind === "text-delta") {
+        updatePendingAssistantMessage((message) => ({
+          ...message,
+          text: `${message.text}${event.delta}`,
+        }));
+        return;
+      }
+
+      if (event.kind === "card") {
+        updatePendingAssistantMessage((message) => ({
+          ...message,
+          technologyContexts: [
+            ...message.technologyContexts,
+            event.card,
+          ],
+        }));
+      }
+    };
 
     setPendingTailorInterviewAnswerMessage(optimisticAnswerMessage);
+    setPendingTailorInterviewAssistantMessage(null);
     setDraftTailorInterviewAnswer("");
     dismissTailorInterviewFinishPrompt();
     setTailorInterviewError(null);
@@ -7630,7 +7696,6 @@ function App() {
     tailorGenerationStepTimingsRef.current = [];
     setTailorGenerationStepTimings([]);
     setCaptureState("finishing");
-    const requestController = beginTailorRequest();
 
     try {
       const result = await patchTailorResume(
@@ -7640,6 +7705,7 @@ function App() {
           interviewId: tailorInterview.id,
         },
         {
+          onInterviewStreamEvent: handleInterviewStreamEvent,
           onStepEvent: (stepEvent) => {
             if (activeTailorRequestAbortControllerRef.current !== requestController) {
               return;
@@ -7662,6 +7728,7 @@ function App() {
       }
 
       setPendingTailorInterviewAnswerMessage(null);
+      setPendingTailorInterviewAssistantMessage(null);
       setTailorInterview(profileSummary.tailoringInterview);
       void loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
 
@@ -7736,6 +7803,7 @@ function App() {
           : "Unable to continue the tailoring follow-up questions.";
 
       setPendingTailorInterviewAnswerMessage(null);
+      setPendingTailorInterviewAssistantMessage(null);
       setDraftTailorInterviewAnswer(trimmedAnswer);
       setTailorInterviewError(message);
       setTailorGenerationStep(null);
@@ -7764,6 +7832,7 @@ function App() {
     setTailorInterviewError(null);
     setDraftTailorInterviewAnswer("");
     setPendingTailorInterviewAnswerMessage(null);
+    setPendingTailorInterviewAssistantMessage(null);
     setIsFinishingTailorInterview(true);
     setTailorGenerationStep(null);
     setTailorGenerationStepTimings([]);
@@ -8246,7 +8315,8 @@ function App() {
     try {
       const response = await chrome.runtime.sendMessage({
         payload: {
-          downloadName: buildCompanyResumeDownloadName(tailoredResume),
+          companyName: tailoredResume.companyName,
+          displayName: tailoredResume.displayName,
           tailoredResumeId: tailoredResume.id,
         },
         type: "JOB_HELPER_DOWNLOAD_TAILORED_RESUME",
@@ -8391,6 +8461,84 @@ function App() {
     }
   }
 
+  async function handleRevealActiveTailorRunKeywords(card: ActiveTailorRunCard) {
+    const emphasizedTechnologies = card.emphasizedTechnologies.filter(
+      (technology) => technology.name.trim(),
+    );
+
+    if (emphasizedTechnologies.length === 0) {
+      return;
+    }
+
+    const isCurrentCard = card.isCurrentPage;
+    const backgroundActionState =
+      backgroundTailorRunActionStates[card.id] ?? null;
+
+    if (
+      (isCurrentCard && tailorRunMenuActionState !== "idle") ||
+      (!isCurrentCard && backgroundActionState)
+    ) {
+      return;
+    }
+
+    if (isCurrentCard) {
+      setTailorRunMenuActionState("showingKeywords");
+      setTailorRunMenuError(null);
+    } else {
+      setBackgroundTailorRunActionStates((currentStates) => ({
+        ...currentStates,
+        [card.id]: "showingKeywords",
+      }));
+      setBackgroundTailorRunMenuError(null);
+      setBackgroundTailorRunMenuErrorCardId(null);
+    }
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        payload: {
+          badgeKey: buildActiveTailorRunKeywordBadgeKey(card),
+          displayName: card.title,
+          emphasizedTechnologies,
+          includeLowPriorityTermsInKeywordCoverage: false,
+          jobUrl: card.url,
+          keywordCoverage: null,
+        },
+        type: "JOB_HELPER_REVEAL_KEYWORD_BADGE",
+      });
+      assertRuntimeResponseOk(response, "Could not show the keywords popup.");
+
+      if (isCurrentCard) {
+        setIsTailorRunMenuOpen(false);
+      } else {
+        setBackgroundTailorRunMenuId(null);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not show the keywords popup.";
+
+      if (isCurrentCard) {
+        setTailorRunMenuError(message);
+        setIsTailorRunMenuOpen(true);
+      } else {
+        setBackgroundTailorRunMenuErrorCardId(card.id);
+        setBackgroundTailorRunMenuError(message);
+        setBackgroundTailorRunMenuId(card.id);
+      }
+    } finally {
+      if (isCurrentCard) {
+        setTailorRunMenuActionState("idle");
+      } else {
+        setBackgroundTailorRunActionStates((currentStates) => {
+          const nextStates = { ...currentStates };
+          delete nextStates[card.id];
+          return nextStates;
+        });
+      }
+    }
+  }
+
   async function handleOpenTrackedApplication(
     application: TrackedApplicationSummary,
   ) {
@@ -8425,11 +8573,19 @@ function App() {
             personalInfo: previousPersonalInfo,
           })
         : null;
+    const deletedJobUrls =
+      previousPersonalInfo && currentDeleteImpact
+        ? readDeletedPersonalInfoJobUrls({
+            impact: currentDeleteImpact,
+            personalInfo: previousPersonalInfo,
+          })
+        : [];
     let shouldRefreshPersonalInfo = false;
 
     setPersonalDeleteActionState("deleting");
     setPersonalDeleteError(null);
     setTailoredResumeMutationError(null);
+    void requestHideTailoredResumeBadgesForUrls(deletedJobUrls);
 
     if (optimisticPersonalInfo) {
       lastReadyPersonalInfoRef.current = optimisticPersonalInfo;
@@ -8819,6 +8975,12 @@ function App() {
       buildTailorRunRegistryKey(cancelJobUrl);
     const shouldRemoveSavedArtifacts = Boolean(tailoredResumeId);
     const fallbackMessage = "Unable to delete the tailored resume.";
+    void requestHideTailoredResumeBadgesForUrls([
+      jobUrl,
+      cancelJobUrl,
+      registryPageKey,
+      currentPageUrl,
+    ]);
 
     setTailorRunMenuActionState("deleting");
     setTailorRunMenuError(null);
@@ -9035,6 +9197,8 @@ function App() {
       publishPersonalInfoToSharedCache(nextPersonalInfo);
     }
 
+    void requestHideTailoredResumeBadgesForUrls([jobUrl, card.pageKey]);
+
     await clearTailorRegistryEntriesForMatch({
       jobUrl,
       pageKey: card.pageKey,
@@ -9234,6 +9398,8 @@ function App() {
       publishPersonalInfoToSharedCache(nextPersonalInfo);
     }
 
+    void requestHideTailoredResumeBadgesForUrls([jobUrl, card.pageKey]);
+
     await clearTailorRegistryEntriesForMatch({
       jobUrl,
       pageKey: card.pageKey,
@@ -9306,15 +9472,252 @@ function App() {
     }
   }
 
+  async function handleStartTailorChatForCard(card: ActiveTailorRunCard) {
+    const existingTailoringId = card.existingTailoringId?.trim() ?? "";
+
+    if (!existingTailoringId || generatingTailorQuestionCardIds.has(card.id)) {
+      return;
+    }
+
+    const optimisticInterviewId = `generating:${existingTailoringId}`;
+    let hasOpenedQuestionChat = false;
+    let streamedQuestionMessage: TailorResumeConversationMessage = {
+      id: `streaming-tailor-question:${existingTailoringId}`,
+      role: "assistant",
+      technologyContexts: [],
+      text: "",
+      toolCalls: [],
+    };
+
+    const readOptimisticConversation = () =>
+      streamedQuestionMessage.text || streamedQuestionMessage.technologyContexts.length > 0
+        ? [
+            {
+              ...streamedQuestionMessage,
+              technologyContexts: [
+                ...streamedQuestionMessage.technologyContexts,
+              ],
+              toolCalls: [...streamedQuestionMessage.toolCalls],
+            },
+          ]
+        : [];
+
+    const publishOptimisticQuestionChat = () => {
+      setTailorInterview((currentInterview) => {
+        const baseInterview =
+          currentInterview?.id === optimisticInterviewId
+            ? currentInterview
+            : buildGeneratingTailorInterviewForCard({
+                card,
+                existingTailoringId,
+                interviewId: optimisticInterviewId,
+              });
+
+        return {
+          ...baseInterview,
+          conversation: readOptimisticConversation(),
+          updatedAt: new Date().toISOString(),
+        };
+      });
+    };
+
+    const openOptimisticQuestionChat = () => {
+      if (hasOpenedQuestionChat) {
+        return;
+      }
+
+      hasOpenedQuestionChat = true;
+      setSelectedTailorInterviewId(optimisticInterviewId);
+      setPendingTailorInterviewAnswerMessage(null);
+      setDraftTailorInterviewAnswer("");
+      setCaptureState("needs_input");
+      setIsTailorInterviewFinishPromptOpen(false);
+      setGeneratingTailorQuestionInterviewId(optimisticInterviewId);
+      publishOptimisticQuestionChat();
+      revealTailorInterview();
+    };
+
+    const handleInterviewStreamEvent = (
+      event: TailorResumeInterviewStreamEvent,
+    ) => {
+      if (event.kind === "reset") {
+        streamedQuestionMessage = {
+          ...streamedQuestionMessage,
+          technologyContexts: [],
+          text: "",
+        };
+
+        if (hasOpenedQuestionChat) {
+          publishOptimisticQuestionChat();
+        }
+
+        return;
+      }
+
+      if (
+        (event.kind === "text-start" || event.kind === "text-delta") &&
+        event.field !== "assistantMessage"
+      ) {
+        return;
+      }
+
+      if (event.kind === "text-start") {
+        openOptimisticQuestionChat();
+        return;
+      }
+
+      if (event.kind === "text-delta") {
+        openOptimisticQuestionChat();
+        streamedQuestionMessage = {
+          ...streamedQuestionMessage,
+          text: `${streamedQuestionMessage.text}${event.delta}`,
+        };
+        publishOptimisticQuestionChat();
+        return;
+      }
+
+      if (event.kind === "card" && hasOpenedQuestionChat) {
+        streamedQuestionMessage = {
+          ...streamedQuestionMessage,
+          technologyContexts: [
+            ...streamedQuestionMessage.technologyContexts,
+            event.card,
+          ],
+        };
+        publishOptimisticQuestionChat();
+      }
+    };
+
+    setGeneratingTailorQuestionCardIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      nextIds.add(card.id);
+      return nextIds;
+    });
+    setTailorInterviewError(null);
+    setBackgroundTailorRunMenuError(null);
+    setBackgroundTailorRunMenuErrorCardId(null);
+    setTailorRunMenuError(null);
+
+    try {
+      const result = await patchTailorResume({
+        action: "startTailorResumeInterview",
+        existingTailoringId,
+      }, {
+        onInterviewStreamEvent: handleInterviewStreamEvent,
+      });
+      const profileSummary = readTailorResumeProfileSummary(result.payload);
+
+      if (!result.ok || !profileSummary) {
+        throw new Error(
+          readTailorResumePayloadError(
+            result.payload,
+            "Unable to start the resume follow-up chat.",
+          ),
+        );
+      }
+
+      syncTailoredResumeReviewFromPayload(result.payload);
+      syncTailoredResumeSummariesFromPayload(result.payload);
+
+      const fallbackInterview = profileSummary.tailoringInterview;
+      const matchingInterview =
+        profileSummary.tailoringInterviews.find((interview) =>
+          activeTailorRunCardMatchesInterview({ card, interview }),
+        ) ??
+        (fallbackInterview &&
+        activeTailorRunCardMatchesInterview({
+          card,
+          interview: fallbackInterview,
+        })
+          ? fallbackInterview
+          : null) ??
+        null;
+
+      await loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
+
+      if (matchingInterview) {
+        setGeneratingTailorQuestionInterviewId((currentId) =>
+          currentId === optimisticInterviewId ? null : currentId,
+        );
+        setSelectedTailorInterviewId(matchingInterview.id);
+        setTailorInterview(matchingInterview);
+        setPendingTailorInterviewAnswerMessage(null);
+        setDraftTailorInterviewAnswer("");
+        setCaptureState("needs_input");
+        revealTailorInterview({ focusComposer: true });
+        return;
+      }
+
+      setGeneratingTailorQuestionInterviewId((currentId) =>
+        currentId === optimisticInterviewId ? null : currentId,
+      );
+      setSelectedTailorInterviewId(null);
+      setTailorInterview(null);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to start the resume follow-up chat.";
+
+      if (hasOpenedQuestionChat) {
+        setTailorInterviewError(message);
+      }
+
+      if (card.isCurrentPage) {
+        setTailorRunMenuError(message);
+        setIsTailorRunMenuOpen(true);
+      } else {
+        setBackgroundTailorRunMenuErrorCardId(card.id);
+        setBackgroundTailorRunMenuError(message);
+        setBackgroundTailorRunMenuId(card.id);
+      }
+
+      void loadPersonalInfo({ preserveCurrent: true });
+    } finally {
+      setGeneratingTailorQuestionInterviewId((currentId) =>
+        currentId === optimisticInterviewId ? null : currentId,
+      );
+      setGeneratingTailorQuestionCardIds((currentIds) => {
+        const nextIds = new Set(currentIds);
+        nextIds.delete(card.id);
+        return nextIds;
+      });
+    }
+  }
+
   const renderActiveTailorRunCard = (card: ActiveTailorRunCard) => {
     const isCurrentCard = card.isCurrentPage;
     const backgroundActionState = backgroundTailorRunActionStates[card.id] ?? null;
+    const matchingCardInterview =
+      personalInfo?.tailoringInterviews.find((interview) =>
+        activeTailorRunCardMatchesInterview({ card, interview }),
+      ) ??
+      (tailorInterview &&
+      activeTailorRunCardMatchesInterview({ card, interview: tailorInterview })
+        ? tailorInterview
+        : null);
+    const canOpenInterviewChat = Boolean(matchingCardInterview);
+    const isQuestionStartPending =
+      !canOpenInterviewChat && card.interviewStatus === "pending";
+    const isQuestionGenerating =
+      !canOpenInterviewChat &&
+      (card.interviewStatus === "deciding" ||
+        generatingTailorQuestionCardIds.has(card.id));
+    const shouldShowInterviewAction =
+      canOpenInterviewChat || isQuestionStartPending || isQuestionGenerating;
+    const interviewActionState = canOpenInterviewChat
+      ? "ready"
+      : isQuestionStartPending
+        ? "pending"
+        : isQuestionGenerating
+          ? "generating"
+          : null;
     const isMenuOpen = isCurrentCard
       ? isTailorRunMenuOpen
       : backgroundTailorRunMenuId === card.id;
     const isMenuBusy = isCurrentCard
-      ? tailorRunMenuActionState !== "idle"
-      : Boolean(backgroundActionState);
+      ? tailorRunMenuActionState !== "idle" || isQuestionGenerating
+      : Boolean(backgroundActionState) || isQuestionGenerating;
     const isStopBusy = isCurrentCard
       ? isStoppingCurrentTailoring
       : backgroundActionState === "stopping";
@@ -9331,24 +9734,17 @@ function App() {
       status: card.step.status,
     });
     const stepLabel =
-      card.step.label === "Queued" || card.step.label === "Question ready"
+      card.step.label === "Start chat" || card.step.label === "Question ready"
         ? card.step.label
         : formatTailorResumeProgressStepLabel({
             label: card.step.label,
             status: card.step.status,
           });
-    const canOpenInterviewChat = Boolean(
-      tailorInterview &&
-        activeTailorRunCardMatchesInterview({
-          card,
-          interview: tailorInterview,
-        }),
-    );
     const waitingReachedAtTime =
-      canOpenInterviewChat && tailorInterview
-        ? readActiveTailorRunSortTime(tailorInterview.updatedAt)
+      matchingCardInterview
+        ? readActiveTailorRunSortTime(matchingCardInterview.updatedAt)
         : card.elapsedTimeEndTime;
-    const frozenWaitingStepDurationLabel = canOpenInterviewChat
+    const frozenWaitingStepDurationLabel = matchingCardInterview
       ? readTailorRunFrozenStepDurationLabel({
           stepNumber: 2,
           stepTimings: card.stepTimings,
@@ -9387,6 +9783,8 @@ function App() {
     const canStopCard = card.statusDisplayState !== "error";
     const shouldShowCardProgressCopy =
       card.statusDisplayState === "error" && Boolean(card.message || card.detail);
+    const showKeywordAction =
+      card.emphasizedTechnologies.length > 0 && Boolean(card.url);
 
     return (
       <section
@@ -9394,6 +9792,8 @@ function App() {
         className={`snapshot-card tailor-run-shell tailor-run-shell-${card.statusDisplayState} ${
           isCurrentCard ? "tailor-run-shell-current-page" : ""
         } ${canOpenInterviewChat ? "tailor-run-shell-chat-ready" : ""} ${
+          isQuestionStartPending ? "tailor-run-shell-chat-pending" : ""
+        } ${isQuestionGenerating ? "tailor-run-shell-chat-generating" : ""} ${
           isMenuOpen ? "tailor-run-shell-menu-open" : ""
         }`.trim()}
         key={card.id}
@@ -9414,8 +9814,7 @@ function App() {
                   className="secondary-action compact-action"
                   disabled={
                     isCurrentCard
-                      ? isStoppingCurrentTailoring ||
-                        tailorRunMenuActionState !== "idle"
+                      ? isStoppingCurrentTailoring || isMenuBusy
                       : isMenuBusy
                   }
                   type="button"
@@ -9477,6 +9876,20 @@ function App() {
                             : "Go to tab"}
                         </button>
                       ) : null}
+                      {showKeywordAction ? (
+                        <button
+                          className="tailor-run-menu-item"
+                          disabled={isMenuBusy}
+                          type="button"
+                          onClick={() =>
+                            void handleRevealActiveTailorRunKeywords(card)
+                          }
+                        >
+                          {menuActionStateLabel === "showingKeywords"
+                            ? "Showing..."
+                            : "Show keywords"}
+                        </button>
+                      ) : null}
                       {card.url ? (
                         <button
                           className="tailor-run-menu-item"
@@ -9517,16 +9930,40 @@ function App() {
             </div>
           </div>
 
-          {canOpenInterviewChat ? (
+          {shouldShowInterviewAction ? (
             <button
-              className="tailor-run-answer-block"
-              disabled={isTailorInterviewBusy}
+              className={`tailor-run-answer-block ${
+                interviewActionState
+                  ? `tailor-run-answer-block-${interviewActionState}`
+                  : ""
+              }`.trim()}
+              disabled={
+                isQuestionGenerating ||
+                (!isQuestionStartPending && isTailorInterviewBusy)
+              }
               type="button"
-              onClick={() => revealTailorInterview({ focusComposer: true })}
+              onClick={() => {
+                if (matchingCardInterview) {
+                  setSelectedTailorInterviewId(matchingCardInterview.id);
+                  setTailorInterview(matchingCardInterview);
+                  revealTailorInterview({ focusComposer: true });
+                  return;
+                }
+
+                if (isQuestionStartPending) {
+                  void handleStartTailorChatForCard(card);
+                }
+              }}
             >
               <span className="tailor-run-answer-block-copy">
                 <span className="tailor-run-answer-block-kicker">Step 2</span>
-                <span className="tailor-run-answer-block-label">Answer</span>
+                <span className="tailor-run-answer-block-label">
+                  {isQuestionGenerating
+                    ? "Starting..."
+                    : isQuestionStartPending
+                      ? "Start chat"
+                      : "Answer"}
+                </span>
               </span>
               {elapsedTimeLabel ? (
                 <span
