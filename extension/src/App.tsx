@@ -295,6 +295,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function readUserMarkdownFromTailorResumePayload(
+  payload: unknown,
+): UserMarkdownSummary | null {
+  if (
+    !isRecord(payload) ||
+    (!("userMemory" in payload) &&
+      !("userMarkdown" in payload) &&
+      !("nonTechnologyNames" in payload))
+  ) {
+    return null;
+  }
+
+  return readPersonalInfoPayload(payload).userMarkdown;
+}
+
 function readAuthUser(value: unknown): JobHelperAuthUser | null {
   if (!isRecord(value) || typeof value.id !== "string") {
     return null;
@@ -5591,6 +5606,63 @@ function App() {
     } satisfies UserMarkdownSummary;
   }
 
+  async function refreshTailorInterviewKeywordBadge(
+    nonTechnologyNames: readonly string[],
+  ) {
+    if (!tailorInterview) {
+      return;
+    }
+
+    const cardTechnologies =
+      matchingTailorInterviewActiveRunCard?.emphasizedTechnologies ?? [];
+    const emphasizedTechnologies = (
+      cardTechnologies.length > 0
+        ? cardTechnologies
+        : tailorInterview.emphasizedTechnologies
+    ).filter((technology) => technology.name.trim().length > 0);
+    const matchingCurrentPageUrl =
+      matchingTailorInterviewPageContext && currentPageIdentity
+        ? currentPageIdentity.jobUrl ??
+          currentPageIdentity.canonicalUrl ??
+          currentPageIdentity.pageUrl ??
+          currentPageUrl
+        : null;
+    const jobUrl =
+      tailorInterview.jobUrl ??
+      matchingTailorInterviewActiveRunCard?.url ??
+      matchingCurrentPageUrl;
+
+    if (!jobUrl || emphasizedTechnologies.length === 0) {
+      return;
+    }
+
+    try {
+      await chrome.runtime.sendMessage({
+        payload: {
+          badgeKey: matchingTailorInterviewActiveRunCard
+            ? buildActiveTailorRunKeywordBadgeKey(
+                matchingTailorInterviewActiveRunCard,
+              )
+            : `tailor-run-keywords:${
+                buildTailorRunRegistryKey(jobUrl) ??
+                tailorInterview.tailorResumeRunId ??
+                tailorInterview.id
+              }`,
+          displayName: tailorInterviewHeading,
+          emphasizedTechnologies,
+          includeLowPriorityTermsInKeywordCoverage: false,
+          jobUrl,
+          nonTechnologyNames: normalizeNonTechnologyTerms([
+            ...nonTechnologyNames,
+          ]),
+        },
+        type: "JOB_HELPER_REFRESH_KEYWORD_BADGE",
+      });
+    } catch {
+      // Some job pages cannot receive extension messages; the side panel still updates.
+    }
+  }
+
   async function saveSettingsUserMarkdown() {
     if (authState.status !== "signedIn") {
       return;
@@ -5647,6 +5719,9 @@ function App() {
 
       if (nextUserMarkdown) {
         applySavedUserMarkdown(nextUserMarkdown);
+        void refreshTailorInterviewKeywordBadge(
+          nextUserMarkdown.nonTechnologies,
+        );
       }
     } catch (error) {
       const message =
@@ -5685,6 +5760,10 @@ function App() {
             normalizeNonTechnologyTerm(currentTerm) !== normalizedTerm,
         )
       : normalizeNonTechnologyTerms([...currentTerms, normalizedTerm]);
+    const optimisticUserMarkdown = {
+      ...currentUserMarkdown,
+      nonTechnologies: nextTerms,
+    } satisfies UserMarkdownSummary;
     const shouldRequestCompletion =
       !isAlreadyNonTechnology &&
       areAllTailorInterviewScrapedTermsNonTechnologies({
@@ -5695,7 +5774,11 @@ function App() {
     setPendingInterviewNonTechnologyTerms((currentTerms) =>
       normalizeNonTechnologyTerms([...currentTerms, normalizedTerm]),
     );
+    applySavedUserMarkdown(optimisticUserMarkdown);
+    void refreshTailorInterviewKeywordBadge(nextTerms);
     setTailorInterviewError(null);
+
+    let didPersistUserMarkdown = false;
 
     try {
       const nextUserMarkdown = await persistUserMarkdown({
@@ -5705,7 +5788,17 @@ function App() {
       });
 
       if (nextUserMarkdown) {
+        didPersistUserMarkdown = true;
         applySavedUserMarkdown(nextUserMarkdown);
+        void refreshTailorInterviewKeywordBadge(
+          nextUserMarkdown.nonTechnologies,
+        );
+      } else {
+        applySavedUserMarkdown(currentUserMarkdown);
+        void refreshTailorInterviewKeywordBadge(
+          currentUserMarkdown.nonTechnologies,
+        );
+        return;
       }
 
       if (shouldRequestCompletion && tailorInterview) {
@@ -5740,6 +5833,13 @@ function App() {
           ? error.message
           : "Unable to update non-technology terms.",
       );
+
+      if (!didPersistUserMarkdown) {
+        applySavedUserMarkdown(currentUserMarkdown);
+        void refreshTailorInterviewKeywordBadge(
+          currentUserMarkdown.nonTechnologies,
+        );
+      }
     } finally {
       setPendingInterviewNonTechnologyTerms((currentTerms) =>
         currentTerms.filter(
@@ -7773,6 +7873,17 @@ function App() {
         );
       }
 
+      const resultUserMarkdown = readUserMarkdownFromTailorResumePayload(
+        result.payload,
+      );
+
+      if (resultUserMarkdown) {
+        applySavedUserMarkdown(resultUserMarkdown);
+        void refreshTailorInterviewKeywordBadge(
+          resultUserMarkdown.nonTechnologies,
+        );
+      }
+
       setPendingTailorInterviewAnswerMessage(null);
       setPendingTailorInterviewAssistantMessage(null);
       setTailorInterview(profileSummary.tailoringInterview);
@@ -8491,6 +8602,9 @@ function App() {
       await chrome.runtime.sendMessage({
         payload: {
           jobUrl: input.jobUrl,
+          nonTechnologyNames:
+            personalInfo?.userMarkdown.nonTechnologies ??
+            savedSettingsUserMarkdown.nonTechnologies,
           tailoredResumeId: input.tailoredResumeId,
         },
         type: "JOB_HELPER_REVEAL_KEYWORD_BADGE",
@@ -8548,6 +8662,9 @@ function App() {
           includeLowPriorityTermsInKeywordCoverage: false,
           jobUrl: card.url,
           keywordCoverage: null,
+          nonTechnologyNames:
+            personalInfo?.userMarkdown.nonTechnologies ??
+            savedSettingsUserMarkdown.nonTechnologies,
         },
         type: "JOB_HELPER_REVEAL_KEYWORD_BADGE",
       });

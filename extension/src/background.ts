@@ -403,6 +403,7 @@ async function sendTailoredResumeBadgeMessage(
           includeLowPriorityTermsInKeywordCoverage: boolean;
           jobUrl: string | null;
           keywordCoverage: unknown;
+          nonTechnologyNames?: string[];
           tailoredResumeId: string;
         };
         type: "JOB_HELPER_SHOW_TAILORED_RESUME_BADGE";
@@ -476,6 +477,7 @@ async function sendEmphasizedTechnologiesBadgeMessage(
       includeLowPriorityTermsInKeywordCoverage: boolean;
       jobUrl: string | null;
       keywordCoverage: null;
+      nonTechnologyNames?: string[];
     };
     type: "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE";
   },
@@ -653,6 +655,7 @@ async function showActiveTailoringKeywordBadgeForTab(input: {
       includeLowPriorityTermsInKeywordCoverage: false,
       jobUrl: activeTailoring.jobUrl,
       keywordCoverage: null,
+      nonTechnologyNames: input.personalInfo.userMarkdown.nonTechnologies,
     },
     type: "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE",
   });
@@ -661,6 +664,7 @@ async function showActiveTailoringKeywordBadgeForTab(input: {
 }
 
 async function showLocalActiveTailorRunKeywordBadgeForTab(input: {
+  nonTechnologyNames?: string[];
   pageIdentity: Awaited<ReturnType<typeof readTailoredResumeBadgePageIdentity>>;
   tabId: number;
 }) {
@@ -680,6 +684,7 @@ async function showLocalActiveTailorRunKeywordBadgeForTab(input: {
         includeLowPriorityTermsInKeywordCoverage: false,
         jobUrl: rememberedBadge.jobUrl,
         keywordCoverage: null,
+        nonTechnologyNames: input.nonTechnologyNames,
       },
       type: "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE",
     });
@@ -728,6 +733,7 @@ async function showLocalActiveTailorRunKeywordBadgeForTab(input: {
       includeLowPriorityTermsInKeywordCoverage: false,
       jobUrl: resolution.run.pageUrl,
       keywordCoverage: null,
+      nonTechnologyNames: input.nonTechnologyNames,
     },
     type: "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE",
   });
@@ -837,13 +843,16 @@ async function revealDismissedKeywordBadge(input: {
   includeLowPriorityTermsInKeywordCoverage?: boolean;
   jobUrl: string | null;
   keywordCoverage?: unknown;
+  nonTechnologyNames?: string[];
   tailoredResumeId: string | null;
 }) {
   let resolvedJobUrl = input.jobUrl;
+  let resolvedPersonalInfo: PersonalInfoSummary | null = null;
 
   if (!resolvedJobUrl && input.tailoredResumeId) {
     try {
       const { personalInfo } = await getPersonalInfoSummary();
+      resolvedPersonalInfo = personalInfo;
       const matchingResume = personalInfo.tailoredResumes.find(
         (resume) => resume.id === input.tailoredResumeId,
       );
@@ -894,6 +903,10 @@ async function revealDismissedKeywordBadge(input: {
       input.emphasizedTechnologies?.filter((technology) =>
         Boolean(technology.name.trim()),
       ) ?? [];
+    const nonTechnologyNames =
+      input.nonTechnologyNames && input.nonTechnologyNames.length > 0
+        ? input.nonTechnologyNames
+        : resolvedPersonalInfo?.userMarkdown.nonTechnologies ?? [];
 
     await Promise.all(
       tabs.map(async (tab) => {
@@ -919,6 +932,7 @@ async function revealDismissedKeywordBadge(input: {
                 input.includeLowPriorityTermsInKeywordCoverage === true,
               jobUrl: resolvedJobUrl,
               keywordCoverage: null,
+              nonTechnologyNames,
             },
             type: "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE",
           });
@@ -930,6 +944,68 @@ async function revealDismissedKeywordBadge(input: {
     );
   } catch {
     // No tabs to refresh is fine — the storage listener will cover any open tabs.
+  }
+}
+
+async function refreshKeywordBadgeForMatchingTabs(input: {
+  badgeKey?: string | null;
+  displayName?: string | null;
+  emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
+  includeLowPriorityTermsInKeywordCoverage?: boolean;
+  jobUrl: string | null;
+  nonTechnologyNames?: string[];
+}) {
+  const normalizedTargetUrl = normalizeComparableUrl(input.jobUrl);
+
+  if (!normalizedTargetUrl) {
+    return;
+  }
+
+  const emphasizedTechnologies =
+    input.emphasizedTechnologies?.filter((technology) =>
+      Boolean(technology.name.trim()),
+    ) ?? [];
+
+  if (emphasizedTechnologies.length === 0) {
+    return;
+  }
+
+  try {
+    const tabs = await chrome.tabs.query({
+      url: ["http://*/*", "https://*/*"],
+    });
+
+    await Promise.all(
+      tabs.map(async (tab) => {
+        const tabUrl = cleanText(tab.url) || cleanText(tab.pendingUrl);
+
+        if (!tabUrl || normalizeComparableUrl(tabUrl) !== normalizedTargetUrl) {
+          return;
+        }
+
+        if (typeof tab.id !== "number") {
+          return;
+        }
+
+        await sendEmphasizedTechnologiesBadgeMessage(tab.id, {
+          payload: {
+            badgeKey:
+              input.badgeKey?.trim() ||
+              `tailor-run-keywords:${normalizedTargetUrl}`,
+            displayName: input.displayName?.trim() || "Tailor Resume keywords",
+            emphasizedTechnologies,
+            includeLowPriorityTermsInKeywordCoverage:
+              input.includeLowPriorityTermsInKeywordCoverage === true,
+            jobUrl: input.jobUrl,
+            keywordCoverage: null,
+            nonTechnologyNames: input.nonTechnologyNames ?? [],
+          },
+          type: "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE",
+        });
+      }),
+    );
+  } catch {
+    // Refreshing a visible in-page keyword badge is best-effort.
   }
 }
 
@@ -1061,6 +1137,7 @@ async function refreshTailoredResumeBadgeForTab(
   const localActiveKeywordBadge = showedActiveKeywordBadge
     ? { matchedActiveRun: false, showed: false }
     : await showLocalActiveTailorRunKeywordBadgeForTab({
+        nonTechnologyNames: personalInfo.userMarkdown.nonTechnologies,
         pageIdentity,
         tabId,
       });
@@ -1094,6 +1171,7 @@ async function refreshTailoredResumeBadgeForTab(
       ...badge,
       includeLowPriorityTermsInKeywordCoverage:
         personalInfo.generationSettings.includeLowPriorityTermsInKeywordCoverage,
+      nonTechnologyNames: personalInfo.userMarkdown.nonTechnologies,
     },
     type: "JOB_HELPER_SHOW_TAILORED_RESUME_BADGE",
   });
@@ -3280,6 +3358,10 @@ chrome.runtime.onMessage.addListener((
         typedMessage.payload,
         "jobUrl",
       );
+      const nonTechnologyNames = [
+        ...readPayloadStringArray(typedMessage.payload, "nonTechnologyNames"),
+        ...readPayloadStringArray(typedMessage.payload, "nonTechnologies"),
+      ];
 
       await revealDismissedKeywordBadge({
         badgeKey,
@@ -3293,7 +3375,35 @@ chrome.runtime.onMessage.addListener((
         keywordCoverage: isRecord(typedMessage.payload)
           ? typedMessage.payload.keywordCoverage
           : null,
+        nonTechnologyNames,
         tailoredResumeId,
+      });
+
+      return {};
+    });
+  }
+
+  if (typedMessage?.type === "JOB_HELPER_REFRESH_KEYWORD_BADGE") {
+    return sendAsyncResponse(sendResponse, async () => {
+      const emphasizedTechnologies = isRecord(typedMessage.payload)
+        ? readTailoredResumeEmphasizedTechnologies(
+            typedMessage.payload.emphasizedTechnologies,
+          )
+        : [];
+
+      await refreshKeywordBadgeForMatchingTabs({
+        badgeKey: readPayloadString(typedMessage.payload, "badgeKey"),
+        displayName: readPayloadString(typedMessage.payload, "displayName"),
+        emphasizedTechnologies,
+        includeLowPriorityTermsInKeywordCoverage: readPayloadBoolean(
+          typedMessage.payload,
+          "includeLowPriorityTermsInKeywordCoverage",
+        ),
+        jobUrl: readPayloadString(typedMessage.payload, "jobUrl"),
+        nonTechnologyNames: [
+          ...readPayloadStringArray(typedMessage.payload, "nonTechnologyNames"),
+          ...readPayloadStringArray(typedMessage.payload, "nonTechnologies"),
+        ],
       });
 
       return {};

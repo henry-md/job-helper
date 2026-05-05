@@ -21,6 +21,8 @@ type TailoredResumeBadgePayload = {
   includeLowPriorityTermsInKeywordCoverage?: boolean;
   jobUrl?: string;
   keywordCoverage?: TailoredResumeKeywordCoveragePayload | null;
+  nonTechnologies?: string[];
+  nonTechnologyNames?: string[];
   tailoredResumeId?: string;
 };
 
@@ -212,6 +214,25 @@ function uniqueStrings(values: string[], limit: number) {
   return result;
 }
 
+function normalizeNonTechnologyTerm(value: string | null | undefined) {
+  return cleanText(value).toLowerCase();
+}
+
+function readNonTechnologyTermSet(payload: TailoredResumeBadgePayload) {
+  const terms = [
+    ...(Array.isArray(payload.nonTechnologyNames)
+      ? payload.nonTechnologyNames
+      : []),
+    ...(Array.isArray(payload.nonTechnologies) ? payload.nonTechnologies : []),
+  ];
+
+  return new Set(
+    terms
+      .map((term) => normalizeNonTechnologyTerm(term))
+      .filter((term) => term.length > 0),
+  );
+}
+
 function readNonNegativeInteger(value: unknown) {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.max(Math.round(value), 0)
@@ -382,8 +403,27 @@ function readKeywordCoverageBuckets(payload: TailoredResumeBadgePayload) {
     return null;
   }
 
-  const allPriorities = normalizeKeywordCoverageBucket(coverage.allPriorities);
-  const highPriority = normalizeKeywordCoverageBucket(coverage.highPriority);
+  const nonTechnologyTerms = readNonTechnologyTermSet(payload);
+  const rawAllPriorities = normalizeKeywordCoverageBucket(coverage.allPriorities);
+  const rawHighPriority = normalizeKeywordCoverageBucket(coverage.highPriority);
+  const allPriorities =
+    nonTechnologyTerms.size === 0
+      ? rawAllPriorities
+      : buildKeywordCoverageBucketFromTerms(
+          rawAllPriorities?.terms.filter(
+            (term) =>
+              !nonTechnologyTerms.has(normalizeNonTechnologyTerm(term.name)),
+          ) ?? [],
+        );
+  const highPriority =
+    nonTechnologyTerms.size === 0
+      ? rawHighPriority
+      : buildKeywordCoverageBucketFromTerms(
+          rawHighPriority?.terms.filter(
+            (term) =>
+              !nonTechnologyTerms.has(normalizeNonTechnologyTerm(term.name)),
+          ) ?? [],
+        );
   const lowPriority = allPriorities
     ? buildKeywordCoverageBucketFromTerms(
         allPriorities.terms.filter((term) => term.priority === "low"),
@@ -919,6 +959,7 @@ function createResumeDownloadButton(payload: TailoredResumeBadgePayload) {
 
 function normalizeEmphasizedTechnologies(
   value: TailoredResumeEmphasizedTechnologyPayload[] | undefined,
+  nonTechnologyTerms = new Set<string>(),
 ) {
   if (!Array.isArray(value)) {
     return [] as Required<TailoredResumeEmphasizedTechnologyPayload>[];
@@ -934,12 +975,13 @@ function normalizeEmphasizedTechnologies(
 
     const name = cleanText(item.name, 80);
     const priority = item.priority === "high" ? "high" : item.priority === "low" ? "low" : null;
+    const normalizedName = normalizeNonTechnologyTerm(name);
 
-    if (!name || !priority) {
+    if (!name || !priority || nonTechnologyTerms.has(normalizedName)) {
       continue;
     }
 
-    const dedupeKey = `${priority}:${name.toLowerCase()}`;
+    const dedupeKey = `${priority}:${normalizedName}`;
 
     if (seen.has(dedupeKey)) {
       continue;
@@ -1483,16 +1525,16 @@ function showEmphasizedTechnologyBadge(
 ) {
   const technologies = normalizeEmphasizedTechnologies(
     payload.emphasizedTechnologies,
+    readNonTechnologyTermSet(payload),
   );
   const technologyBadgeKey = `emphasized-technologies:${badgeKey}`;
   const dismissalKey = resolveKeywordBadgeDismissalKey(payload, badgeKey);
+  lastShownKeywordBadgePayload = { badgeKey, payload };
 
   if (technologies.length === 0) {
     hideEmphasizedTechnologyBadge();
     return;
   }
-
-  lastShownKeywordBadgePayload = { badgeKey, payload };
 
   if (dismissedKeywordBadgeKeys.has(dismissalKey)) {
     hideEmphasizedTechnologyBadge();
