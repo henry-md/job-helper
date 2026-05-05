@@ -9,10 +9,10 @@ export function isTailorResumeInterviewReady(
   return interview.status === "ready";
 }
 
-export function isTailorResumeInterviewQueued(
+export function isTailorResumeInterviewPendingQuestionStart(
   interview: TailorResumePendingInterview,
 ) {
-  return interview.status === "queued";
+  return interview.status === "pending";
 }
 
 export function isTailorResumeInterviewDecisionInFlight(
@@ -30,7 +30,7 @@ function readTailorResumeInterviewTimestamp(value: string | null | undefined) {
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
-function readTailorResumeInterviewQueueTime(
+function readTailorResumeInterviewSortTime(
   interview: TailorResumePendingInterview,
 ) {
   return (
@@ -46,11 +46,11 @@ function readTailorResumeInterviewStatusRank(
     return 0;
   }
 
-  if (isTailorResumeInterviewDecisionInFlight(interview)) {
+  if (isTailorResumeInterviewPendingQuestionStart(interview)) {
     return 1;
   }
 
-  if (isTailorResumeInterviewQueued(interview)) {
+  if (isTailorResumeInterviewDecisionInFlight(interview)) {
     return 2;
   }
 
@@ -70,8 +70,8 @@ export function sortTailorResumeWorkspaceInterviews(
         return statusDifference;
       }
 
-      return readTailorResumeInterviewQueueTime(left) -
-        readTailorResumeInterviewQueueTime(right);
+      return readTailorResumeInterviewSortTime(left) -
+        readTailorResumeInterviewSortTime(right);
     },
   );
 }

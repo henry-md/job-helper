@@ -4,6 +4,7 @@ import {
   mergeTailorResumeGenerationSettings,
   type TailorResumeGenerationSettings,
 } from "./tailor-resume-generation-settings.ts";
+import { formatTailorResumeTermWithCapitalFirst } from "./tailor-resume-non-technologies.ts";
 import {
   createDefaultSystemPromptSettings,
   mergeSystemPromptSettings,
@@ -131,7 +132,7 @@ export type TailorResumeUserMarkdownPatchOperation = {
 
 export type TailorResumePendingInterviewStatus =
   | "deciding"
-  | "queued"
+  | "pending"
   | "ready";
 
 export type TailoredResumeEmphasizedTechnologyPriority = "high" | "low";
@@ -287,6 +288,7 @@ export type TailorResumePendingInterview = {
   status: TailorResumePendingInterviewStatus;
   sourceAnnotatedLatexCode: string;
   tailorResumeRunId: string | null;
+  uncoveredEmphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
   updatedAt: string;
 };
 
@@ -1229,7 +1231,9 @@ function parseTailorResumeTechnologyContext(
     return null;
   }
 
-  const name = readNullableString(value.name)?.trim() ?? "";
+  const name = formatTailorResumeTermWithCapitalFirst(
+    readNullableString(value.name) ?? "",
+  );
   const definition = readNullableString(value.definition)?.trim() ?? "";
   const examples = Array.isArray(value.examples)
     ? value.examples
@@ -1237,7 +1241,7 @@ function parseTailorResumeTechnologyContext(
         .filter(Boolean)
     : [];
 
-  if (!name || !definition || examples.length < 2) {
+  if (!name || !definition) {
     return null;
   }
 
@@ -1368,9 +1372,11 @@ function parseTailorResumePendingInterview(
       : null;
   const conversation = parseTailorResumeConversationMessages(value.conversation);
   const status =
-    value.status === "queued" || value.status === "deciding"
-      ? value.status
-      : "ready";
+    value.status === "queued"
+      ? "pending"
+      : value.status === "pending" || value.status === "deciding"
+        ? value.status
+        : "ready";
   const pendingUserMarkdownEditOperations =
     parseTailorResumeUserMarkdownPatchOperations(
       value.pendingUserMarkdownEditOperations,
@@ -1408,6 +1414,9 @@ function parseTailorResumePendingInterview(
     status,
     sourceAnnotatedLatexCode,
     tailorResumeRunId: readNullableString(value.tailorResumeRunId),
+    uncoveredEmphasizedTechnologies: parseTailoredResumeEmphasizedTechnologies(
+      value.uncoveredEmphasizedTechnologies,
+    ),
     updatedAt,
   };
 }

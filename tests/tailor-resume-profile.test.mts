@@ -478,20 +478,20 @@ test("parseTailorResumeProfile keeps parallel tailoring interviews and preserves
   assert.equal(profile.workspace.tailoringInterview?.id, "interview-1");
 });
 
-test("parseTailorResumeProfile sorts question queue as popped item then FIFO queued items", () => {
+test("parseTailorResumeProfile sorts pending question starts before in-flight decisions", () => {
   const profile = parseTailorResumeProfile({
     workspace: {
       isBaseResumeStepComplete: true,
       tailoringInterviews: [
         buildTestTailorInterview({
           createdAt: "2026-04-20T10:02:00.000Z",
-          id: "queued-newer",
-          status: "queued",
+          id: "pending-newer",
+          status: "pending",
         }),
         buildTestTailorInterview({
           createdAt: "2026-04-20T10:01:00.000Z",
-          id: "queued-older",
-          status: "queued",
+          id: "pending-older",
+          status: "pending",
         }),
         buildTestTailorInterview({
           createdAt: "2026-04-20T10:03:00.000Z",
@@ -505,7 +505,7 @@ test("parseTailorResumeProfile sorts question queue as popped item then FIFO que
 
   assert.deepEqual(
     profile.workspace.tailoringInterviews.map((interview) => interview.id),
-    ["deciding", "queued-older", "queued-newer"],
+    ["pending-older", "pending-newer", "deciding"],
   );
   assert.equal(profile.workspace.tailoringInterview, null);
 });

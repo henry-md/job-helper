@@ -1,5 +1,5 @@
-Tailor Resume queued chat stale cleanup
+Tailor Resume pending Step 2 stale cleanup
 
-- Bug: Step 1 queued runs could be cancelled by stale-run cleanup while they were intentionally waiting behind another active follow-up chat. Their original request had already returned `Chat Queued`, so no run heartbeat was active.
-- Fix: cleanup now treats a `RUNNING` run with a matching `queued` interview as live, removes orphan interview markers whose DB run is no longer active, and starts a heartbeat when a queued run is later drained and re-evaluated.
-- Guardrail: queued Step 2 interviews are durable wait states, not stale work. Only terminal/orphan markers should be cleaned up automatically.
+- Step 2 pending-start runs are intentional wait states. Stale-run cleanup must not delete a `RUNNING` or `NEEDS_INPUT` run that still has a matching interview status of `pending`, `deciding`, or `ready`.
+- Cleanup may remove terminal/orphan markers whose DB run is no longer active, but it should not invent a follow-up action. The user starts the chat explicitly from the side panel.
+- Legacy `queued` interview status may still be parsed as `pending` for old profile payloads, but new code should not create queued markers or queue drain actions.

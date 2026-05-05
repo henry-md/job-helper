@@ -1,5 +1,5 @@
-Tailor Resume global question queue order
+Tailor Resume Step 2 manual ordering
 
-- Bug: Step 2 queue order was decided only after a run finished Step 1 keyword scraping. A later-started run that scraped faster could become the ready chat before older active runs reached Step 2.
-- Fix: question-queue claiming now uses active Tailor Resume run order as the global source of truth. Older active runs that have not completed Step 2 block newer runs from becoming `deciding`; newer runs stay `queued` until the head run either asks, skips, completes, fails, or is canceled.
-- Guardrail: do not derive the active interview from load timing or from the newest queued marker. Queued interviews should be sorted FIFO, with at most one popped `ready` or `deciding` item ahead of the remaining queued items.
+- The global Step 2 question queue was removed because automatic ordering still generated stale first questions when `USER.md` changed between chats.
+- After Step 1, each run that may need clarification becomes an independent `pending` start. The user chooses which card to generate first, and that click reads the latest `USER.md`.
+- Sorting should keep ready chats first, then pending starts by creation time, then deciding items. This is display/order hygiene only; it must not imply automatic claiming or draining.

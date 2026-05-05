@@ -145,7 +145,7 @@ Tailoring generation:
 - Tailor Resume no longer asks one model call to decide the strategy and write final LaTeX at the same time.
 - The tailoring flow now runs in four required stages plus one conditional guardrail:
   - Step 1 extracts emphasized job technologies and deterministic keyword presence
-  - Step 2 optionally asks one queued follow-up chat and updates `USER.md` before planning
+  - Step 2 stores a pending `Start chat` only when Step 1 keywords are missing from both the resume and `USER.md`; the click reads fresh `USER.md` and either skips or opens a hard-coded keyword-review chat before any Step 2 LLM call
   - Step 3 runs an OpenAI planning pass over whole-resume plaintext and document-ordered blocks using the latest `USER.md`
   - Step 4 sees only the selected blocks and translates the approved plaintext plan plus any compressed user learnings back into block-local LaTeX replacements
   - Step 5 conditionally compacts edited blocks when page-count protection is enabled and the preview grows

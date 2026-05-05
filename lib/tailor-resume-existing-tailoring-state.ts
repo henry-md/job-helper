@@ -5,7 +5,10 @@ import type {
   TailorResumeGenerationStepEvent,
   TailorResumePendingInterview,
 } from "./tailor-resume-types.ts";
-import { isTailorResumeInterviewReady } from "./tailor-resume-workspace-interviews.ts";
+import {
+  isTailorResumeInterviewPendingQuestionStart,
+  isTailorResumeInterviewReady,
+} from "./tailor-resume-workspace-interviews.ts";
 
 export type TailorResumeExistingTailoringState =
   | {
@@ -31,6 +34,7 @@ export type TailorResumeExistingTailoringState =
       jobUrl: string | null;
       kind: "pending_interview";
       emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+      interviewStatus: "deciding" | "pending" | "ready";
       positionTitle: string | null;
       questionCount: number | null;
       updatedAt: string;
@@ -266,13 +270,16 @@ export function buildPendingInterviewExistingTailoringState(
   run?: TailorResumeDbRunRecord,
 ): TailorResumeExistingTailoringState {
   const questioningSummary = tailoringInterview.planningResult.questioningSummary;
+  const emphasizedTechnologies =
+    tailoringInterview.planningResult.emphasizedTechnologies;
 
   return {
     applicationId: run?.applicationId ?? tailoringInterview.applicationId,
     companyName: tailoringInterview.planningResult.companyName || null,
     createdAt: run?.createdAt.toISOString() ?? tailoringInterview.createdAt,
     id: run?.id ?? tailoringInterview.tailorResumeRunId ?? tailoringInterview.id,
-    emphasizedTechnologies: tailoringInterview.planningResult.emphasizedTechnologies,
+    emphasizedTechnologies,
+    interviewStatus: tailoringInterview.status,
     jobDescription: tailoringInterview.jobDescription,
     jobIdentifier: tailoringInterview.planningResult.jobIdentifier || null,
     jobUrl: tailoringInterview.jobUrl,
@@ -304,7 +311,8 @@ export function buildActiveTailoringStates(input: {
     }
 
     activeTailorings.push(
-      isTailorResumeInterviewReady(tailoringInterview)
+      isTailorResumeInterviewReady(tailoringInterview) ||
+        isTailorResumeInterviewPendingQuestionStart(tailoringInterview)
         ? buildPendingInterviewExistingTailoringState(tailoringInterview, run)
         : run
           ? buildActiveRunExistingTailoringState(run)
@@ -390,6 +398,14 @@ function readExistingTailoringQuestionCount(value: unknown) {
   return asked > 0 ? Math.floor(asked) : null;
 }
 
+function readExistingTailoringInterviewStatus(value: unknown) {
+  const status = readString(value).trim().toLowerCase();
+
+  return status === "deciding" || status === "pending" || status === "ready"
+    ? status
+    : "ready";
+}
+
 export function readTailorResumeExistingTailoringState(
   value: unknown,
 ): TailorResumeExistingTailoringState | null {
@@ -448,6 +464,9 @@ export function readTailorResumeExistingTailoringState(
         existingTailoring.emphasizedTechnologies,
       ),
       id,
+      interviewStatus: readExistingTailoringInterviewStatus(
+        existingTailoring.interviewStatus,
+      ),
       jobDescription: readString(existingTailoring.jobDescription),
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
       jobUrl: readNullableString(existingTailoring.jobUrl),

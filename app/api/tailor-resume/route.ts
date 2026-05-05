@@ -71,6 +71,7 @@ import { buildTailorResumePlanningSnapshot } from "@/lib/tailor-resume-planning"
 import { applyTailorResumePageCountFailure } from "@/lib/tailor-resume-page-count-failure";
 import {
   advanceTailorResumeQuestioning,
+  buildFallbackTechnologyContexts,
   type TailorResumeInterviewStreamEvent,
 } from "@/lib/tailor-resume-questioning";
 import { refineTailoredResume } from "@/lib/tailor-resume-refinement";
@@ -95,7 +96,15 @@ import {
   implementTailoredResumePlan,
   planTailoredResume,
 } from "@/lib/tailor-resume-tailoring";
-import { buildTailoredResumeKeywordCoverage } from "@/lib/tailor-resume-keyword-coverage";
+import {
+  buildTailorResumeKeywordPresenceContext,
+  buildTailoredResumeKeywordCoverage,
+} from "@/lib/tailor-resume-keyword-coverage";
+import { formatTailorResumeTermWithCapitalFirst } from "@/lib/tailor-resume-non-technologies";
+import {
+  tailorResumeGenerateExamplesRequestText,
+  tailorResumeScrapedTechnologiesMessage,
+} from "@/lib/tailor-resume-interview-constants";
 import {
   tailorResumeDebugErrorSources,
 } from "@/lib/tailor-resume-debug-errors";
@@ -114,6 +123,7 @@ import {
   type TailorResumeLockedLinkRecord,
   type TailorResumeTechnologyContext,
   type TailoredResumePlanningResult as TailorResumePlanningResult,
+  type TailoredResumeEmphasizedTechnology,
   type TailoredResumeBlockEditRecord,
   type TailorResumeProfile,
   type TailorResumeSavedLinkUpdate,
@@ -121,7 +131,7 @@ import {
 import {
   findTailorResumeWorkspaceInterview,
   isTailorResumeInterviewDecisionInFlight,
-  isTailorResumeInterviewQueued,
+  isTailorResumeInterviewPendingQuestionStart,
   isTailorResumeInterviewReady,
   readTailorResumeWorkspaceInterviews,
   removeTailorResumeWorkspaceInterview,
@@ -130,6 +140,9 @@ import {
 } from "@/lib/tailor-resume-workspace-interviews";
 import {
   applyTailorResumeUserMarkdownPatch,
+  buildTailorResumeUserMemoryState,
+  filterTailorResumeNonTechnologiesFromEmphasizedTechnologies,
+  mergeTailorResumeNonTechnologyTerms,
   readTailorResumeUserMarkdown,
   saveTailorResumeUserMarkdown,
   type TailorResumeUserMarkdownPatchResult,
@@ -189,6 +202,16 @@ function normalizeAnnotatedLatexState(latexCode: string, updatedAt: string) {
 
 function unauthorizedResponse() {
   return NextResponse.json({ error: "Sign in to manage your resume." }, { status: 401 });
+}
+
+function buildUserMemoryResponseFields(state: TailorResumeUserMarkdownState) {
+  const userMemory = buildTailorResumeUserMemoryState(state);
+
+  return {
+    nonTechnologyNames: userMemory.nonTechnologyNames,
+    userMarkdown: userMemory.userMarkdown,
+    userMemory,
+  };
 }
 
 function wantsTailorResumeStream(request: Request) {
@@ -382,6 +405,7 @@ function buildExtractionResponse(input: {
 
 async function persistTailorResumeUserMarkdownPatchResult(input: {
   baseState: TailorResumeUserMarkdownState;
+  nonTechnologyTerms?: string[];
   patchResult: TailorResumeUserMarkdownPatchResult | null;
   userId: string;
 }): Promise<
@@ -394,10 +418,19 @@ async function persistTailorResumeUserMarkdownPatchResult(input: {
       response: Response;
     }
 > {
+  const nextNonTechnologies = mergeTailorResumeNonTechnologyTerms(
+    input.baseState.nonTechnologies,
+    input.nonTechnologyTerms ?? [],
+  );
+  const nonTechnologiesChanged =
+    nextNonTechnologies.join("\n") !==
+    input.baseState.nonTechnologies.join("\n");
+
   if (
-    !input.patchResult ||
-    !input.patchResult.ok ||
-    !input.patchResult.changed
+    (!input.patchResult ||
+      !input.patchResult.ok ||
+      !input.patchResult.changed) &&
+    !nonTechnologiesChanged
   ) {
     return {
       ok: true,
@@ -405,11 +438,16 @@ async function persistTailorResumeUserMarkdownPatchResult(input: {
     };
   }
 
+  const nextMarkdown =
+    input.patchResult?.ok === true && input.patchResult.changed
+      ? input.patchResult.markdown
+      : input.baseState.markdown;
   const saveResult = await saveTailorResumeUserMarkdown(
     input.userId,
-    input.patchResult.markdown,
+    nextMarkdown,
     {
       expectedUpdatedAt: input.baseState.updatedAt,
+      nonTechnologies: nextNonTechnologies,
     },
   );
 
@@ -420,7 +458,7 @@ async function persistTailorResumeUserMarkdownPatchResult(input: {
         {
           error:
             "USER.md changed while the tailoring follow-up was running. Review the latest memory and try again.",
-          userMarkdown: saveResult.state,
+          ...buildUserMemoryResponseFields(saveResult.state),
         },
         { status: 409 },
       ),
@@ -459,8 +497,8 @@ async function persistTailorResumePendingInterviewUserMarkdown(input: {
       response: NextResponse.json(
         {
           error:
-            "The queued USER.md update from this chat no longer applies cleanly. Keep chatting once to refresh the memory update, then press Done again.",
-          userMarkdown,
+            "The saved USER.md update from this chat no longer applies cleanly. Keep chatting once to refresh the memory update, then press Done again.",
+          ...buildUserMemoryResponseFields(userMarkdown),
         },
         { status: 409 },
       ),
@@ -819,106 +857,108 @@ async function completeTailorResumeInterviewAndFinalize(input: {
   });
 }
 
-function readTailorResumeInterviewSortTime(interview: TailorResumePendingInterview) {
-  const createdAtTime = Date.parse(interview.createdAt);
-
-  if (Number.isFinite(createdAtTime)) {
-    return createdAtTime;
-  }
-
-  const updatedAtTime = Date.parse(interview.updatedAt);
-  return Number.isFinite(updatedAtTime) ? updatedAtTime : 0;
-}
-
-function activeTailorResumeRunBlocksQuestionQueue(run: {
-  status: string;
-  stepNumber: number | null;
-  stepStatus: string | null;
-}) {
-  if (run.status === "NEEDS_INPUT") {
-    return true;
-  }
-
-  if (!run.stepNumber) {
-    return true;
-  }
-
-  if (run.stepNumber < 2) {
-    return true;
-  }
-
-  if (run.stepNumber > 2) {
-    return false;
-  }
-
-  const normalizedStepStatus = run.stepStatus?.trim().toLowerCase();
-  return normalizedStepStatus !== "skipped" &&
-    normalizedStepStatus !== "succeeded";
-}
-
-async function readTailorResumeQuestionQueueRunPosition(input: {
+async function isTailorResumeRunInProgress(input: {
   runId: string | null;
   userId: string;
 }) {
   if (!input.runId) {
-    return {
-      hasPriorQuestionQueueBlocker: false,
-      runStillActive: true,
-    };
+    return true;
   }
 
-  const activeRuns = await getPrismaClient().tailorResumeRun.findMany({
-    orderBy: [{ createdAt: "asc" }, { updatedAt: "asc" }, { id: "asc" }],
+  const run = await getPrismaClient().tailorResumeRun.findFirst({
     select: {
       id: true,
-      status: true,
-      stepNumber: true,
-      stepStatus: true,
     },
     where: {
+      id: input.runId,
       status: {
         in: ["RUNNING", "NEEDS_INPUT"],
       },
       userId: input.userId,
     },
   });
-  const runIndex = activeRuns.findIndex((run) => run.id === input.runId);
 
-  if (runIndex < 0) {
-    return {
-      hasPriorQuestionQueueBlocker: false,
-      runStillActive: false,
-    };
-  }
-
-  return {
-    hasPriorQuestionQueueBlocker: activeRuns
-      .slice(0, runIndex)
-      .some(activeTailorResumeRunBlocksQuestionQueue),
-    runStillActive: true,
-  };
+  return Boolean(run);
 }
 
-function buildTailorResumeChatQueuedStepEvent(
-  detail =
-    "Another resume follow-up chat is active, so this run is queued until USER.md is updated and its Step 2 question decision can be re-evaluated.",
+function buildTailorResumeQuestionStartReadyStepEvent(
   emphasizedTechnologies?: TailorResumePlanningResult["emphasizedTechnologies"],
-  durationMs = 0,
 ): TailorResumeGenerationStepEvent {
   return {
     attempt: null,
-    detail,
-    durationMs,
+    detail:
+      "Step 2 found scraped technologies that are not yet in the resume or USER.md. Start the chat when you want to review them.",
+    durationMs: 0,
     ...(emphasizedTechnologies ? { emphasizedTechnologies } : {}),
     retrying: false,
     status: "running",
     stepCount: 5,
     stepNumber: 2,
-    summary: "Chat Queued",
+    summary: "Ready to review scraped technologies",
   };
 }
 
-function buildTailorResumeQueuedInterview(input: {
+function buildUncoveredTailorResumeQuestionTechnologies(input: {
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+  resumePlainText: string;
+  userMarkdown: TailorResumeUserMarkdownState;
+}) {
+  const emphasizedTechnologies =
+    filterTailorResumeNonTechnologiesFromEmphasizedTechnologies(
+      input.emphasizedTechnologies,
+      input.userMarkdown.nonTechnologies,
+    );
+  const keywordPresenceContext = buildTailorResumeKeywordPresenceContext({
+    emphasizedTechnologies,
+    originalResumeText: input.resumePlainText,
+    userMarkdown: input.userMarkdown.markdown,
+  });
+  const uncoveredNames = new Set(
+    keywordPresenceContext.terms
+      .filter((term) => !term.presentInOriginalResume && !term.presentInUserMarkdown)
+      .map((term) => term.name.trim().toLowerCase()),
+  );
+
+  if (uncoveredNames.size === 0) {
+    return [];
+  }
+
+  return emphasizedTechnologies.filter((technology) =>
+    uncoveredNames.has(technology.name.trim().toLowerCase()),
+  );
+}
+
+function buildTailorResumeScrapedTechnologyContexts(
+  technologies: TailoredResumeEmphasizedTechnology[],
+): TailorResumeTechnologyContext[] {
+  return technologies.slice(0, 12).map((technology) => {
+    const name = formatTailorResumeTermWithCapitalFirst(technology.name);
+    const evidence = technology.evidence.trim();
+
+    return {
+      definition: evidence
+        ? `Scraped from the job posting: ${evidence}`
+        : "Scraped from the job posting as a missing technology keyword.",
+      examples: [],
+      name,
+    };
+  });
+}
+
+function buildTailorResumeGenerateExamplesConversationPrompt(
+  technologies: TailoredResumeEmphasizedTechnology[],
+) {
+  const names = technologies
+    .slice(0, 12)
+    .map((technology) => formatTailorResumeTermWithCapitalFirst(technology.name))
+    .filter(Boolean);
+
+  return names.length > 0
+    ? `${tailorResumeGenerateExamplesRequestText}\n\nScraped technologies: ${names.join(", ")}.`
+    : tailorResumeGenerateExamplesRequestText;
+}
+
+function buildTailorResumeQuestionStartInterview(input: {
   accumulatedModelDurationMs: number;
   applicationId: string | null;
   generationSourceSnapshot: ReturnType<typeof buildTailorResumeGenerationSourceSnapshot>;
@@ -927,8 +967,8 @@ function buildTailorResumeQueuedInterview(input: {
   planningDebug: TailorResumePendingInterview["planningDebug"];
   planningResult: TailorResumePlanningResult;
   sourceAnnotatedLatexCode: string;
-  status: TailorResumePendingInterview["status"];
   runId: string | null;
+  uncoveredEmphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
 }) {
   const now = new Date().toISOString();
 
@@ -946,13 +986,14 @@ function buildTailorResumeQueuedInterview(input: {
     planningResult: input.planningResult,
     pendingUserMarkdownEditOperations: [],
     sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode,
-    status: input.status,
+    status: "pending",
     tailorResumeRunId: input.runId,
+    uncoveredEmphasizedTechnologies: input.uncoveredEmphasizedTechnologies,
     updatedAt: now,
   } satisfies TailorResumePendingInterview;
 }
 
-async function reserveTailorResumeQuestionDecision(input: {
+async function createTailorResumeQuestionStart(input: {
   accumulatedModelDurationMs: number;
   applicationId: string | null;
   generationSourceSnapshot: ReturnType<typeof buildTailorResumeGenerationSourceSnapshot>;
@@ -962,17 +1003,18 @@ async function reserveTailorResumeQuestionDecision(input: {
   planningResult: TailorResumePlanningResult;
   sourceAnnotatedLatexCode: string;
   runId: string | null;
+  uncoveredEmphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
   userId: string;
 }) {
   return withTailorResumeProfileLock(input.userId, async () => {
     const latestState = await readTailorResumeProfileState(input.userId);
-    const queuePosition = await readTailorResumeQuestionQueueRunPosition({
+    const runStillActive = await isTailorResumeRunInProgress({
       runId: input.runId,
       userId: input.userId,
     });
 
     if (
-      !queuePosition.runStillActive ||
+      !runStillActive ||
       hasTailorResumeGenerationSourceChanged({
         currentLockedLinks: latestState.lockedLinks,
         currentRawProfile: latestState.rawProfile,
@@ -984,17 +1026,7 @@ async function reserveTailorResumeQuestionDecision(input: {
       };
     }
 
-    const currentInterviews = readTailorResumeWorkspaceInterviews(
-      latestState.rawProfile.workspace,
-    );
-    const questionDecisionIsBusy = currentInterviews.some(
-      (interview) =>
-        isTailorResumeInterviewReady(interview) ||
-        isTailorResumeInterviewDecisionInFlight(interview),
-    );
-    const earlierRunStillOwnsQuestionQueue =
-      queuePosition.hasPriorQuestionQueueBlocker;
-    const pendingInterview = buildTailorResumeQueuedInterview({
+    const pendingInterview = buildTailorResumeQuestionStartInterview({
       accumulatedModelDurationMs: input.accumulatedModelDurationMs,
       applicationId: input.applicationId,
       generationSourceSnapshot: input.generationSourceSnapshot,
@@ -1004,10 +1036,7 @@ async function reserveTailorResumeQuestionDecision(input: {
       planningResult: input.planningResult,
       runId: input.runId,
       sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode,
-      status:
-        questionDecisionIsBusy || earlierRunStillOwnsQuestionQueue
-          ? "queued"
-          : "deciding",
+      uncoveredEmphasizedTechnologies: input.uncoveredEmphasizedTechnologies,
     });
     const nextRawProfile: TailorResumeProfile = {
       ...latestState.rawProfile,
@@ -1022,40 +1051,34 @@ async function reserveTailorResumeQuestionDecision(input: {
 
     return {
       interview: pendingInterview,
-      kind: pendingInterview.status === "queued" ? "queued" : "deciding",
+      kind: "pending" as const,
       lockedLinks: latestState.lockedLinks,
       rawProfile: nextRawProfile,
     } as const;
   });
 }
 
-async function promoteReadyTailorResumeInterview(input: {
-  accumulatedModelDurationMs: number;
-  assistantMessage: string;
+async function promoteTailorResumeKeywordReviewInterview(input: {
   interview: TailorResumePendingInterview;
-  planningResult: TailorResumePlanningResult;
-  questioningResult: Extract<
-    Awaited<ReturnType<typeof advanceTailorResumeQuestioning>>,
-    { action: "ask" }
-  >;
+  uncoveredEmphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
   userId: string;
 }) {
   const readyAt = new Date().toISOString();
   const readyInterview: TailorResumePendingInterview = {
     ...input.interview,
-    accumulatedModelDurationMs: input.accumulatedModelDurationMs,
     completionRequestedAt: null,
     conversation: [
       buildTailorResumeConversationMessage({
         role: "assistant",
-        technologyContexts: input.questioningResult.technologyContexts,
-        text: input.assistantMessage,
-        toolCalls: input.questioningResult.toolCalls,
+        technologyContexts: buildTailorResumeScrapedTechnologyContexts(
+          input.uncoveredEmphasizedTechnologies,
+        ),
+        text: tailorResumeScrapedTechnologiesMessage,
       }),
     ],
-    planningResult: input.planningResult,
     pendingUserMarkdownEditOperations: [],
     status: "ready",
+    uncoveredEmphasizedTechnologies: input.uncoveredEmphasizedTechnologies,
     updatedAt: readyAt,
   };
 
@@ -1085,7 +1108,8 @@ async function promoteReadyTailorResumeInterview(input: {
 
     const nextRawProfile: TailorResumeProfile = {
       ...latestState.rawProfile,
-      jobDescription: latestState.rawProfile.jobDescription || input.interview.jobDescription,
+      jobDescription:
+        latestState.rawProfile.jobDescription || input.interview.jobDescription,
       workspace: upsertTailorResumeWorkspaceInterview(
         latestState.rawProfile.workspace,
         readyInterview,
@@ -1100,119 +1124,6 @@ async function promoteReadyTailorResumeInterview(input: {
       lockedLinks: latestState.lockedLinks,
       rawProfile: nextRawProfile,
     };
-  });
-}
-
-async function claimNextQueuedTailorResumeQuestionDecision(userId: string) {
-  return withTailorResumeProfileLock(userId, async () => {
-    const latestState = await readTailorResumeProfileState(userId);
-    const currentInterviews = readTailorResumeWorkspaceInterviews(
-      latestState.rawProfile.workspace,
-    );
-
-    if (
-      currentInterviews.some(
-        (interview) =>
-          isTailorResumeInterviewReady(interview) ||
-          isTailorResumeInterviewDecisionInFlight(interview),
-      )
-    ) {
-      return null;
-    }
-
-    const queuedInterviews = currentInterviews
-      .filter((interview) => isTailorResumeInterviewQueued(interview))
-      .sort(
-        (left, right) =>
-          readTailorResumeInterviewSortTime(left) -
-          readTailorResumeInterviewSortTime(right),
-      );
-
-    if (queuedInterviews.length === 0) {
-      return null;
-    }
-
-    const staleQueuedInterviewIds = new Set<string>();
-
-    for (const queuedInterview of queuedInterviews) {
-      const queuePosition = await readTailorResumeQuestionQueueRunPosition({
-        runId: queuedInterview.tailorResumeRunId,
-        userId,
-      });
-
-      if (
-        !queuePosition.runStillActive ||
-        hasTailorResumeGenerationSourceChanged({
-          currentLockedLinks: latestState.lockedLinks,
-          currentRawProfile: latestState.rawProfile,
-          snapshot: queuedInterview.generationSourceSnapshot,
-        })
-      ) {
-        staleQueuedInterviewIds.add(queuedInterview.id);
-        await updateTailorResumeRunStatus({
-          error:
-            "The base resume changed, or this queued tailoring run was canceled before its follow-up questions could be prepared.",
-          runId: queuedInterview.tailorResumeRunId,
-          status: "FAILED",
-          userId,
-        });
-        continue;
-      }
-
-      if (queuePosition.hasPriorQuestionQueueBlocker) {
-        if (staleQueuedInterviewIds.size > 0) {
-          const nextRawProfile: TailorResumeProfile = {
-            ...latestState.rawProfile,
-            workspace: removeTailorResumeWorkspaceInterview(
-              latestState.rawProfile.workspace,
-              (interview) => staleQueuedInterviewIds.has(interview.id),
-            ),
-          };
-
-          await writeTailorResumeProfileAndMarkChanged(userId, nextRawProfile);
-        }
-
-        return null;
-      }
-
-      const decidingInterview: TailorResumePendingInterview = {
-        ...queuedInterview,
-        status: "deciding",
-        updatedAt: new Date().toISOString(),
-      };
-      const nextInterviews = currentInterviews
-        .filter((interview) => !staleQueuedInterviewIds.has(interview.id))
-        .map((interview) =>
-          interview.id === decidingInterview.id ? decidingInterview : interview,
-        );
-      const nextRawProfile: TailorResumeProfile = {
-        ...latestState.rawProfile,
-        workspace: withTailorResumeWorkspaceInterviews(
-          latestState.rawProfile.workspace,
-          nextInterviews,
-          decidingInterview.updatedAt,
-        ),
-      };
-
-      await writeTailorResumeProfileAndMarkChanged(userId, nextRawProfile);
-
-      return {
-        interview: decidingInterview,
-        lockedLinks: latestState.lockedLinks,
-        rawProfile: nextRawProfile,
-      };
-    }
-
-    const nextRawProfile: TailorResumeProfile = {
-      ...latestState.rawProfile,
-      workspace: removeTailorResumeWorkspaceInterview(
-        latestState.rawProfile.workspace,
-        (interview) => staleQueuedInterviewIds.has(interview.id),
-      ),
-    };
-
-    await writeTailorResumeProfileAndMarkChanged(userId, nextRawProfile);
-    return null;
   });
 }
 
@@ -1236,115 +1147,230 @@ async function removeTailorResumeQuestionDecisionInterview(input: {
   });
 }
 
-async function continueQueuedTailorResumeQuestionDecision(userId: string) {
-  const claimed = await claimNextQueuedTailorResumeQuestionDecision(userId);
+async function claimTailorResumeQuestionStart(input: {
+  targetId: string;
+  userId: string;
+}) {
+  return withTailorResumeProfileLock(input.userId, async () => {
+    const latestState = await readTailorResumeProfileState(input.userId);
+    const matchingInterview = findTailorResumeWorkspaceInterview(
+      latestState.rawProfile.workspace,
+      (interview) =>
+        interview.id === input.targetId ||
+        interview.tailorResumeRunId === input.targetId,
+    );
 
-  if (!claimed) {
-    return null;
+    if (!matchingInterview) {
+      return {
+        kind: "response" as const,
+        response: NextResponse.json(
+          { error: "There is no Step 2 chat to generate for that run." },
+          { status: 409 },
+        ),
+      };
+    }
+
+    if (isTailorResumeInterviewReady(matchingInterview)) {
+      return {
+        kind: "response" as const,
+        response: NextResponse.json({
+          profile: mergeTailorResumeProfileWithLockedLinks(
+            latestState.rawProfile,
+            latestState.lockedLinks,
+            {
+              includeLockedOnly: true,
+            },
+          ),
+          tailoredResumeDurationMs: matchingInterview.accumulatedModelDurationMs,
+          tailoringStatus: "needs_user_input" as const,
+        }),
+      };
+    }
+
+    if (isTailorResumeInterviewDecisionInFlight(matchingInterview)) {
+      return {
+        kind: "response" as const,
+        response: NextResponse.json(
+          { error: "That Step 2 chat is already being generated." },
+          { status: 409 },
+        ),
+      };
+    }
+
+    if (!isTailorResumeInterviewPendingQuestionStart(matchingInterview)) {
+      return {
+        kind: "response" as const,
+        response: NextResponse.json(
+          { error: "That Step 2 chat cannot be generated from its current state." },
+          { status: 409 },
+        ),
+      };
+    }
+
+    const runStillActive = await isTailorResumeRunInProgress({
+      runId: matchingInterview.tailorResumeRunId,
+      userId: input.userId,
+    });
+
+    if (
+      !runStillActive ||
+      hasTailorResumeGenerationSourceChanged({
+        currentLockedLinks: latestState.lockedLinks,
+        currentRawProfile: latestState.rawProfile,
+        snapshot: matchingInterview.generationSourceSnapshot,
+      })
+    ) {
+      const nextRawProfile: TailorResumeProfile = {
+        ...latestState.rawProfile,
+        workspace: removeTailorResumeWorkspaceInterview(
+          latestState.rawProfile.workspace,
+          (interview) => interview.id === matchingInterview.id,
+        ),
+      };
+
+      await writeTailorResumeProfileAndMarkChanged(input.userId, nextRawProfile);
+      await updateTailorResumeRunStatus({
+        error:
+          "The base resume changed, or this tailoring run was canceled before its Step 2 chat could be generated.",
+        runId: matchingInterview.tailorResumeRunId,
+        status: "FAILED",
+        userId: input.userId,
+      });
+
+      return {
+        kind: "response" as const,
+        response: NextResponse.json(
+          {
+            error:
+              "The base resume changed, or this tailoring run was canceled before its Step 2 chat could be generated. Review the latest Tailor Resume state and try again.",
+          },
+          { status: 409 },
+        ),
+      };
+    }
+
+    const decidingInterview: TailorResumePendingInterview = {
+      ...matchingInterview,
+      status: "deciding",
+      updatedAt: new Date().toISOString(),
+    };
+    const nextRawProfile: TailorResumeProfile = {
+      ...latestState.rawProfile,
+      workspace: upsertTailorResumeWorkspaceInterview(
+        latestState.rawProfile.workspace,
+        decidingInterview,
+        decidingInterview.updatedAt,
+      ),
+    };
+
+    await writeTailorResumeProfileAndMarkChanged(input.userId, nextRawProfile);
+    await updateTailorResumeRunStatus({
+      runId: decidingInterview.tailorResumeRunId,
+      status: "RUNNING",
+      userId: input.userId,
+    });
+
+    return {
+      interview: decidingInterview,
+      kind: "claimed" as const,
+      lockedLinks: latestState.lockedLinks,
+      rawProfile: nextRawProfile,
+    };
+  });
+}
+
+async function handleStartTailorResumeInterview(
+  body: Record<string, unknown>,
+  userId: string,
+  options: {
+    onInterviewStreamEvent?: (
+      event: TailorResumeInterviewStreamEvent,
+    ) => void | Promise<void>;
+    onStepEvent?: (
+      event: TailorResumeGenerationStepEvent,
+    ) => void | Promise<void>;
+  } = {},
+): Promise<Response> {
+  const targetId =
+    typeof body.interviewId === "string" && body.interviewId.trim()
+      ? body.interviewId.trim()
+      : typeof body.tailorRunId === "string" && body.tailorRunId.trim()
+        ? body.tailorRunId.trim()
+        : typeof body.existingTailoringId === "string" &&
+            body.existingTailoringId.trim()
+          ? body.existingTailoringId.trim()
+          : "";
+
+  if (!targetId) {
+    return NextResponse.json(
+      { error: "Provide the Step 2 chat or tailoring run id to generate." },
+      { status: 400 },
+    );
   }
 
+  const claimed = await claimTailorResumeQuestionStart({
+    targetId,
+    userId,
+  });
+
+  if (claimed.kind === "response") {
+    return claimed.response;
+  }
+
+  let lastStepEvent: TailorResumeGenerationStepEvent | null = null;
+  const handleStepEvent = async (event: TailorResumeGenerationStepEvent) => {
+    lastStepEvent = event;
+    await updateTailorResumeRunStep({
+      event,
+      runId: claimed.interview.tailorResumeRunId,
+      userId,
+    });
+    await options.onStepEvent?.(event);
+  };
   const stopRunHeartbeat = startTailorResumeRunHeartbeat({
     runId: claimed.interview.tailorResumeRunId,
     userId,
   });
 
   try {
-    const userMarkdownBeforeQuestioning = await readTailorResumeUserMarkdown(userId);
+    const startedAt = Date.now();
+    const userMarkdownBeforeStart = await readTailorResumeUserMarkdown(userId);
     const planningSnapshot = buildTailorResumePlanningSnapshot(
       claimed.interview.sourceAnnotatedLatexCode,
     );
-    let questioningResult: Awaited<
-      ReturnType<typeof advanceTailorResumeQuestioning>
-    >;
-
-    try {
-      questioningResult = await advanceTailorResumeQuestioning({
-        conversation: [],
-        jobDescription: claimed.interview.jobDescription,
-        planningResult: claimed.interview.planningResult,
-        planningSnapshot,
-        promptSettings: claimed.rawProfile.promptSettings.values,
-        userMarkdown: userMarkdownBeforeQuestioning,
-      });
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : "Unable to determine whether follow-up questions are needed.";
-
-      await updateTailorResumeRunStep({
-        event: {
-          attempt: 1,
-          detail: errorMessage,
-          durationMs: 0,
-          retrying: false,
-          status: "failed",
-          stepCount: 5,
-          stepNumber: 2,
-          summary: "Preparing follow-up question for the user",
-        },
-        runId: claimed.interview.tailorResumeRunId,
-        userId,
-      });
-      await updateTailorResumeRunStatus({
-        error: errorMessage,
-        runId: claimed.interview.tailorResumeRunId,
-        status: "FAILED",
-        userId,
-      });
-      await removeTailorResumeQuestionDecisionInterview({
-        interviewId: claimed.interview.id,
-        userId,
-      });
-      return null;
-    }
-
-    const accumulatedModelDurationMs =
-      claimed.interview.accumulatedModelDurationMs +
-      questioningResult.generationDurationMs;
-    const userMarkdownSaveResult =
-      await persistTailorResumeUserMarkdownPatchResult({
-        baseState: userMarkdownBeforeQuestioning,
-        patchResult: questioningResult.userMarkdownPatchResult,
-        userId,
+    const uncoveredEmphasizedTechnologies =
+      buildUncoveredTailorResumeQuestionTechnologies({
+        emphasizedTechnologies:
+          claimed.interview.planningResult.emphasizedTechnologies,
+        resumePlainText: planningSnapshot.resumePlainText,
+        userMarkdown: userMarkdownBeforeStart,
       });
 
-    if (!userMarkdownSaveResult.ok) {
-      await updateTailorResumeRunStatus({
-        error: "Unable to save the tailoring follow-up memory update.",
-        runId: claimed.interview.tailorResumeRunId,
-        status: "FAILED",
-        userId,
-      });
-      await removeTailorResumeQuestionDecisionInterview({
-        interviewId: claimed.interview.id,
-        userId,
-      });
-      return null;
-    }
+    await handleStepEvent({
+      attempt: 1,
+      detail:
+        "Re-reading the latest USER.md before opening the scraped-technology review chat.",
+      durationMs: 0,
+      emphasizedTechnologies:
+        claimed.interview.planningResult.emphasizedTechnologies,
+      retrying: false,
+      status: "running",
+      stepCount: 5,
+      stepNumber: 2,
+      summary: "Starting keyword review chat",
+    });
 
-    if (questioningResult.action === "ask") {
-      const nextPlanningResult: TailorResumePlanningResult = {
-        ...claimed.interview.planningResult,
-        emphasizedTechnologies: questioningResult.emphasizedTechnologies,
-        questioningSummary: questioningResult.questioningSummary,
-      };
-      const promoted = await promoteReadyTailorResumeInterview({
-        accumulatedModelDurationMs,
-        assistantMessage: buildTailorResumeInterviewAssistantText({
-          assistantMessage: questioningResult.assistantMessage,
-          planningResult: nextPlanningResult,
-        }),
+    if (uncoveredEmphasizedTechnologies.length > 0) {
+      const promoted = await promoteTailorResumeKeywordReviewInterview({
         interview: claimed.interview,
-        planningResult: nextPlanningResult,
-        questioningResult,
+        uncoveredEmphasizedTechnologies,
         userId,
       });
 
       if (!promoted) {
         await updateTailorResumeRunStatus({
           error:
-            "The base resume changed, or this queued tailoring run was canceled while its follow-up question was being prepared.",
+            "The base resume changed, or this tailoring run was canceled while its keyword review chat was being opened.",
           runId: claimed.interview.tailorResumeRunId,
           status: "FAILED",
           userId,
