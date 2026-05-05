@@ -14,6 +14,7 @@ type OverlayTone = "error" | "info" | "success" | "warning";
 
 type TailoredResumeBadgePayload = {
   badgeKey?: string;
+  companyName?: string | null;
   downloadName?: string;
   displayName?: string;
   emphasizedTechnologies?: TailoredResumeEmphasizedTechnologyPayload[];
@@ -68,20 +69,14 @@ type NormalizedKeywordCoverageBucket = {
   totalTermCount: number;
 };
 
-const resumeBadgeRootId = "job-helper-tailored-resume-badge";
 const emphasizedTechnologyBadgeRootId =
   "job-helper-emphasized-technologies-badge";
 const pagePromptStyleId = "job-helper-page-prompt-styles";
-const resumeBadgeDismissedStorageKey =
-  "jobHelperDismissedTailoredResumeBadges";
 const pagePromptEdgeInset = 16;
 const pagePromptGap = 12;
 const pagePromptWidth = "min(420px, calc(100vw - 32px))";
 let overlayTimeoutId: number | null = null;
 let lastShortcutAt = 0;
-const dismissedResumeBadgeKeys = readDismissedPagePromptKeys(
-  resumeBadgeDismissedStorageKey,
-);
 const dismissedKeywordBadgeKeys = new Set<string>();
 let lastShownKeywordBadgePayload: {
   badgeKey: string;
@@ -687,74 +682,12 @@ function showOverlay(text: string, tone: OverlayTone) {
   }, 1_750);
 }
 
-function readDismissedPagePromptKeys(storageKey: string) {
-  try {
-    const value = window.sessionStorage.getItem(storageKey);
-    const parsed = value ? JSON.parse(value) : [];
-
-    if (Array.isArray(parsed)) {
-      return new Set(
-        parsed
-          .map((item) => (typeof item === "string" ? item.trim() : ""))
-          .filter(Boolean),
-      );
-    }
-  } catch {
-    // Session storage is a convenience only; dismissal still works in memory.
-  }
-
-  return new Set<string>();
-}
-
-function writeDismissedPagePromptKeys(storageKey: string, keys: Set<string>) {
-  try {
-    window.sessionStorage.setItem(
-      storageKey,
-      JSON.stringify([...keys].slice(-40)),
-    );
-  } catch {
-    // Ignore pages that block session storage.
-  }
-}
-
-function rememberDismissedPagePromptKey(
-  storageKey: string,
-  keys: Set<string>,
-  badgeKey: string,
-) {
-  keys.add(badgeKey);
-
-  if (keys.size > 40) {
-    const trimmedKeys = new Set([...keys].slice(-40));
-    keys.clear();
-    for (const key of trimmedKeys) {
-      keys.add(key);
-    }
-  }
-
-  writeDismissedPagePromptKeys(storageKey, keys);
-}
-
-function rememberDismissedResumeBadgeKey(badgeKey: string) {
-  rememberDismissedPagePromptKey(
-    resumeBadgeDismissedStorageKey,
-    dismissedResumeBadgeKeys,
-    badgeKey,
-  );
-}
-
-function hideTailoredResumeBadge() {
-  document.getElementById(resumeBadgeRootId)?.remove();
-  reflowPagePromptStack();
-}
-
 function hideEmphasizedTechnologyBadge() {
   document.getElementById(emphasizedTechnologyBadgeRootId)?.remove();
   reflowPagePromptStack();
 }
 
 function hideTailoredResumePrompts() {
-  hideTailoredResumeBadge();
   hideEmphasizedTechnologyBadge();
 }
 
@@ -789,7 +722,7 @@ function ensurePagePromptStyles() {
 }
 
 function getPagePromptElements() {
-  return [resumeBadgeRootId, emphasizedTechnologyBadgeRootId]
+  return [emphasizedTechnologyBadgeRootId]
     .map((id) => document.getElementById(id))
     .filter((element): element is HTMLElement => element instanceof HTMLElement);
 }
@@ -872,47 +805,6 @@ function attachPagePromptDragHandle(element: HTMLElement, handle: HTMLElement) {
 
 window.addEventListener("resize", reflowPagePromptStack);
 
-function ensureTailoredResumeBadgeRoot() {
-  const existingBadge = document.getElementById(resumeBadgeRootId);
-
-  if (existingBadge instanceof HTMLDivElement) {
-    return existingBadge;
-  }
-
-  const badge = document.createElement("div");
-  badge.id = resumeBadgeRootId;
-  badge.setAttribute("role", "status");
-  badge.setAttribute("aria-live", "polite");
-  styleElement(badge, {
-    alignItems: "start",
-    backdropFilter: "blur(18px)",
-    boxSizing: "border-box",
-    background:
-      "linear-gradient(180deg, rgba(24, 24, 27, 0.97), rgba(5, 5, 7, 0.95))",
-    border: "1px solid rgba(52, 211, 153, 0.24)",
-    borderRadius: "16px",
-    boxShadow:
-      "inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 55px rgba(0, 0, 0, 0.28)",
-    color: "#f4f4f5",
-    display: "grid",
-    fontFamily: '"DM Sans", Inter, "Segoe UI", ui-sans-serif, system-ui, sans-serif',
-    gap: "12px",
-    gridTemplateColumns: "minmax(0, 1fr) 28px",
-    letterSpacing: "0",
-    maxWidth: "calc(100vw - 32px)",
-    padding: "13px 13px 13px 15px",
-    pointerEvents: "auto",
-    position: "fixed",
-    left: `${pagePromptEdgeInset}px`,
-    top: `${pagePromptEdgeInset}px`,
-    width: pagePromptWidth,
-    zIndex: "2147483647",
-  });
-  document.documentElement.appendChild(badge);
-
-  return badge;
-}
-
 function createBadgeDownloadIcon() {
   const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
 
@@ -937,6 +829,92 @@ function createBadgeDownloadIcon() {
   }
 
   return icon;
+}
+
+function createBadgeIconButton(label: string) {
+  const button = document.createElement("button");
+
+  button.type = "button";
+  button.setAttribute("aria-label", label);
+  styleElement(button, {
+    alignItems: "center",
+    appearance: "none",
+    background: "rgba(16, 185, 129, 0.16)",
+    border: "1px solid rgba(52, 211, 153, 0.28)",
+    borderRadius: "999px",
+    color: "#a7f3d0",
+    cursor: "pointer",
+    display: "inline-flex",
+    height: "28px",
+    justifyContent: "center",
+    margin: "0",
+    padding: "0",
+    width: "28px",
+  });
+
+  return button;
+}
+
+function createResumeDownloadButton(payload: TailoredResumeBadgePayload) {
+  const companyName = cleanText(payload.companyName, 120);
+  const displayName = cleanText(payload.displayName, 160);
+  const downloadName = cleanText(payload.downloadName, 180);
+  const tailoredResumeId = cleanText(payload.tailoredResumeId, 160);
+
+  if (!tailoredResumeId) {
+    return null;
+  }
+
+  const downloadButton = createBadgeIconButton("Download tailored resume");
+
+  downloadButton.append(createBadgeDownloadIcon());
+  downloadButton.title = "Download";
+  downloadButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (downloadButton.disabled) {
+      return;
+    }
+
+    downloadButton.disabled = true;
+    downloadButton.setAttribute("aria-busy", "true");
+    downloadButton.style.cursor = "wait";
+    downloadButton.style.opacity = "0.72";
+
+    chrome.runtime.sendMessage(
+      {
+        payload: {
+          companyName,
+          displayName,
+          downloadName,
+          tailoredResumeId,
+        },
+        type: "JOB_HELPER_DOWNLOAD_TAILORED_RESUME",
+      },
+      (response: unknown) => {
+        const runtimeError = chrome.runtime.lastError;
+
+        if (runtimeError) {
+          console.warn("Could not download the tailored resume.", runtimeError);
+        } else if (
+          typeof response === "object" &&
+          response !== null &&
+          "ok" in response &&
+          response.ok === false
+        ) {
+          console.warn("Could not download the tailored resume.", response);
+        }
+
+        downloadButton.disabled = false;
+        downloadButton.removeAttribute("aria-busy");
+        downloadButton.style.cursor = "pointer";
+        downloadButton.style.opacity = "1";
+      },
+    );
+  });
+
+  return downloadButton;
 }
 
 function normalizeEmphasizedTechnologies(
@@ -1531,9 +1509,13 @@ function showEmphasizedTechnologyBadge(
   const content = document.createElement("div");
   const eyebrow = document.createElement("div");
   const groups = document.createElement("div");
+  const downloadButton = createResumeDownloadButton(payload);
   const closeButton = createPromptCloseButton("Dismiss job keyword terms");
 
   badge.dataset.jobHelperBadgeKey = technologyBadgeKey;
+  badge.style.gridTemplateColumns = downloadButton
+    ? "minmax(0, 1fr) 28px 28px"
+    : "minmax(0, 1fr) 28px";
   styleElement(content, {
     display: "grid",
     gap: "5px",
@@ -1568,7 +1550,12 @@ function showEmphasizedTechnologyBadge(
     appendTechnologyGroup(groups, "Low priority", lowPriorityTechnologies);
   }
   content.append(eyebrow);
-  badge.replaceChildren(content, closeButton, groups);
+  badge.replaceChildren(
+    content,
+    ...(downloadButton ? [downloadButton] : []),
+    closeButton,
+    groups,
+  );
   attachPagePromptDragHandle(badge, content);
   window.requestAnimationFrame(reflowPagePromptStack);
 }
@@ -1589,118 +1576,7 @@ function showTailoredResumeBadge(payload: TailoredResumeBadgePayload) {
     return;
   }
 
-  const displayName = cleanText(payload.displayName, 160);
   showEmphasizedTechnologyBadge(payload, badgeKey);
-
-  if (dismissedResumeBadgeKeys.has(badgeKey)) {
-    return;
-  }
-
-  const downloadName = cleanText(payload.downloadName, 180);
-  const tailoredResumeId = cleanText(payload.tailoredResumeId, 160);
-  const badge = ensureTailoredResumeBadgeRoot();
-  const content = document.createElement("div");
-  const eyebrow = document.createElement("div");
-  const downloadButton = document.createElement("button");
-  const closeButton = createPromptCloseButton("Dismiss resume download prompt");
-
-  badge.dataset.jobHelperBadgeKey = badgeKey;
-  badge.style.gridTemplateColumns = tailoredResumeId
-    ? "minmax(0, 1fr) 28px 28px"
-    : "minmax(0, 1fr) 28px";
-  styleElement(content, {
-    display: "grid",
-    gap: "5px",
-    minWidth: "0",
-  });
-  styleElement(eyebrow, {
-    color: "#6ee7b7",
-    fontSize: "10px",
-    fontWeight: "800",
-    letterSpacing: "0.22em",
-    lineHeight: "1.2",
-    textTransform: "uppercase",
-  });
-  styleElement(downloadButton, {
-    alignItems: "center",
-    appearance: "none",
-    background: "rgba(16, 185, 129, 0.16)",
-    border: "1px solid rgba(52, 211, 153, 0.28)",
-    borderRadius: "999px",
-    color: "#a7f3d0",
-    cursor: "pointer",
-    display: "inline-flex",
-    height: "28px",
-    justifyContent: "center",
-    margin: "0",
-    padding: "0",
-    width: "28px",
-  });
-  eyebrow.textContent = "Saved resume match";
-  downloadButton.type = "button";
-  downloadButton.append(createBadgeDownloadIcon());
-  downloadButton.title = "Download";
-  downloadButton.setAttribute("aria-label", "Download");
-  downloadButton.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-
-    if (!tailoredResumeId || downloadButton.disabled) {
-      return;
-    }
-
-    downloadButton.disabled = true;
-    downloadButton.setAttribute("aria-busy", "true");
-    downloadButton.style.cursor = "wait";
-    downloadButton.style.opacity = "0.72";
-
-    chrome.runtime.sendMessage(
-      {
-        payload: {
-          downloadName,
-          tailoredResumeId,
-        },
-        type: "JOB_HELPER_DOWNLOAD_TAILORED_RESUME",
-      },
-      (response: unknown) => {
-        const runtimeError = chrome.runtime.lastError;
-
-        if (runtimeError) {
-          console.warn("Could not download the tailored resume.", runtimeError);
-        } else if (
-          typeof response === "object" &&
-          response !== null &&
-          "ok" in response &&
-          response.ok === false
-        ) {
-          console.warn("Could not download the tailored resume.", response);
-        }
-
-        downloadButton.disabled = false;
-        downloadButton.removeAttribute("aria-busy");
-        downloadButton.style.cursor = "pointer";
-        downloadButton.style.opacity = "1";
-      },
-    );
-  });
-  closeButton.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    rememberDismissedResumeBadgeKey(badgeKey);
-    hideTailoredResumeBadge();
-  });
-
-  if (displayName || downloadName) {
-    content.title = displayName || downloadName;
-  }
-  content.append(eyebrow);
-  badge.replaceChildren(
-    content,
-    ...(tailoredResumeId ? [downloadButton] : []),
-    closeButton,
-  );
-  attachPagePromptDragHandle(badge, content);
-  window.requestAnimationFrame(reflowPagePromptStack);
 }
 
 function isEditableTarget(target: EventTarget | null) {

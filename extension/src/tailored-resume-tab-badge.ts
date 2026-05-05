@@ -8,7 +8,7 @@ import {
   resolveCompletedTailoringForPage,
   type TailorOverwritePageIdentity,
 } from "./tailor-overwrite-guard.ts";
-import { buildCompanyResumeDownloadName } from "./tailored-resume-download-name.ts";
+import { buildCompanyResumeDownloadName } from "../../lib/tailored-resume-download-filename.ts";
 
 export type TailoredResumeTabBadgeSummary = {
   badgeKey: string;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCompanyResumeDownloadName } from "../extension/src/tailored-resume-download-name.ts";
+import { buildCompanyResumeDownloadName } from "../lib/tailored-resume-download-filename.ts";
 import { resolveTailoredResumeTabBadge } from "../extension/src/tailored-resume-tab-badge.ts";
 import type {
   TailorResumeExistingTailoringState,
@@ -119,6 +119,13 @@ test("builds company resume download names from company or display name", () => 
       displayName: "Acme/AI - Senior Product Engineer",
     }),
     "Acme-AI Resume.pdf",
+  );
+  assert.equal(
+    buildCompanyResumeDownloadName({
+      companyName: null,
+      displayName: "Palantir Resume.pdf",
+    }),
+    "Palantir Resume.pdf",
   );
 });
 
