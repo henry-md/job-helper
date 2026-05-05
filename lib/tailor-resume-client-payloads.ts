@@ -6,7 +6,7 @@ import type {
   TailorResumeProfile,
   TailorResumeSavedLinkUpdate,
 } from "./tailor-resume-types.ts";
-import type { TailorResumeUserMarkdownState } from "./tailor-resume-user-memory.ts";
+import type { TailorResumeUserMemoryState } from "./tailor-resume-user-memory.ts";
 
 export type TailorResumeExtractionAttempt = {
   attempt: number;
@@ -36,5 +36,5 @@ export type TailorResumeRunResponsePayload = {
   tailoredResumeDurationMs?: number;
   tailoredResumeError?: string | null;
   tailoredResumeId?: string;
-  userMarkdown?: TailorResumeUserMarkdownState;
+  userMemory?: TailorResumeUserMemoryState;
 };

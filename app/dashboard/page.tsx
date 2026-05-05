@@ -11,7 +11,7 @@ import {
 import { getPrismaClient } from "@/lib/prisma";
 import { buildActiveTailoringStates } from "@/lib/tailor-resume-existing-tailoring-state";
 import { readTailorResumeResponseState } from "@/lib/tailor-resume-route-response-state";
-import { readTailorResumeUserMarkdown } from "@/lib/tailor-resume-user-memory";
+import { readTailorResumeUserMemory } from "@/lib/tailor-resume-user-memory";
 import { readTailorResumeWorkspaceInterviews } from "@/lib/tailor-resume-workspace-interviews";
 import { readUserSyncStateSnapshotForUser } from "@/lib/user-sync-state";
 import {
@@ -98,12 +98,16 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       };
     }
   })();
-  const tailorResumeUserMarkdown = await (async () => {
+  const tailorResumeUserMemory = await (async () => {
     try {
-      return await readTailorResumeUserMarkdown(session.user.id);
+      return await readTailorResumeUserMemory(session.user.id);
     } catch {
       return {
-        markdown: "# USER.md\n\n",
+        nonTechnologyNames: [],
+        userMarkdown: {
+          markdown: "# USER.md\n\n",
+          updatedAt: null,
+        },
         updatedAt: null,
       };
     }
@@ -144,7 +148,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             tailorResumeDebugUiEnabled={isTruthyEnvValue(process.env.DEBUG_UI)}
             tailorResumeOpenAIReady={openAIReady}
             tailorResumeProfile={tailorResumeState.profile}
-            tailorResumeUserMarkdown={tailorResumeUserMarkdown}
+            tailorResumeUserMemory={tailorResumeUserMemory}
             initialReviewingTailoredResumeId={
               initialDashboardRouteState.tailoredResumeId
             }

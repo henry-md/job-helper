@@ -11,7 +11,9 @@ import StatusToast from "@/components/status-toast";
 import TailorResumeActiveRuns from "@/components/tailor-resume-active-runs";
 import TailoredResumeReviewModal from "@/components/tailored-resume-review-modal";
 import TailorResumeWorkspace from "@/components/tailor-resume-workspace";
-import UserMarkdownCard from "@/components/user-markdown-card";
+import UserMarkdownCard, {
+  NonTechnologyNamesCard,
+} from "@/components/user-markdown-card";
 import {
   buildDashboardHref,
   parseDashboardRouteStateFromSearchParams,
@@ -45,7 +47,7 @@ import type {
   TailorResumeProfile,
   TailoredResumeRecord,
 } from "@/lib/tailor-resume-types";
-import type { TailorResumeUserMarkdownState } from "@/lib/tailor-resume-user-memory";
+import type { TailorResumeUserMemoryState } from "@/lib/tailor-resume-user-memory";
 
 type DashboardDeleteImpact = {
   applicationCount: number;
@@ -431,7 +433,7 @@ export default function DashboardWorkspace({
   tailorResumeOpenAIReady,
   initialActiveTailorings,
   tailorResumeProfile,
-  tailorResumeUserMarkdown,
+  tailorResumeUserMemory,
   userImage,
   userName,
 }: {
@@ -448,7 +450,7 @@ export default function DashboardWorkspace({
   tailorResumeOpenAIReady: boolean;
   initialActiveTailorings: TailorResumeExistingTailoringState[];
   tailorResumeProfile: TailorResumeProfile;
-  tailorResumeUserMarkdown: TailorResumeUserMarkdownState;
+  tailorResumeUserMemory: TailorResumeUserMemoryState;
   userImage: string | null | undefined;
   userName: string | null | undefined;
 }) {
@@ -465,8 +467,8 @@ export default function DashboardWorkspace({
   );
   const [tailorResumeProfileState, setTailorResumeProfileState] =
     useState<TailorResumeProfile>(() => tailorResumeProfile);
-  const [tailorResumeUserMarkdownState, setTailorResumeUserMarkdownState] =
-    useState<TailorResumeUserMarkdownState>(() => tailorResumeUserMarkdown);
+  const [tailorResumeUserMemoryState, setTailorResumeUserMemoryState] =
+    useState<TailorResumeUserMemoryState>(() => tailorResumeUserMemory);
   const [activeTailorings, setActiveTailorings] =
     useState<TailorResumeExistingTailoringState[]>(() => initialActiveTailorings);
   const [pendingDashboardDelete, setPendingDashboardDelete] =
@@ -554,8 +556,8 @@ export default function DashboardWorkspace({
   }, [tailorResumeProfile]);
 
   useEffect(() => {
-    setTailorResumeUserMarkdownState(tailorResumeUserMarkdown);
-  }, [tailorResumeUserMarkdown]);
+    setTailorResumeUserMemoryState(tailorResumeUserMemory);
+  }, [tailorResumeUserMemory]);
 
   useEffect(() => {
     setActiveTailorings(initialActiveTailorings);
@@ -962,14 +964,19 @@ export default function DashboardWorkspace({
   const configWorkspacePane = (
     <div className="flex flex-col gap-[clamp(0.75rem,1.2vh,1rem)]">
       <UserMarkdownCard
-        initialUserMarkdown={tailorResumeUserMarkdownState}
-        onUserMarkdownChange={setTailorResumeUserMarkdownState}
+        initialUserMemory={tailorResumeUserMemoryState}
+        onUserMemoryChange={setTailorResumeUserMemoryState}
+      />
+      <NonTechnologyNamesCard
+        initialUserMemory={tailorResumeUserMemoryState}
+        onUserMemoryChange={setTailorResumeUserMemoryState}
       />
       <TailorResumeWorkspace
         debugUiEnabled={tailorResumeDebugUiEnabled}
         openAIReady={tailorResumeOpenAIReady}
         initialProfile={tailorResumeProfileState}
         onTailoredResumesChange={setTailoredResumes}
+        onUserMemoryChange={setTailorResumeUserMemoryState}
         sourceOnly
       />
     </div>

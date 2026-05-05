@@ -60,7 +60,7 @@ import type {
   TailorResumeSavedLinkUpdate,
   TailorResumeTechnologyContext,
 } from "@/lib/tailor-resume-types";
-import type { TailorResumeUserMarkdownState } from "@/lib/tailor-resume-user-memory";
+import type { TailorResumeUserMemoryState } from "@/lib/tailor-resume-user-memory";
 
 type TailorResumeWorkspaceProps = {
   debugUiEnabled: boolean;
@@ -71,7 +71,7 @@ type TailorResumeWorkspaceProps = {
   onTailoredResumesChange?: (
     tailoredResumes: TailorResumeProfile["tailoredResumes"],
   ) => void;
-  onUserMarkdownChange?: (userMarkdown: TailorResumeUserMarkdownState) => void;
+  onUserMemoryChange?: (userMemory: TailorResumeUserMemoryState) => void;
   openAIReady: boolean;
   sourceOnly?: boolean;
   sourceResumeEditRequestKey?: number;
@@ -708,19 +708,24 @@ function TailorResumeTechnologyContexts({
                 {context.name}
               </span>
               <span className="text-[10px] font-semibold text-slate-400">
-                {context.examples.length}{" "}
-                {context.examples.length === 1 ? "example" : "examples"}
+                {context.examples.length > 0
+                  ? `${context.examples.length} ${
+                      context.examples.length === 1 ? "example" : "examples"
+                    }`
+                  : "Scraped"}
               </span>
             </summary>
             <div className="grid gap-1.5 border-t border-slate-600/80 px-2.5 pb-2 pt-1.5 text-xs leading-5 text-slate-200">
               <p>{context.definition}</p>
-              <ul className="grid list-disc gap-1 pl-4">
-                {context.examples.map((example, exampleIndex) => (
-                  <li key={`${context.name}:${String(exampleIndex)}`}>
-                    {example}
-                  </li>
-                ))}
-              </ul>
+              {context.examples.length > 0 ? (
+                <ul className="grid list-disc gap-1 pl-4">
+                  {context.examples.map((example, exampleIndex) => (
+                    <li key={`${context.name}:${String(exampleIndex)}`}>
+                      {example}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
           </details>
         );
@@ -744,7 +749,7 @@ export default function TailorResumeWorkspace({
   onReviewTailoredResume,
   onSourceResumeEditRequestHandled,
   onTailoredResumesChange,
-  onUserMarkdownChange,
+  onUserMemoryChange,
   openAIReady,
   sourceOnly = false,
   sourceResumeEditRequestKey = 0,
@@ -1364,6 +1369,10 @@ export default function TailorResumeWorkspace({
 
         if (event.kind === "text-delta") {
           return { ...base, text: base.text + event.delta };
+        }
+
+        if (event.kind === "text-start") {
+          return base;
         }
 
         return { ...base, cards: [...base.cards, event.card] };
@@ -2271,8 +2280,8 @@ export default function TailorResumeWorkspace({
         tailoringDurationMs,
       );
 
-      if (payload.userMarkdown) {
-        onUserMarkdownChange?.(payload.userMarkdown);
+      if (payload.userMemory) {
+        onUserMemoryChange?.(payload.userMemory);
       }
 
       if (!streamedResult.ok || !payload.profile) {
@@ -2427,8 +2436,8 @@ export default function TailorResumeWorkspace({
       };
       const payload = streamedResult.payload;
 
-      if (payload.userMarkdown) {
-        onUserMarkdownChange?.(payload.userMarkdown);
+      if (payload.userMemory) {
+        onUserMemoryChange?.(payload.userMemory);
       }
 
       if (!streamedResult.ok || !payload.profile) {
@@ -2574,8 +2583,8 @@ export default function TailorResumeWorkspace({
           };
       const payload = streamedResult.payload;
 
-      if (payload.userMarkdown) {
-        onUserMarkdownChange?.(payload.userMarkdown);
+      if (payload.userMemory) {
+        onUserMemoryChange?.(payload.userMemory);
       }
 
       if (!streamedResult.ok || !payload.profile) {

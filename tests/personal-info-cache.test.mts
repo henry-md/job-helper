@@ -44,8 +44,18 @@ function buildPersonalInfo() {
     ],
     tailoringInterview: null,
     tailoringInterviews: [],
+    userMemory: {
+      nonTechnologyNames: [],
+      updatedAt: null,
+      userMarkdown: {
+        markdown: "# USER.md\n\n",
+        nonTechnologies: [],
+        updatedAt: null,
+      },
+    },
     userMarkdown: {
       markdown: "# USER.md\n\n",
+      nonTechnologies: [],
       updatedAt: null,
     },
   } as const;
