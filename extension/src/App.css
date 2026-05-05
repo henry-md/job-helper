@@ -2122,6 +2122,8 @@ button:disabled {
   right: 0;
   z-index: 3;
   min-width: 160px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
   padding: 8px;
   border: 1px solid var(--border-strong);
   border-radius: 16px;

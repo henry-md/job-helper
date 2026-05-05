@@ -249,6 +249,9 @@ const TAILOR_RESUME_SHORTCUT_ARIA_LABEL = "Command Shift S";
 const STALE_TAILORING_RUN_MAX_AGE_MS = 1000 * 60 * 2;
 const SYNC_STATE_POLL_INTERVAL_MS = 500;
 const TAILOR_RUN_DETAIL_WIDE_LAYOUT_QUERY = "(min-width: 650px)";
+const FLOATING_MENU_VIEWPORT_PADDING = 12;
+const TAILORED_RESUME_MENU_FALLBACK_WIDTH = 176;
+const TAILORED_RESUME_MENU_FALLBACK_HEIGHT = 260;
 const EMPTY_TAILORED_PREVIEW_HIGHLIGHT_QUERIES: TailoredResumeInteractivePreviewQuery[] =
   [];
 
@@ -3819,17 +3822,42 @@ function App() {
     }
 
     const anchorRect = menuShell.getBoundingClientRect();
-    const menuWidth = 176;
-    const viewportPadding = 12;
-    const nextLeft = Math.min(
-      Math.max(viewportPadding, anchorRect.right - menuWidth),
-      window.innerWidth - menuWidth - viewportPadding,
+    const popoverRect =
+      tailoredResumeMenuPopoverRef.current?.getBoundingClientRect();
+    const menuWidth =
+      popoverRect?.width ?? TAILORED_RESUME_MENU_FALLBACK_WIDTH;
+    const menuHeight =
+      popoverRect?.height ?? TAILORED_RESUME_MENU_FALLBACK_HEIGHT;
+    const maxLeft = Math.max(
+      FLOATING_MENU_VIEWPORT_PADDING,
+      window.innerWidth - menuWidth - FLOATING_MENU_VIEWPORT_PADDING,
     );
-    const nextTop = Math.max(viewportPadding, anchorRect.bottom + 8);
+    const maxTop = Math.max(
+      FLOATING_MENU_VIEWPORT_PADDING,
+      window.innerHeight - menuHeight - FLOATING_MENU_VIEWPORT_PADDING,
+    );
+    const nextLeft = Math.min(
+      Math.max(FLOATING_MENU_VIEWPORT_PADDING, anchorRect.right - menuWidth),
+      maxLeft,
+    );
+    const nextTop = Math.min(
+      Math.max(FLOATING_MENU_VIEWPORT_PADDING, anchorRect.bottom + 8),
+      maxTop,
+    );
 
-    setTailoredResumeMenuPosition({
-      left: nextLeft,
-      top: nextTop,
+    setTailoredResumeMenuPosition((currentPosition) => {
+      if (
+        currentPosition &&
+        Math.abs(currentPosition.left - nextLeft) < 0.5 &&
+        Math.abs(currentPosition.top - nextTop) < 0.5
+      ) {
+        return currentPosition;
+      }
+
+      return {
+        left: nextLeft,
+        top: nextTop,
+      };
     });
   }, []);
 
@@ -5289,6 +5317,24 @@ function App() {
   }, [
     tailoredResumeMenuActionState,
     tailoredResumeMenuId,
+    updateTailoredResumeMenuPosition,
+  ]);
+
+  useEffect(() => {
+    if (!tailoredResumeMenuId || !tailoredResumeMenuPosition) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      updateTailoredResumeMenuPosition();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [
+    tailoredResumeMenuId,
+    tailoredResumeMenuPosition,
     updateTailoredResumeMenuPosition,
   ]);
 
