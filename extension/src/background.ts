@@ -1223,12 +1223,14 @@ async function persistExistingTailoringPrompt(
 
 async function clearTailorStateForKey(pageKey: string | null) {
   if (pageKey) {
+    activeTailorRunKeywordBadgesByPageKey.delete(pageKey);
     await Promise.all([
       setStorageRegistryEntry(TAILORING_RUNS_STORAGE_KEY, pageKey, null),
       setStorageRegistryEntry(TAILORING_PREPARATIONS_STORAGE_KEY, pageKey, null),
       setStorageRegistryEntry(TAILORING_PROMPTS_STORAGE_KEY, pageKey, null),
     ]);
   } else {
+    activeTailorRunKeywordBadgesByPageKey.clear();
     await chrome.storage.local.remove([
       TAILORING_RUNS_STORAGE_KEY,
       TAILORING_PREPARATIONS_STORAGE_KEY,
@@ -1346,6 +1348,9 @@ async function cancelCurrentTailoring(input: {
     }
   } finally {
     await clearTailorStateForKey(pageKey);
+    await hideTailoredResumeBadgesForMatchingTabs({
+      targetUrls: [input.jobUrl, pageKey],
+    });
   }
 
   const activeTab = await getActiveTab().catch(() => null);
@@ -1368,6 +1373,16 @@ function readPayloadString(payload: unknown, key: string) {
 
   const value = payload[key];
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readPayloadStringArray(payload: unknown, key: string) {
+  if (!isRecord(payload) || !Array.isArray(payload[key])) {
+    return [] as string[];
+  }
+
+  return payload[key]
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter((value) => value.length > 0);
 }
 
 function readPayloadBoolean(payload: unknown, key: string) {
@@ -1488,6 +1503,8 @@ async function blobToDataUrl(blob: Blob) {
 }
 
 async function downloadTailoredResumePdf(input: {
+  companyName: string;
+  displayName: string;
   downloadName: string;
   tailoredResumeId: string;
 }) {
@@ -1502,7 +1519,10 @@ async function downloadTailoredResumePdf(input: {
   }
 
   const filename = normalizeTailoredResumeDownloadName(
-    input.downloadName || buildCompanyResumeDownloadName(null),
+    buildCompanyResumeDownloadName({
+      companyName: input.companyName,
+      displayName: input.displayName || input.downloadName,
+    }),
   );
   const session = await ensureJobHelperSession({ interactive: false });
   const response = await fetch(
@@ -2097,15 +2117,6 @@ async function readStoredPersonalInfoCache(userId: string) {
   return cacheEntry;
 }
 
-function hasQueuedTailorResumeChat(personalInfo: PersonalInfoSummary) {
-  return personalInfo.activeTailorings.some(
-    (activeTailoring) =>
-      activeTailoring.kind === "active_generation" &&
-      activeTailoring.lastStep?.stepNumber === 2 &&
-      activeTailoring.lastStep.summary.trim().toLowerCase() === "chat queued",
-  );
-}
-
 function hasVolatileTailorResumeState(personalInfo: PersonalInfoSummary) {
   return (
     personalInfo.tailoringInterviews.length > 0 ||
@@ -2123,132 +2134,6 @@ function readPersonalInfoCacheAgeMs(cachedAt: string) {
   return Number.isFinite(cachedAtTime)
     ? Date.now() - cachedAtTime
     : Number.POSITIVE_INFINITY;
-}
-
-async function scheduleTailorInterviewMonitor() {
-  try {
-    await chrome.alarms.create(TAILOR_INTERVIEW_MONITOR_ALARM_NAME, {
-      delayInMinutes: TAILOR_INTERVIEW_MONITOR_PERIOD_MINUTES,
-      periodInMinutes: TAILOR_INTERVIEW_MONITOR_PERIOD_MINUTES,
-    });
-  } catch (error) {
-    console.warn("Could not schedule the Tailor Resume chat monitor.", error);
-  }
-}
-
-async function clearTailorInterviewMonitor() {
-  try {
-    await chrome.alarms.clear(TAILOR_INTERVIEW_MONITOR_ALARM_NAME);
-  } catch {
-    // The alarm may not exist yet.
-  }
-}
-
-async function maybeOpenSidePanelForReadyTailorInterview(
-  personalInfo: PersonalInfoSummary,
-) {
-  const interviewId = personalInfo.tailoringInterview?.id?.trim();
-
-  if (!interviewId) {
-    return;
-  }
-
-  const result = await chrome.storage.local.get(TAILOR_INTERVIEW_ALERT_STORAGE_KEY);
-  const previousAlert = result[TAILOR_INTERVIEW_ALERT_STORAGE_KEY];
-  const previousInterviewId = isRecord(previousAlert)
-    ? typeof previousAlert.interviewId === "string"
-      ? previousAlert.interviewId
-      : ""
-    : typeof previousAlert === "string"
-      ? previousAlert
-      : "";
-
-  if (previousInterviewId === interviewId) {
-    return;
-  }
-
-  const activeTab = await getActiveTab().catch(() => null);
-
-  if (!activeTab) {
-    return;
-  }
-
-  await openSidePanelForTab(activeTab);
-  await chrome.storage.local.set({
-    [TAILOR_INTERVIEW_ALERT_STORAGE_KEY]: {
-      interviewId,
-      surfacedAt: new Date().toISOString(),
-    },
-  });
-}
-
-async function drainQueuedTailorResumeChat() {
-  if (queuedTailorResumeDrainPromise) {
-    return queuedTailorResumeDrainPromise;
-  }
-
-  queuedTailorResumeDrainPromise = (async () => {
-    const authSession = await ensureJobHelperSession({ interactive: false });
-    const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
-      method: "PATCH",
-      body: JSON.stringify({
-        action: "drainTailorResumeQuestionQueue",
-      }),
-      credentials: "include",
-      headers: {
-        ...authorizationHeaders(authSession),
-        "Content-Type": "application/json",
-      },
-    });
-    const payload = await readJsonResponse(response);
-
-    if (response.status === 401) {
-      await clearStoredAuthSession();
-    }
-
-    if (!response.ok) {
-      throw new Error(
-        readResponseError(payload, "Unable to advance the queued resume chat."),
-      );
-    }
-
-    const activeRefresh = personalInfoCacheRefreshPromise;
-
-    if (activeRefresh) {
-      await activeRefresh.catch(() => undefined);
-    }
-
-    await refreshPersonalInfoCache(authSession);
-  })().finally(() => {
-    queuedTailorResumeDrainPromise = null;
-  });
-
-  return queuedTailorResumeDrainPromise;
-}
-
-async function reconcileTailorInterviewMonitor(personalInfo: PersonalInfoSummary) {
-  await maybeOpenSidePanelForReadyTailorInterview(personalInfo);
-
-  if (hasQueuedTailorResumeChat(personalInfo)) {
-    await scheduleTailorInterviewMonitor();
-    if (!personalInfo.tailoringInterview) {
-      void drainQueuedTailorResumeChat().catch((error) => {
-        console.warn("Could not advance the queued Tailor Resume chat.", error);
-      });
-    }
-    return;
-  }
-
-  await clearTailorInterviewMonitor();
-}
-
-async function refreshQueuedTailorInterviewMonitor() {
-  try {
-    const { personalInfo } = await getPersonalInfoSummary();
-    await reconcileTailorInterviewMonitor(personalInfo);
-  } catch (error) {
-    console.warn("Could not refresh queued Tailor Resume chat state.", error);
-  }
 }
 
 async function fetchWithTimeout(
@@ -2311,7 +2196,6 @@ async function fetchFreshPersonalInfoSummary(session: JobHelperAuthSession) {
     personalInfo,
     userId: session.user.id,
   });
-  await reconcileTailorInterviewMonitor(personalInfo);
   await showActiveTailoringKeywordBadgeForCurrentTab(personalInfo).catch(
     (error) => {
       if (!shouldIgnoreTailoredResumeBadgeCheckError(error)) {
@@ -2597,6 +2481,12 @@ async function tailorResumeForTab(input: {
             step: stepEvent,
             timings: latestStepTimings,
           });
+          rememberActiveTailorRunKeywordBadge({
+            capturedAt,
+            pageContext,
+            pageKey,
+            stepEvent,
+          });
           requestSharedPersonalInfoRefresh();
           void persistResult(
             pageKey,
@@ -2636,6 +2526,7 @@ async function tailorResumeForTab(input: {
       tab: readyTab,
     });
 
+    activeTailorRunKeywordBadgesByPageKey.delete(pageKey);
     await persistResult(pageKey, record);
     refreshSharedPersonalInfoCache(authSession, "the tailoring run failed");
     await showOverlay(tabId, message, "error");
@@ -2672,6 +2563,7 @@ async function tailorResumeForTab(input: {
         tailoredResumeId: null,
       };
 
+      activeTailorRunKeywordBadgesByPageKey.delete(pageKey);
       await persistResult(pageKey, record);
       await persistExistingTailoringPrompt(pageKey, {
         existingTailoring,
@@ -2701,6 +2593,7 @@ async function tailorResumeForTab(input: {
       tab: readyTab,
     });
 
+    activeTailorRunKeywordBadgesByPageKey.delete(pageKey);
     await persistResult(pageKey, record);
     refreshSharedPersonalInfoCache(authSession, "the tailoring run failed");
     await showOverlay(tabId, message, "error");
@@ -2709,11 +2602,68 @@ async function tailorResumeForTab(input: {
   }
 
   if (typeof payload.profile !== "object" || payload.profile === null) {
+    activeTailorRunKeywordBadgesByPageKey.delete(pageKey);
     throw new Error("Tailor Resume did not return a saved result.");
   }
 
   const profileSummary = readTailorResumeProfileSummary(payload.profile);
   const activeInterview = profileSummary?.tailoringInterview ?? null;
+  const activeQuestionStart = resolveActiveTailoringForPage({
+    activeTailorings: readTailorResumeExistingTailoringStates(payload),
+    pageIdentity: {
+      canonicalUrl: pageContext.canonicalUrl,
+      jobUrl,
+      pageUrl: pageContext.url,
+    },
+  });
+
+  if (payload.tailoringStatus === "question_start_pending") {
+    const isPendingInterview =
+      activeQuestionStart?.kind === "pending_interview";
+    const record: TailorResumeRunRecord = {
+      applicationId:
+        activeQuestionStart?.applicationId ?? overwriteTargetApplicationId ?? null,
+      capturedAt,
+      companyName: isPendingInterview ? activeQuestionStart.companyName : null,
+      endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
+      generationStep:
+        latestStepEvent ?? {
+	          attempt: null,
+	          detail:
+	            "Start the Step 2 chat when you are ready so the latest USER.md edits are used.",
+          durationMs: 0,
+          retrying: false,
+          status: "running",
+          stepCount: 5,
+          stepNumber: 2,
+	          summary: "Ready to review scraped technologies",
+	        },
+      generationStepTimings: latestStepTimings,
+      jobIdentifier:
+        activeQuestionStart?.jobIdentifier ?? null,
+	      message: "Start the Step 2 chat in the side panel.",
+      pageTitle: pageContext.title || null,
+      pageUrl: pageContext.url || null,
+      positionTitle: isPendingInterview ? activeQuestionStart.positionTitle : null,
+      status: "needs_input",
+      suppressedTailoredResumeId: overwriteTargetTailoredResumeId?.trim() || null,
+      tailoredResumeError: null,
+      tailoredResumeId: null,
+    };
+
+    await persistResult(pageKey, record);
+    try {
+      await refreshPersonalInfoCache(authSession);
+    } catch (error) {
+      console.warn(
+        "Could not refresh the shared personal info cache before opening the Step 2 chat-start card.",
+        error,
+      );
+    }
+    await showOverlay(tabId, record.message, "info");
+    await openSidePanelForTab(activeTab);
+    return;
+  }
 
   if (payload.tailoringStatus === "needs_user_input" || activeInterview) {
     const record: TailorResumeRunRecord = {
@@ -2741,42 +2691,6 @@ async function tailorResumeForTab(input: {
     );
     await showOverlay(tabId, record.message, "info");
     await openSidePanelForTab(activeTab);
-    return;
-  }
-
-  if (payload.tailoringStatus === "chat_queued") {
-    const record: TailorResumeRunRecord = {
-      applicationId: overwriteTargetApplicationId ?? null,
-      capturedAt,
-      companyName: null,
-      endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
-      generationStep:
-        latestStepEvent ?? {
-          attempt: null,
-          detail:
-            "Another resume follow-up chat is active, so this run is queued.",
-          durationMs: 0,
-          retrying: false,
-          status: "running",
-          stepCount: 5,
-          stepNumber: 2,
-          summary: "Chat Queued",
-        },
-      generationStepTimings: latestStepTimings,
-      jobIdentifier: null,
-      message: "Chat Queued",
-      pageTitle: pageContext.title || null,
-      pageUrl: pageContext.url || null,
-      positionTitle: null,
-      status: "running",
-      suppressedTailoredResumeId: overwriteTargetTailoredResumeId?.trim() || null,
-      tailoredResumeError: null,
-      tailoredResumeId: null,
-    };
-
-    await persistResult(pageKey, record);
-    refreshSharedPersonalInfoCache(authSession, "the tailoring chat was queued");
-    await showOverlay(tabId, "Chat Queued", "info");
     return;
   }
 
@@ -2810,6 +2724,7 @@ async function tailorResumeForTab(input: {
     ? "Already tailored this job. Showing the saved resume in the side panel."
     : buildSuccessMessage(record);
 
+  activeTailorRunKeywordBadgesByPageKey.delete(pageKey);
   await persistResult(pageKey, record);
   refreshSharedPersonalInfoCache(
     authSession,
@@ -3034,6 +2949,7 @@ async function runCaptureFlow(input: {
     }
 
     throwIfTailorCaptureAborted(abortController.signal);
+    activeTailorRunKeywordBadgesByPageKey.delete(pageKey);
     await persistTailorPreparationState(pageKey, null);
     await persistExistingTailoringPrompt(pageKey, null);
     await persistResult(
@@ -3046,6 +2962,9 @@ async function runCaptureFlow(input: {
         tab: readyTab,
       }),
     );
+    await sendTailoredResumeBadgeMessage(tabId, {
+      type: "JOB_HELPER_HIDE_TAILORED_RESUME_BADGE",
+    });
     refreshSharedPersonalInfoCache(
       authSession,
       "the tailoring run was dispatched",

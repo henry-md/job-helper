@@ -3,9 +3,68 @@ import {
   readUserSyncStateSnapshot,
   type UserSyncStateSnapshot,
 } from "../../lib/sync-state.ts";
-export { normalizeComparableUrl } from "./comparable-job-url.ts";
+export {
+  currentUrlMatchesSavedJobUrl,
+  normalizeComparableUrl,
+} from "./comparable-job-url.ts";
 
 export const defaultUserMarkdown = "# USER.md\n\n";
+export const maxNonTechnologyTermLength = 120;
+export const maxNonTechnologyTermCount = 200;
+
+export function normalizeNonTechnologyTerm(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+export function formatTermWithCapitalFirst(value: string) {
+  const term = value.trim().replace(/\s+/g, " ");
+
+  if (!term) {
+    return "";
+  }
+
+  return `${term.slice(0, 1).toUpperCase()}${term.slice(1)}`;
+}
+
+export function formatNonTechnologyTerm(value: string) {
+  const normalizedTerm = normalizeNonTechnologyTerm(value);
+
+  if (!normalizedTerm) {
+    return "";
+  }
+
+  return formatTermWithCapitalFirst(normalizedTerm);
+}
+
+export function normalizeNonTechnologyTerms(values: readonly string[]) {
+  const seenTerms = new Set<string>();
+  const normalizedTerms: string[] = [];
+
+  for (const value of values) {
+    const normalizedTerm = normalizeNonTechnologyTerm(value);
+
+    if (!normalizedTerm || seenTerms.has(normalizedTerm)) {
+      continue;
+    }
+
+    if (normalizedTerm.length > maxNonTechnologyTermLength) {
+      throw new Error(
+        `Keep non-technology terms under ${maxNonTechnologyTermLength.toLocaleString()} characters each.`,
+      );
+    }
+
+    seenTerms.add(normalizedTerm);
+    normalizedTerms.push(normalizedTerm);
+  }
+
+  if (normalizedTerms.length > maxNonTechnologyTermCount) {
+    throw new Error(
+      `Keep the non-technology list under ${maxNonTechnologyTermCount.toLocaleString()} terms.`,
+    );
+  }
+
+  return normalizedTerms;
+}
 
 export const CAPTURE_COMMAND_NAME = "capture_job_page";
 const fallbackAppBaseUrl = "http://localhost:1285";
@@ -303,12 +362,20 @@ export type PersonalInfoSummary = {
   tailoredResumes: TailoredResumeSummary[];
   tailoringInterview: TailorResumePendingInterviewSummary | null;
   tailoringInterviews: TailorResumePendingInterviewSummary[];
+  userMemory: UserMemorySummary;
   userMarkdown: UserMarkdownSummary;
 };
 
 export type UserMarkdownSummary = {
   markdown: string;
+  nonTechnologies: string[];
   updatedAt: string | null;
+};
+
+export type UserMemorySummary = {
+  nonTechnologyNames: string[];
+  updatedAt: string | null;
+  userMarkdown: UserMarkdownSummary;
 };
 
 export type TailorResumeConversationMessage = {
@@ -326,7 +393,7 @@ export type TailorResumeConversationToolCall = {
 
 export type TailorResumeTechnologyContext = {
   definition: string;
-  examples: [string, string];
+  examples: string[];
   name: string;
 };
 
@@ -392,6 +459,7 @@ export type TailorResumeExistingTailoringState =
       jobUrl: string | null;
       kind: "pending_interview";
       emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+      interviewStatus: "deciding" | "pending" | "ready";
       positionTitle: string | null;
       questionCount: number | null;
       updatedAt: string;
@@ -831,13 +899,13 @@ function readTailorResumeTechnologyContext(
     ? value.examples.map(readString).filter(Boolean)
     : [];
 
-  if (!name || !definition || examples.length !== 2) {
+  if (!name || !definition) {
     return null;
   }
 
   return {
     definition,
-    examples: [examples[0]!, examples[1]!],
+    examples,
     name,
   };
 }
@@ -902,7 +970,7 @@ function readTailorResumeQuestioningSummary(
   };
 }
 
-function readTailoredResumeEmphasizedTechnologies(value: unknown) {
+export function readTailoredResumeEmphasizedTechnologies(value: unknown) {
   if (!Array.isArray(value)) {
     return [] as TailoredResumeEmphasizedTechnology[];
   }
@@ -1199,6 +1267,14 @@ function readExistingTailoringQuestionCount(value: unknown) {
   return asked > 0 ? Math.floor(asked) : null;
 }
 
+function readExistingTailoringInterviewStatus(value: unknown) {
+  const status = readString(value).trim().toLowerCase();
+
+  return status === "deciding" || status === "pending" || status === "ready"
+    ? status
+    : "ready";
+}
+
 export function readTailorResumeExistingTailoringState(
   value: unknown,
 ): TailorResumeExistingTailoringState | null {
@@ -1259,6 +1335,9 @@ export function readTailorResumeExistingTailoringState(
         existingTailoring.emphasizedTechnologies,
       ),
       id,
+      interviewStatus: readExistingTailoringInterviewStatus(
+        existingTailoring.interviewStatus,
+      ),
       jobDescription: readString(existingTailoring.jobDescription),
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
       jobUrl: readNullableString(existingTailoring.jobUrl),
@@ -1507,13 +1586,61 @@ function readUserMarkdownSummary(value: unknown): UserMarkdownSummary {
   if (isRecord(directValue) && typeof directValue.markdown === "string") {
     return {
       markdown: directValue.markdown,
+      nonTechnologies: normalizeNonTechnologyTerms(
+        Array.isArray(directValue.nonTechnologies)
+          ? directValue.nonTechnologies.filter(
+              (term): term is string => typeof term === "string",
+            )
+          : [],
+      ),
       updatedAt: readNullableString(directValue.updatedAt),
     };
   }
 
   return {
     markdown: defaultUserMarkdown,
+    nonTechnologies: [],
     updatedAt: null,
+  };
+}
+
+function readStringList(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+function readUserMemorySummary(value: unknown): UserMemorySummary {
+  const payloadRecord: Record<string, unknown> = isRecord(value) ? value : {};
+  const directValue = isRecord(payloadRecord.userMemory)
+    ? payloadRecord.userMemory
+    : payloadRecord;
+  const userMarkdown = readUserMarkdownSummary(
+    isRecord(directValue) && "userMarkdown" in directValue
+      ? directValue.userMarkdown
+      : payloadRecord.userMarkdown,
+  );
+  const nonTechnologyNames = normalizeNonTechnologyTerms([
+    ...readStringList(
+      isRecord(directValue) ? directValue.nonTechnologyNames : undefined,
+    ),
+    ...readStringList(
+      isRecord(payloadRecord) ? payloadRecord.nonTechnologyNames : undefined,
+    ),
+    ...userMarkdown.nonTechnologies,
+  ]);
+  const updatedAt =
+    readNullableString(isRecord(directValue) ? directValue.updatedAt : null) ??
+    userMarkdown.updatedAt;
+
+  return {
+    nonTechnologyNames,
+    updatedAt,
+    userMarkdown: {
+      ...userMarkdown,
+      nonTechnologies: nonTechnologyNames,
+      updatedAt: userMarkdown.updatedAt ?? updatedAt,
+    },
   };
 }
 
@@ -1527,9 +1654,14 @@ export function readPersonalInfoSummary(input: {
   const tailorResumeProfile = readTailorResumeProfileSummary(
     input.tailorResumePayload,
   );
+  const payloadRecord = isRecord(input.tailorResumePayload)
+    ? input.tailorResumePayload
+    : {};
   const activeTailorings = readTailorResumeExistingTailoringStates(
     input.tailorResumePayload,
   );
+
+  const userMemory = readUserMemorySummary(payloadRecord);
 
   return {
     activeTailoring: activeTailorings[0] ?? null,
@@ -1545,7 +1677,8 @@ export function readPersonalInfoSummary(input: {
     tailoredResumes: tailorResumeProfile?.tailoredResumes ?? [],
     tailoringInterview: tailorResumeProfile?.tailoringInterview ?? null,
     tailoringInterviews: tailorResumeProfile?.tailoringInterviews ?? [],
-    userMarkdown: readUserMarkdownSummary(input.tailorResumePayload),
+    userMarkdown: userMemory.userMarkdown,
+    userMemory,
   };
 }
 
@@ -1573,6 +1706,7 @@ export function readPersonalInfoPayload(value: unknown): PersonalInfoSummary {
       : fallbackTailoringInterview
         ? [fallbackTailoringInterview]
         : [];
+  const userMemory = readUserMemorySummary(payloadRecord);
 
   return {
     activeTailoring: activeTailorings[0] ?? null,
@@ -1598,6 +1732,7 @@ export function readPersonalInfoPayload(value: unknown): PersonalInfoSummary {
         : tailorResumeProfile?.tailoredResumes ?? [],
     tailoringInterview: normalizedTailoringInterviews[0] ?? null,
     tailoringInterviews: normalizedTailoringInterviews,
-    userMarkdown: readUserMarkdownSummary(payloadRecord.userMarkdown),
+    userMarkdown: userMemory.userMarkdown,
+    userMemory,
   };
 }

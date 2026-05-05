@@ -443,6 +443,7 @@ export function installDebugChromeRuntime() {
       userMarkdown: {
         markdown:
           "# USER.md\n\n- C language was also used in the Ray Tracer project, so we can lean on this even though it is primarily a C++ project.\n",
+        nonTechnologies: [],
         updatedAt: new Date("2026-04-21T22:45:00.000Z").toISOString(),
       },
     };
