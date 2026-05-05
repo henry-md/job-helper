@@ -10703,6 +10703,9 @@ function App() {
             const isKeywordBadgeDismissed = keywordBadgeDismissalKey
               ? dismissedKeywordBadgeKeys.has(keywordBadgeDismissalKey)
               : false;
+            const canShowKeywordBadge =
+              tailoredResume.emphasizedTechnologies.length > 0 ||
+              isKeywordBadgeDismissed;
 
             return (
               <div
@@ -10795,7 +10798,7 @@ function App() {
                                   ? "Downloading..."
                                   : "Download"}
                               </button>
-                              {isKeywordBadgeDismissed ? (
+                              {canShowKeywordBadge ? (
                                 <button
                                   className="tailor-run-menu-item"
                                   disabled={isMenuBusy}
@@ -10999,6 +11002,9 @@ function App() {
         personalInfo?.tailoredResumes.find(
           (tailoredResume) => tailoredResume.id === tailoredResumeId,
         ) ?? null;
+      void requestHideTailoredResumeBadgesForUrls([
+        matchingTailoredResume?.jobUrl,
+      ]);
       let nextPersonalInfo: PersonalInfoSummary | null = null;
 
       setPersonalInfoState((currentState) =>
@@ -11393,6 +11399,9 @@ function App() {
   async function patchTailorResume(
     body: Record<string, unknown>,
     options: {
+      onInterviewStreamEvent?: (
+        interviewStreamEvent: TailorResumeInterviewStreamEvent,
+      ) => void;
       onStepEvent?: (stepEvent: TailorResumeGenerationStepSummary) => void;
       signal?: AbortSignal;
     } = {},
@@ -11403,7 +11412,11 @@ function App() {
 
     const action = typeof body.action === "string" ? body.action : "";
     const shouldStream =
-      action === "tailor" || action === "completeTailorResumeInterview";
+      action === "tailor" ||
+      action === "advanceTailorResumeInterview" ||
+      action === "completeTailorResumeInterview" ||
+      action === "startTailorResumeInterview" ||
+      action === "generateTailorResumeInterviewExamples";
     const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
       body: JSON.stringify(body),
       credentials: "include",
@@ -11418,6 +11431,7 @@ function App() {
 
     if (isNdjsonResponse(response)) {
       const streamedResult = await readTailorResumeGenerationStream(response, {
+        onInterviewStreamEvent: options.onInterviewStreamEvent,
         onStepEvent: options.onStepEvent,
       });
 
@@ -11507,66 +11521,28 @@ function App() {
     chatMessages.length > 0 &&
     Boolean(chatPageUrl);
 
+  const focusTailoredPreviewEdit = useCallback(
+    (editId: string) => {
+      setTailoredPreviewFocusEditId(editId);
+      setTailoredPreviewFocusRequest((currentValue) => currentValue + 1);
+
+      if (!isTailorRunDetailWideLayout) {
+        setActiveTailorRunDetailView("preview");
+      }
+    },
+    [isTailorRunDetailWideLayout],
+  );
+
   function renderTailoredPreviewSurface() {
     const isShowingHighlightedPreview =
       shouldShowTailoredPreviewDiffHighlighting;
+    const previewHighlightQueries = isShowingHighlightedPreview
+      ? tailoredPreviewHighlightQueries
+      : EMPTY_TAILORED_PREVIEW_HIGHLIGHT_QUERIES;
 
     return (
       <div className="tailor-run-detail-page-body tailor-run-detail-page-body-preview">
         <div className="tailored-preview-stage">
-          <div className="tailored-preview-toolbar">
-            <div className="tailored-preview-toolbar-copy">
-              <p className="tailored-preview-toolbar-label">Rendered PDF</p>
-              <p className="tailored-preview-toolbar-description">
-                Highlights are painted on the clean PDF render, so the
-                highlighted view keeps the same page count without becoming a
-                grainy static image.
-              </p>
-            </div>
-            {canToggleTailoredPreviewDiffHighlighting ? (
-              <div className="tailored-preview-toolbar-actions">
-                <button
-                  aria-label={
-                    isShowingHighlightedPreview
-                      ? "Hide diff highlighting"
-                      : "Show diff highlighting"
-                  }
-                  aria-pressed={isShowingHighlightedPreview}
-                  className={`tailored-preview-highlight-toggle tailored-preview-highlight-toggle-icon ${
-                    isShowingHighlightedPreview
-                      ? "tailored-preview-highlight-toggle-active"
-                      : ""
-                  }`.trim()}
-                  onClick={() =>
-                    setIsTailoredPreviewDiffHighlightingEnabled(
-                      (currentValue) => !currentValue,
-                    )
-                  }
-                  title={
-                    isShowingHighlightedPreview
-                      ? "Hide diff highlighting"
-                      : "Show diff highlighting"
-                  }
-                  type="button"
-                >
-                  <svg
-                    aria-hidden="true"
-                    fill="none"
-                    height="16"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                    viewBox="0 0 24 24"
-                    width="16"
-                  >
-                    <path d="m9 11-6 6v3h9l3-3" />
-                    <path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4" />
-                  </svg>
-                </button>
-              </div>
-            ) : null}
-          </div>
           {activeTailoredResumeError ? (
             <div className="tailored-preview-error-banner" role="alert">
               <p>
@@ -11577,48 +11553,79 @@ function App() {
             </div>
           ) : null}
           <div className="resume-preview-shell tailored-preview-shell tailor-run-fullscreen-preview">
-            {isShowingHighlightedPreview ? (
-              tailoredResumePreviewState.status === "loading" ? (
-                <p className="placeholder">
-                  Rendering highlighted tailored preview...
-                </p>
-              ) : tailoredResumePreviewState.status === "error" ? (
-                <p className="preview-error">{tailoredResumePreviewState.error}</p>
-              ) : tailoredResumePreviewState.status === "ready" ? (
-                <TailoredResumeOverlayPreview
-                  displayName={activeTailoredResumeReviewRecord?.displayName ?? "Resume"}
-                  highlightQueries={tailoredPreviewHighlightQueries}
-                  pdfUrl={tailoredResumePreviewState.objectUrl}
-                />
-              ) : (
-                <p className="placeholder preview-placeholder">
-                  Highlighted tailored preview will appear here.
-                </p>
-              )
+            {tailoredResumePreviewState.status === "loading" ? (
+              <p className="placeholder">Rendering tailored preview...</p>
+            ) : tailoredResumePreviewState.status === "error" ? (
+              <p className="preview-error">{tailoredResumePreviewState.error}</p>
+            ) : tailoredResumePreviewState.status === "ready" ? (
+              <TailoredResumeOverlayPreview
+                displayName={activeTailoredResumeReviewRecord?.displayName ?? "Resume"}
+                focusKey={tailoredPreviewFocusEditId}
+                focusMatchKey={tailoredPreviewFocusMatchKey}
+                focusQuery={tailoredPreviewFocusQuery}
+                focusRequest={tailoredPreviewFocusRequest}
+                highlightQueries={previewHighlightQueries}
+                pdfUrl={tailoredResumePreviewState.objectUrl}
+              />
             ) : (
-              <>
-                {tailoredResumePreviewState.status === "loading" ? (
-                  <p className="placeholder">Rendering tailored preview...</p>
-                ) : tailoredResumePreviewState.status === "error" ? (
-                  <p className="preview-error">{tailoredResumePreviewState.error}</p>
-                ) : tailoredResumePreviewState.status === "ready" ? (
-                  <iframe
-                    className="resume-preview-frame"
-                    src={buildPdfPreviewFrameUrl(
-                      tailoredResumePreviewState.objectUrl,
-                    )}
-                    title="Tailored resume preview"
-                  />
-                ) : (
-                  <p className="placeholder preview-placeholder">
-                    Tailored preview will appear here.
-                  </p>
-                )}
-              </>
+              <p className="placeholder preview-placeholder">
+                Tailored preview will appear here.
+              </p>
             )}
           </div>
         </div>
       </div>
+    );
+  }
+
+  function renderTailoredPreviewHighlightToggle() {
+    const isShowingHighlightedPreview =
+      shouldShowTailoredPreviewDiffHighlighting;
+
+    if (!canToggleTailoredPreviewDiffHighlighting) {
+      return null;
+    }
+
+    return (
+      <button
+        aria-label={
+          isShowingHighlightedPreview
+            ? "Hide diff highlighting"
+            : "Show diff highlighting"
+        }
+        aria-pressed={isShowingHighlightedPreview}
+        className={`tailored-preview-highlight-toggle tailored-preview-highlight-toggle-icon ${
+          isShowingHighlightedPreview
+            ? "tailored-preview-highlight-toggle-active"
+            : ""
+        }`.trim()}
+        onClick={() =>
+          setIsTailoredPreviewDiffHighlightingEnabled(
+            (currentValue) => !currentValue,
+          )
+        }
+        title={
+          isShowingHighlightedPreview
+            ? "Hide diff highlighting"
+            : "Show diff highlighting"
+        }
+        type="button"
+      >
+        <svg
+          aria-hidden="true"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="2"
+          viewBox="0 0 24 24"
+          width="16"
+        >
+          <path d="m9 11-6 6v3h9l3-3" />
+          <path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4" />
+        </svg>
+      </button>
     );
   }
 
@@ -11640,7 +11647,7 @@ function App() {
           <TailoredResumeQuickReview
             error={tailoredResumeReviewError}
             isUpdating={pendingTailoredResumeReviewEditId !== null}
-            pendingEditId={pendingTailoredResumeReviewEditId}
+            onFocusEdit={focusTailoredPreviewEdit}
             record={activeTailoredResumeReviewRecord}
             variant="fullscreen"
             onSetEditState={(editId, nextState) =>
@@ -11893,6 +11900,94 @@ function App() {
               {keywordCoverageSettingError}
             </p>
           ) : null}
+        </section>
+
+        <section className="snapshot-card settings-card">
+          <div className="settings-section-heading">
+            <p className="settings-section-eyebrow">Scraper Reliability</p>
+          </div>
+          <div className="settings-non-technology-panel">
+            <div className="settings-non-technology-copy">
+              <p className="settings-non-technology-title">Non-technologies</p>
+              <p className="settings-non-technology-description">
+                These terms are ignored when job keywords are scraped.
+              </p>
+            </div>
+            <div className="settings-non-technology-badges">
+              {draftSettingsNonTechnologies.length > 0 ? (
+                draftSettingsNonTechnologies.map((term) => (
+                  <span className="settings-non-technology-badge" key={term}>
+                    <span>{formatNonTechnologyTerm(term)}</span>
+                    <button
+                      aria-label={`Remove ${formatNonTechnologyTerm(term)}`}
+                      className="settings-non-technology-remove"
+                      disabled={isSavingSettingsNonTechnologies}
+                      onClick={() => removeSettingsNonTechnology(term)}
+                      type="button"
+                    >
+                      <CloseIcon />
+                    </button>
+                  </span>
+                ))
+              ) : (
+                <span className="settings-non-technology-empty">No terms</span>
+              )}
+            </div>
+            <div className="settings-non-technology-add">
+              <input
+                disabled={isSavingSettingsNonTechnologies}
+                onChange={(event) =>
+                  setDraftSettingsNonTechnologyInput(event.target.value)
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    addSettingsNonTechnology();
+                  }
+                }}
+                placeholder="Add a term"
+                value={draftSettingsNonTechnologyInput}
+              />
+              <button
+                className="secondary-action compact-action settings-account-action"
+                disabled={
+                  isSavingSettingsNonTechnologies ||
+                  !normalizeNonTechnologyTerm(draftSettingsNonTechnologyInput)
+                }
+                onClick={addSettingsNonTechnology}
+                type="button"
+              >
+                Add
+              </button>
+            </div>
+            {settingsNonTechnologyError ? (
+              <p className="preview-error">{settingsNonTechnologyError}</p>
+            ) : null}
+            <div className="settings-non-technology-actions">
+              <button
+                className="secondary-action compact-action settings-account-action"
+                disabled={
+                  isSavingSettingsNonTechnologies ||
+                  !isSettingsNonTechnologiesChanged
+                }
+                onClick={cancelSettingsNonTechnologyEdits}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-action compact-action settings-account-action"
+                disabled={
+                  isSavingSettingsNonTechnologies ||
+                  !isSettingsNonTechnologiesChanged
+                }
+                onClick={() => void saveSettingsNonTechnologies()}
+                type="button"
+              >
+                {isSavingSettingsNonTechnologies ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
         </section>
 
         <section className="snapshot-card resume-preview-card settings-card">
@@ -12151,15 +12246,45 @@ function App() {
           </header>
 
           <div className="interview-thread tailor-interview-page-thread" aria-live="polite">
-            {displayedTailorInterviewConversation.map((message) => (
+            {displayedTailorInterviewConversation.map((message, index) => (
               <div
                 className={`interview-message interview-message-${message.role}`}
                 key={message.id}
               >
-                <TailorInterviewMessageContent message={message} />
+                <TailorInterviewMessageContent
+                  message={message}
+                  nonTechnologies={
+                    personalInfo?.userMarkdown.nonTechnologies ??
+                    savedSettingsUserMarkdown.nonTechnologies
+                  }
+                  onToggleNonTechnologyTerm={(term) =>
+                    void toggleInterviewNonTechnologyTerm(term)
+                  }
+                  pendingNonTechnologyTerms={pendingInterviewNonTechnologyTerms}
+                />
+                {tailorInterview &&
+                isTailorInterviewScrapedTechnologiesMessage(message, index) &&
+                !hasTailorInterviewGeneratedTechnologyExamples(
+                  displayedTailorInterviewConversation,
+                ) &&
+                !tailorInterview.completionRequestedAt ? (
+                  <button
+                    className="interview-message-generate-examples"
+                    disabled={isTailorInterviewBusy}
+                    type="button"
+                    onClick={() => void generateTailorInterviewExamples()}
+                  >
+                    <GenerateExamplesIcon />
+                    <span>
+                      {isGeneratingTailorInterviewExamples
+                        ? "Generating"
+                        : "Generate"}
+                    </span>
+                  </button>
+                ) : null}
               </div>
             ))}
-            {isTailorInterviewThinking ? (
+            {shouldShowTailorInterviewThinkingIndicator ? (
               <div className="interview-message interview-message-assistant interview-message-thinking">
                 <TailorInterviewThinkingIndicator />
               </div>
@@ -12300,49 +12425,103 @@ function App() {
               {activeTailorRunDetailIdentity}
             </p>
           ) : null}
-          <div className="panel-detail-toggle-group" aria-label="Tailored resume detail">
-            <button
-              aria-pressed={activeTailorRunDetailView === "quickReview"}
-              className={`panel-detail-toggle ${
-                activeTailorRunDetailView === "quickReview"
-                  ? "panel-detail-toggle-active"
-                  : ""
-              }`.trim()}
-              type="button"
-              onClick={() =>
-                openTailorRunDetailView("quickReview", focusedTailoredResumeId)
-              }
-            >
-              Review edits
-            </button>
-            <button
-              aria-pressed={activeTailorRunDetailView === "preview"}
-              className={`panel-detail-toggle ${
-                activeTailorRunDetailView === "preview"
-                  ? "panel-detail-toggle-active"
-                  : ""
-              }`.trim()}
-              type="button"
-              onClick={() =>
-                openTailorRunDetailView("preview", focusedTailoredResumeId)
-              }
-            >
-              Preview
-            </button>
+          <div className="panel-detail-meta-actions">
+            {renderTailoredPreviewHighlightToggle()}
           </div>
+          {!isTailorRunDetailWideLayout ? (
+            <div
+              className="panel-detail-toggle-group"
+              aria-label="Tailored resume detail"
+            >
+              <button
+                aria-pressed={activeTailorRunDetailView === "quickReview"}
+                className={`panel-detail-toggle ${
+                  activeTailorRunDetailView === "quickReview"
+                    ? "panel-detail-toggle-active"
+                    : ""
+                }`.trim()}
+                type="button"
+                onClick={() =>
+                  openTailorRunDetailView("quickReview", focusedTailoredResumeId)
+                }
+              >
+                Review edits
+              </button>
+              <button
+                aria-pressed={activeTailorRunDetailView === "preview"}
+                className={`panel-detail-toggle ${
+                  activeTailorRunDetailView === "preview"
+                    ? "panel-detail-toggle-active"
+                    : ""
+                }`.trim()}
+                type="button"
+                onClick={() =>
+                  openTailorRunDetailView("preview", focusedTailoredResumeId)
+                }
+              >
+                Preview
+              </button>
+            </div>
+          ) : null}
         </div>
 
-        <section className="tailor-run-detail-page">
-          {activeTailorRunDetailView === "quickReview"
-            ? renderTailoredQuickReviewSurface()
-            : renderTailoredPreviewSurface()}
+        <section
+          className={`tailor-run-detail-page ${
+            isTailorRunDetailWideLayout ? "tailor-run-detail-page-split" : ""
+          }`.trim()}
+        >
+          {isTailorRunDetailWideLayout ? (
+            <ResizablePanelGroup
+              className="tailor-run-detail-resizable"
+              orientation="horizontal"
+            >
+              <ResizablePanel
+                collapsedSize={0}
+                collapsible
+                className="tailor-run-detail-split-pane tailor-run-detail-split-pane-review"
+                defaultSize={48}
+                id="tailored-resume-review-edits"
+                minSize={24}
+              >
+                <section aria-label="Block edits">
+                  {renderTailoredQuickReviewSurface()}
+                </section>
+              </ResizablePanel>
+
+              <ResizableHandle
+                className="tailor-run-detail-resize-handle"
+                withHandle
+              />
+
+              <ResizablePanel
+                collapsedSize={0}
+                collapsible
+                className="tailor-run-detail-split-pane tailor-run-detail-split-pane-preview"
+                defaultSize={52}
+                id="tailored-resume-preview"
+                minSize={24}
+              >
+                <section aria-label="Tailored resume preview">
+                  {renderTailoredPreviewSurface()}
+                </section>
+              </ResizablePanel>
+            </ResizablePanelGroup>
+          ) : activeTailorRunDetailView === "quickReview" ? (
+            renderTailoredQuickReviewSurface()
+          ) : (
+            renderTailoredPreviewSurface()
+          )}
         </section>
       </main>
     );
   }
 
   return (
-    <main className="side-panel-shell">
+    <main
+      className={`side-panel-shell ${
+        activePanelTab === "tailor" ? "side-panel-shell-tailor" : ""
+      }`.trim()}
+    >
       <div className="panel-topbar">
         <nav
           aria-label="Job Helper sections"
@@ -12450,15 +12629,45 @@ function App() {
               ) : null}
 
               <div className="interview-thread" aria-live="polite">
-                {displayedTailorInterviewConversation.map((message) => (
+                {displayedTailorInterviewConversation.map((message, index) => (
                   <div
                     className={`interview-message interview-message-${message.role}`}
                     key={message.id}
                   >
-                    <TailorInterviewMessageContent message={message} />
+                    <TailorInterviewMessageContent
+                      message={message}
+                      nonTechnologies={
+                        personalInfo?.userMarkdown.nonTechnologies ??
+                        savedSettingsUserMarkdown.nonTechnologies
+                      }
+                      onToggleNonTechnologyTerm={(term) =>
+                        void toggleInterviewNonTechnologyTerm(term)
+                      }
+                      pendingNonTechnologyTerms={pendingInterviewNonTechnologyTerms}
+                    />
+                    {tailorInterview &&
+                    isTailorInterviewScrapedTechnologiesMessage(message, index) &&
+                    !hasTailorInterviewGeneratedTechnologyExamples(
+                      displayedTailorInterviewConversation,
+                    ) &&
+                    !tailorInterview.completionRequestedAt ? (
+                      <button
+                        className="interview-message-generate-examples"
+                        disabled={isTailorInterviewBusy}
+                        type="button"
+                        onClick={() => void generateTailorInterviewExamples()}
+                      >
+                        <GenerateExamplesIcon />
+                        <span>
+                          {isGeneratingTailorInterviewExamples
+                            ? "Generating"
+                            : "Generate"}
+                        </span>
+                      </button>
+                    ) : null}
                   </div>
                 ))}
-                {isTailorInterviewThinking ? (
+                {shouldShowTailorInterviewThinkingIndicator ? (
                   <div className="interview-message interview-message-assistant interview-message-thinking">
                     <TailorInterviewThinkingIndicator />
                   </div>

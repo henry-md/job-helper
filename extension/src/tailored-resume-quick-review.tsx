@@ -2,8 +2,6 @@ import { useMemo } from "react";
 import {
   buildTailoredResumeDiffRows,
   formatTailoredResumeEditLabel,
-  normalizeTailoredResumeEditReason,
-  summarizeTailoredResumeEdit,
   type TailoredResumeDiffSegment,
 } from "../../lib/tailor-resume-review.ts";
 import type {
@@ -14,7 +12,7 @@ import type {
 type TailoredResumeQuickReviewProps = {
   error: string | null;
   isUpdating: boolean;
-  pendingEditId: string | null;
+  onFocusEdit?: (editId: string) => void;
   record: TailoredResumeReviewRecord;
   variant?: "card" | "embedded" | "fullscreen";
   onSetEditState: (
@@ -64,12 +62,12 @@ function DiffCell({
 function QuickReviewEditCard({
   edit,
   isUpdating,
-  pendingEditId,
+  onFocusEdit,
   onSetEditState,
 }: {
   edit: TailoredResumeReviewEdit;
   isUpdating: boolean;
-  pendingEditId: string | null;
+  onFocusEdit?: TailoredResumeQuickReviewProps["onFocusEdit"];
   onSetEditState: TailoredResumeQuickReviewProps["onSetEditState"];
 }) {
   const proposedLatexCode = edit.customLatexCode ?? edit.afterLatexCode;
@@ -77,11 +75,12 @@ function QuickReviewEditCard({
     () => buildTailoredResumeDiffRows(edit.beforeLatexCode, proposedLatexCode),
     [edit.beforeLatexCode, proposedLatexCode],
   );
-  const isPending = pendingEditId === edit.editId;
   const isCustomOverride = edit.customLatexCode !== null;
   const isInteractionLocked = isUpdating || isCustomOverride;
 
   function handleSurfaceSelect(nextState: TailoredResumeReviewEdit["state"]) {
+    onFocusEdit?.(edit.editId);
+
     if (isInteractionLocked) {
       return;
     }
@@ -91,27 +90,20 @@ function QuickReviewEditCard({
 
   return (
     <article className="quick-review-edit-card">
-      <div className="quick-review-edit-header">
-        <div className="quick-review-edit-copy">
-          <div className="quick-review-edit-title-row">
-            <h4>{formatTailoredResumeEditLabel(edit)}</h4>
-            <div className="quick-review-edit-badges">
-              <span className="quick-review-edit-badge">Step {edit.generatedByStep}</span>
-              {isPending ? (
-                <span className="quick-review-edit-badge quick-review-edit-badge-pending">
-                  Saving...
-                </span>
-              ) : null}
-            </div>
-          </div>
-          <p className="quick-review-edit-reason">
-            {normalizeTailoredResumeEditReason(edit.reason)}
-          </p>
-          <p className="quick-review-edit-summary">
-            {summarizeTailoredResumeEdit(proposedLatexCode)}
-          </p>
-        </div>
-      </div>
+      <button
+        className="quick-review-edit-header quick-review-edit-focus-action"
+        type="button"
+        title="Jump to this block in the preview"
+        onClick={() => onFocusEdit?.(edit.editId)}
+      >
+        <span className="quick-review-edit-copy">
+          <span className="quick-review-edit-title-row">
+            <span className="quick-review-edit-title">
+              {formatTailoredResumeEditLabel(edit)}
+            </span>
+          </span>
+        </span>
+      </button>
 
       {isCustomOverride ? (
         <p className="quick-review-custom-note">
@@ -200,7 +192,7 @@ function QuickReviewEditCard({
 export default function TailoredResumeQuickReview({
   error,
   isUpdating,
-  pendingEditId,
+  onFocusEdit,
   record,
   variant = "card",
   onSetEditState,
@@ -241,8 +233,8 @@ export default function TailoredResumeQuickReview({
             <QuickReviewEditCard
               edit={edit}
               isUpdating={isUpdating}
+              onFocusEdit={onFocusEdit}
               key={edit.editId}
-              pendingEditId={pendingEditId}
               onSetEditState={onSetEditState}
             />
           ))}

@@ -3474,6 +3474,11 @@ button:disabled {
   padding-top: 2px;
 }
 
+.side-panel-shell-tailor .tailor-resume-library-surface {
+  display: block;
+  flex: 0 0 auto;
+}
+
 .tailored-resume-card-stack {
   display: flex;
   min-height: 0;
@@ -3514,6 +3519,12 @@ button:disabled {
 
 .tailor-resume-library-surface .tailored-resume-list-flush {
   flex: 1 1 auto;
+}
+
+.side-panel-shell-tailor
+  .tailor-resume-library-surface
+  .tailored-resume-list-flush {
+  flex: 0 0 auto;
 }
 
 .tailored-resume-row-shell {
@@ -3649,6 +3660,14 @@ button:disabled {
   background: rgba(255, 255, 255, 0.035);
 }
 
+.resume-preview-shell.tailor-run-fullscreen-preview {
+  margin-top: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 .resume-preview-frame {
   width: 100%;
   height: 430px;
@@ -3722,17 +3741,13 @@ button:disabled {
 .quick-review-copy,
 .quick-review-error,
 .quick-review-custom-note,
-.quick-review-placeholder,
-.quick-review-edit-reason,
-.quick-review-edit-summary {
+.quick-review-placeholder {
   margin: 0;
   font-size: 13px;
   line-height: 1.5;
 }
 
 .quick-review-copy,
-.quick-review-edit-reason,
-.quick-review-edit-summary,
 .quick-review-placeholder {
   color: var(--muted-strong);
 }
@@ -3756,18 +3771,43 @@ button:disabled {
 
 .quick-review-edit-card {
   display: grid;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid rgba(244, 244, 245, 0.08);
-  border-radius: 16px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .quick-review-edit-header,
 .quick-review-edit-copy {
   display: grid;
-  gap: 8px;
+  gap: 6px;
+}
+
+.quick-review-edit-focus-action {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  justify-content: flex-start;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: inherit;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+  white-space: normal;
+}
+
+.quick-review-edit-focus-action:hover:not(:disabled) {
+  transform: none;
+  background: rgba(255, 255, 255, 0.025);
+  box-shadow: none;
+}
+
+.quick-review-edit-focus-action:focus-visible {
+  outline: 2px solid rgba(52, 211, 153, 0.28);
+  outline-offset: 3px;
 }
 
 .quick-review-edit-title-row {
@@ -3778,47 +3818,18 @@ button:disabled {
   gap: 8px;
 }
 
-.quick-review-edit-title-row h4 {
+.quick-review-edit-title {
   margin: 0;
   color: var(--foreground);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 760;
-  line-height: 1.35;
+  line-height: 1.25;
   text-transform: capitalize;
-}
-
-.quick-review-edit-badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.quick-review-edit-badge {
-  padding: 5px 8px;
-  border: 1px solid rgba(244, 244, 245, 0.1);
-  border-radius: 999px;
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.04);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.quick-review-edit-badge-pending {
-  color: #dffcf1;
-  border-color: rgba(52, 211, 153, 0.26);
-  background: rgba(52, 211, 153, 0.12);
-}
-
-.quick-review-edit-summary {
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
 }
 
 .quick-review-diff-grid {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .quick-review-diff-surface {
@@ -3831,7 +3842,7 @@ button:disabled {
   padding: 0;
   overflow: hidden;
   border: 1px solid rgba(244, 244, 245, 0.08);
-  border-radius: 14px;
+  border-radius: 10px;
   background: rgba(0, 0, 0, 0.2);
   box-shadow: none;
   text-align: left;
@@ -3864,7 +3875,7 @@ button:disabled {
 }
 
 .quick-review-diff-heading {
-  padding: 9px 11px;
+  padding: 7px 10px;
   border-bottom: 1px solid rgba(244, 244, 245, 0.08);
   color: var(--muted);
   font-size: 11px;
@@ -3881,7 +3892,7 @@ button:disabled {
 }
 
 .quick-review-diff-body {
-  max-height: 180px;
+  max-height: 240px;
   overflow: auto;
 }
 
@@ -3889,7 +3900,7 @@ button:disabled {
   display: grid;
   grid-template-columns: 2.25rem minmax(0, 1fr);
   gap: 8px;
-  padding: 7px 9px;
+  padding: 6px 8px;
   border-top: 1px solid rgba(244, 244, 245, 0.04);
 }
 
