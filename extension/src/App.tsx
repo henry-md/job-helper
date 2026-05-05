@@ -17,6 +17,8 @@ import {
 } from "../../lib/tailored-resume-review-record.ts";
 import { buildJobApplicationDisplayParts } from "../../lib/job-application-display.ts";
 import { buildTailoredResumeInteractivePreviewQueries } from "../../lib/tailor-resume-preview-focus.ts";
+import type { TailoredResumeInteractivePreviewQuery } from "../../lib/tailor-resume-preview-focus.ts";
+import { tailorResumeScrapedTechnologiesMessage } from "../../lib/tailor-resume-interview-constants.ts";
 import "./App.css";
 import {
   AUTH_SESSION_STORAGE_KEY,
@@ -48,6 +50,10 @@ import {
   type UserMarkdownSummary,
   defaultUserMarkdown,
   defaultExtensionPreferences,
+  formatNonTechnologyTerm,
+  formatTermWithCapitalFirst,
+  normalizeNonTechnologyTerm,
+  normalizeNonTechnologyTerms,
   readExtensionPreferences,
   readPersonalInfoPayload,
   readTailorResumePreparationState,
@@ -67,6 +73,7 @@ import {
   type TailorResumePendingInterviewSummary,
   type TailorResumeRunRecord,
   type TailorRunTimeDisplayMode,
+  type TailoredResumeEmphasizedTechnology,
   type TailoredResumeSummary,
   type TrackedApplicationSummary,
 } from "./job-helper";
@@ -79,8 +86,14 @@ import {
 import TailoredResumeOverlayPreview from "./tailored-resume-overlay-preview";
 import TailoredResumeQuickReview from "./tailored-resume-quick-review";
 import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "./resizable";
+import {
   isNdjsonResponse,
   readTailorResumeGenerationStream,
+  type TailorResumeInterviewStreamEvent,
 } from "./tailor-resume-stream";
 import {
   buildTailorRunIdentityDisplay,
@@ -100,6 +113,7 @@ import {
   mergeTailorResumeGenerationStepTiming,
   mergeTailorResumeGenerationStepTimingHistory,
 } from "./tailor-run-step-timing";
+import { readTailorRunKeywordTechnologies } from "./tailor-run-keywords";
 import { buildCompletedTailoringMessage } from "./tailor-run-copy";
 import {
   buildTailorResumeLiveStatusMessage as buildLiveTailorResumeStatusMessage,
@@ -125,7 +139,6 @@ import {
 } from "./tailor-storage-registry";
 import { buildTailoringRunsRefreshKey } from "./tailor-run-refresh";
 import { filterVisibleTailoredResumes } from "./tailored-resume-visibility";
-import { buildCompanyResumeDownloadName } from "./tailored-resume-download-name";
 import {
   deriveKeywordBadgeDismissalKey,
   KEYWORD_BADGE_DISMISSAL_STORAGE_KEY,
@@ -208,9 +221,11 @@ type ActiveTailorRunCard = {
   applicationId: string | null;
   deleteTarget: TailorRunDeleteTarget | null;
   detail: string | null;
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
   existingTailoringId: string | null;
   elapsedTimeEndTime: number | null;
   id: string;
+  interviewStatus: "deciding" | "pending" | "ready" | null;
   isCurrentPage: boolean;
   message: string | null;
   pageKey: string | null;
@@ -233,6 +248,9 @@ const TAILOR_RESUME_SHORTCUT_KEYS = ["⌘", "⇧", "S"] as const;
 const TAILOR_RESUME_SHORTCUT_ARIA_LABEL = "Command Shift S";
 const STALE_TAILORING_RUN_MAX_AGE_MS = 1000 * 60 * 2;
 const SYNC_STATE_POLL_INTERVAL_MS = 500;
+const TAILOR_RUN_DETAIL_WIDE_LAYOUT_QUERY = "(min-width: 650px)";
+const EMPTY_TAILORED_PREVIEW_HIGHLIGHT_QUERIES: TailoredResumeInteractivePreviewQuery[] =
+  [];
 
 function readDebugPreviewFlag(name: string) {
   if (
@@ -632,10 +650,6 @@ function buildTailoredResumePreviewUrl(input: {
   return url.toString();
 }
 
-function buildPdfPreviewFrameUrl(objectUrl: string) {
-  return `${objectUrl}#toolbar=1&navpanes=0&view=Fit`;
-}
-
 function readTailorResumePayloadError(value: unknown, fallbackMessage: string) {
   return isRecord(value) && typeof value.error === "string" && value.error.trim()
     ? value.error
@@ -829,6 +843,25 @@ function isTransientTailoringRun(run: TailorResumeRunRecord | null) {
   return run?.status === "running" || run?.status === "needs_input";
 }
 
+function isLocalTailoringRunShadowedByServerState(input: {
+  activeTailorings: TailorResumeExistingTailoringState[];
+  run: TailorResumeRunRecord | null;
+}) {
+  const run = input.run;
+
+  if (!run || run.status !== "needs_input") {
+    return false;
+  }
+
+  return input.activeTailorings.some(
+    (activeTailoring) =>
+      activeTailoring.kind !== "completed" &&
+      ((run.applicationId &&
+        activeTailoring.applicationId === run.applicationId) ||
+        sameTailoringJobUrl(activeTailoring.jobUrl, run.pageUrl)),
+  );
+}
+
 function isStaleTailoringRun(run: TailorResumeRunRecord | null) {
   if (!isTransientTailoringRun(run)) {
     return false;
@@ -933,6 +966,25 @@ function uniqueNonEmptyStrings(values: Array<string | null | undefined>) {
         .filter((value) => value.length > 0),
     ),
   ];
+}
+
+async function requestHideTailoredResumeBadgesForUrls(
+  values: Array<string | null | undefined>,
+) {
+  const jobUrls = uniqueNonEmptyStrings(values);
+
+  if (jobUrls.length === 0) {
+    return;
+  }
+
+  try {
+    await chrome.runtime.sendMessage({
+      payload: { jobUrls },
+      type: "JOB_HELPER_HIDE_TAILORED_RESUME_BADGE_FOR_URL",
+    });
+  } catch (error) {
+    console.error("Could not hide the Tailor Resume page popup.", error);
+  }
 }
 
 function findLinkedApplicationForTailoredResume(
@@ -1120,6 +1172,23 @@ function removeDeletedItemsFromPersonalInfo(input: {
   };
 }
 
+function readDeletedPersonalInfoJobUrls(input: {
+  impact: PersonalDeleteImpact;
+  personalInfo: PersonalInfoSummary;
+}) {
+  const applicationIds = new Set(input.impact.applicationIds);
+  const tailoredResumeIds = new Set(input.impact.tailoredResumeIds);
+
+  return uniqueNonEmptyStrings([
+    ...input.personalInfo.applications
+      .filter((application) => applicationIds.has(application.id))
+      .map((application) => application.jobUrl),
+    ...input.personalInfo.tailoredResumes
+      .filter((tailoredResume) => tailoredResumeIds.has(tailoredResume.id))
+      .map((tailoredResume) => tailoredResume.jobUrl),
+  ]);
+}
+
 function removeTailorRunArtifactsFromPersonalInfo(input: {
   jobUrl: string;
   personalInfo: PersonalInfoSummary;
@@ -1287,6 +1356,8 @@ function buildTailoringRunRecordFromExistingTailoring(input: {
     : [];
 
   if (input.existingTailoring.kind === "pending_interview") {
+    const interviewStatus = input.existingTailoring.interviewStatus;
+
     return {
       applicationId: input.existingTailoring.applicationId,
       capturedAt: activeCapturedAt,
@@ -1300,11 +1371,16 @@ function buildTailoringRunRecordFromExistingTailoring(input: {
         timings: [],
       }),
       jobIdentifier,
-      message: "Resume questions are waiting in the side panel.",
+      message:
+        interviewStatus === "pending"
+          ? "Generate the Step 2 chat when you are ready."
+          : interviewStatus === "deciding"
+            ? "Generating the Step 2 chat."
+            : "Resume questions are waiting in the side panel.",
       pageTitle,
       pageUrl,
       positionTitle: input.existingTailoring.positionTitle,
-      status: "needs_input",
+      status: interviewStatus === "deciding" ? "running" : "needs_input",
       suppressedTailoredResumeId: null,
       tailoredResumeError: null,
       tailoredResumeId: null,
@@ -1713,28 +1789,33 @@ function buildTailorRunDeleteTarget(input: TailorRunDeleteTarget) {
   return input.jobUrl || input.tailoredResumeId || input.tailorRunId ? input : null;
 }
 
-function isQueuedTailorResumeChatStep(
-  step: TailorResumeGenerationStepSummary | null,
+function readTailorRunKeywordTechnologiesFromRun(
+  run: TailorResumeRunRecord,
 ) {
-  return (
-    step?.stepNumber === 2 &&
-    step.summary.trim().toLowerCase() === "chat queued"
-  );
+  return readTailorRunKeywordTechnologies(run);
 }
 
-function buildQueuedTailorRunStep(): TailorRunProgressStep {
-  const clarifyStep =
-    TAILOR_RUN_PROGRESS_STEP_DEFINITIONS.find(
-      (step) => step.stepNumber === 2,
-    ) ?? TAILOR_RUN_PROGRESS_STEP_DEFINITIONS[1];
+function readTailorRunKeywordTechnologiesFromExistingTailoring(
+  existingTailoring: TailorResumeExistingTailoringState,
+) {
+  if (existingTailoring.kind === "pending_interview") {
+    return existingTailoring.emphasizedTechnologies;
+  }
 
-  return {
-    attempt: null,
-    label: "Queued",
-    shortLabel: clarifyStep?.shortLabel ?? "Clarify",
-    status: "current",
-    stepNumber: 2,
-  };
+  if (existingTailoring.kind === "active_generation") {
+    return existingTailoring.lastStep?.emphasizedTechnologies ?? [];
+  }
+
+  return existingTailoring.emphasizedTechnologies;
+}
+
+function buildActiveTailorRunKeywordBadgeKey(card: ActiveTailorRunCard) {
+  return `tailor-run-keywords:${
+    card.pageKey ??
+    buildTailorRunRegistryKey(card.url) ??
+    card.existingTailoringId ??
+    card.id
+  }`;
 }
 
 function buildActiveTailorRunCardFromRun(input: {
@@ -1763,9 +1844,6 @@ function buildActiveTailorRunCardFromRun(input: {
 
   const url = input.run.pageUrl ?? input.titleFallback?.url ?? null;
   const startedAtTime = readActiveTailorRunSortTime(input.run.capturedAt);
-  const isQueuedChat = isQueuedTailorResumeChatStep(
-    input.run.generationStep ?? null,
-  );
 
   return {
     applicationId: input.run.applicationId ?? null,
@@ -1775,40 +1853,34 @@ function buildActiveTailorRunCardFromRun(input: {
       tailorRunId: null,
     }),
     detail:
-      isQueuedChat
-        ? null
-        : input.run.status === "error"
+      input.run.status === "error"
         ? input.run.tailoredResumeError?.trim() || input.run.message
         : null,
+    emphasizedTechnologies: readTailorRunKeywordTechnologiesFromRun(input.run),
     existingTailoringId: null,
     elapsedTimeEndTime: readTailorRunElapsedEndTime({
-      isWaiting: isQueuedChat,
+      isWaiting: false,
       startedAtTime,
       status: input.run.status,
       stepTimings: input.run.generationStepTimings ?? [],
     }),
     id: input.id,
+    interviewStatus: null,
     isCurrentPage: input.isCurrentPage ?? false,
-    message: isQueuedChat
-      ? "Queued behind the active resume question."
-      : input.run.status === "error"
+    message: input.run.status === "error"
         ? "Failed generation"
         : null,
     pageKey: input.pageKey ?? null,
     sortTime: startedAtTime,
     statusDisplayState:
-      isQueuedChat
-        ? "warning"
-        : input.run.status === "needs_input"
+      input.run.status === "needs_input"
         ? "ready"
         : input.run.status === "error"
           ? "error"
           : "loading",
     startedAtTime,
     suppressedTailoredResumeId: input.run.suppressedTailoredResumeId ?? null,
-    step: isQueuedChat
-      ? buildQueuedTailorRunStep()
-      : readActiveTailorRunStep({
+    step: readActiveTailorRunStep({
           captureState: readCaptureStateFromTailoringRun(input.run) ?? "idle",
           existingTailoring: null,
           lastTailoringRun: input.run,
@@ -1863,6 +1935,36 @@ function buildActiveTailorRunCardFromExistingTailoring(input: {
 
   const url = input.existingTailoring.jobUrl ?? nextCard.url;
   const startedAtTime = readExistingTailoringSortTime(input.existingTailoring);
+  const interviewStatus =
+    input.existingTailoring.kind === "pending_interview"
+      ? input.existingTailoring.interviewStatus
+      : null;
+  const pendingInterviewStep =
+    interviewStatus === "pending"
+      ? {
+          ...nextCard.step,
+          label: "Start chat",
+          shortLabel: "Start",
+          status: "current" as const,
+          stepNumber: 2,
+        }
+      : interviewStatus === "ready"
+        ? {
+            ...nextCard.step,
+            label: "Question ready",
+            shortLabel: "Ready",
+            status: "current" as const,
+            stepNumber: 2,
+          }
+	    : interviewStatus === "deciding"
+	      ? {
+	          ...nextCard.step,
+	              label: "Starting chat",
+	              shortLabel: "Clarify",
+	              status: "current" as const,
+	              stepNumber: 2,
+	            }
+          : null;
 
   return {
     ...nextCard,
@@ -1872,24 +1974,24 @@ function buildActiveTailorRunCardFromExistingTailoring(input: {
       tailoredResumeId: null,
       tailorRunId: input.existingTailoring.id,
     }),
+    emphasizedTechnologies:
+      readTailorRunKeywordTechnologiesFromExistingTailoring(
+        input.existingTailoring,
+      ),
     existingTailoringId: input.existingTailoring.id,
     elapsedTimeEndTime: readActiveTailorRunSortTime(
       input.existingTailoring.updatedAt,
     ),
+    interviewStatus,
     sortTime: startedAtTime,
     statusDisplayState:
-      input.statusDisplayState ??
-      nextCard.statusDisplayState,
+      interviewStatus === "pending" || interviewStatus === "ready"
+        ? "ready"
+        : interviewStatus === "deciding"
+          ? "loading"
+          : input.statusDisplayState ?? nextCard.statusDisplayState,
     startedAtTime,
-    step:
-      input.existingTailoring.kind === "pending_interview"
-        ? {
-            ...nextCard.step,
-            label: "Question ready",
-            shortLabel: "Ready",
-            stepNumber: 2,
-          }
-        : nextCard.step,
+    step: pendingInterviewStep ?? nextCard.step,
     suppressedTailoredResumeId: null,
     url,
   };
@@ -1920,9 +2022,13 @@ function buildActiveTailorRunCardFromPreparation(input: {
       tailorRunId: null,
     }),
     detail: null,
+    emphasizedTechnologies: input.run
+      ? readTailorRunKeywordTechnologiesFromRun(input.run)
+      : [],
     existingTailoringId: null,
     elapsedTimeEndTime: null,
     id: input.id,
+    interviewStatus: null,
     isCurrentPage: input.isCurrentPage ?? false,
     message: null,
     pageKey: input.pageKey ?? null,
@@ -1988,7 +2094,11 @@ function buildCurrentActiveTailorRunCard(input: {
   const cardId = `current:${input.currentPageRegistryKey ?? titleFallback.url ?? "active"}`;
 
   // Keep the current page on the local stream so server polling cannot reset live timers.
-  if (isTransientTailoringRun(input.currentPageStoredTailoringRun)) {
+  if (
+    input.currentPageStoredTailoringRun?.status === "running" ||
+    (input.currentPageStoredTailoringRun?.status === "needs_input" &&
+      !input.currentPagePersonalInfoTailoring)
+  ) {
     const currentRun = input.currentPageStoredTailoringRun;
 
     if (!currentRun) {
@@ -2060,6 +2170,18 @@ function buildParallelTailorRunCards(input: {
     const prompt = input.existingTailoringPromptsByKey[registryKey] ?? null;
     const preparation = input.tailorPreparationsByKey[registryKey] ?? null;
     const run = input.tailoringRunsByKey[registryKey] ?? null;
+
+    if (
+      !prompt &&
+      !preparation &&
+      isLocalTailoringRunShadowedByServerState({
+        activeTailorings: input.personalInfo?.activeTailorings ?? [],
+        run,
+      })
+    ) {
+      continue;
+    }
+
     const nextCard = prompt
       ? buildActiveTailorRunCardFromExistingTailoring({
           existingTailoring: prompt.existingTailoring,
@@ -2283,11 +2405,13 @@ type TailorRunMenuActionState =
   | "deleting"
   | "goingToTab"
   | "idle"
-  | "retrying";
+  | "retrying"
+  | "showingKeywords";
 type BackgroundTailorRunActionState =
   | "deleting"
   | "goingToTab"
   | "retrying"
+  | "showingKeywords"
   | "stopping";
 type TailoredResumeMenuActionState =
   | "downloading"
@@ -2545,6 +2669,27 @@ function activeTailorRunCardMatchesInterview(input: {
   );
 }
 
+function buildGeneratingTailorInterviewForCard(input: {
+  card: ActiveTailorRunCard;
+  existingTailoringId: string;
+  interviewId: string;
+}) {
+  return {
+    applicationId: input.card.applicationId,
+    companyName: null,
+    completionRequestedAt: null,
+    conversation: [],
+    emphasizedTechnologies: input.card.emphasizedTechnologies,
+    id: input.interviewId,
+    jobIdentifier: null,
+    jobUrl: input.card.url,
+    positionTitle: input.card.title,
+    questioningSummary: null,
+    tailorResumeRunId: input.existingTailoringId,
+    updatedAt: new Date().toISOString(),
+  } satisfies TailorResumePendingInterviewSummary;
+}
+
 function readChatMessage(value: unknown): ChatMessageRecord | null {
   if (!isRecord(value)) {
     return null;
@@ -2702,12 +2847,32 @@ function ArrowUpRightIcon() {
   );
 }
 
+function GenerateExamplesIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M16 3h5v5" />
+      <path d="M21 3 14 10" />
+      <path d="M8 21H3v-5" />
+      <path d="m3 21 7-7" />
+    </svg>
+  );
+}
+
 function EllipsisHorizontalIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
       <circle cx="6" cy="12" r="1.8" />
       <circle cx="12" cy="12" r="1.8" />
       <circle cx="18" cy="12" r="1.8" />
+    </svg>
+  );
+}
+
+function NonTechnologyToggleIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="7" />
+      <path d="m7.2 16.8 9.6-9.6" />
     </svg>
   );
 }
@@ -2851,49 +3016,174 @@ function ToolCallDetails({ toolCalls }: { toolCalls: ToolCallRecord[] }) {
 
 function TailorInterviewTechnologyContexts({
   contexts,
+  nonTechnologies,
+  onToggleNonTechnologyTerm,
+  pendingNonTechnologyTerms,
 }: {
   contexts: TailorResumeConversationMessage["technologyContexts"];
+  nonTechnologies: readonly string[];
+  onToggleNonTechnologyTerm: (term: string) => void;
+  pendingNonTechnologyTerms: readonly string[];
 }) {
   if (contexts.length === 0) {
     return null;
   }
 
+  const normalizedNonTechnologyTerms = new Set(
+    nonTechnologies.map(normalizeNonTechnologyTerm),
+  );
+  const pendingNormalizedTerms = new Set(
+    pendingNonTechnologyTerms.map(normalizeNonTechnologyTerm),
+  );
+
   return (
     <div className="interview-technology-contexts">
-      {contexts.map((context) => (
-        <details className="interview-technology-card" key={context.name}>
-          <summary>
-            <span className="interview-technology-name">{context.name}</span>
-            <span className="interview-technology-hint">2 examples</span>
-            <span className="interview-technology-chevron" aria-hidden="true" />
-          </summary>
-          <div className="interview-technology-body">
-            <p>{context.definition}</p>
-            <ul>
-              {context.examples.map((example, index) => (
-                <li key={`${context.name}:${String(index)}`}>{example}</li>
-              ))}
-            </ul>
-          </div>
-        </details>
-      ))}
+      {contexts.map((context) => {
+        const displayName = formatTermWithCapitalFirst(context.name);
+        const normalizedTerm = normalizeNonTechnologyTerm(context.name);
+        const isNonTechnology = normalizedNonTechnologyTerms.has(normalizedTerm);
+        const isPending = pendingNormalizedTerms.has(normalizedTerm);
+
+        return (
+          <details
+            className={`interview-technology-card ${
+              isNonTechnology ? "interview-technology-card-disabled" : ""
+            }`}
+            key={context.name}
+          >
+            <summary>
+              <span className="interview-technology-name">{displayName}</span>
+              <span className="interview-technology-hint">
+                {context.examples.length > 0
+                  ? `${context.examples.length} examples`
+                  : "Scraped"}
+              </span>
+              <button
+                aria-label={
+                  isNonTechnology
+                    ? `Remove ${displayName} from non-technologies`
+                    : `Add ${displayName} to non-technologies`
+                }
+                aria-pressed={isNonTechnology}
+                aria-busy={isPending}
+                className={`interview-technology-non-term-toggle ${
+                  isNonTechnology
+                    ? "interview-technology-non-term-toggle-active"
+                    : ""
+                }`}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onToggleNonTechnologyTerm(context.name);
+                }}
+                title={
+                  isNonTechnology
+                    ? `Remove ${displayName} from non-technologies`
+                    : `Add ${displayName} to non-technologies`
+                }
+                type="button"
+              >
+                <NonTechnologyToggleIcon />
+              </button>
+              <span className="interview-technology-chevron" aria-hidden="true" />
+            </summary>
+            <div className="interview-technology-body">
+              <p>{context.definition}</p>
+              {context.examples.length > 0 ? (
+                <ul>
+                  {context.examples.map((example, index) => (
+                    <li key={`${context.name}:${String(index)}`}>{example}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          </details>
+        );
+      })}
     </div>
   );
 }
 
 function TailorInterviewMessageContent({
   message,
+  nonTechnologies,
+  onToggleNonTechnologyTerm,
+  pendingNonTechnologyTerms,
 }: {
   message: TailorResumeConversationMessage;
+  nonTechnologies: readonly string[];
+  onToggleNonTechnologyTerm: (term: string) => void;
+  pendingNonTechnologyTerms: readonly string[];
 }) {
   return (
     <>
       <div className="interview-message-body">{message.text}</div>
       <TailorInterviewTechnologyContexts
         contexts={message.technologyContexts}
+        nonTechnologies={nonTechnologies}
+        onToggleNonTechnologyTerm={onToggleNonTechnologyTerm}
+        pendingNonTechnologyTerms={pendingNonTechnologyTerms}
       />
       <ToolCallDetails toolCalls={message.toolCalls} />
     </>
+  );
+}
+
+function isTailorInterviewScrapedTechnologiesMessage(
+  message: TailorResumeConversationMessage,
+  index: number,
+) {
+  return (
+    index === 0 &&
+    message.role === "assistant" &&
+    message.text.trim() === tailorResumeScrapedTechnologiesMessage &&
+    message.technologyContexts.length > 0
+  );
+}
+
+function hasTailorInterviewGeneratedTechnologyExamples(
+  conversation: readonly TailorResumeConversationMessage[],
+) {
+  return conversation.some(
+    (message, index) =>
+      index > 0 &&
+      message.role === "assistant" &&
+      message.technologyContexts.some(
+        (context) => context.examples.length > 0,
+      ),
+  );
+}
+
+function readTailorInterviewScrapedTechnologyTerms(
+  interview: TailorResumePendingInterviewSummary | null,
+) {
+  const firstMessage = interview?.conversation[0] ?? null;
+
+  if (!firstMessage || !isTailorInterviewScrapedTechnologiesMessage(firstMessage, 0)) {
+    return [];
+  }
+
+  return firstMessage.technologyContexts
+    .map((context) => context.name.trim())
+    .filter(Boolean);
+}
+
+function areAllTailorInterviewScrapedTermsNonTechnologies(input: {
+  interview: TailorResumePendingInterviewSummary | null;
+  nonTechnologies: readonly string[];
+}) {
+  const scrapedTerms = readTailorInterviewScrapedTechnologyTerms(input.interview);
+
+  if (scrapedTerms.length === 0) {
+    return false;
+  }
+
+  const normalizedNonTechnologies = new Set(
+    input.nonTechnologies.map(normalizeNonTechnologyTerm),
+  );
+
+  return scrapedTerms.every((term) =>
+    normalizedNonTechnologies.has(normalizeNonTechnologyTerm(term)),
   );
 }
 
@@ -2972,29 +3262,50 @@ function App() {
   const [savedSettingsUserMarkdown, setSavedSettingsUserMarkdown] =
     useState<UserMarkdownSummary>({
       markdown: defaultUserMarkdown,
+      nonTechnologies: [],
       updatedAt: null,
     });
   const [draftSettingsUserMarkdown, setDraftSettingsUserMarkdown] = useState(
     defaultUserMarkdown,
   );
+  const [draftSettingsNonTechnologies, setDraftSettingsNonTechnologies] =
+    useState<string[]>([]);
+  const [
+    pendingInterviewNonTechnologyTerms,
+    setPendingInterviewNonTechnologyTerms,
+  ] = useState<string[]>([]);
+  const [
+    draftSettingsNonTechnologyInput,
+    setDraftSettingsNonTechnologyInput,
+  ] = useState("");
   const [isSettingsOriginalResumeOpen, setIsSettingsOriginalResumeOpen] =
     useState(false);
   const [isSettingsUserMarkdownOpen, setIsSettingsUserMarkdownOpen] =
     useState(false);
   const [isSavingSettingsUserMarkdown, setIsSavingSettingsUserMarkdown] =
     useState(false);
+  const [isSavingSettingsNonTechnologies, setIsSavingSettingsNonTechnologies] =
+    useState(false);
   const [settingsUserMarkdownError, setSettingsUserMarkdownError] =
+    useState<string | null>(null);
+  const [settingsNonTechnologyError, setSettingsNonTechnologyError] =
     useState<string | null>(null);
   const [tailoredResumePreviewState, setTailoredResumePreviewState] =
     useState<ResumePreviewState>({ objectUrl: null, status: "idle" });
   const [isTailoredPreviewDiffHighlightingEnabled, setIsTailoredPreviewDiffHighlightingEnabled] =
-    useState(false);
+    useState(true);
+  const [tailoredPreviewFocusEditId, setTailoredPreviewFocusEditId] =
+    useState<string | null>(null);
+  const [tailoredPreviewFocusRequest, setTailoredPreviewFocusRequest] =
+    useState(0);
   const [tailoredResumeReviewState, setTailoredResumeReviewState] =
     useState<TailoredResumeReviewState>({ record: null, status: "idle" });
   const [pendingTailoredResumeReviewEditId, setPendingTailoredResumeReviewEditId] =
     useState<string | null>(null);
   const [activeTailorRunDetailView, setActiveTailorRunDetailView] =
     useState<TailorRunDetailView | null>(null);
+  const [isTailorRunDetailWideLayout, setIsTailorRunDetailWideLayout] =
+    useState(false);
   const [isTailorRunMenuOpen, setIsTailorRunMenuOpen] = useState(false);
   const [tailorRunMenuActionState, setTailorRunMenuActionState] =
     useState<TailorRunMenuActionState>("idle");
@@ -3005,6 +3316,12 @@ function App() {
     useState<string | null>(null);
   const [backgroundTailorRunActionStates, setBackgroundTailorRunActionStates] =
     useState<Record<string, BackgroundTailorRunActionState>>({});
+  const [generatingTailorQuestionCardIds, setGeneratingTailorQuestionCardIds] =
+    useState<Set<string>>(() => new Set());
+  const [
+    generatingTailorQuestionInterviewId,
+    setGeneratingTailorQuestionInterviewId,
+  ] = useState<string | null>(null);
   const [backgroundTailorRunMenuError, setBackgroundTailorRunMenuError] =
     useState<string | null>(null);
   const [backgroundTailorRunMenuErrorCardId, setBackgroundTailorRunMenuErrorCardId] =
@@ -3066,6 +3383,8 @@ function App() {
   const tailorGenerationStepTimingsRef = useRef<TailorResumeGenerationStepTiming[]>([]);
   const [tailorInterview, setTailorInterview] =
     useState<TailorResumePendingInterviewSummary | null>(null);
+  const [selectedTailorInterviewId, setSelectedTailorInterviewId] =
+    useState<string | null>(null);
   const [isTailorInterviewOpen, setIsTailorInterviewOpen] = useState(false);
   const [existingTailoringPrompt, setExistingTailoringPrompt] =
     useState<ExistingTailoringPromptState | null>(null);
@@ -3083,6 +3402,11 @@ function App() {
     setPendingTailorInterviewAnswerMessage,
   ] =
     useState<TailorResumeConversationMessage | null>(null);
+  const [
+    pendingTailorInterviewAssistantMessage,
+    setPendingTailorInterviewAssistantMessage,
+  ] =
+    useState<TailorResumeConversationMessage | null>(null);
   const [tailorInterviewError, setTailorInterviewError] = useState<string | null>(
     null,
   );
@@ -3090,6 +3414,10 @@ function App() {
     useState(false);
   const [isFinishingTailorInterview, setIsFinishingTailorInterview] =
     useState(false);
+  const [
+    isGeneratingTailorInterviewExamples,
+    setIsGeneratingTailorInterviewExamples,
+  ] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessageRecord[]>([]);
   const [chatStatus, setChatStatus] = useState<ChatStatus>("idle");
@@ -3135,6 +3463,20 @@ function App() {
   );
   const tailoringRunsRefreshKey =
     buildTailoringRunsRefreshKey(tailoringRunsByKey);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia(TAILOR_RUN_DETAIL_WIDE_LAYOUT_QUERY);
+    const syncWideLayout = () => {
+      setIsTailorRunDetailWideLayout(mediaQuery.matches);
+    };
+
+    syncWideLayout();
+    mediaQuery.addEventListener("change", syncWideLayout);
+
+    return () => {
+      mediaQuery.removeEventListener("change", syncWideLayout);
+    };
+  }, []);
 
   const loadExtensionPreferences = useCallback(async () => {
     const result = await chrome.storage.local.get(EXTENSION_PREFERENCES_STORAGE_KEY);
@@ -4051,13 +4393,20 @@ function App() {
         })
       : null;
   const currentPagePersonalInfoInterview =
-    personalInfo?.tailoringInterview ??
-    (currentPageIdentity && personalInfo
+    currentPageIdentity && personalInfo
       ? resolveTailorInterviewForPage({
           pageIdentity: currentPageIdentity,
           tailoringInterviews: personalInfo.tailoringInterviews,
         })
-      : null);
+      : null;
+  const selectedPersonalInfoInterview =
+    selectedTailorInterviewId && personalInfo
+      ? personalInfo.tailoringInterviews.find(
+          (interview) => interview.id === selectedTailorInterviewId,
+        ) ?? null
+      : null;
+  const activePersonalInfoInterview =
+    selectedPersonalInfoInterview ?? currentPagePersonalInfoInterview;
   const currentPageApplicationContext = currentPageContext
     ? buildTailorResumeApplicationContext(currentPageContext)
     : null;
@@ -4130,6 +4479,9 @@ function App() {
     tailorPreparationState?.message?.trim() ||
     buildTailorResumePreparationMessage(false);
   const originalResume = personalInfo?.originalResume ?? null;
+  const isSettingsNonTechnologiesChanged =
+    draftSettingsNonTechnologies.join("\n") !==
+    savedSettingsUserMarkdown.nonTechnologies.join("\n");
   const isSettingsUserMarkdownChanged =
     draftSettingsUserMarkdown !== savedSettingsUserMarkdown.markdown;
   const isTailorInterviewAwaitingCompletion = Boolean(
@@ -4140,11 +4492,19 @@ function App() {
       ? `${tailorInterview.id}:${tailorInterview.completionRequestedAt}`
       : null;
   const displayedTailorInterviewConversation = tailorInterview
-    ? pendingTailorInterviewAnswerMessage &&
+    ? [
+        ...tailorInterview.conversation,
+        ...(pendingTailorInterviewAnswerMessage &&
         tailorInterview.conversation.at(-1)?.id !==
           pendingTailorInterviewAnswerMessage.id
-      ? [...tailorInterview.conversation, pendingTailorInterviewAnswerMessage]
-      : tailorInterview.conversation
+          ? [pendingTailorInterviewAnswerMessage]
+          : []),
+        ...(pendingTailorInterviewAssistantMessage &&
+        pendingTailorInterviewAssistantMessage.id !==
+          tailorInterview.conversation.at(-1)?.id
+          ? [pendingTailorInterviewAssistantMessage]
+          : []),
+      ]
     : [];
   const displayedTailorInterviewMessageCount =
     displayedTailorInterviewConversation.length;
@@ -4198,15 +4558,31 @@ function App() {
       })
     : "Resume questions";
   const isTailorInterviewAnswerPending = Boolean(pendingTailorInterviewAnswerMessage);
+  const hasPendingTailorInterviewAssistantContent = Boolean(
+    pendingTailorInterviewAssistantMessage &&
+      (pendingTailorInterviewAssistantMessage.text.trim() ||
+        pendingTailorInterviewAssistantMessage.technologyContexts.length > 0),
+  );
+  const isGeneratingTailorQuestionForOpenInterview = Boolean(
+    tailorInterview?.id &&
+      generatingTailorQuestionInterviewId === tailorInterview.id,
+  );
   const isTailorInterviewBusy =
     captureState === "finishing" ||
     isTailorInterviewAnswerPending ||
     isStoppingCurrentTailoring ||
-    isFinishingTailorInterview;
+    isFinishingTailorInterview ||
+    isGeneratingTailorInterviewExamples ||
+    isGeneratingTailorQuestionForOpenInterview;
   const isTailorInterviewThinking =
     Boolean(tailorInterview) &&
     !tailorInterviewError &&
-    (isTailorInterviewAnswerPending || isFinishingTailorInterview);
+    (isTailorInterviewAnswerPending ||
+      isFinishingTailorInterview ||
+      isGeneratingTailorInterviewExamples ||
+      isGeneratingTailorQuestionForOpenInterview);
+  const shouldShowTailorInterviewThinkingIndicator =
+    isTailorInterviewThinking && !hasPendingTailorInterviewAssistantContent;
   const lastTailoringRunMessage = lastTailoringRun?.message?.trim() || null;
   const lastTailoringRunError = lastTailoringRun?.tailoredResumeError?.trim() || null;
   const pageCaptureFailureRun = isPageCaptureFailureRun(currentPageStoredTailoringRun)
@@ -4507,9 +4883,13 @@ function App() {
           "Tailoring your resume for this job...",
         )
       : activeTailoring?.kind === "pending_interview"
-        ? isTailorInterviewAwaitingCompletion
-          ? "Press Done or keep chatting to wrap up the resume follow-up."
-          : "Answer the resume follow-up below."
+        ? activeTailoring.interviewStatus === "pending"
+          ? "Generate the Step 2 chat when you are ready."
+          : activeTailoring.interviewStatus === "deciding"
+            ? "Generating the Step 2 chat."
+            : isTailorInterviewAwaitingCompletion
+              ? "Press Done or keep chatting to wrap up the resume follow-up."
+              : "Answer the resume follow-up below."
         : completedTailoringJobLabel
           ? buildCompletedTailoringMessage({
               jobLabel: completedTailoringJobLabel,
@@ -4539,9 +4919,9 @@ function App() {
       : null;
   const activeTailoredResumeError =
     activeTailoredResumeReviewRecord?.error?.trim() || null;
-  const tailoredPreviewHighlightQueries = useMemo(() => {
+  const tailoredPreviewInteractiveQueries = useMemo(() => {
     if (!activeTailoredResumeReviewRecord?.annotatedLatexCode) {
-      return [];
+      return null;
     }
 
     return buildTailoredResumeInteractivePreviewQueries({
@@ -4549,8 +4929,24 @@ function App() {
       edits: activeTailoredResumeReviewRecord.edits,
       sourceAnnotatedLatexCode:
         activeTailoredResumeReviewRecord.sourceAnnotatedLatexCode,
-    }).highlightQueries;
+    });
   }, [activeTailoredResumeReviewRecord]);
+  const tailoredPreviewHighlightQueries =
+    tailoredPreviewInteractiveQueries?.highlightQueries ??
+    EMPTY_TAILORED_PREVIEW_HIGHLIGHT_QUERIES;
+  const tailoredPreviewFocusEdit =
+    activeTailoredResumeReviewRecord?.edits.find(
+      (edit) => edit.editId === tailoredPreviewFocusEditId,
+    ) ?? null;
+  const tailoredPreviewFocusQuery =
+    tailoredPreviewFocusEditId && tailoredPreviewInteractiveQueries
+      ? tailoredPreviewInteractiveQueries.focusQueryByEditId.get(
+          tailoredPreviewFocusEditId,
+        ) ?? null
+      : null;
+  const tailoredPreviewFocusMatchKey = tailoredPreviewFocusEdit
+    ? `segment:${tailoredPreviewFocusEdit.segmentId}`
+    : null;
   const tailoredResumeReviewError =
     tailoredResumeReviewState.status === "error"
       ? tailoredResumeReviewState.error
@@ -4992,6 +5388,7 @@ function App() {
     setIsSettingsOriginalResumeOpen(false);
     setIsSettingsUserMarkdownOpen(false);
     setSettingsUserMarkdownError(null);
+    setSettingsNonTechnologyError(null);
     setFollowUpQuestionSettingError(null);
     setPageCountProtectionSettingError(null);
     setKeywordCoverageSettingError(null);
@@ -5011,6 +5408,143 @@ function App() {
     setIsSettingsUserMarkdownOpen(false);
   }
 
+  function cancelSettingsNonTechnologyEdits() {
+    setDraftSettingsNonTechnologies(savedSettingsUserMarkdown.nonTechnologies);
+    setDraftSettingsNonTechnologyInput("");
+    setSettingsNonTechnologyError(null);
+  }
+
+  function addSettingsNonTechnology() {
+    const normalizedTerm = normalizeNonTechnologyTerm(
+      draftSettingsNonTechnologyInput,
+    );
+
+    if (!normalizedTerm) {
+      return;
+    }
+
+    try {
+      setDraftSettingsNonTechnologies((currentTerms) =>
+        normalizeNonTechnologyTerms([...currentTerms, normalizedTerm]),
+      );
+      setDraftSettingsNonTechnologyInput("");
+      setSettingsNonTechnologyError(null);
+    } catch (error) {
+      setSettingsNonTechnologyError(
+        error instanceof Error
+          ? error.message
+          : "Unable to add non-technology term.",
+      );
+    }
+  }
+
+  function removeSettingsNonTechnology(term: string) {
+    const normalizedTerm = normalizeNonTechnologyTerm(term);
+
+    setDraftSettingsNonTechnologies((currentTerms) =>
+      currentTerms.filter(
+        (currentTerm) =>
+          normalizeNonTechnologyTerm(currentTerm) !== normalizedTerm,
+      ),
+    );
+    setSettingsNonTechnologyError(null);
+  }
+
+  function applySavedUserMarkdown(nextUserMarkdown: UserMarkdownSummary) {
+    setSavedSettingsUserMarkdown(nextUserMarkdown);
+    setDraftSettingsUserMarkdown(nextUserMarkdown.markdown);
+    setDraftSettingsNonTechnologies(nextUserMarkdown.nonTechnologies);
+    setDraftSettingsNonTechnologyInput("");
+    setPersonalInfoState((currentState) =>
+      currentState.status === "ready"
+        ? {
+            personalInfo: {
+              ...currentState.personalInfo,
+              userMemory: {
+                nonTechnologyNames: nextUserMarkdown.nonTechnologies,
+                updatedAt: nextUserMarkdown.updatedAt,
+                userMarkdown: nextUserMarkdown,
+              },
+              userMarkdown: nextUserMarkdown,
+            },
+            status: "ready",
+          }
+        : currentState,
+    );
+  }
+
+  async function persistUserMarkdown(input: {
+    markdown: string;
+    nonTechnologies: readonly string[];
+    updatedAt: string | null;
+  }) {
+    if (authState.status !== "signedIn") {
+      return null;
+    }
+
+    const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
+      body: JSON.stringify({
+        action: "saveUserMarkdown",
+        markdown: input.markdown,
+        nonTechnologyNames: input.nonTechnologies,
+        updatedAt: input.updatedAt,
+      }),
+      credentials: "include",
+      headers: {
+        Authorization: `Bearer ${authState.session.sessionToken}`,
+        "Content-Type": "application/json",
+      },
+      method: "PATCH",
+    });
+    const payload = (await response.json().catch(() => ({}))) as {
+      error?: string;
+      nonTechnologyNames?: string[];
+      userMarkdown?: {
+        markdown?: string;
+        nonTechnologies?: string[];
+        updatedAt?: string | null;
+      };
+      userMemory?: {
+        nonTechnologyNames?: string[];
+        updatedAt?: string | null;
+        userMarkdown?: {
+          markdown?: string;
+          updatedAt?: string | null;
+        };
+      };
+    };
+
+    if (response.status === 401) {
+      await invalidateAuthSession();
+      return null;
+    }
+
+    const nextMarkdown =
+      payload.userMemory?.userMarkdown?.markdown ??
+      payload.userMarkdown?.markdown;
+    const nextNonTechnologies =
+      payload.userMemory?.nonTechnologyNames ??
+      payload.nonTechnologyNames ??
+      payload.userMarkdown?.nonTechnologies;
+    const nextUpdatedAt =
+      payload.userMemory?.updatedAt ??
+      payload.userMemory?.userMarkdown?.updatedAt ??
+      payload.userMarkdown?.updatedAt ??
+      null;
+
+    if (!response.ok || typeof nextMarkdown !== "string") {
+      throw new Error(
+        readTailorResumePayloadError(payload, "Unable to save USER.md."),
+      );
+    }
+
+    return {
+      markdown: nextMarkdown,
+      nonTechnologies: normalizeNonTechnologyTerms(nextNonTechnologies ?? []),
+      updatedAt: nextUpdatedAt,
+    } satisfies UserMarkdownSummary;
+  }
+
   async function saveSettingsUserMarkdown() {
     if (authState.status !== "signedIn") {
       return;
@@ -5026,60 +5560,284 @@ function App() {
     setSettingsUserMarkdownError(null);
 
     try {
-      const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
-        body: JSON.stringify({
-          action: "saveUserMarkdown",
-          markdown: draftSettingsUserMarkdown,
-          updatedAt: savedSettingsUserMarkdown.updatedAt,
-        }),
-        credentials: "include",
-        headers: {
-          Authorization: `Bearer ${authState.session.sessionToken}`,
-          "Content-Type": "application/json",
-        },
-        method: "PATCH",
+      const nextUserMarkdown = await persistUserMarkdown({
+        markdown: draftSettingsUserMarkdown,
+        nonTechnologies: savedSettingsUserMarkdown.nonTechnologies,
+        updatedAt: savedSettingsUserMarkdown.updatedAt,
       });
-      const payload = (await response.json().catch(() => ({}))) as {
-        error?: string;
-        userMarkdown?: UserMarkdownSummary;
-      };
 
-      if (response.status === 401) {
-        await invalidateAuthSession();
-        return;
+      if (nextUserMarkdown) {
+        applySavedUserMarkdown(nextUserMarkdown);
+        setIsSettingsUserMarkdownOpen(false);
       }
-
-      if (!response.ok || !payload.userMarkdown) {
-        throw new Error(
-          readTailorResumePayloadError(payload, "Unable to save USER.md."),
-        );
-      }
-
-      const nextUserMarkdown: UserMarkdownSummary = {
-        markdown: payload.userMarkdown.markdown,
-        updatedAt: payload.userMarkdown.updatedAt ?? null,
-      };
-
-      setSavedSettingsUserMarkdown(nextUserMarkdown);
-      setDraftSettingsUserMarkdown(nextUserMarkdown.markdown);
-      setIsSettingsUserMarkdownOpen(false);
-      setPersonalInfoState((currentState) =>
-        currentState.status === "ready"
-          ? {
-              personalInfo: {
-                ...currentState.personalInfo,
-                userMarkdown: nextUserMarkdown,
-              },
-              status: "ready",
-            }
-          : currentState,
-      );
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unable to save USER.md.";
       setSettingsUserMarkdownError(message);
     } finally {
       setIsSavingSettingsUserMarkdown(false);
+    }
+  }
+
+  async function saveSettingsNonTechnologies() {
+    if (authState.status !== "signedIn") {
+      return;
+    }
+
+    if (!isSettingsNonTechnologiesChanged) {
+      setSettingsNonTechnologyError(null);
+      return;
+    }
+
+    setIsSavingSettingsNonTechnologies(true);
+    setSettingsNonTechnologyError(null);
+
+    try {
+      const nextUserMarkdown = await persistUserMarkdown({
+        markdown: savedSettingsUserMarkdown.markdown,
+        nonTechnologies: draftSettingsNonTechnologies,
+        updatedAt: savedSettingsUserMarkdown.updatedAt,
+      });
+
+      if (nextUserMarkdown) {
+        applySavedUserMarkdown(nextUserMarkdown);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to save non-technology terms.";
+      setSettingsNonTechnologyError(message);
+    } finally {
+      setIsSavingSettingsNonTechnologies(false);
+    }
+  }
+
+  async function toggleInterviewNonTechnologyTerm(term: string) {
+    if (authState.status !== "signedIn") {
+      setTailorInterviewError(
+        "Connect Google before updating non-technology terms.",
+      );
+      return;
+    }
+
+    const normalizedTerm = normalizeNonTechnologyTerm(term);
+
+    if (!normalizedTerm) {
+      return;
+    }
+
+    const currentUserMarkdown =
+      personalInfo?.userMarkdown ?? savedSettingsUserMarkdown;
+    const currentTerms = currentUserMarkdown.nonTechnologies;
+    const isAlreadyNonTechnology = currentTerms.some(
+      (currentTerm) => normalizeNonTechnologyTerm(currentTerm) === normalizedTerm,
+    );
+    const nextTerms = isAlreadyNonTechnology
+      ? currentTerms.filter(
+          (currentTerm) =>
+            normalizeNonTechnologyTerm(currentTerm) !== normalizedTerm,
+        )
+      : normalizeNonTechnologyTerms([...currentTerms, normalizedTerm]);
+    const shouldRequestCompletion =
+      !isAlreadyNonTechnology &&
+      areAllTailorInterviewScrapedTermsNonTechnologies({
+        interview: tailorInterview,
+        nonTechnologies: nextTerms,
+      });
+
+    setPendingInterviewNonTechnologyTerms((currentTerms) =>
+      normalizeNonTechnologyTerms([...currentTerms, normalizedTerm]),
+    );
+    setTailorInterviewError(null);
+
+    try {
+      const nextUserMarkdown = await persistUserMarkdown({
+        markdown: currentUserMarkdown.markdown,
+        nonTechnologies: nextTerms,
+        updatedAt: currentUserMarkdown.updatedAt,
+      });
+
+      if (nextUserMarkdown) {
+        applySavedUserMarkdown(nextUserMarkdown);
+      }
+
+      if (shouldRequestCompletion && tailorInterview) {
+        const interviewId = tailorInterview.id;
+        const result = await patchTailorResume({
+          action: "requestTailorResumeInterviewCompletion",
+          interviewId,
+        });
+        const profileSummary = readTailorResumeProfileSummary(result.payload);
+        const matchingInterview =
+          profileSummary?.tailoringInterviews.find(
+            (interview) => interview.id === interviewId,
+          ) ??
+          profileSummary?.tailoringInterview ??
+          null;
+
+        if (!result.ok || !matchingInterview) {
+          throw new Error(
+            readTailorResumePayloadError(
+              result.payload,
+              "Unable to prepare the finish prompt.",
+            ),
+          );
+        }
+
+        setTailorInterview(matchingInterview);
+        setIsTailorInterviewFinishPromptOpen(true);
+      }
+    } catch (error) {
+      setTailorInterviewError(
+        error instanceof Error
+          ? error.message
+          : "Unable to update non-technology terms.",
+      );
+    } finally {
+      setPendingInterviewNonTechnologyTerms((currentTerms) =>
+        currentTerms.filter(
+          (currentTerm) =>
+            normalizeNonTechnologyTerm(currentTerm) !== normalizedTerm,
+        ),
+      );
+    }
+  }
+
+  async function generateTailorInterviewExamples() {
+    if (
+      !tailorInterview ||
+      isGeneratingTailorInterviewExamples ||
+      isTailorInterviewBusy
+    ) {
+      return;
+    }
+
+    const interviewId = tailorInterview.id;
+    const streamedMessage: TailorResumeConversationMessage = {
+      id: `streaming-tailor-examples:${interviewId}:${Date.now()}`,
+      role: "assistant",
+      technologyContexts: [],
+      text: "",
+      toolCalls: [],
+    };
+
+    const publishStreamedMessage = () => {
+      setTailorInterview((currentInterview) => {
+        if (!currentInterview || currentInterview.id !== interviewId) {
+          return currentInterview;
+        }
+
+        const conversationWithoutStream = currentInterview.conversation.filter(
+          (message) => message.id !== streamedMessage.id,
+        );
+
+        return {
+          ...currentInterview,
+          conversation: [
+            ...conversationWithoutStream,
+            {
+              ...streamedMessage,
+              technologyContexts: [...streamedMessage.technologyContexts],
+              toolCalls: [...streamedMessage.toolCalls],
+            },
+          ],
+          updatedAt: new Date().toISOString(),
+        };
+      });
+    };
+    const handleInterviewStreamEvent = (
+      event: TailorResumeInterviewStreamEvent,
+    ) => {
+      if (event.kind === "reset") {
+        streamedMessage.text = "";
+        streamedMessage.technologyContexts = [];
+        return;
+      }
+
+      if (
+        (event.kind === "text-start" || event.kind === "text-delta") &&
+        event.field !== "assistantMessage"
+      ) {
+        return;
+      }
+
+      if (event.kind === "text-delta") {
+        streamedMessage.text = `${streamedMessage.text}${event.delta}`;
+        publishStreamedMessage();
+        return;
+      }
+
+      if (event.kind === "card") {
+        streamedMessage.technologyContexts = [
+          ...streamedMessage.technologyContexts,
+          event.card,
+        ];
+        publishStreamedMessage();
+      }
+    };
+    const requestController = beginTailorRequest();
+
+    setTailorInterviewError(null);
+    setIsGeneratingTailorInterviewExamples(true);
+    setIsTailorInterviewFinishPromptOpen(false);
+
+    try {
+      const result = await patchTailorResume(
+        {
+          action: "generateTailorResumeInterviewExamples",
+          interviewId,
+        },
+        {
+          onInterviewStreamEvent: handleInterviewStreamEvent,
+          onStepEvent: (stepEvent) => {
+            if (activeTailorRequestAbortControllerRef.current !== requestController) {
+              return;
+            }
+
+            recordTailorGenerationStepEvent(stepEvent);
+          },
+          signal: requestController.signal,
+        },
+      );
+      const profileSummary = readTailorResumeProfileSummary(result.payload);
+
+      if (!result.ok || !profileSummary?.tailoringInterview) {
+        throw new Error(
+          readTailorResumePayloadError(
+            result.payload,
+            "Unable to generate technology examples.",
+          ),
+        );
+      }
+
+      const matchingInterview =
+        profileSummary.tailoringInterviews.find(
+          (interview) => interview.id === interviewId,
+        ) ??
+        profileSummary.tailoringInterview;
+
+      setTailorInterview(matchingInterview);
+      syncTailoredResumeSummariesFromPayload(result.payload);
+      void loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
+      setCaptureState("needs_input");
+
+      if (matchingInterview.completionRequestedAt) {
+        setIsTailorInterviewFinishPromptOpen(true);
+      }
+    } catch (error) {
+      if (isAbortError(error)) {
+        return;
+      }
+
+      setTailorInterviewError(
+        error instanceof Error
+          ? error.message
+          : "Unable to generate technology examples.",
+      );
+    } finally {
+      clearTailorRequest(requestController);
+      setIsGeneratingTailorInterviewExamples(false);
     }
   }
 
@@ -5664,9 +6422,12 @@ function App() {
     if (authState.status !== "signedIn") {
       setSavedSettingsUserMarkdown({
         markdown: defaultUserMarkdown,
+        nonTechnologies: [],
         updatedAt: null,
       });
       setDraftSettingsUserMarkdown(defaultUserMarkdown);
+      setDraftSettingsNonTechnologies([]);
+      setDraftSettingsNonTechnologyInput("");
       setSettingsUserMarkdownError(null);
       return;
     }
@@ -5679,18 +6440,23 @@ function App() {
 
     if (
       savedSettingsUserMarkdown.updatedAt === nextUserMarkdown.updatedAt &&
-      savedSettingsUserMarkdown.markdown === nextUserMarkdown.markdown
+      savedSettingsUserMarkdown.markdown === nextUserMarkdown.markdown &&
+      savedSettingsUserMarkdown.nonTechnologies.join("\n") ===
+        nextUserMarkdown.nonTechnologies.join("\n")
     ) {
       return;
     }
 
     setSavedSettingsUserMarkdown(nextUserMarkdown);
     setDraftSettingsUserMarkdown(nextUserMarkdown.markdown);
+    setDraftSettingsNonTechnologies(nextUserMarkdown.nonTechnologies);
+    setDraftSettingsNonTechnologyInput("");
     setSettingsUserMarkdownError(null);
   }, [
     authState.status,
     personalInfoState,
     savedSettingsUserMarkdown.markdown,
+    savedSettingsUserMarkdown.nonTechnologies,
     savedSettingsUserMarkdown.updatedAt,
   ]);
 
@@ -5779,9 +6545,20 @@ function App() {
       return;
     }
 
-    setTailorInterview(currentPagePersonalInfoInterview);
+    if (
+      isGeneratingTailorQuestionForOpenInterview &&
+      !selectedPersonalInfoInterview
+    ) {
+      return;
+    }
 
-    if (!currentPagePersonalInfoInterview) {
+    if (selectedTailorInterviewId && !selectedPersonalInfoInterview) {
+      setSelectedTailorInterviewId(null);
+    }
+
+    setTailorInterview(activePersonalInfoInterview);
+
+    if (!activePersonalInfoInterview) {
       dismissedTailorInterviewPageIdRef.current = null;
       setDraftTailorInterviewAnswer("");
       setPendingTailorInterviewAnswerMessage(null);
@@ -5793,15 +6570,18 @@ function App() {
 
       if (
         dismissedTailorInterviewPageIdRef.current !==
-        currentPagePersonalInfoInterview.id
+        activePersonalInfoInterview.id
       ) {
         setIsTailorInterviewOpen(true);
       }
     }
   }, [
-    currentPagePersonalInfoInterview,
+    activePersonalInfoInterview,
+    isGeneratingTailorQuestionForOpenInterview,
     isSuppressingActiveTailoringHydration,
     personalInfoState,
+    selectedPersonalInfoInterview,
+    selectedTailorInterviewId,
   ]);
 
   useEffect(() => {
