@@ -38,7 +38,7 @@ export function shouldDeleteActiveTailorResumeRun(input: {
     input.matchingInterviewStatus?.trim().toLowerCase() ?? null;
 
   if (
-    normalizedInterviewStatus === "queued" ||
+    normalizedInterviewStatus === "pending" ||
     normalizedInterviewStatus === "deciding" ||
     normalizedInterviewStatus === "ready"
   ) {

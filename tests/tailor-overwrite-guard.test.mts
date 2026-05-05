@@ -281,3 +281,17 @@ test("still matches pid-based career pages when only non-identity query params d
     true,
   );
 });
+
+test("matches a saved tailored resume when the current page is a nested apply URL", () => {
+  assert.equal(
+    matchesTailorOverwritePageIdentity({
+      jobUrl: "https://jobs.example.com/roles/123",
+      pageIdentity: {
+        canonicalUrl: "https://jobs.example.com/roles/123/apply?utm_source=extension",
+        jobUrl: null,
+        pageUrl: "https://jobs.example.com/roles/123/apply",
+      },
+    }),
+    true,
+  );
+});

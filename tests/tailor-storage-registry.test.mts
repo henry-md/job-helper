@@ -91,6 +91,57 @@ test("finds the current-page registry entry even when the stored key is legacy",
   assert.equal(entry?.value.pageUrl, legacyKey);
 });
 
+test("finds a saved registry entry when the current page is a nested apply URL", () => {
+  const savedUrl = "https://jobs.example.com/roles/123";
+  const entry = findTailorStorageRegistryEntry({
+    match: {
+      pageIdentity: {
+        canonicalUrl: "https://jobs.example.com/roles/123/apply",
+        jobUrl: null,
+        pageUrl: "https://jobs.example.com/roles/123/apply?utm_source=extension",
+      },
+    },
+    readEntryKey: readDummyEntryKey,
+    readEntryUrls: readDummyEntryUrls,
+    registry: {
+      [savedUrl]: {
+        capturedAt: "2026-04-26T18:00:00.000Z",
+        pageUrl: savedUrl,
+      },
+    },
+  });
+
+  assert.equal(entry?.key, savedUrl);
+  assert.equal(entry?.value.pageUrl, savedUrl);
+});
+
+test("collects saved registry keys under the current nested apply URL", () => {
+  const savedUrl = "https://jobs.example.com/roles/123";
+  const matchingKeys = collectTailorStorageRegistryKeys({
+    match: {
+      pageIdentity: {
+        canonicalUrl: null,
+        jobUrl: null,
+        pageUrl: "https://jobs.example.com/roles/123/apply",
+      },
+    },
+    readEntryKey: readDummyEntryKey,
+    readEntryUrls: readDummyEntryUrls,
+    registry: {
+      [savedUrl]: {
+        capturedAt: "2026-04-26T18:00:00.000Z",
+        pageUrl: savedUrl,
+      },
+      "https://jobs.example.com/roles/456": {
+        capturedAt: "2026-04-26T18:05:00.000Z",
+        pageUrl: "https://jobs.example.com/roles/456",
+      },
+    },
+  });
+
+  assert.deepEqual(matchingKeys, [savedUrl]);
+});
+
 test("collects all matching registry keys for one comparable job URL", () => {
   const legacyKey =
     "https://apply.careers.microsoft.com/careers/job/123?domain=microsoft.com";

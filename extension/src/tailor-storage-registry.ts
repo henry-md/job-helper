@@ -1,4 +1,7 @@
-import { normalizeComparableUrl } from "./job-helper.ts";
+import {
+  currentUrlMatchesSavedJobUrl,
+  normalizeComparableUrl,
+} from "./job-helper.ts";
 import { buildTailorRunRegistryKey } from "./tailor-run-registry.ts";
 
 export type ComparablePageIdentity = {
@@ -58,7 +61,12 @@ function entryMatchesComparableCandidates<T>(input: {
 
   if (
     entryComparableKey &&
-    input.comparableCandidates.has(entryComparableKey)
+    [...input.comparableCandidates].some((candidate) =>
+      currentUrlMatchesSavedJobUrl({
+        currentUrl: candidate,
+        savedJobUrl: entryComparableKey,
+      }),
+    )
   ) {
     return true;
   }
@@ -67,7 +75,12 @@ function entryMatchesComparableCandidates<T>(input: {
     const comparableCandidate = buildTailorRunRegistryKey(candidateUrl);
     return Boolean(
       comparableCandidate &&
-        input.comparableCandidates.has(comparableCandidate),
+        [...input.comparableCandidates].some((candidate) =>
+          currentUrlMatchesSavedJobUrl({
+            currentUrl: candidate,
+            savedJobUrl: comparableCandidate,
+          }),
+        ),
     );
   });
 }

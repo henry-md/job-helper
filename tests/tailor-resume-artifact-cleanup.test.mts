@@ -76,13 +76,13 @@ test("deletes stale running tailor resume runs", () => {
   );
 });
 
-test("keeps queued running tailor resume runs while another chat is active", () => {
+test("keeps pending question-start running tailor resume runs", () => {
   const now = Date.parse("2026-04-25T18:00:00.000Z");
 
   assert.equal(
     shouldDeleteActiveTailorResumeRun({
       hasMatchingInterview: true,
-      matchingInterviewStatus: "queued",
+      matchingInterviewStatus: "pending",
       now,
       status: "RUNNING",
       stepStatus: "running",

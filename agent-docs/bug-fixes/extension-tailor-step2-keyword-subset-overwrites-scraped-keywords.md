@@ -1,0 +1,4 @@
+- Symptom: the in-page job-keyword modal could first show the full Step 1 scraped keyword set, then collapse to a smaller set as Step 2 started.
+- Root cause: Step 2 uses an uncovered-keyword subset for follow-up-question decisions, but that subset was being published through the same `emphasizedTechnologies` fields and live badge messages used by the Step 1 keyword modal.
+- Fix: keep Step 1 scraped keywords as the displayed keyword source. Step 2 events still compute uncovered terms for the chat, but live page badge updates only come from Step 1, local run cards prefer Step 1 timing history over later step metadata, and pending-interview active state exposes the full planning keyword set.
+- Guardrail: do not reuse `emphasizedTechnologies` in page/modal-facing payloads for a question-only subset unless there is a separate field for the full scraped keyword set.

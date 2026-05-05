@@ -75,3 +75,17 @@ export function normalizeComparableUrl(value: string | null | undefined) {
     return trimmedValue;
   }
 }
+
+export function currentUrlMatchesSavedJobUrl(input: {
+  currentUrl: string | null | undefined;
+  savedJobUrl: string | null | undefined;
+}) {
+  const normalizedCurrentUrl = normalizeComparableUrl(input.currentUrl);
+  const normalizedSavedJobUrl = normalizeComparableUrl(input.savedJobUrl);
+
+  return Boolean(
+    normalizedCurrentUrl &&
+      normalizedSavedJobUrl &&
+      normalizedCurrentUrl.includes(normalizedSavedJobUrl),
+  );
+}

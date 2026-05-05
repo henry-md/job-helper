@@ -3,7 +3,10 @@ import type {
   TailorResumeExistingTailoringState,
   TailoredResumeSummary,
 } from "./job-helper.ts";
-import { normalizeComparableUrl } from "./comparable-job-url.ts";
+import {
+  currentUrlMatchesSavedJobUrl,
+  normalizeComparableUrl,
+} from "./comparable-job-url.ts";
 
 export type TailorOverwritePageIdentity = {
   canonicalUrl: string | null;
@@ -26,8 +29,12 @@ export function matchesTailorOverwritePageIdentity(input: {
     input.pageIdentity.canonicalUrl,
     input.pageIdentity.jobUrl,
   ]
-    .map(normalizeComparableUrl)
-    .some((candidate) => candidate === normalizedJobUrl);
+    .some((candidate) =>
+      currentUrlMatchesSavedJobUrl({
+        currentUrl: candidate,
+        savedJobUrl: normalizedJobUrl,
+      }),
+    );
 }
 
 function buildCompletedExistingTailoringState(
