@@ -459,6 +459,7 @@ button {
 
 .resume-interactive-page canvas {
   display: block;
+  border-radius: inherit;
 }
 
 .resume-interactive-text-layer {

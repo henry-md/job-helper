@@ -16,6 +16,7 @@ import type {
 } from "pdfjs-dist/types/src/display/api";
 import type {
   TailoredResumeInteractivePreviewQuery,
+  TailoredResumePreviewFocusQuery,
   TailoredResumePreviewHighlightTone,
 } from "../../lib/tailor-resume-preview-focus.ts";
 import { resolveTailoredResumePreviewFocusRanges } from "../../lib/tailor-resume-preview-focus.ts";
@@ -25,6 +26,10 @@ type PdfPageViewport = ReturnType<PDFPageProxy["getViewport"]>;
 
 type TailoredResumeOverlayPreviewProps = {
   displayName: string;
+  focusKey?: string | null;
+  focusMatchKey?: string | null;
+  focusQuery?: TailoredResumePreviewFocusQuery | null;
+  focusRequest?: number;
   highlightQueries: TailoredResumeInteractivePreviewQuery[];
   pdfUrl: string | null;
 };
@@ -62,8 +67,20 @@ type PageHighlightSource = {
   pageMatchIndex: PageMatchIndex;
 };
 
+type PreviewMagnifierState = {
+  left: number;
+  top: number;
+  width: number;
+  x: number;
+  y: number;
+};
+
 let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
 const previewLoadRetryDelays = [150, 400];
+const previewGuidedFocusDurationMs = 320;
+const previewMagnifierHeight = 136;
+const previewMagnifierViewportInset = 6;
+const previewMagnifierZoom = 1.35;
 
 function waitForPreviewRetry(delayMs: number) {
   return new Promise<void>((resolve) => {
@@ -437,6 +454,129 @@ function buildHighlightRectsForNormalizedSlice(input: {
   return mergeHighlightRects(rects);
 }
 
+function summarizeHighlightRectGroup(rects: HighlightRect[]) {
+  if (rects.length === 0) {
+    return null;
+  }
+
+  const top = Math.min(...rects.map((rect) => rect.top));
+  const bottom = Math.max(...rects.map((rect) => rect.top + rect.height));
+
+  return {
+    height: bottom - top,
+    top,
+  };
+}
+
+function buildInteractivePreviewFocusScrollSignature(input: {
+  focusKey: string;
+  focusRequest: number;
+  rects: HighlightRect[];
+}) {
+  return `${input.focusKey}:${input.focusRequest}:${input.rects
+    .map((rect) =>
+      [
+        rect.left.toFixed(2),
+        rect.top.toFixed(2),
+        rect.width.toFixed(2),
+        rect.height.toFixed(2),
+      ].join(","),
+    )
+    .join("|")}`;
+}
+
+function resolveInteractivePreviewCenteredScrollTop(input: {
+  focusGroup: { height: number; top: number };
+  pageElement: HTMLDivElement;
+  scrollContainer: HTMLDivElement;
+}) {
+  const maxScrollTop = Math.max(
+    0,
+    input.scrollContainer.scrollHeight - input.scrollContainer.clientHeight,
+  );
+
+  if (maxScrollTop === 0) {
+    return 0;
+  }
+
+  const pageRect = input.pageElement.getBoundingClientRect();
+  const scrollContainerRect = input.scrollContainer.getBoundingClientRect();
+  const pageTopWithinScrollContent =
+    pageRect.top - scrollContainerRect.top + input.scrollContainer.scrollTop;
+  const focusCenterWithinScrollContent =
+    pageTopWithinScrollContent +
+    input.focusGroup.top +
+    input.focusGroup.height / 2;
+  const idealScrollTop =
+    focusCenterWithinScrollContent - input.scrollContainer.clientHeight / 2;
+
+  return Math.max(0, Math.min(idealScrollTop, maxScrollTop));
+}
+
+function resolvePreviewMagnifierState(input: {
+  horizontalBleed: number;
+  pageHeight: number;
+  pageViewportLeft: number;
+  pageViewportTop: number;
+  pageWidth: number;
+  pointerX: number;
+  pointerY: number;
+}) {
+  const width = input.pageWidth + input.horizontalBleed * 2;
+  const height = Math.min(previewMagnifierHeight, Math.max(96, input.pageHeight - 24));
+  const top = Math.max(
+    12,
+    Math.min(input.pointerY - height / 2, input.pageHeight - height - 12),
+  );
+
+  return {
+    left: input.pageViewportLeft - input.horizontalBleed,
+    top: input.pageViewportTop + top,
+    width,
+    x: Math.max(0, Math.min(input.pointerX, input.pageWidth)),
+    y: Math.max(0, Math.min(input.pointerY, input.pageHeight)),
+  } satisfies PreviewMagnifierState;
+}
+
+function resolvePreviewMagnifierHorizontalBleed(input: {
+  pageRect: DOMRect;
+  scrollContainer: HTMLDivElement | null;
+}) {
+  const viewportRight =
+    typeof window === "undefined"
+      ? input.scrollContainer?.getBoundingClientRect().right ?? input.pageRect.right
+      : window.innerWidth;
+
+  return Math.max(
+    0,
+    viewportRight - input.pageRect.right - previewMagnifierViewportInset,
+  );
+}
+
+function buildFocusRects(input: {
+  focusQuery: TailoredResumePreviewFocusQuery | null;
+  pageMatchIndex: PageMatchIndex;
+}) {
+  const resolvedRanges = resolveTailoredResumePreviewFocusRanges({
+    pageText: input.pageMatchIndex.normalizedText,
+    query: input.focusQuery,
+  });
+
+  return resolvedRanges.flatMap((range) => {
+    const rects = buildHighlightRectsForNormalizedSlice({
+      end: range.end,
+      pageMatchIndex: input.pageMatchIndex,
+      start: range.start,
+    });
+
+    if (!rects) {
+      return [];
+    }
+
+    return rects;
+  });
+}
+
 function buildPageHighlightMatches(input: {
   pageMatchIndex: PageMatchIndex;
   queries: TailoredResumeInteractivePreviewQuery[];
@@ -469,18 +609,43 @@ function buildPageHighlightMatches(input: {
   });
 }
 
+function buildFocusRectsFromPageHighlightMatches(input: {
+  focusMatchKey: string | null;
+  pageHighlightMatches: PageHighlightMatch[];
+}) {
+  if (!input.focusMatchKey) {
+    return [];
+  }
+
+  return input.pageHighlightMatches.flatMap((match) =>
+    match.key.startsWith(`${input.focusMatchKey}:`) ? match.rects : [],
+  );
+}
+
 function OverlayPreviewPage({
+  focusActive,
+  focusKey,
+  focusMatchKey,
+  focusQuery,
+  focusRequest,
   highlightQueries,
   page,
   scale,
+  scrollContainerRef,
 }: {
+  focusActive: boolean;
+  focusKey: string | null;
+  focusMatchKey: string | null;
+  focusQuery: TailoredResumePreviewFocusQuery | null;
+  focusRequest: number;
   highlightQueries: TailoredResumeInteractivePreviewQuery[];
   page: LoadedPdfPage;
   scale: number;
+  scrollContainerRef: React.RefObject<HTMLDivElement | null>;
 }) {
-  const [pageHighlightMatches, setPageHighlightMatches] = useState<PageHighlightMatch[]>(
-    [],
-  );
+  const [dismissedGuidedFocusToken, setDismissedGuidedFocusToken] = useState<
+    string | null
+  >(null);
   const [highlightSource, setHighlightSource] = useState<PageHighlightSource | null>(
     null,
   );
@@ -488,9 +653,52 @@ function OverlayPreviewPage({
   const [renderState, setRenderState] = useState<"error" | "loading" | "ready">(
     "loading",
   );
+  const [magnifierCanvasDataUrl, setMagnifierCanvasDataUrl] = useState<string | null>(
+    null,
+  );
+  const [magnifierState, setMagnifierState] =
+    useState<PreviewMagnifierState | null>(null);
   const pageHeight = page.baseHeight * scale;
   const pageWidth = page.baseWidth * scale;
+  const pageRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const lastScrolledFocusSignatureRef = useRef<string | null>(null);
+  const { focusHighlightRects, pageHighlightMatches } = useMemo(() => {
+    if (!highlightSource) {
+      return {
+        focusHighlightRects: [] as HighlightRect[],
+        pageHighlightMatches: [] as PageHighlightMatch[],
+      };
+    }
+
+    const nextPageHighlightMatches = buildPageHighlightMatches({
+      pageMatchIndex: highlightSource.pageMatchIndex,
+      queries: highlightQueries,
+    });
+    const nextFocusHighlightRects =
+      buildFocusRectsFromPageHighlightMatches({
+        focusMatchKey,
+        pageHighlightMatches: nextPageHighlightMatches,
+      });
+
+    return {
+      focusHighlightRects:
+        nextFocusHighlightRects.length > 0
+          ? nextFocusHighlightRects
+          : buildFocusRects({
+              focusQuery,
+              pageMatchIndex: highlightSource.pageMatchIndex,
+            }),
+      pageHighlightMatches: nextPageHighlightMatches,
+    };
+  }, [focusMatchKey, focusQuery, highlightQueries, highlightSource]);
+  const currentGuidedFocusToken =
+    focusActive && focusKey && focusHighlightRects.length > 0
+      ? `${focusKey}:${focusRequest}`
+      : null;
+  const shouldShowGuidedFocus =
+    currentGuidedFocusToken !== null &&
+    dismissedGuidedFocusToken !== currentGuidedFocusToken;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -507,7 +715,8 @@ function OverlayPreviewPage({
     async function renderPage() {
       setRenderState("loading");
       setHighlightSource(null);
-      setPageHighlightMatches([]);
+      setMagnifierCanvasDataUrl(null);
+      setMagnifierState(null);
       setRenderErrorMessage(null);
 
       try {
@@ -546,6 +755,13 @@ function OverlayPreviewPage({
           return;
         }
 
+        try {
+          setMagnifierCanvasDataUrl(resolvedCanvas.toDataURL("image/png"));
+        } catch (magnifierError) {
+          console.warn("Unable to prepare preview magnifier image.", magnifierError);
+          setMagnifierCanvasDataUrl(null);
+        }
+
         const textContent = await page.page.getTextContent();
 
         if (isCancelled) {
@@ -567,7 +783,8 @@ function OverlayPreviewPage({
 
         console.error(error);
         setHighlightSource(null);
-        setPageHighlightMatches([]);
+        setMagnifierCanvasDataUrl(null);
+        setMagnifierState(null);
         setRenderErrorMessage(
           error instanceof Error ? error.message : "Unknown PDF rendering error.",
         );
@@ -584,27 +801,101 @@ function OverlayPreviewPage({
   }, [page.page, scale]);
 
   useEffect(() => {
-    if (!highlightSource) {
-      setPageHighlightMatches([]);
+    if (!currentGuidedFocusToken) {
       return;
     }
 
-    try {
-      setPageHighlightMatches(
-        buildPageHighlightMatches({
-          pageMatchIndex: highlightSource.pageMatchIndex,
-          queries: highlightQueries,
-        }),
-      );
-    } catch (highlightError) {
-      console.warn("Unable to compute extension preview highlights.", highlightError);
-      setPageHighlightMatches([]);
+    const focusScrollSignature = buildInteractivePreviewFocusScrollSignature({
+      focusKey: focusKey ?? currentGuidedFocusToken,
+      focusRequest,
+      rects: focusHighlightRects,
+    });
+
+    const pageElement = pageRef.current;
+    const scrollContainer = scrollContainerRef.current;
+    const focusGroup = summarizeHighlightRectGroup(focusHighlightRects);
+
+    if (
+      lastScrolledFocusSignatureRef.current === focusScrollSignature ||
+      !pageElement ||
+      !scrollContainer ||
+      !focusGroup
+    ) {
+      const clearFocusTimer = window.setTimeout(() => {
+        setDismissedGuidedFocusToken((currentToken) =>
+          currentToken === currentGuidedFocusToken
+            ? currentToken
+            : currentGuidedFocusToken,
+        );
+      }, previewGuidedFocusDurationMs);
+
+      return () => {
+        window.clearTimeout(clearFocusTimer);
+      };
     }
-  }, [highlightQueries, highlightSource]);
+
+    lastScrolledFocusSignatureRef.current = focusScrollSignature;
+
+    const clampedScrollTop = resolveInteractivePreviewCenteredScrollTop({
+      focusGroup,
+      pageElement,
+      scrollContainer,
+    });
+
+    scrollContainer.scrollTo({
+      behavior: "smooth",
+      top: clampedScrollTop,
+    });
+
+    const clearFocusTimer = window.setTimeout(() => {
+      setDismissedGuidedFocusToken((currentToken) =>
+        currentToken === currentGuidedFocusToken
+          ? currentToken
+          : currentGuidedFocusToken,
+      );
+    }, previewGuidedFocusDurationMs);
+
+    return () => {
+      window.clearTimeout(clearFocusTimer);
+    };
+  }, [
+    currentGuidedFocusToken,
+    focusHighlightRects,
+    focusKey,
+    focusRequest,
+    scrollContainerRef,
+  ]);
 
   return (
     <div
       className="tailored-preview-overlay-page"
+      onPointerLeave={() => {
+        setMagnifierState(null);
+      }}
+      onPointerMove={(event) => {
+        if (renderState !== "ready" || !magnifierCanvasDataUrl) {
+          return;
+        }
+
+        const pageRect = event.currentTarget.getBoundingClientRect();
+        const horizontalBleed = resolvePreviewMagnifierHorizontalBleed({
+          pageRect,
+          scrollContainer: scrollContainerRef.current,
+        });
+
+        setMagnifierState(
+          resolvePreviewMagnifierState({
+            horizontalBleed,
+            pageHeight,
+            pageViewportLeft: pageRect.left,
+            pageViewportTop: pageRect.top,
+            pageWidth,
+            pointerX: event.clientX - pageRect.left,
+            pointerY: event.clientY - pageRect.top,
+          }),
+        );
+      }}
+      ref={pageRef}
       style={{
         height: `${pageHeight}px`,
         width: `${pageWidth}px`,
@@ -633,6 +924,86 @@ function OverlayPreviewPage({
           )}
         </div>
       ) : null}
+      {shouldShowGuidedFocus ? (
+        <div className="tailored-preview-overlay-layer">
+          {focusHighlightRects.map((rect, index) => (
+            <div
+              className="tailored-preview-overlay-highlight tailored-preview-overlay-highlight--focus tailored-preview-overlay-highlight--guided tailored-preview-overlay-highlight--animated"
+              data-tailor-resume-active-highlight={index === 0 ? "true" : undefined}
+              key={`${focusKey ?? "steady"}-${focusRequest}-${page.pageNumber}-${index}`}
+              style={{
+                height: `${rect.height}px`,
+                left: `${rect.left}px`,
+                top: `${rect.top}px`,
+                width: `${rect.width}px`,
+              }}
+            />
+          ))}
+        </div>
+      ) : null}
+      {magnifierState && magnifierCanvasDataUrl && renderState === "ready" ? (
+        <div
+          aria-hidden="true"
+          className="tailored-preview-overlay-magnifier"
+          style={{
+            backgroundImage: `url(${magnifierCanvasDataUrl})`,
+            backgroundPosition: `${magnifierState.width / 2 - magnifierState.x * previewMagnifierZoom}px ${
+              previewMagnifierHeight / 2 - magnifierState.y * previewMagnifierZoom
+            }px`,
+            backgroundSize: `${pageWidth * previewMagnifierZoom}px ${
+              pageHeight * previewMagnifierZoom
+            }px`,
+            height: `${Math.min(previewMagnifierHeight, Math.max(96, pageHeight - 24))}px`,
+            left: `${magnifierState.left}px`,
+            top: `${magnifierState.top}px`,
+            width: `${magnifierState.width}px`,
+          }}
+        >
+          <div
+            className="tailored-preview-overlay-magnifier-highlight-layer"
+            style={{
+              height: `${pageHeight}px`,
+              transform: `translate(${magnifierState.width / 2 - magnifierState.x * previewMagnifierZoom}px, ${
+                previewMagnifierHeight / 2 - magnifierState.y * previewMagnifierZoom
+              }px) scale(${previewMagnifierZoom})`,
+              width: `${pageWidth}px`,
+            }}
+          >
+            {pageHighlightMatches.flatMap((match) =>
+              match.rects.map((rect, index) => (
+                <div
+                  className={`tailored-preview-overlay-highlight ${
+                    match.tone === "changed"
+                      ? "tailored-preview-overlay-highlight--changed"
+                      : "tailored-preview-overlay-highlight--added"
+                  }`}
+                  key={`magnifier-steady-${match.key}-${page.pageNumber}-${index}`}
+                  style={{
+                    height: `${rect.height}px`,
+                    left: `${rect.left}px`,
+                    top: `${rect.top}px`,
+                    width: `${rect.width}px`,
+                  }}
+                />
+              )),
+            )}
+            {shouldShowGuidedFocus
+              ? focusHighlightRects.map((rect, index) => (
+                  <div
+                    className="tailored-preview-overlay-highlight tailored-preview-overlay-highlight--focus tailored-preview-overlay-highlight--guided"
+                    key={`magnifier-focus-${focusKey ?? "steady"}-${focusRequest}-${page.pageNumber}-${index}`}
+                    style={{
+                      height: `${rect.height}px`,
+                      left: `${rect.left}px`,
+                      top: `${rect.top}px`,
+                      width: `${rect.width}px`,
+                    }}
+                  />
+                ))
+              : null}
+          </div>
+        </div>
+      ) : null}
       {renderState === "loading" ? (
         <div className="tailored-preview-overlay-loading">
           <div className="tailored-preview-overlay-pill">
@@ -656,6 +1027,10 @@ function OverlayPreviewPage({
 
 export default function TailoredResumeOverlayPreview({
   displayName,
+  focusKey = null,
+  focusMatchKey = null,
+  focusQuery = null,
+  focusRequest = 0,
   highlightQueries,
   pdfUrl,
 }: TailoredResumeOverlayPreviewProps) {
@@ -690,9 +1065,14 @@ export default function TailoredResumeOverlayPreview({
 
   useEffect(() => {
     if (!pdfUrl) {
-      setLoadedPages([]);
-      setDocumentState("idle");
-      return;
+      const resetFrame = window.requestAnimationFrame(() => {
+        setLoadedPages([]);
+        setDocumentState("idle");
+      });
+
+      return () => {
+        window.cancelAnimationFrame(resetFrame);
+      };
     }
 
     const resolvedPdfUrl = pdfUrl;
@@ -827,11 +1207,17 @@ export default function TailoredResumeOverlayPreview({
 
           {documentState === "ready"
             ? loadedPages.map((page) => (
-                <OverlayPreviewPage
+              <OverlayPreviewPage
+                  focusActive={Boolean(focusKey)}
+                  focusKey={focusKey}
+                  focusMatchKey={focusMatchKey}
+                  focusQuery={focusQuery}
+                  focusRequest={focusRequest}
                   highlightQueries={highlightQueries}
                   key={page.pageNumber}
                   page={page}
                   scale={pageScale}
+                  scrollContainerRef={containerRef}
                 />
               ))
             : null}

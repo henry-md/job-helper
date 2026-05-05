@@ -68,9 +68,20 @@ type PageHighlightSource = {
   pageMatchIndex: PageMatchIndex;
 };
 
+type PreviewMagnifierState = {
+  left: number;
+  top: number;
+  width: number;
+  x: number;
+  y: number;
+};
+
 let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
 const interactivePreviewLoadRetryDelays = [150, 400];
 const interactivePreviewGuidedFocusDurationMs = 320;
+const interactivePreviewMagnifierHeight = 136;
+const interactivePreviewMagnifierViewportInset = 6;
+const interactivePreviewMagnifierZoom = 1.35;
 const maxPreviewSnapshotWidth = 1200;
 
 type PreviewSnapshotHighlightTone = "added" | "changed" | "focus";
@@ -653,6 +664,49 @@ function resolveInteractivePreviewCenteredScrollTop(input: {
   return Math.max(0, Math.min(idealScrollTop, maxScrollTop));
 }
 
+function resolvePreviewMagnifierState(input: {
+  horizontalBleed: number;
+  pageHeight: number;
+  pageViewportLeft: number;
+  pageViewportTop: number;
+  pageWidth: number;
+  pointerX: number;
+  pointerY: number;
+}) {
+  const width = input.pageWidth + input.horizontalBleed * 2;
+  const height = Math.min(
+    interactivePreviewMagnifierHeight,
+    Math.max(96, input.pageHeight - 24),
+  );
+  const top = Math.max(
+    12,
+    Math.min(input.pointerY - height / 2, input.pageHeight - height - 12),
+  );
+
+  return {
+    left: input.pageViewportLeft - input.horizontalBleed,
+    top: input.pageViewportTop + top,
+    width,
+    x: Math.max(0, Math.min(input.pointerX, input.pageWidth)),
+    y: Math.max(0, Math.min(input.pointerY, input.pageHeight)),
+  } satisfies PreviewMagnifierState;
+}
+
+function resolvePreviewMagnifierHorizontalBleed(input: {
+  pageRect: DOMRect;
+  scrollContainer: HTMLDivElement | null;
+}) {
+  const viewportRight =
+    typeof window === "undefined"
+      ? input.scrollContainer?.getBoundingClientRect().right ?? input.pageRect.right
+      : window.innerWidth;
+
+  return Math.max(
+    0,
+    viewportRight - input.pageRect.right - interactivePreviewMagnifierViewportInset,
+  );
+}
+
 function buildFocusRects(input: {
   focusQuery: TailoredResumePreviewFocusQuery | null;
   pageMatchIndex: PageMatchIndex;
@@ -759,6 +813,11 @@ function InteractivePreviewPage({
   const [renderState, setRenderState] = useState<"error" | "loading" | "ready">(
     "loading",
   );
+  const [magnifierCanvasDataUrl, setMagnifierCanvasDataUrl] = useState<string | null>(
+    null,
+  );
+  const [magnifierState, setMagnifierState] =
+    useState<PreviewMagnifierState | null>(null);
   const pageHeight = page.baseHeight * scale;
   const pageWidth = page.baseWidth * scale;
   const pageRef = useRef<HTMLDivElement | null>(null);
@@ -787,6 +846,8 @@ function InteractivePreviewPage({
       setFocusHighlightRects([]);
       setHighlightSource(null);
       setPageHighlightMatches([]);
+      setMagnifierCanvasDataUrl(null);
+      setMagnifierState(null);
       setRenderErrorMessage(null);
 
       try {
@@ -797,7 +858,10 @@ function InteractivePreviewPage({
         }
 
         const viewport = page.page.getViewport({ scale });
-        const outputScale = window.devicePixelRatio || 1;
+        const outputScale = Math.min(
+          3,
+          Math.max(window.devicePixelRatio || 1, 2),
+        );
         const canvasContext = resolvedCanvas.getContext("2d");
 
         if (!canvasContext) {
@@ -820,6 +884,13 @@ function InteractivePreviewPage({
 
         if (isCancelled) {
           return;
+        }
+
+        try {
+          setMagnifierCanvasDataUrl(resolvedCanvas.toDataURL("image/png"));
+        } catch (magnifierError) {
+          console.warn("Unable to prepare preview magnifier image.", magnifierError);
+          setMagnifierCanvasDataUrl(null);
         }
 
         const textContent = await page.page.getTextContent();
@@ -853,6 +924,8 @@ function InteractivePreviewPage({
         setFocusHighlightRects([]);
         setHighlightSource(null);
         setPageHighlightMatches([]);
+        setMagnifierCanvasDataUrl(null);
+        setMagnifierState(null);
         setRenderErrorMessage(
           error instanceof Error ? error.message : "Unknown PDF rendering error.",
         );
@@ -1024,7 +1097,33 @@ function InteractivePreviewPage({
 
   return (
     <div
-      className="resume-interactive-page relative overflow-hidden rounded-[0.35rem] bg-white shadow-[0_30px_80px_rgba(0,0,0,0.24)]"
+      className="resume-interactive-page relative rounded-[0.35rem] bg-white shadow-[0_30px_80px_rgba(0,0,0,0.24)]"
+      onPointerLeave={() => {
+        setMagnifierState(null);
+      }}
+      onPointerMove={(event) => {
+        if (renderState !== "ready" || !magnifierCanvasDataUrl) {
+          return;
+        }
+
+        const pageRect = event.currentTarget.getBoundingClientRect();
+        const horizontalBleed = resolvePreviewMagnifierHorizontalBleed({
+          pageRect,
+          scrollContainer: scrollContainerRef.current,
+        });
+
+        setMagnifierState(
+          resolvePreviewMagnifierState({
+            horizontalBleed,
+            pageHeight,
+            pageViewportLeft: pageRect.left,
+            pageViewportTop: pageRect.top,
+            pageWidth,
+            pointerX: event.clientX - pageRect.left,
+            pointerY: event.clientY - pageRect.top,
+          }),
+        );
+      }}
       ref={pageRef}
       style={{
         height: `${pageHeight}px`,
@@ -1072,6 +1171,76 @@ function InteractivePreviewPage({
               }}
             />
           ))}
+        </div>
+      ) : null}
+      {magnifierState && magnifierCanvasDataUrl && renderState === "ready" ? (
+        <div
+          aria-hidden="true"
+          className="resume-interactive-magnifier"
+          style={{
+            backgroundImage: `url(${magnifierCanvasDataUrl})`,
+            backgroundPosition: `${magnifierState.width / 2 - magnifierState.x * interactivePreviewMagnifierZoom}px ${
+              interactivePreviewMagnifierHeight / 2 -
+              magnifierState.y * interactivePreviewMagnifierZoom
+            }px`,
+            backgroundSize: `${pageWidth * interactivePreviewMagnifierZoom}px ${
+              pageHeight * interactivePreviewMagnifierZoom
+            }px`,
+            height: `${Math.min(
+              interactivePreviewMagnifierHeight,
+              Math.max(96, pageHeight - 24),
+            )}px`,
+            left: `${magnifierState.left}px`,
+            top: `${magnifierState.top}px`,
+            width: `${magnifierState.width}px`,
+          }}
+        >
+          <div
+            className="resume-interactive-magnifier-highlight-layer"
+            style={{
+              height: `${pageHeight}px`,
+              transform: `translate(${magnifierState.width / 2 - magnifierState.x * interactivePreviewMagnifierZoom}px, ${
+                interactivePreviewMagnifierHeight / 2 -
+                magnifierState.y * interactivePreviewMagnifierZoom
+              }px) scale(${interactivePreviewMagnifierZoom})`,
+              width: `${pageWidth}px`,
+            }}
+          >
+            {pageHighlightMatches.flatMap((match) =>
+              match.rects.map((rect, index) => (
+                <div
+                  className={`resume-interactive-highlight ${
+                    match.tone === "changed"
+                      ? "resume-interactive-highlight--changed"
+                      : "resume-interactive-highlight--added"
+                  }`}
+                  key={`magnifier-steady-${match.key}-${page.pageNumber}-${index}`}
+                  style={{
+                    height: `${rect.height}px`,
+                    left: `${rect.left}px`,
+                    top: `${rect.top}px`,
+                    width: `${rect.width}px`,
+                  }}
+                />
+              )),
+            )}
+            {focusActive &&
+            focusHighlightRects.length > 0 &&
+            guidedFocusToken === `${focusKey}:${focusRequest}`
+              ? focusHighlightRects.map((rect, index) => (
+                  <div
+                    className="resume-interactive-highlight resume-interactive-highlight--focus resume-interactive-highlight--guided"
+                    key={`magnifier-focus-${focusKey ?? "steady"}-${focusRequest}-${page.pageNumber}-${index}`}
+                    style={{
+                      height: `${rect.height}px`,
+                      left: `${rect.left}px`,
+                      top: `${rect.top}px`,
+                      width: `${rect.width}px`,
+                    }}
+                  />
+                ))
+              : null}
+          </div>
         </div>
       ) : null}
       {renderState === "loading" ? (
