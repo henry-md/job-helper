@@ -217,3 +217,45 @@ test("keeps a completed zero-duration step stable across server refreshes", () =
   assert.equal(result[0]?.durationMs, 65_000);
   assert.equal(result[0]?.observedAt, "2026-05-01T21:01:08.000Z");
 });
+
+test("preserves streamed keywords when a same-step refresh omits them", () => {
+  const result = mergeTailorResumeGenerationStepTiming({
+    observedAt: "2026-05-01T21:02:08.000Z",
+    step: {
+      attempt: 1,
+      detail: "Identified 1 job keyword term.",
+      durationMs: 0,
+      emphasizedTechnologies: [],
+      retrying: false,
+      status: "succeeded",
+      stepCount: 5,
+      stepNumber: 1,
+      summary: "Scrape keywords",
+    },
+    timings: [
+      {
+        attempt: 1,
+        detail: "Identified 1 job keyword term.",
+        durationMs: 65_000,
+        emphasizedTechnologies: [
+          {
+            evidence: "Posting names Go.",
+            name: "Go",
+            priority: "high",
+          },
+        ],
+        observedAt: "2026-05-01T21:01:08.000Z",
+        retrying: false,
+        status: "succeeded",
+        stepCount: 5,
+        stepNumber: 1,
+        summary: "Scrape keywords",
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    result[0]?.emphasizedTechnologies?.map((technology) => technology.name),
+    ["Go"],
+  );
+});

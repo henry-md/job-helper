@@ -202,6 +202,26 @@ export function serializeTailorResumeChatMessage(
   };
 }
 
+function mergeStreamedAndFinalChatText(streamedText: string, finalText: string) {
+  if (!streamedText) {
+    return finalText;
+  }
+
+  if (!finalText) {
+    return streamedText;
+  }
+
+  if (finalText.startsWith(streamedText) || finalText.includes(streamedText.trim())) {
+    return finalText;
+  }
+
+  if (streamedText.startsWith(finalText)) {
+    return streamedText;
+  }
+
+  return `${streamedText.trimEnd()}\n\n${finalText}`;
+}
+
 function truncateWithNotice(value: string, maxLength: number) {
   if (value.length <= maxLength) {
     return value;
@@ -622,7 +642,10 @@ export async function generateTailorResumeChatResponse(input: {
   const finalResponse = await finalResponsePromise;
   const finalOutputText =
     typeof finalResponse.output_text === "string" ? finalResponse.output_text : "";
-  const finalContent = (content || finalOutputText).trim();
+  const finalContent = mergeStreamedAndFinalChatText(
+    content,
+    finalOutputText,
+  ).trim();
 
   if (!finalContent) {
     throw new Error("The chat model returned an empty response.");

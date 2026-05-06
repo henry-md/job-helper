@@ -1360,7 +1360,6 @@ export default function TailorResumeWorkspace({
   const handleInterviewStreamEvent = useCallback(
     (event: TailorResumeInterviewStreamEvent) => {
       if (event.kind === "reset") {
-        setStreamingInterviewMessage({ cards: [], text: "" });
         return;
       }
 

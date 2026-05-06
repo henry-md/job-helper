@@ -101,3 +101,53 @@ test("readTailorResumeGenerationStream parses step events and final payload", as
     status: 202,
   });
 });
+
+test("readTailorResumeGenerationStream emits saved USER.md payloads before final payload", async () => {
+  const userMemoryEvents: Array<{ userMarkdown: { markdown: string } }> = [];
+  const response = new Response(
+    [
+      JSON.stringify({
+        payload: {
+          userMarkdown: {
+            markdown: "# USER.md\n\n## Grafana\n\n- saved\n",
+          },
+        },
+        type: "user-memory",
+      }),
+      JSON.stringify({
+        ok: true,
+        payload: {
+          tailoringStatus: "running",
+        },
+        status: 202,
+        type: "done",
+      }),
+    ].join("\n"),
+    {
+      headers: {
+        "Content-Type": "text/x-ndjson",
+      },
+    },
+  );
+
+  const result = await readTailorResumeGenerationStream(response, {
+    onUserMemoryEvent: (payload) => {
+      userMemoryEvents.push(payload);
+    },
+    parsePayload: (value) => value as { tailoringStatus: string },
+    parseStepEvent: () => null,
+    parseUserMemoryPayload: (value) =>
+      value as { userMarkdown: { markdown: string } },
+  });
+
+  assert.deepEqual(userMemoryEvents, [
+    {
+      userMarkdown: {
+        markdown: "# USER.md\n\n## Grafana\n\n- saved\n",
+      },
+    },
+  ]);
+  assert.deepEqual(result.payload, {
+    tailoringStatus: "running",
+  });
+});

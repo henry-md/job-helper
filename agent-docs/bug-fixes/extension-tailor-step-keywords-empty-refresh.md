@@ -1,0 +1,3 @@
+- Symptom: a live tailor run could briefly show correct Step 1 job keywords, then later same-step refreshes with `emphasizedTechnologies: []` made intermediate step timing state look empty even though final resume coverage was correct.
+- Root cause: extension timing merges treated an omitted or empty keyword array from a same-step refresh as authoritative and replaced the earlier streamed non-empty array.
+- Fix: when merging the same step/attempt, preserve the previous non-empty `emphasizedTechnologies` array if the incoming timing omits keywords or sends an empty array.

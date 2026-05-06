@@ -73,29 +73,49 @@ function mergeStepTiming(
   previousTiming: TailorResumeGenerationStepTiming | null,
   nextTiming: TailorResumeGenerationStepTiming,
 ) {
-  if (shouldPreserveObservedRunningTiming(previousTiming, nextTiming)) {
+  const nextTimingWithPreservedKeywords =
+    previousTiming &&
+    areSameStepAttempt(previousTiming, nextTiming) &&
+    (nextTiming.emphasizedTechnologies ?? []).length === 0 &&
+    (previousTiming.emphasizedTechnologies ?? []).length > 0
+      ? {
+          ...nextTiming,
+          emphasizedTechnologies: previousTiming.emphasizedTechnologies,
+        }
+      : nextTiming;
+
+  if (
+    shouldPreserveObservedRunningTiming(
+      previousTiming,
+      nextTimingWithPreservedKeywords,
+    )
+  ) {
     return {
-      ...nextTiming,
-      observedAt: previousTiming?.observedAt ?? nextTiming.observedAt,
+      ...nextTimingWithPreservedKeywords,
+      observedAt:
+        previousTiming?.observedAt ?? nextTimingWithPreservedKeywords.observedAt,
     };
   }
 
-  if (!areSameStepAttempt(previousTiming, nextTiming) || !previousTiming) {
-    return nextTiming;
+  if (
+    !areSameStepAttempt(previousTiming, nextTimingWithPreservedKeywords) ||
+    !previousTiming
+  ) {
+    return nextTimingWithPreservedKeywords;
   }
 
   if (
     previousTiming.status === "running" &&
-    nextTiming.status !== "running" &&
-    nextTiming.retrying !== true
+    nextTimingWithPreservedKeywords.status !== "running" &&
+    nextTimingWithPreservedKeywords.retrying !== true
   ) {
     return {
-      ...nextTiming,
+      ...nextTimingWithPreservedKeywords,
       durationMs: Math.max(
         previousTiming.durationMs,
-        nextTiming.durationMs,
+        nextTimingWithPreservedKeywords.durationMs,
         readObservedDurationMs({
-          endedAt: nextTiming.observedAt,
+          endedAt: nextTimingWithPreservedKeywords.observedAt,
           startedAt: previousTiming.observedAt,
         }),
       ),
@@ -104,26 +124,26 @@ function mergeStepTiming(
 
   if (
     previousTiming.status !== "running" &&
-    nextTiming.status !== "running" &&
+    nextTimingWithPreservedKeywords.status !== "running" &&
     previousTiming.retrying !== true &&
-    nextTiming.retrying !== true
+    nextTimingWithPreservedKeywords.retrying !== true
   ) {
     const nextDurationMs = Math.max(
       previousTiming.durationMs,
-      nextTiming.durationMs,
+      nextTimingWithPreservedKeywords.durationMs,
     );
 
     return {
-      ...nextTiming,
+      ...nextTimingWithPreservedKeywords,
       durationMs: nextDurationMs,
       observedAt:
-        nextTiming.durationMs > previousTiming.durationMs
-          ? nextTiming.observedAt
-          : previousTiming.observedAt ?? nextTiming.observedAt,
+        nextTimingWithPreservedKeywords.durationMs > previousTiming.durationMs
+          ? nextTimingWithPreservedKeywords.observedAt
+          : previousTiming.observedAt ?? nextTimingWithPreservedKeywords.observedAt,
     };
   }
 
-  return nextTiming;
+  return nextTimingWithPreservedKeywords;
 }
 
 function freezeAdvancedRunningTimings(

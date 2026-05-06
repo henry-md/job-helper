@@ -113,6 +113,12 @@ import {
   mergeTailorResumeGenerationStepTiming,
   mergeTailorResumeGenerationStepTimingHistory,
 } from "./tailor-run-step-timing";
+import {
+  applyTailorInterviewStreamEventToMessage,
+  hasTailorInterviewStreamedMessageContent,
+  isTailorResumeInterviewEndStepEvent,
+  mergeTailorInterviewWithStreamedAssistantMessage,
+} from "./tailor-interview-flow";
 import { readTailorRunKeywordTechnologies } from "./tailor-run-keywords";
 import { buildCompletedTailoringMessage } from "./tailor-run-copy";
 import {
@@ -855,6 +861,38 @@ function buildTailoringRunRecord(input: {
     tailoredResumeError: input.tailoredResumeError ?? null,
     tailoredResumeId: input.tailoredResumeId ?? null,
   } satisfies TailorResumeRunRecord;
+}
+
+function buildTailorInterviewFailureStep(input: {
+  message: string;
+  timings: TailorResumeGenerationStepTiming[];
+}): TailorResumeGenerationStepSummary {
+  const lastTiming = input.timings[input.timings.length - 1];
+
+  if (lastTiming) {
+    return {
+      attempt: lastTiming.attempt,
+      detail: input.message,
+      durationMs: lastTiming.durationMs,
+      emphasizedTechnologies: lastTiming.emphasizedTechnologies,
+      retrying: false,
+      status: "failed",
+      stepCount: lastTiming.stepCount,
+      stepNumber: lastTiming.stepNumber,
+      summary: lastTiming.summary,
+    };
+  }
+
+  return {
+    attempt: null,
+    detail: input.message,
+    durationMs: 0,
+    retrying: false,
+    status: "failed",
+    stepCount: 5,
+    stepNumber: 2,
+    summary: "Clarify missing details",
+  };
 }
 
 function isTransientTailoringRun(run: TailorResumeRunRecord | null) {
@@ -2435,6 +2473,7 @@ type TailoredResumeMenuActionState =
   | "downloading"
   | "goingToTab"
   | "idle"
+  | "openingWeb"
   | "retrying";
 
 type ExistingTailoringPromptState = {
@@ -2761,6 +2800,29 @@ function createTemporaryChatMessage(
     role,
     toolCalls: [],
   };
+}
+
+function mergeChatStreamedContent(baseContent: string, streamedContent: string) {
+  if (!streamedContent) {
+    return baseContent;
+  }
+
+  if (!baseContent) {
+    return streamedContent;
+  }
+
+  if (
+    baseContent.startsWith(streamedContent) ||
+    baseContent.includes(streamedContent.trim())
+  ) {
+    return baseContent;
+  }
+
+  if (streamedContent.startsWith(baseContent)) {
+    return streamedContent;
+  }
+
+  return `${streamedContent.trimEnd()}\n\n${baseContent}`;
 }
 
 async function readChatStream(
@@ -5863,58 +5925,43 @@ function App() {
 
     const interviewId = tailorInterview.id;
     const streamedMessageId = `streaming-tailor-examples:${interviewId}:${Date.now()}`;
-    const updatePendingExamplesMessage = (
-      update: (
-        message: TailorResumeConversationMessage,
-      ) => TailorResumeConversationMessage,
-    ) => {
-      setPendingTailorInterviewAssistantMessage((currentMessage) => {
-        const baseMessage =
-          currentMessage?.id === streamedMessageId
-            ? currentMessage
-            : {
-                id: streamedMessageId,
-                role: "assistant" as const,
-                technologyContexts: [],
-                text: "",
-                toolCalls: [],
-              };
-
-        return update(baseMessage);
-      });
+    let streamedExamplesMessage: TailorResumeConversationMessage = {
+      id: streamedMessageId,
+      role: "assistant",
+      technologyContexts: [],
+      text: "",
+      toolCalls: [],
+    };
+    const publishPendingExamplesMessage = () => {
+      setPendingTailorInterviewAssistantMessage(
+        hasTailorInterviewStreamedMessageContent(streamedExamplesMessage)
+          ? {
+              ...streamedExamplesMessage,
+              technologyContexts: [...streamedExamplesMessage.technologyContexts],
+              toolCalls: [...streamedExamplesMessage.toolCalls],
+            }
+          : null,
+      );
     };
     const handleInterviewStreamEvent = (
       event: TailorResumeInterviewStreamEvent,
     ) => {
-      if (event.kind === "reset") {
-        setPendingTailorInterviewAssistantMessage(null);
+      if (event.kind === "reset" || event.kind === "text-start") {
         return;
       }
 
       if (
-        (event.kind === "text-start" || event.kind === "text-delta") &&
+        event.kind === "text-delta" &&
         event.field !== "assistantMessage"
       ) {
         return;
       }
 
-      if (event.kind === "text-delta") {
-        updatePendingExamplesMessage((message) => ({
-          ...message,
-          text: `${message.text}${event.delta}`,
-        }));
-        return;
-      }
-
-      if (event.kind === "card") {
-        updatePendingExamplesMessage((message) => ({
-          ...message,
-          technologyContexts: [
-            ...message.technologyContexts,
-            event.card,
-          ],
-        }));
-      }
+      streamedExamplesMessage = applyTailorInterviewStreamEventToMessage(
+        streamedExamplesMessage,
+        event,
+      );
+      publishPendingExamplesMessage();
     };
     const requestController = beginTailorRequest();
     const technologyNames = Array.from(
@@ -5954,6 +6001,21 @@ function App() {
 
             recordTailorGenerationStepEvent(stepEvent);
           },
+          onUserMemoryEvent: (payload) => {
+            if (activeTailorRequestAbortControllerRef.current !== requestController) {
+              return;
+            }
+
+            const streamedUserMarkdown =
+              readUserMarkdownFromTailorResumePayload(payload);
+
+            if (streamedUserMarkdown) {
+              applySavedUserMarkdown(streamedUserMarkdown);
+              void refreshTailorInterviewKeywordBadge(
+                streamedUserMarkdown.nonTechnologies,
+              );
+            }
+          },
           signal: requestController.signal,
         },
       );
@@ -5973,14 +6035,19 @@ function App() {
           (interview) => interview.id === interviewId,
         ) ??
         profileSummary.tailoringInterview;
+      const mergedMatchingInterview =
+        mergeTailorInterviewWithStreamedAssistantMessage(
+          matchingInterview,
+          streamedExamplesMessage,
+        ) ?? matchingInterview;
 
       setPendingTailorInterviewAssistantMessage(null);
-      setTailorInterview(matchingInterview);
+      setTailorInterview(mergedMatchingInterview);
       syncTailoredResumeSummariesFromPayload(result.payload);
       void loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
       setCaptureState("needs_input");
 
-      if (matchingInterview.completionRequestedAt) {
+      if (mergedMatchingInterview.completionRequestedAt) {
         setIsTailorInterviewFinishPromptOpen(true);
       }
     } catch (error) {
@@ -5989,12 +6056,31 @@ function App() {
         return;
       }
 
-      setTailorInterviewError(
+      const message =
         error instanceof Error
           ? error.message
-          : "Unable to generate technology examples.",
-      );
-      setPendingTailorInterviewAssistantMessage(null);
+          : "Unable to generate technology examples.";
+      const pageContext = state.status === "ready" ? state.snapshot : null;
+      const record = buildTailoringRunRecord({
+        companyName: tailorInterview.companyName,
+        generationStep: buildTailorInterviewFailureStep({
+          message,
+          timings: tailorGenerationStepTimingsRef.current,
+        }),
+        generationStepTimings: tailorGenerationStepTimingsRef.current,
+        jobIdentifier: tailorInterview.jobIdentifier,
+        message,
+        pageContext,
+        positionTitle: tailorInterview.positionTitle,
+        status: "error",
+        tailoredResumeError: message,
+      });
+
+      await persistTailoringRun(record);
+      setTailorInterviewError(message);
+      setTailorGenerationStep(record.generationStep);
+      setCaptureState("error");
+      void loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
     } finally {
       isGenerateTailorInterviewExamplesInFlightRef.current = false;
       clearTailorRequest(requestController);
@@ -7782,70 +7868,50 @@ function App() {
       text: trimmedAnswer,
       toolCalls: [],
     };
-    const optimisticAssistantMessageId = `streaming-tailor-interview-answer-${tailorInterview.id}:${Date.now()}`;
     const pageContext = state.status === "ready" ? state.snapshot : null;
     const requestController = beginTailorRequest();
-
-    const updatePendingAssistantMessage = (
-      update: (message: TailorResumeConversationMessage) => TailorResumeConversationMessage,
-    ) => {
-      if (activeTailorRequestAbortControllerRef.current !== requestController) {
-        return;
-      }
-
-      setPendingTailorInterviewAssistantMessage((currentMessage) => {
-        const baseMessage =
-          currentMessage?.id === optimisticAssistantMessageId
-            ? currentMessage
-            : {
-                id: optimisticAssistantMessageId,
-                role: "assistant" as const,
-                technologyContexts: [],
-                text: "",
-                toolCalls: [],
-              };
-
-        return update(baseMessage);
-      });
+    const streamedMessageId = `streaming-tailor-interview:${tailorInterview.id}:${Date.now()}`;
+    let didModelEndTailorInterview = false;
+    let streamedAssistantMessage: TailorResumeConversationMessage = {
+      id: streamedMessageId,
+      role: "assistant",
+      technologyContexts: [],
+      text: "",
+      toolCalls: [],
     };
-
+    const publishPendingAssistantMessage = () => {
+      setPendingTailorInterviewAssistantMessage(
+        hasTailorInterviewStreamedMessageContent(streamedAssistantMessage)
+          ? {
+              ...streamedAssistantMessage,
+              technologyContexts: [
+                ...streamedAssistantMessage.technologyContexts,
+              ],
+              toolCalls: [...streamedAssistantMessage.toolCalls],
+            }
+          : null,
+      );
+    };
     const handleInterviewStreamEvent = (
       event: TailorResumeInterviewStreamEvent,
     ) => {
-      if (activeTailorRequestAbortControllerRef.current !== requestController) {
-        return;
-      }
-
-      if (event.kind === "reset") {
-        setPendingTailorInterviewAssistantMessage(null);
+      if (event.kind === "reset" || event.kind === "text-start") {
         return;
       }
 
       if (
-        (event.kind === "text-start" || event.kind === "text-delta") &&
+        event.kind === "text-delta" &&
         event.field !== "assistantMessage" &&
         event.field !== "completionMessage"
       ) {
         return;
       }
 
-      if (event.kind === "text-delta") {
-        updatePendingAssistantMessage((message) => ({
-          ...message,
-          text: `${message.text}${event.delta}`,
-        }));
-        return;
-      }
-
-      if (event.kind === "card") {
-        updatePendingAssistantMessage((message) => ({
-          ...message,
-          technologyContexts: [
-            ...message.technologyContexts,
-            event.card,
-          ],
-        }));
-      }
+      streamedAssistantMessage = applyTailorInterviewStreamEventToMessage(
+        streamedAssistantMessage,
+        event,
+      );
+      publishPendingAssistantMessage();
     };
 
     setPendingTailorInterviewAnswerMessage(optimisticAnswerMessage);
@@ -7866,13 +7932,36 @@ function App() {
           interviewId: tailorInterview.id,
         },
         {
-          onInterviewStreamEvent: handleInterviewStreamEvent,
           onStepEvent: (stepEvent) => {
             if (activeTailorRequestAbortControllerRef.current !== requestController) {
               return;
             }
 
             recordTailorGenerationStepEvent(stepEvent);
+
+            if (isTailorResumeInterviewEndStepEvent(stepEvent)) {
+              didModelEndTailorInterview = true;
+              dismissedTailorInterviewPageIdRef.current = tailorInterview.id;
+              setPendingTailorInterviewAssistantMessage(null);
+              setIsTailorInterviewFinishPromptOpen(false);
+              setIsTailorInterviewOpen(false);
+            }
+          },
+          onInterviewStreamEvent: handleInterviewStreamEvent,
+          onUserMemoryEvent: (payload) => {
+            if (activeTailorRequestAbortControllerRef.current !== requestController) {
+              return;
+            }
+
+            const streamedUserMarkdown =
+              readUserMarkdownFromTailorResumePayload(payload);
+
+            if (streamedUserMarkdown) {
+              applySavedUserMarkdown(streamedUserMarkdown);
+              void refreshTailorInterviewKeywordBadge(
+                streamedUserMarkdown.nonTechnologies,
+              );
+            }
           },
           signal: requestController.signal,
         },
@@ -7899,18 +7988,24 @@ function App() {
         );
       }
 
+      const nextTailoringInterview =
+        mergeTailorInterviewWithStreamedAssistantMessage(
+          profileSummary.tailoringInterview,
+          streamedAssistantMessage,
+        );
+
       setPendingTailorInterviewAnswerMessage(null);
       setPendingTailorInterviewAssistantMessage(null);
-      setTailorInterview(profileSummary.tailoringInterview);
+      setTailorInterview(nextTailoringInterview);
       void loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
 
-      if (profileSummary.tailoringInterview) {
+      if (nextTailoringInterview) {
         const record = buildTailoringRunRecord({
-          companyName: profileSummary.tailoringInterview.companyName,
+          companyName: nextTailoringInterview.companyName,
           generationStepTimings: tailorGenerationStepTimingsRef.current,
           message: "One more resume question is waiting in the sidebar.",
           pageContext,
-          positionTitle: profileSummary.tailoringInterview.positionTitle,
+          positionTitle: nextTailoringInterview.positionTitle,
           status: "needs_input",
         });
 
@@ -7961,6 +8056,7 @@ function App() {
 
       await persistTailoringRun(record);
       setTailorInterview(null);
+      setIsTailorInterviewOpen(false);
       setTailorGenerationStep(null);
       setTailorGenerationStepTimings([]);
       setCaptureState("sent");
@@ -7973,14 +8069,37 @@ function App() {
         error instanceof Error
           ? error.message
           : "Unable to continue the tailoring follow-up questions.";
+      const failureStep = buildTailorInterviewFailureStep({
+        message,
+        timings: tailorGenerationStepTimingsRef.current,
+      });
+      const record = buildTailoringRunRecord({
+        companyName: tailorInterview.companyName,
+        generationStep: failureStep,
+        generationStepTimings: tailorGenerationStepTimingsRef.current,
+        jobIdentifier: tailorInterview.jobIdentifier,
+        message,
+        pageContext,
+        positionTitle: tailorInterview.positionTitle,
+        status: "error",
+        tailoredResumeError: message,
+      });
 
+      await persistTailoringRun(record);
       setPendingTailorInterviewAnswerMessage(null);
-      setPendingTailorInterviewAssistantMessage(null);
+      if (didModelEndTailorInterview) {
+        setTailorInterview(null);
+        setIsTailorInterviewOpen(false);
+      } else {
+        setIsTailorInterviewOpen(true);
+      }
       setDraftTailorInterviewAnswer(trimmedAnswer);
       setTailorInterviewError(message);
-      setTailorGenerationStep(null);
-      setTailorGenerationStepTimings([]);
-      setCaptureState("needs_input");
+      setTailorGenerationStep(failureStep);
+      setCaptureState("error");
+      if (didModelEndTailorInterview) {
+        void loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
+      }
     } finally {
       clearTailorRequest(requestController);
     }
@@ -8122,16 +8241,33 @@ function App() {
         return;
       }
 
-      setTailorInterviewError(
+      const message =
         error instanceof Error
           ? error.message
-          : "Unable to finish the tailoring follow-up questions.",
-      );
+          : "Unable to finish the tailoring follow-up questions.";
+      const failureStep = buildTailorInterviewFailureStep({
+        message,
+        timings: tailorGenerationStepTimingsRef.current,
+      });
+      const record = buildTailoringRunRecord({
+        companyName: tailorInterview.companyName,
+        generationStep: failureStep,
+        generationStepTimings: tailorGenerationStepTimingsRef.current,
+        jobIdentifier: tailorInterview.jobIdentifier,
+        message,
+        pageContext,
+        positionTitle: tailorInterview.positionTitle,
+        status: "error",
+        tailoredResumeError: message,
+      });
+
+      await persistTailoringRun(record);
+      setTailorInterviewError(message);
       setIsTailorInterviewOpen(true);
-      setIsTailorInterviewFinishPromptOpen(true);
-      setTailorGenerationStep(null);
-      setTailorGenerationStepTimings([]);
-      setCaptureState("needs_input");
+      setIsTailorInterviewFinishPromptOpen(false);
+      setTailorGenerationStep(failureStep);
+      setCaptureState("error");
+      void loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
     } finally {
       clearTailorRequest(requestController);
       setIsFinishingTailorInterview(false);
@@ -8288,7 +8424,13 @@ function App() {
             setChatMessages((currentMessages) =>
               currentMessages.map((message) =>
                 message.id === optimisticAssistantMessage.id
-                  ? savedAssistantMessage
+                  ? {
+                      ...savedAssistantMessage,
+                      content: mergeChatStreamedContent(
+                        savedAssistantMessage.content,
+                        message.content,
+                      ),
+                    }
                   : message,
               ),
             );
@@ -8301,7 +8443,9 @@ function App() {
       );
       setChatMessages((currentMessages) =>
         currentMessages.filter(
-          (message) => message.id !== optimisticAssistantMessage.id,
+          (message) =>
+            message.id !== optimisticAssistantMessage.id ||
+            message.content.length > 0,
         ),
       );
     } finally {
@@ -8530,6 +8674,41 @@ function App() {
     } catch (error) {
       setTailoredResumeMenuError(
         error instanceof Error ? error.message : "Could not open that job tab.",
+      );
+      setTailoredResumeMenuErrorResumeId(tailoredResume.id);
+    } finally {
+      setTailoredResumeMenuActionState("idle");
+      setTailoredResumeMenuActionResumeId(null);
+    }
+  }
+
+  async function handleOpenTailoredResumeInWebAppFromMenu(
+    tailoredResume: TailoredResumeSummary,
+  ) {
+    if (tailoredResumeMenuActionState !== "idle") {
+      return;
+    }
+
+    setTailoredResumeMenuActionState("openingWeb");
+    setTailoredResumeMenuActionResumeId(tailoredResume.id);
+    setTailoredResumeMenuError(null);
+    setTailoredResumeMenuErrorResumeId(null);
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        payload: {
+          callbackUrl: buildTailoredResumeReviewUrl(tailoredResume.id),
+        },
+        type: "JOB_HELPER_OPEN_DASHBOARD",
+      });
+      assertRuntimeResponseOk(response, "Could not open that resume in the web app.");
+      setTailoredResumeMenuId(null);
+      setTailoredResumeMenuPosition(null);
+    } catch (error) {
+      setTailoredResumeMenuError(
+        error instanceof Error
+          ? error.message
+          : "Could not open that resume in the web app.",
       );
       setTailoredResumeMenuErrorResumeId(tailoredResume.id);
     } finally {
@@ -9718,52 +9897,23 @@ function App() {
     const handleInterviewStreamEvent = (
       event: TailorResumeInterviewStreamEvent,
     ) => {
-      if (event.kind === "reset") {
-        streamedQuestionMessage = {
-          ...streamedQuestionMessage,
-          technologyContexts: [],
-          text: "",
-        };
-
-        if (hasOpenedQuestionChat) {
-          publishOptimisticQuestionChat();
-        }
-
+      if (event.kind === "reset" || event.kind === "text-start") {
         return;
       }
 
       if (
-        (event.kind === "text-start" || event.kind === "text-delta") &&
+        event.kind === "text-delta" &&
         event.field !== "assistantMessage"
       ) {
         return;
       }
 
-      if (event.kind === "text-start") {
-        openOptimisticQuestionChat();
-        return;
-      }
-
-      if (event.kind === "text-delta") {
-        openOptimisticQuestionChat();
-        streamedQuestionMessage = {
-          ...streamedQuestionMessage,
-          text: `${streamedQuestionMessage.text}${event.delta}`,
-        };
-        publishOptimisticQuestionChat();
-        return;
-      }
-
-      if (event.kind === "card" && hasOpenedQuestionChat) {
-        streamedQuestionMessage = {
-          ...streamedQuestionMessage,
-          technologyContexts: [
-            ...streamedQuestionMessage.technologyContexts,
-            event.card,
-          ],
-        };
-        publishOptimisticQuestionChat();
-      }
+      openOptimisticQuestionChat();
+      streamedQuestionMessage = applyTailorInterviewStreamEventToMessage(
+        streamedQuestionMessage,
+        event,
+      );
+      publishOptimisticQuestionChat();
     };
 
     setGeneratingTailorQuestionCardIds((currentIds) => {
@@ -9814,11 +9964,17 @@ function App() {
       await loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
 
       if (matchingInterview) {
+        const mergedMatchingInterview =
+          mergeTailorInterviewWithStreamedAssistantMessage(
+            matchingInterview,
+            streamedQuestionMessage,
+          ) ?? matchingInterview;
+
         setGeneratingTailorQuestionInterviewId((currentId) =>
           currentId === optimisticInterviewId ? null : currentId,
         );
-        setSelectedTailorInterviewId(matchingInterview.id);
-        setTailorInterview(matchingInterview);
+        setSelectedTailorInterviewId(mergedMatchingInterview.id);
+        setTailorInterview(mergedMatchingInterview);
         setPendingTailorInterviewAnswerMessage(null);
         setDraftTailorInterviewAnswer("");
         setCaptureState("needs_input");
@@ -10976,6 +11132,20 @@ function App() {
                                   ? "Downloading..."
                                   : "Download"}
                               </button>
+                              <button
+                                className="tailor-run-menu-item"
+                                disabled={isMenuBusy}
+                                type="button"
+                                onClick={() =>
+                                  void handleOpenTailoredResumeInWebAppFromMenu(
+                                    tailoredResume,
+                                  )
+                                }
+                              >
+                                {menuActionState === "openingWeb"
+                                  ? "Opening..."
+                                  : "See in web app"}
+                              </button>
                               {canShowKeywordBadge ? (
                                 <button
                                   className="tailor-run-menu-item"
@@ -11581,6 +11751,7 @@ function App() {
         interviewStreamEvent: TailorResumeInterviewStreamEvent,
       ) => void;
       onStepEvent?: (stepEvent: TailorResumeGenerationStepSummary) => void;
+      onUserMemoryEvent?: (payload: Record<string, unknown>) => void;
       signal?: AbortSignal;
     } = {},
   ) {
@@ -11611,6 +11782,7 @@ function App() {
       const streamedResult = await readTailorResumeGenerationStream(response, {
         onInterviewStreamEvent: options.onInterviewStreamEvent,
         onStepEvent: options.onStepEvent,
+        onUserMemoryEvent: options.onUserMemoryEvent,
       });
 
       return streamedResult;

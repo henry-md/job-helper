@@ -1,0 +1,6 @@
+# Tailor Resume stream chunks must stay monotonic
+
+- Symptom: Step 2 streamed assistant text or technology dropdown cards could appear while an NDJSON request was live, then disappear when a retry/reset event or the final persisted conversation replaced the optimistic message.
+- Root cause: client handlers treated `reset` and `text-start` as permission to clear accumulated assistant content, and final reconciliation replaced the optimistic streamed message wholesale with the server message. The examples generator also parsed function-call argument deltas but forwarded only card events, silently dropping streamed assistant text from that portion of the tool call.
+- Fix: stream application is now append-only for visible content. Reset/start events no longer erase accumulated text/cards, final interviews merge streamed assistant content into the saved assistant message, partial top-level chat text survives errors, and examples tool-call deltas forward every emitted visible event.
+- Guardrail: once a chunk has been rendered to the user, never replace it with a shorter message or clear it as part of retry/reconciliation. If the final server payload differs, merge the streamed text/cards into the final message so no visible portion of the stream is lost.

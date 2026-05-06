@@ -306,6 +306,10 @@ export function buildActiveTailoringStates(input: {
         ? activeRunsById.get(tailoringInterview.tailorResumeRunId)
         : undefined;
 
+    if (tailoringInterview.tailorResumeRunId && !run) {
+      continue;
+    }
+
     if (run) {
       representedRunIds.add(run.id);
     }

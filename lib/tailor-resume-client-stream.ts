@@ -37,6 +37,10 @@ type TailorResumeRunStreamEvent<StepEvent> =
       type: "interview-stream";
     }
   | {
+      payload?: unknown;
+      type: "user-memory";
+    }
+  | {
       error?: unknown;
       type: "error";
     }
@@ -153,14 +157,17 @@ export async function readTailorResumeGenerationStream<
   StepEvent = unknown,
   InterviewStreamEvent = unknown,
   Payload = Record<string, unknown>,
+  UserMemoryPayload = Payload,
 >(
   response: Response,
   handlers: {
     onInterviewStreamEvent?: (event: InterviewStreamEvent) => void;
     onStepEvent?: (stepEvent: StepEvent) => void;
+    onUserMemoryEvent?: (payload: UserMemoryPayload) => void;
     parseInterviewStreamEvent?: (value: unknown) => InterviewStreamEvent | null;
     parsePayload?: (value: unknown) => Payload;
     parseStepEvent: (value: unknown) => StepEvent | null;
+    parseUserMemoryPayload?: (value: unknown) => UserMemoryPayload;
   },
 ) {
   if (!response.body) {
@@ -170,6 +177,10 @@ export async function readTailorResumeGenerationStream<
   const parsePayload =
     handlers.parsePayload ??
     ((value: unknown) => readObjectPayload(value, {} as Payload));
+  const parseUserMemoryPayload =
+    handlers.parseUserMemoryPayload ??
+    ((value: unknown) =>
+      readObjectPayload(value, {} as UserMemoryPayload));
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -206,6 +217,12 @@ export async function readTailorResumeGenerationStream<
         }
       }
 
+      return;
+    }
+
+    if (event.type === "user-memory") {
+      handlers.onUserMemoryEvent?.(parseUserMemoryPayload(event.payload));
+      await waitForNextStreamPaintOpportunity();
       return;
     }
 

@@ -111,16 +111,22 @@ export async function readTailorResumeGenerationStream(
       interviewStreamEvent: TailorResumeInterviewStreamEvent,
     ) => void;
     onStepEvent?: (stepEvent: TailorResumeGenerationStepSummary) => void;
+    onUserMemoryEvent?: (payload: Record<string, unknown>) => void;
   },
 ) {
   return readSharedTailorResumeGenerationStream(response, {
     onInterviewStreamEvent: handlers.onInterviewStreamEvent,
     onStepEvent: handlers.onStepEvent,
+    onUserMemoryEvent: handlers.onUserMemoryEvent,
     parseInterviewStreamEvent: readTailorResumeInterviewStreamEvent,
     parsePayload: (value) =>
       typeof value === "object" && value !== null
         ? (value as Record<string, unknown>)
         : {},
     parseStepEvent: readTailorResumeGenerationStepSummary,
+    parseUserMemoryPayload: (value) =>
+      typeof value === "object" && value !== null
+        ? (value as Record<string, unknown>)
+        : {},
   }) as Promise<TailorResumeRunStreamResult<Record<string, unknown>>>;
 }

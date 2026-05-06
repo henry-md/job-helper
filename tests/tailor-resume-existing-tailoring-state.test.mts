@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildActiveTailoringStates,
   buildPendingInterviewExistingTailoringState,
   readTailorResumeExistingTailoringStates,
 } from "../lib/tailor-resume-existing-tailoring-state.ts";
+import type { TailorResumeDbRunRecord } from "../lib/tailor-resume-route-response-state.ts";
 import type { TailorResumePendingInterview } from "../lib/tailor-resume-types.ts";
 
-test("readTailorResumeExistingTailoringStates dedupes active runs by comparable job URL", () => {
+test("readTailorResumeExistingTailoringStates keeps query-distinct active runs", () => {
   const activeTailorings = readTailorResumeExistingTailoringStates({
     activeTailorings: [
       {
@@ -53,7 +55,7 @@ test("readTailorResumeExistingTailoringStates dedupes active runs by comparable 
 
   assert.deepEqual(
     activeTailorings.map((activeTailoring) => activeTailoring.id),
-    ["run-newer", "run-neighbor"],
+    ["run-newer", "run-neighbor", "run-older"],
   );
 });
 
@@ -124,5 +126,90 @@ test("buildPendingInterviewExistingTailoringState exposes all scraped keywords",
   assert.deepEqual(
     existingTailoring.emphasizedTechnologies.map((technology) => technology.name),
     ["TypeScript", "Kubernetes"],
+  );
+});
+
+test("buildActiveTailoringStates ignores interviews whose run is no longer active", () => {
+  const interview = {
+    accumulatedModelDurationMs: 1200,
+    applicationId: "app-123",
+    completionRequestedAt: null,
+    conversation: [],
+    createdAt: "2026-05-05T14:00:00.000Z",
+    generationSourceSnapshot: {
+      latexCode: "\\documentclass{article}\\begin{document}Hi\\end{document}",
+      linkState: "[]",
+      lockedLinkState: "[]",
+      resumeStoragePath: null,
+      resumeUpdatedAt: null,
+    },
+    id: "interview-123",
+    jobDescription: "Role text",
+    jobUrl: "https://jobs.example.com/roles/123",
+    planningDebug: {
+      outputJson: null,
+      prompt: null,
+      skippedReason: null,
+    },
+    planningResult: {
+      changes: [],
+      companyName: "Example Corp",
+      displayName: "Example Corp - Software Engineer",
+      emphasizedTechnologies: [],
+      jobIdentifier: "Software Engineer",
+      positionTitle: "Software Engineer",
+      questioningSummary: null,
+      thesis: {
+        jobDescriptionFocus: "Infrastructure platform role.",
+        resumeChanges: "Highlight platform experience.",
+      },
+    },
+    pendingUserMarkdownEditOperations: [],
+    sourceAnnotatedLatexCode:
+      "\\documentclass{article}\\begin{document}Hi\\end{document}",
+    status: "ready",
+    tailorResumeRunId: "failed-run-123",
+    uncoveredEmphasizedTechnologies: [],
+    updatedAt: "2026-05-05T14:00:05.000Z",
+  } satisfies TailorResumePendingInterview;
+
+  assert.deepEqual(
+    buildActiveTailoringStates({
+      activeRuns: [],
+      tailoringInterviews: [interview],
+    }),
+    [],
+  );
+
+  const activeRun = {
+    application: {
+      company: {
+        name: "Example Corp",
+      },
+      title: "Software Engineer",
+    },
+    applicationId: "app-123",
+    createdAt: new Date("2026-05-05T14:00:00.000Z"),
+    error: null,
+    id: "failed-run-123",
+    jobDescription: "Role text",
+    jobUrl: "https://jobs.example.com/roles/123",
+    status: "NEEDS_INPUT",
+    stepAttempt: null,
+    stepCount: null,
+    stepDetail: null,
+    stepNumber: null,
+    stepRetrying: false,
+    stepStatus: null,
+    stepSummary: null,
+    updatedAt: new Date("2026-05-05T14:00:05.000Z"),
+  } satisfies TailorResumeDbRunRecord;
+
+  assert.equal(
+    buildActiveTailoringStates({
+      activeRuns: [activeRun],
+      tailoringInterviews: [interview],
+    })[0]?.kind,
+    "pending_interview",
   );
 });
