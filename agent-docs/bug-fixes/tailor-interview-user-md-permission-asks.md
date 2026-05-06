@@ -1,0 +1,5 @@
+Tailor Resume Step 2 asked permission to save obvious USER.md memory
+
+- Bug: After the user answered Step 2 with quoted bullets, employer/project mappings, or skills-only constraints, the model sometimes called `initiate_tailor_resume_probing_questions` to ask "do you want me to..." or "should I proceed..." instead of saving USER.md memory.
+- Impact: The chat made users re-confirm the only thing Step 2 exists to do, and it could stall tailoring after the user had already supplied enough durable context.
+- Fix: Treat USER.md permission asks as invalid ask turns. If the model includes USER.md edits, normalize legacy timid asks to `finish_tailor_resume_interview`; if it asks permission without edits, validation rejects the turn and retries with feedback telling the model to call `finish_tailor_resume_interview` with USER.md edit operations. The prompt also says paragraphs, quoted bullets, employer/project mappings, and skills-only constraints are explicit authorization to save memory now.
