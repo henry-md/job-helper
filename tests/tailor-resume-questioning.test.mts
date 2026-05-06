@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  extractTailorResumeExperiencePlacementNames,
   findAskWorthyMissingTailorResumeQuestionTerms,
   isDebugForceConversationInTailorPipelineEnabled,
   latestUserMessageDirectlyConfirmsTechnologyExperience,
   normalizeTailorResumeInterviewResponseForCurrentTurn,
   parseTailorResumeInterviewResponseFromModelOutput,
+  tailorResumeAskMessageRequestsUserMarkdownPermission,
+  validateTailorResumeTechnologyContexts,
 } from "../lib/tailor-resume-questioning.ts";
 
 test("isDebugForceConversationInTailorPipelineEnabled reads common true values", () => {
@@ -125,6 +128,75 @@ test("findAskWorthyMissingTailorResumeQuestionTerms keeps concrete stack gaps", 
   );
 });
 
+test("extractTailorResumeExperiencePlacementNames reads resume employers and internships", () => {
+  assert.deepEqual(
+    extractTailorResumeExperiencePlacementNames(
+      [
+        "WORK EXPERIENCE",
+        "NewForm AI | Software Engineer I --- Full Time Aug 2025 - Feb 2026",
+        "KnoWhiz | Software Engineering Intern May 2024 - Sep 2024",
+        "HF Engineering | Software Engineering Intern May 2024 - Sep 2024",
+        "Johns Hopkins University | Software Development Intern May 2023 - Aug 2023",
+        "EDUCATION",
+        "Johns Hopkins University | Bachelor of Science",
+      ].join("\n"),
+    ),
+    ["NewForm AI", "KnoWhiz", "HF Engineering", "Johns Hopkins University"],
+  );
+});
+
+test("validateTailorResumeTechnologyContexts rejects job-product suffixes", () => {
+  assert.throws(
+    () =>
+      validateTailorResumeTechnologyContexts({
+        emphasizedTechnologyNames: ["Azure"],
+        resumeExperienceNames: [
+          "NewForm AI",
+          "KnoWhiz",
+          "HF Engineering",
+          "Johns Hopkins University",
+        ],
+        technologyContexts: [
+          {
+            definition:
+              "Azure is a cloud platform used for deploying and operating production services.",
+            examples: [
+              "Provisioned Azure Kubernetes Service with Infrastructure-as-Code to reduce deployment time 3x -- Purview Data Platform",
+              "Migrated Azure App Services workloads to improve availability 2x -- Azure App Services",
+            ],
+            name: "Azure",
+          },
+        ],
+      }),
+    /resume companies\/internships/i,
+  );
+});
+
+test("validateTailorResumeTechnologyContexts accepts resume placement suffixes", () => {
+  assert.doesNotThrow(() =>
+    validateTailorResumeTechnologyContexts({
+      emphasizedTechnologyNames: ["Azure"],
+      resumeExperienceNames: [
+        "NewForm AI",
+        "KnoWhiz",
+        "HF Engineering",
+        "Johns Hopkins University",
+      ],
+      technologyContexts: [
+        {
+          definition:
+            "Azure is a cloud platform used for deploying and operating production services.",
+          examples: [
+            "Provisioned Azure Kubernetes Service with Infrastructure-as-Code to reduce deployment time 3x -- NewForm",
+            "Migrated Azure App Services rollout for clinic dashboards to improve availability 2x -- Johns Hopkins University internship",
+          ],
+          name: "Azure",
+        },
+      ],
+    }),
+  );
+});
+
 test("normalizeTailorResumeInterviewResponseForCurrentTurn does not treat post-start skip as done", () => {
   const response = normalizeTailorResumeInterviewResponseForCurrentTurn({
     previousSummary: {
@@ -147,12 +219,235 @@ test("normalizeTailorResumeInterviewResponseForCurrentTurn does not treat post-s
   assert.equal(response.action, "skip");
 });
 
+test("normalizeTailorResumeInterviewResponseForCurrentTurn finishes timid memory-confirmation asks", () => {
+  const response = normalizeTailorResumeInterviewResponseForCurrentTurn({
+    conversation: [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "Do any of these match your experience?",
+        toolCalls: [],
+      },
+      {
+        id: "user-1",
+        role: "user",
+        text:
+          "Yes, I used Grafana and Cilium at Johns Hopkins. Please end the chat and tailor it.",
+        toolCalls: [],
+      },
+    ],
+    emphasizedTechnologyNames: ["Grafana", "Cilium"],
+    previousSummary: {
+      agenda: "technology details",
+      askedQuestionCount: 1,
+      debugDecision: null,
+      learnings: [],
+    },
+    response: {
+      action: "ask",
+      assistantMessage:
+        "Do you want me to update USER.md with the confirmed Grafana and Cilium experience?",
+      completionMessage: "",
+      debugDecision: "not_applicable",
+      keywordDecisions: [],
+      learnings: [],
+      nonTechnologyTerms: [],
+      technologyContexts: [
+        {
+          definition: "Grafana is an observability dashboarding tool.",
+          examples: [
+            "Built Grafana dashboards that cut alert triage time 35%.",
+            "Integrated Grafana alerts to reduce noisy pages 40%.",
+          ],
+          name: "Grafana",
+        },
+      ],
+      userMarkdownEditOperations: [
+        {
+          anchorMarkdown: "",
+          headingPath: ["Grafana"],
+          markdown:
+            '- "Built Grafana dashboards that cut alert triage time 35%." -- Johns Hopkins\n',
+          newMarkdown: "",
+          oldMarkdown: "",
+          op: "append",
+        },
+      ],
+    },
+  });
+
+  assert.equal(response.action, "done");
+  assert.equal(response.assistantMessage, "");
+  assert.match(response.completionMessage, /update USER\.md/i);
+  assert.deepEqual(response.technologyContexts, []);
+});
+
+test("normalizeTailorResumeInterviewResponseForCurrentTurn finishes placement-confirmation asks", () => {
+  const response = normalizeTailorResumeInterviewResponseForCurrentTurn({
+    conversation: [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "Which generated example bullets match your actual experience?",
+        toolCalls: [],
+      },
+      {
+        id: "user-1",
+        role: "user",
+        text:
+          'Grafana: Use "Integrated Grafana with Prometheus to create service-level dashboards and automated alerts, cutting P1 pages by 40%" in Johns Hopkins University internship.\n\nCilium: Use "Deployed Cilium CNI to secure east-west traffic across 50-node Kubernetes cluster, reducing policy complexity by 60%" for N-body Orbits project. And add that under Kubernetes too.\n\nEnvoy: Use "Integrated Envoy with Istio and Prometheus to enable distributed tracing and metrics, improving visibility into inter-service latency and production failure debugging across microservices." for Johns Hopkins University.\n\nYou can add Windsurf and Cline in skills section but don\'t include it in a work experience.',
+        toolCalls: [],
+      },
+    ],
+    emphasizedTechnologyNames: ["Grafana", "Cilium", "Envoy", "Windsurf", "Cline"],
+    previousSummary: {
+      agenda: "technology details",
+      askedQuestionCount: 1,
+      debugDecision: null,
+      learnings: [],
+    },
+    response: {
+      action: "ask",
+      assistantMessage:
+        "Should I add the confirmed Grafana, Cilium, and Envoy bullets to your Johns Hopkins, N-body, and Johns Hopkins entries and list Windsurf/Cline in skills?",
+      completionMessage: "",
+      debugDecision: "not_applicable",
+      keywordDecisions: [],
+      learnings: [],
+      nonTechnologyTerms: [],
+      technologyContexts: [],
+      userMarkdownEditOperations: [
+        {
+          anchorMarkdown: "",
+          headingPath: ["Grafana"],
+          markdown:
+            '- "Integrated Grafana with Prometheus to create service-level dashboards and automated alerts, cutting P1 pages by 40%" -- Johns Hopkins University\n',
+          newMarkdown: "",
+          oldMarkdown: "",
+          op: "append",
+        },
+      ],
+    },
+  });
+
+  assert.equal(response.action, "done");
+  assert.equal(response.assistantMessage, "");
+  assert.match(response.completionMessage, /confirmed Grafana/i);
+});
+
+test("detects ask messages that only request USER.md update permission", () => {
+  assert.equal(
+    tailorResumeAskMessageRequestsUserMarkdownPermission(
+      "Thanks — I can proceed to implement the tailored LaTeX resume now using your confirmed technology notes. Before I start, do you want me to add Grafana, Cilium, Envoy as quoted experience bullets and add Windsurf & Cline to the skills section only?",
+    ),
+    true,
+  );
+  assert.equal(
+    tailorResumeAskMessageRequestsUserMarkdownPermission(
+      "Which service did the Go work belong to?",
+    ),
+    false,
+  );
+});
+
+test("normalizeTailorResumeInterviewResponseForCurrentTurn keeps permission asks without USER.md edits rejectable", () => {
+  const response = normalizeTailorResumeInterviewResponseForCurrentTurn({
+    conversation: [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "Which generated example bullets match your actual experience?",
+        toolCalls: [],
+      },
+      {
+        id: "user-1",
+        role: "user",
+        text:
+          'Cilium: Use "Deployed Cilium CNI to secure east-west traffic across 50-node Kubernetes cluster, reducing policy complexity by 60%" for N-body Orbits project. And add that under Kubernetes too.',
+        toolCalls: [],
+      },
+    ],
+    emphasizedTechnologyNames: ["Cilium", "Kubernetes"],
+    previousSummary: {
+      agenda: "technology details",
+      askedQuestionCount: 1,
+      debugDecision: null,
+      learnings: [],
+    },
+    response: {
+      action: "ask",
+      assistantMessage:
+        "Before I start, do you want me to add Cilium as a quoted experience bullet and add that under Kubernetes too?",
+      completionMessage: "",
+      debugDecision: "not_applicable",
+      keywordDecisions: [],
+      learnings: [],
+      nonTechnologyTerms: [],
+      technologyContexts: [],
+      userMarkdownEditOperations: [],
+    },
+  });
+
+  assert.equal(response.action, "ask");
+  assert.match(response.assistantMessage, /do you want me to add Cilium/i);
+});
+
+test("normalizeTailorResumeInterviewResponseForCurrentTurn strips ordinary follow-up cards", () => {
+  const response = normalizeTailorResumeInterviewResponseForCurrentTurn({
+    conversation: [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "Do you have Go experience?",
+        toolCalls: [],
+      },
+      {
+        id: "user-1",
+        role: "user",
+        text: "I used Go for backend services at Johns Hopkins.",
+        toolCalls: [],
+      },
+    ],
+    emphasizedTechnologyNames: ["Go"],
+    previousSummary: {
+      agenda: "technology details",
+      askedQuestionCount: 1,
+      debugDecision: null,
+      learnings: [],
+    },
+    response: {
+      action: "ask",
+      assistantMessage: "Which service did the Go work belong to?",
+      completionMessage: "",
+      debugDecision: "not_applicable",
+      keywordDecisions: [],
+      learnings: [],
+      nonTechnologyTerms: [],
+      technologyContexts: [
+        {
+          definition: "Go is used for backend services.",
+          examples: [
+            "Built Go services that reduced latency 25%.",
+            "Migrated workers to Go and cut memory 40%.",
+          ],
+          name: "Go",
+        },
+      ],
+      userMarkdownEditOperations: [],
+    },
+  });
+
+  assert.equal(response.action, "ask");
+  assert.deepEqual(response.technologyContexts, []);
+});
+
 test("parseTailorResumeInterviewResponseFromModelOutput reads finish tool calls", () => {
   const response = parseTailorResumeInterviewResponseFromModelOutput({
     output: [
       {
         arguments: JSON.stringify({
-          keywordDecisions: [],
+          completionMessage:
+            "I have enough detail to wrap up, and I am updating USER.md with that context.",
           learnings: [
             {
               detail: "Owned LLM deployment latency work.",
@@ -167,8 +462,7 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads finish tool calls"
         type: "function_call",
       },
     ],
-    output_text:
-      "I have enough detail to wrap up, and I am updating USER.md with that context.",
+    output_text: "A stale normal-text finish message.",
   });
 
   assert.equal(response.response.action, "done");
@@ -190,7 +484,6 @@ test("parseTailorResumeInterviewResponseFromModelOutput preserves cumulative USE
     output: [
       {
         arguments: JSON.stringify({
-          keywordDecisions: [],
           learnings: [
             {
               detail: "Confirmed Go, Cassandra, and Spark work at Johns Hopkins.",
@@ -244,7 +537,7 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads non-technology upd
       {
         arguments: JSON.stringify({
           completionMessage:
-            "I added Chromium and Internationalization to the non-technology list and removed them from this run. Press Done when you're ready.",
+            "I added Chromium and Internationalization to the non-technology list and removed them from this run.",
           keywordDecisions: [
             {
               action: "remove",
@@ -257,9 +550,7 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads non-technology upd
               reason: "The user said these are not real skills.",
             },
           ],
-          learnings: [],
           nonTechnologyTerms: ["Chromium", "internationalization"],
-          userMarkdownEditOperations: [],
         }),
         call_id: "call-non-tech",
         name: "update_tailor_resume_non_technologies",
@@ -267,7 +558,7 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads non-technology upd
       },
     ],
     output_text:
-      "I added Chromium and Internationalization to the non-technology list and removed them from this run. Press Done when you're ready.",
+      "I added Chromium and Internationalization to the non-technology list and removed them from this run.",
   });
 
   assert.equal(response.response.action, "done");
@@ -286,25 +577,15 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads probing-question t
     output: [
       {
         arguments: JSON.stringify({
-          debugDecision: "not_applicable",
-          keywordDecisions: [],
-          learnings: [
-            {
-              detail:
-                "Need the model family, serving stack, and one measurable outcome from the Java LLM pipeline work.",
-              targetSegmentIds: ["segment-2"],
-              topic: "Java LLM pipeline",
-            },
-          ],
-          userMarkdownEditOperations: [],
+          assistantMessage:
+            "For a Java backend angle, strong answers would sound like 'I owned the Spring Boot API layer around the LLM pipeline' or 'I built the Java service flow for prompt orchestration, retrieval, and eval logging.' Which model family, serving stack, and measurable outcome best match your work?",
+          technologyContexts: [],
         }),
         call_id: "call-2",
         name: "initiate_tailor_resume_probing_questions",
         type: "function_call",
       },
     ],
-    output_text:
-      "For a Java backend angle, strong answers would sound like 'I owned the Spring Boot API layer around the LLM pipeline' or 'I built the Java service flow for prompt orchestration, retrieval, and eval logging.' Which model family, serving stack, and measurable outcome best match your work?",
   });
 
   assert.equal(response.response.action, "ask");
@@ -324,9 +605,6 @@ test("parseTailorResumeInterviewResponseFromModelOutput keeps follow-up technolo
         arguments: JSON.stringify({
           assistantMessage:
             "Your answer sounded close to Cassandra work. Which resume project should this map to?",
-          debugDecision: "not_applicable",
-          keywordDecisions: [],
-          learnings: [],
           technologyContexts: [
             {
               definition:
@@ -338,7 +616,6 @@ test("parseTailorResumeInterviewResponseFromModelOutput keeps follow-up technolo
               name: "cassandra",
             },
           ],
-          userMarkdownEditOperations: [],
         }),
         call_id: "call-follow-up",
         name: "initiate_tailor_resume_probing_questions",
@@ -363,9 +640,6 @@ test("parseTailorResumeInterviewResponseFromModelOutput allows requested extra t
         arguments: JSON.stringify({
           assistantMessage:
             "Here are four more realistic Go options. Which ones are closest to your experience?",
-          debugDecision: "not_applicable",
-          keywordDecisions: [],
-          learnings: [],
           technologyContexts: [
             {
               definition:
@@ -379,7 +653,6 @@ test("parseTailorResumeInterviewResponseFromModelOutput allows requested extra t
               name: "Go",
             },
           ],
-          userMarkdownEditOperations: [],
         }),
         call_id: "call-more-examples",
         name: "initiate_tailor_resume_probing_questions",
@@ -406,9 +679,6 @@ test("parseTailorResumeInterviewResponseFromModelOutput rejects duplicated techn
             arguments: JSON.stringify({
               assistantMessage:
                 "Two Go bullet suggestions you can use outside NewForm:\n\n- Built a Go microservice for Quizlet imports, replacing a Python ETL and increasing throughput 4x while cutting memory use 60% -- KnoWhiz\n- Implemented a Go-based concurrent worker pool and AWS SQS consumers to process onboarding jobs at 2k jobs/sec, reducing processing lag 80% -- HF Engineering\n\nWhich of these should I add?",
-              debugDecision: "not_applicable",
-              keywordDecisions: [],
-              learnings: [],
               technologyContexts: [
                 {
                   definition:
@@ -420,7 +690,6 @@ test("parseTailorResumeInterviewResponseFromModelOutput rejects duplicated techn
                   name: "Go",
                 },
               ],
-              userMarkdownEditOperations: [],
             }),
             call_id: "call-duplicate-card",
             name: "initiate_tailor_resume_probing_questions",
