@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   classifyTailorResumeDebugErrorSource,
+  buildTailorResumeStepFailureDebugSource,
+  buildTailorResumeStepFailureLogPayload,
   formatTailorResumeDebugPayloadLabel,
   formatTailorResumeDebugErrorSource,
   parseTailorResumeInvalidReplacementPayload,
+  parseTailorResumeStepFailureLogPayload,
   tailorResumeDebugErrorSources,
 } from "../lib/tailor-resume-debug-errors.ts";
 import { tailorResumeLatexExample } from "../lib/tailor-resume-latex-example.ts";
@@ -30,6 +33,16 @@ test("classifyTailorResumeDebugErrorSource separates invalid replacements from b
     classifyTailorResumeDebugErrorSource("tailoring"),
     "bad_latex_generation",
   );
+  assert.equal(
+    classifyTailorResumeDebugErrorSource(
+      tailorResumeDebugErrorSources.stepTwoChatServedError,
+    ),
+    "chat_error",
+  );
+  assert.equal(
+    classifyTailorResumeDebugErrorSource(buildTailorResumeStepFailureDebugSource(3)),
+    "step_failure",
+  );
 });
 
 test("debug error labels stay human readable", () => {
@@ -45,6 +58,63 @@ test("debug error labels stay human readable", () => {
     ),
     "Rejected payload",
   );
+  assert.equal(
+    formatTailorResumeDebugErrorSource(
+      tailorResumeDebugErrorSources.stepTwoChatServedError,
+    ),
+    "Step 2 chat error",
+  );
+  assert.equal(
+    formatTailorResumeDebugPayloadLabel(
+      tailorResumeDebugErrorSources.stepTwoChatServedError,
+    ),
+    "Chat context",
+  );
+  assert.equal(formatTailorResumeDebugErrorSource("step-5-failure"), "Step 5 failure");
+  assert.equal(
+    formatTailorResumeDebugPayloadLabel("step-5-failure"),
+    "Step failure context",
+  );
+});
+
+test("step failure debug payloads are structured and parseable", () => {
+  const payload = buildTailorResumeStepFailureLogPayload({
+    action: "tailor",
+    applicationId: "application-123",
+    event: {
+      attempt: 2,
+      detail: "Step 3: The planner response was invalid.",
+      durationMs: 1234,
+      emphasizedTechnologies: [
+        {
+          evidence: "Required: TypeScript",
+          name: "TypeScript",
+          priority: "high",
+        },
+      ],
+      retrying: true,
+      status: "failed",
+      stepCount: 5,
+      stepNumber: 3,
+      summary: "Generating plaintext edit outline",
+    },
+    jobDescription: "We need TypeScript.",
+    jobUrl: "https://example.com/job",
+    loggedAt: "2026-05-06T15:16:00.000Z",
+    logKind: "step-event",
+    runId: "run-123",
+  });
+  const parsed = parseTailorResumeStepFailureLogPayload(payload);
+
+  assert.ok(parsed);
+  assert.equal(parsed.kind, "tailor_resume_step_failure");
+  assert.equal(parsed.action, "tailor");
+  assert.equal(parsed.applicationId, "application-123");
+  assert.equal(parsed.runId, "run-123");
+  assert.equal(parsed.step.stepNumber, 3);
+  assert.equal(parsed.step.attempt, 2);
+  assert.equal(parsed.step.retrying, true);
+  assert.equal(parsed.step.emphasizedTechnologies[0]?.name, "TypeScript");
 });
 
 test("buildInvalidTailorResumeReplacementLogPayload captures the rejected replacement and annotated source", () => {

@@ -8,6 +8,7 @@ import {
   formatTailorResumeDebugPayloadLabel,
   normalizeTailorResumeDebugErrorSignature,
   parseTailorResumeInvalidReplacementPayload,
+  parseTailorResumeStepFailureLogPayload,
 } from "@/lib/tailor-resume-debug-errors";
 
 function formatDebugTimestamp(date: Date) {
@@ -100,7 +101,27 @@ export default async function DebugErrorsPage() {
       classifyTailorResumeDebugErrorSource(failure.source) ===
       "bad_latex_generation",
   );
+  const chatErrorFailures = failures.filter(
+    (failure) =>
+      classifyTailorResumeDebugErrorSource(failure.source) === "chat_error",
+  );
+  const stepFailures = failures.filter(
+    (failure) =>
+      classifyTailorResumeDebugErrorSource(failure.source) === "step_failure",
+  );
   const failureGroups = [
+    {
+      description:
+        "Durable failed step events and terminal run failures from the five-stage Tailor Resume pipeline. These records are structured JSON payloads stored alongside the older debug artifacts.",
+      failures: stepFailures,
+      title: "Step Failures",
+    },
+    {
+      description:
+        "Step 2 chat errors that were returned to the extension, including validation failures that should not disappear after the sidebar closes.",
+      failures: chatErrorFailures,
+      title: "Chat Errors",
+    },
     {
       description:
         "Rejected tailoring responses whose block replacements were structurally invalid before LaTeX compilation even started.",
@@ -228,10 +249,16 @@ export default async function DebugErrorsPage() {
             </div>
 
             {group.failures.map((failure) => {
+              const category = classifyTailorResumeDebugErrorSource(
+                failure.source,
+              );
               const invalidReplacementPayload =
-                classifyTailorResumeDebugErrorSource(failure.source) ===
-                "invalid_replacement"
+                category === "invalid_replacement"
                   ? parseTailorResumeInvalidReplacementPayload(failure.latexCode)
+                  : null;
+              const stepFailurePayload =
+                category === "step_failure"
+                  ? parseTailorResumeStepFailureLogPayload(failure.latexCode)
                   : null;
 
               return (
@@ -268,7 +295,84 @@ export default async function DebugErrorsPage() {
                       </div>
                     </div>
 
-                    {invalidReplacementPayload ? (
+                    {stepFailurePayload ? (
+                      <>
+                        <div className="grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+                          <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                            <p className="text-[11px] font-medium tracking-[0.22em] text-zinc-500 uppercase">
+                              Step Context
+                            </p>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <MetadataChip
+                                label="step"
+                                value={`${stepFailurePayload.step.stepNumber}/${stepFailurePayload.step.stepCount}`}
+                              />
+                              <MetadataChip
+                                label="kind"
+                                value={stepFailurePayload.logKind}
+                              />
+                              <MetadataChip
+                                label="status"
+                                value={stepFailurePayload.step.status}
+                              />
+                              <MetadataChip
+                                label="retrying"
+                                value={stepFailurePayload.step.retrying ? "yes" : "no"}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                            <p className="text-[11px] font-medium tracking-[0.22em] text-zinc-500 uppercase">
+                              Run Context
+                            </p>
+                            <div className="mt-3 grid gap-3 md:grid-cols-2">
+                              <FieldCard
+                                label="Action"
+                                value={stepFailurePayload.action}
+                              />
+                              <FieldCard
+                                label="Run"
+                                value={stepFailurePayload.runId}
+                              />
+                              <FieldCard
+                                label="Application"
+                                value={stepFailurePayload.applicationId}
+                              />
+                              <FieldCard
+                                label="Job URL"
+                                value={stepFailurePayload.jobUrl}
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid gap-4 xl:grid-cols-2">
+                          <FieldCard
+                            label="Step Summary"
+                            value={stepFailurePayload.step.summary}
+                          />
+                          <FieldCard
+                            label="Logged At"
+                            value={stepFailurePayload.loggedAt}
+                          />
+                        </div>
+
+                        {stepFailurePayload.jobDescription ? (
+                          <ExpandableCodeSection
+                            charCount={stepFailurePayload.jobDescription.length}
+                            title="Job Description Snapshot"
+                            value={stepFailurePayload.jobDescription}
+                          />
+                        ) : null}
+
+                        <ExpandableCodeSection
+                          charCount={failure.latexCode.length}
+                          title="Full Step Failure JSON"
+                          value={failure.latexCode}
+                        />
+                      </>
+                    ) : invalidReplacementPayload ? (
                       <>
                         <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
                           <div className="grid gap-4">

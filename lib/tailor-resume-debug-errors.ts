@@ -1,19 +1,49 @@
 import { readAnnotatedTailorResumeBlocks } from "./tailor-resume-segmentation.ts";
-import type { TailoredResumeThesis } from "./tailor-resume-types.ts";
+import type {
+  TailorResumeGenerationStepEvent,
+  TailoredResumeEmphasizedTechnology,
+  TailoredResumeThesis,
+} from "./tailor-resume-types.ts";
 
 export const tailorResumeDebugErrorSources = {
   extractionCompileFailure: "extraction-compile-failure",
+  stepTwoChatServedError: "step-two-chat-served-error",
   tailoringCompileFailure: "tailoring-compile-failure",
   tailoringInvalidReplacement: "tailoring-invalid-replacement",
 } as const;
 
 export type TailorResumeDebugErrorCategory =
+  | "chat_error"
+  | "step_failure"
   | "bad_latex_generation"
   | "invalid_replacement";
+
+export function buildTailorResumeStepFailureDebugSource(stepNumber: number) {
+  const normalizedStepNumber =
+    Number.isFinite(stepNumber) && stepNumber >= 1 && stepNumber <= 5
+      ? Math.floor(stepNumber)
+      : 0;
+
+  return normalizedStepNumber > 0
+    ? (`step-${normalizedStepNumber}-failure` as const)
+    : "step-unknown-failure";
+}
+
+export function isTailorResumeStepFailureDebugSource(source: string) {
+  return /^step-(?:[1-5]|unknown)-failure$/.test(source);
+}
 
 export function classifyTailorResumeDebugErrorSource(
   source: string,
 ): TailorResumeDebugErrorCategory {
+  if (isTailorResumeStepFailureDebugSource(source)) {
+    return "step_failure";
+  }
+
+  if (source === tailorResumeDebugErrorSources.stepTwoChatServedError) {
+    return "chat_error";
+  }
+
   if (source === tailorResumeDebugErrorSources.tailoringInvalidReplacement) {
     return "invalid_replacement";
   }
@@ -22,9 +52,17 @@ export function classifyTailorResumeDebugErrorSource(
 }
 
 export function formatTailorResumeDebugErrorSource(source: string) {
+  if (isTailorResumeStepFailureDebugSource(source)) {
+    const stepNumber = source.match(/^step-(\d+)-failure$/)?.[1];
+
+    return stepNumber ? `Step ${stepNumber} failure` : "Step failure";
+  }
+
   switch (source) {
     case tailorResumeDebugErrorSources.extractionCompileFailure:
       return "Extraction compile failure";
+    case tailorResumeDebugErrorSources.stepTwoChatServedError:
+      return "Step 2 chat error";
     case tailorResumeDebugErrorSources.tailoringCompileFailure:
       return "Tailoring compile failure";
     case tailorResumeDebugErrorSources.tailoringInvalidReplacement:
@@ -39,6 +77,14 @@ export function formatTailorResumeDebugErrorSource(source: string) {
 }
 
 export function formatTailorResumeDebugPayloadLabel(source: string) {
+  if (classifyTailorResumeDebugErrorSource(source) === "step_failure") {
+    return "Step failure context";
+  }
+
+  if (classifyTailorResumeDebugErrorSource(source) === "chat_error") {
+    return "Chat context";
+  }
+
   return classifyTailorResumeDebugErrorSource(source) === "invalid_replacement"
     ? "Rejected payload"
     : "Generated LaTeX";
@@ -83,6 +129,30 @@ export type ParsedTailorResumeInvalidReplacementPayload = {
   validationError: string | null;
 };
 
+export type TailorResumeStepFailureLogPayload = {
+  action: string | null;
+  applicationId: string | null;
+  interviewId: string | null;
+  jobDescription: string | null;
+  jobUrl: string | null;
+  kind: "tailor_resume_step_failure";
+  loggedAt: string;
+  logKind: "step-event" | "terminal-run-status";
+  runId: string | null;
+  step: {
+    attempt: number | null;
+    detail: string | null;
+    durationMs: number;
+    emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+    retrying: boolean;
+    status: TailorResumeGenerationStepEvent["status"];
+    stepCount: number;
+    stepNumber: number;
+    summary: string;
+  };
+  tailoredResumeId: string | null;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -93,6 +163,156 @@ function readOptionalString(value: unknown) {
 
 function readCodeString(value: unknown) {
   return typeof value === "string" ? value : "";
+}
+
+function trimLongDebugText(value: string | null | undefined, maxLength = 6000) {
+  const text = typeof value === "string" ? value.trim() : "";
+
+  if (!text) {
+    return null;
+  }
+
+  return text.length > maxLength
+    ? `${text.slice(0, maxLength)}\n\n[truncated ${text.length - maxLength} chars]`
+    : text;
+}
+
+function readNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readBoolean(value: unknown) {
+  return typeof value === "boolean" ? value : null;
+}
+
+function parseEmphasizedTechnologies(
+  value: unknown,
+): TailoredResumeEmphasizedTechnology[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+
+    const name = readOptionalString(entry.name);
+    const priority = readOptionalString(entry.priority);
+    const evidence = readOptionalString(entry.evidence);
+
+    if (!name || (priority !== "high" && priority !== "low") || !evidence) {
+      return [];
+    }
+
+    return [{ evidence, name, priority }];
+  });
+}
+
+export function buildTailorResumeStepFailureLogPayload(input: {
+  action?: string | null;
+  applicationId?: string | null;
+  event: TailorResumeGenerationStepEvent;
+  interviewId?: string | null;
+  jobDescription?: string | null;
+  jobUrl?: string | null;
+  loggedAt?: string;
+  logKind: TailorResumeStepFailureLogPayload["logKind"];
+  runId?: string | null;
+  tailoredResumeId?: string | null;
+}) {
+  const payload: TailorResumeStepFailureLogPayload = {
+    action: input.action?.trim() || null,
+    applicationId: input.applicationId?.trim() || null,
+    interviewId: input.interviewId?.trim() || null,
+    jobDescription: trimLongDebugText(input.jobDescription),
+    jobUrl: input.jobUrl?.trim() || null,
+    kind: "tailor_resume_step_failure",
+    loggedAt: input.loggedAt ?? new Date().toISOString(),
+    logKind: input.logKind,
+    runId: input.runId?.trim() || null,
+    step: {
+      attempt: input.event.attempt,
+      detail: input.event.detail,
+      durationMs: input.event.durationMs,
+      emphasizedTechnologies: input.event.emphasizedTechnologies ?? [],
+      retrying: input.event.retrying,
+      status: input.event.status,
+      stepCount: input.event.stepCount,
+      stepNumber: input.event.stepNumber,
+      summary: input.event.summary,
+    },
+    tailoredResumeId: input.tailoredResumeId?.trim() || null,
+  };
+
+  return JSON.stringify(payload, null, 2);
+}
+
+export function parseTailorResumeStepFailureLogPayload(
+  payload: string,
+): TailorResumeStepFailureLogPayload | null {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+
+  if (!isRecord(parsed) || parsed.kind !== "tailor_resume_step_failure") {
+    return null;
+  }
+
+  const step = isRecord(parsed.step) ? parsed.step : null;
+  const stepNumber = readNumber(step?.stepNumber);
+  const stepCount = readNumber(step?.stepCount);
+  const durationMs = readNumber(step?.durationMs);
+  const summary = readOptionalString(step?.summary);
+  const status = readOptionalString(step?.status);
+
+  if (
+    !step ||
+    !stepNumber ||
+    !stepCount ||
+    durationMs === null ||
+    !summary ||
+    (status !== "failed" &&
+      status !== "running" &&
+      status !== "skipped" &&
+      status !== "succeeded")
+  ) {
+    return null;
+  }
+
+  return {
+    action: readOptionalString(parsed.action),
+    applicationId: readOptionalString(parsed.applicationId),
+    interviewId: readOptionalString(parsed.interviewId),
+    jobDescription: readOptionalString(parsed.jobDescription),
+    jobUrl: readOptionalString(parsed.jobUrl),
+    kind: "tailor_resume_step_failure",
+    loggedAt:
+      readOptionalString(parsed.loggedAt) ?? new Date(0).toISOString(),
+    logKind:
+      parsed.logKind === "terminal-run-status"
+        ? "terminal-run-status"
+        : "step-event",
+    runId: readOptionalString(parsed.runId),
+    step: {
+      attempt: readNumber(step.attempt),
+      detail: readOptionalString(step.detail),
+      durationMs,
+      emphasizedTechnologies: parseEmphasizedTechnologies(
+        step.emphasizedTechnologies,
+      ),
+      retrying: readBoolean(step.retrying) ?? false,
+      status,
+      stepCount,
+      stepNumber,
+      summary,
+    },
+    tailoredResumeId: readOptionalString(parsed.tailoredResumeId),
+  };
 }
 
 function parseTailorResumeThesis(value: unknown): TailoredResumeThesis | null {

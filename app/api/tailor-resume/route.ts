@@ -108,6 +108,7 @@ import {
 } from "@/lib/tailor-resume-debug-errors";
 import {
   logLatexBuildFailure,
+  logTailorResumeStepFailure,
   logTailorResumeDebugError,
 } from "@/lib/tailor-resume-log-latex-failure";
 import {
@@ -213,6 +214,17 @@ function buildUserMemoryResponseFields(state: TailorResumeUserMarkdownState) {
   };
 }
 
+function hasTailorResumeUserMarkdownStateChanged(input: {
+  after: TailorResumeUserMarkdownState;
+  before: TailorResumeUserMarkdownState;
+}) {
+  return (
+    input.after.markdown !== input.before.markdown ||
+    input.after.nonTechnologies.join("\n") !==
+      input.before.nonTechnologies.join("\n")
+  );
+}
+
 function wantsTailorResumeStream(request: Request) {
   return request.headers.get("x-tailor-resume-stream") === "1";
 }
@@ -246,6 +258,42 @@ function logTailorResumeDiagnostic(input: {
   };
 
   console.info(`[tailor-resume] ${input.message} ${JSON.stringify(payload)}`);
+}
+
+async function logTailorResumeChatServedError(input: {
+  action:
+    | "advanceTailorResumeInterview"
+    | "completeTailorResumeInterview"
+    | "generateTailorResumeInterviewExamples"
+    | "startTailorResumeInterview";
+  attempt?: number | null;
+  error: string;
+  interview?: TailorResumePendingInterview | null;
+  interviewId?: string | null;
+  runId?: string | null;
+  userId: string;
+}) {
+  const interview = input.interview ?? null;
+  const payload = {
+    action: input.action,
+    applicationId: interview?.applicationId ?? null,
+    conversationMessageCount: interview?.conversation.length ?? null,
+    interviewId: input.interviewId ?? interview?.id ?? null,
+    jobUrl: interview?.jobUrl ?? null,
+    runId: input.runId ?? interview?.tailorResumeRunId ?? null,
+    technologyNames:
+      interview?.planningResult.emphasizedTechnologies.map(
+        (technology) => technology.name,
+      ) ?? [],
+  };
+
+  await logTailorResumeDebugError({
+    attempt: Math.max(1, Math.floor(input.attempt ?? 1)),
+    error: input.error,
+    latexCode: JSON.stringify(payload, null, 2),
+    source: tailorResumeDebugErrorSources.stepTwoChatServedError,
+    userId: input.userId,
+  });
 }
 
 async function markApplicationsChanged(userId: string) {
@@ -480,6 +528,7 @@ async function persistTailorResumePendingInterviewUserMarkdown(input: {
 
   if (input.tailoringInterview.pendingUserMarkdownEditOperations.length === 0) {
     return {
+      changed: false as const,
       ok: true as const,
       userMarkdown,
     };
@@ -496,7 +545,7 @@ async function persistTailorResumePendingInterviewUserMarkdown(input: {
       response: NextResponse.json(
         {
           error:
-            "The saved USER.md update from this chat no longer applies cleanly. Keep chatting once to refresh the memory update, then press Done again.",
+            "The saved USER.md update from this chat no longer applies cleanly. Send the latest details once more so the memory update can be refreshed.",
           ...buildUserMemoryResponseFields(userMarkdown),
         },
         { status: 409 },
@@ -504,11 +553,23 @@ async function persistTailorResumePendingInterviewUserMarkdown(input: {
     };
   }
 
-  return persistTailorResumeUserMarkdownPatchResult({
+  const saveResult = await persistTailorResumeUserMarkdownPatchResult({
     baseState: userMarkdown,
     patchResult,
     userId: input.userId,
   });
+
+  if (!saveResult.ok) {
+    return saveResult;
+  }
+
+  return {
+    ...saveResult,
+    changed: hasTailorResumeUserMarkdownStateChanged({
+      after: saveResult.userMarkdown,
+      before: userMarkdown,
+    }),
+  };
 }
 
 function buildLatexLinkSyncSummary(
@@ -1319,7 +1380,9 @@ async function handleStartTailorResumeInterview(
   const handleStepEvent = async (event: TailorResumeGenerationStepEvent) => {
     lastStepEvent = event;
     await updateTailorResumeRunStep({
+      action: "startTailorResumeInterview",
       event,
+      interviewId: claimed.interview.id,
       runId: claimed.interview.tailorResumeRunId,
       userId,
     });
@@ -1779,7 +1842,9 @@ async function handleGenerateTailorResumeInterviewExamples(
   const handleStepEvent = async (event: TailorResumeGenerationStepEvent) => {
     lastStepEvent = event;
     await updateTailorResumeRunStep({
+      action: "generateTailorResumeInterviewExamples",
       event,
+      interviewId,
       runId: preparation.runId,
       userId,
     });
@@ -1801,6 +1866,9 @@ async function handleGenerateTailorResumeInterviewExamples(
         : preparation.tailoringInterview.planningResult.emphasizedTechnologies;
     const examplesStartedAt = Date.now();
     const earlyOpeningMessage = await earlyOpeningMessagePromise;
+    const planningSnapshot = buildTailorResumePlanningSnapshot(
+      preparation.tailoringInterview.sourceAnnotatedLatexCode,
+    );
 
     await handleStepEvent({
       attempt: readTailorResumeInterviewAttempt(
@@ -1826,7 +1894,9 @@ async function handleGenerateTailorResumeInterviewExamples(
       examplesResult = await generateTailorResumeTechnologyExamples({
         jobDescription: preparation.tailoringInterview.jobDescription,
         onStreamEvent: options.onInterviewStreamEvent,
+        onStepEvent: handleStepEvent,
         openingMessage: earlyOpeningMessage,
+        resumePlainText: planningSnapshot.resumePlainText,
         streamOpening: !earlyOpeningMessage,
         technologies: technologiesForExamples,
       });
@@ -1837,11 +1907,12 @@ async function handleGenerateTailorResumeInterviewExamples(
           ? error.message
           : "Unable to generate technology examples.",
       );
+      const attempt = readTailorResumeInterviewAttempt(
+        preparation.tailoringInterview.planningResult.questioningSummary,
+      );
 
       await handleStepEvent({
-        attempt: readTailorResumeInterviewAttempt(
-          preparation.tailoringInterview.planningResult.questioningSummary,
-        ),
+        attempt,
         detail: errorMessage,
         durationMs: Math.max(0, Date.now() - examplesStartedAt),
         retrying: false,
@@ -1854,6 +1925,18 @@ async function handleGenerateTailorResumeInterviewExamples(
         error: errorMessage,
         runId: preparation.runId,
         status: "FAILED",
+        userId,
+      });
+      await logTailorResumeChatServedError({
+        action: "generateTailorResumeInterviewExamples",
+        attempt,
+        error: errorMessage,
+        interview: preparation.tailoringInterview,
+        runId: preparation.runId,
+        userId,
+      });
+      await removeTailorResumeQuestionDecisionInterview({
+        interviewId: preparation.tailoringInterview.id,
         userId,
       });
 
@@ -2538,11 +2621,131 @@ async function createTailorResumeRun(input: {
   return run.id;
 }
 
-async function updateTailorResumeRunStep(input: {
-  event: TailorResumeGenerationStepEvent;
+function readTailorResumeFailureStepNumberFromMessage(error: string | null | undefined) {
+  const match = error?.match(/\bStep\s+([1-5])\s*:/i);
+
+  return match ? Number.parseInt(match[1] ?? "", 10) : null;
+}
+
+function fallbackTailorResumeStepSummary(stepNumber: number) {
+  switch (stepNumber) {
+    case 1:
+      return "Scrape keywords";
+    case 2:
+      return "Clarify missing details";
+    case 3:
+      return "Generating plaintext edit outline";
+    case 4:
+      return "Generating block-scoped edits";
+    case 5:
+      return "Keeping the tailored resume within the original page count";
+    default:
+      return "Tailor Resume run failed";
+  }
+}
+
+async function readTailorResumeRunFailureLogContext(input: {
   runId: string | null;
   userId: string;
 }) {
+  if (!input.runId) {
+    return null;
+  }
+
+  try {
+    return await getPrismaClient().tailorResumeRun.findFirst({
+      select: {
+        applicationId: true,
+        jobDescription: true,
+        jobUrl: true,
+        stepAttempt: true,
+        stepCount: true,
+        stepDetail: true,
+        stepNumber: true,
+        stepRetrying: true,
+        stepStatus: true,
+        stepSummary: true,
+        tailoredResumeId: true,
+      },
+      where: {
+        id: input.runId,
+        userId: input.userId,
+      },
+    });
+  } catch (error) {
+    console.warn("Could not read Tailor Resume run context for failure log.", error);
+    return null;
+  }
+}
+
+async function logTailorResumeRunStepFailure(input: {
+  action?: string | null;
+  event: TailorResumeGenerationStepEvent;
+  interviewId?: string | null;
+  logKind: "step-event" | "terminal-run-status";
+  runId: string | null;
+  userId: string;
+}) {
+  if (input.event.status !== "failed") {
+    return;
+  }
+
+  const runContext = await readTailorResumeRunFailureLogContext({
+    runId: input.runId,
+    userId: input.userId,
+  });
+
+  await logTailorResumeStepFailure({
+    action: input.action,
+    applicationId: runContext?.applicationId ?? null,
+    event: input.event,
+    interviewId: input.interviewId,
+    jobDescription: runContext?.jobDescription ?? null,
+    jobUrl: runContext?.jobUrl ?? null,
+    logKind: input.logKind,
+    runId: input.runId,
+    tailoredResumeId: runContext?.tailoredResumeId ?? null,
+    userId: input.userId,
+  });
+}
+
+function shouldLogTailorResumeTerminalFailure(input: {
+  error: string;
+  runContext: Awaited<ReturnType<typeof readTailorResumeRunFailureLogContext>>;
+}) {
+  if (input.runContext?.stepStatus !== "failed") {
+    return true;
+  }
+
+  const existingStepDetail = input.runContext.stepDetail?.trim();
+  const terminalError = input.error.trim();
+
+  if (!existingStepDetail || !terminalError) {
+    return true;
+  }
+
+  return (
+    !terminalError.includes(existingStepDetail) &&
+    !existingStepDetail.includes(terminalError)
+  );
+}
+
+async function updateTailorResumeRunStep(input: {
+  action?: string | null;
+  event: TailorResumeGenerationStepEvent;
+  interviewId?: string | null;
+  runId: string | null;
+  userId: string;
+}) {
+  await logTailorResumeRunStepFailure({
+    action: input.action,
+    event: input.event,
+    interviewId: input.interviewId,
+    logKind: "step-event",
+    runId: input.runId,
+    userId: input.userId,
+  });
+
   if (!input.runId) {
     return;
   }
@@ -2571,8 +2774,37 @@ async function updateTailorResumeRunStatus(input: {
   userId: string;
 }) {
   if (!input.runId) {
+    if (input.status === "FAILED" && input.error?.trim()) {
+      const stepNumber =
+        readTailorResumeFailureStepNumberFromMessage(input.error) ?? 1;
+      await logTailorResumeRunStepFailure({
+        action: "terminal-run-status",
+        event: {
+          attempt: null,
+          detail: input.error,
+          durationMs: 0,
+          retrying: false,
+          status: "failed",
+          stepCount: 5,
+          stepNumber,
+          summary: fallbackTailorResumeStepSummary(stepNumber),
+        },
+        logKind: "terminal-run-status",
+        runId: null,
+        userId: input.userId,
+      });
+    }
+
     return;
   }
+
+  const terminalFailureContext =
+    input.status === "FAILED" && input.error?.trim()
+      ? await readTailorResumeRunFailureLogContext({
+          runId: input.runId,
+          userId: input.userId,
+        })
+      : null;
 
   const updatedRuns = await getPrismaClient().tailorResumeRun.updateMany({
     data: {
@@ -2597,6 +2829,39 @@ async function updateTailorResumeRunStatus(input: {
 
   if (updatedRuns.count > 0) {
     await markTailoringChanged(input.userId);
+  }
+
+  if (
+    input.status === "FAILED" &&
+    input.error?.trim() &&
+    shouldLogTailorResumeTerminalFailure({
+      error: input.error,
+      runContext: terminalFailureContext,
+    })
+  ) {
+    const stepNumber =
+      readTailorResumeFailureStepNumberFromMessage(input.error) ??
+      terminalFailureContext?.stepNumber ??
+      1;
+
+    await logTailorResumeRunStepFailure({
+      action: "terminal-run-status",
+      event: {
+        attempt: terminalFailureContext?.stepAttempt ?? null,
+        detail: input.error,
+        durationMs: 0,
+        retrying: false,
+        status: "failed",
+        stepCount: terminalFailureContext?.stepCount ?? 5,
+        stepNumber,
+        summary:
+          terminalFailureContext?.stepSummary?.trim() ||
+          fallbackTailorResumeStepSummary(stepNumber),
+      },
+      logKind: "terminal-run-status",
+      runId: input.runId,
+      userId: input.userId,
+    });
   }
 }
 
@@ -3553,6 +3818,7 @@ async function handleTailorResumeGeneration(
       stepEvent: event,
     });
     await updateTailorResumeRunStep({
+      action: "tailor",
       event,
       runId: preparation.runId,
       userId,
@@ -3828,6 +4094,9 @@ async function handleAdvanceTailorResumeInterview(
     onStepEvent?: (
       event: TailorResumeGenerationStepEvent,
     ) => void | Promise<void>;
+    onUserMemoryEvent?: (
+      state: TailorResumeUserMarkdownState,
+    ) => void | Promise<void>;
   } = {},
 ): Promise<Response> {
   const interviewId =
@@ -3908,7 +4177,9 @@ async function handleAdvanceTailorResumeInterview(
       stepEvent: event,
     });
     await updateTailorResumeRunStep({
+      action: "advanceTailorResumeInterview",
       event,
+      interviewId,
       runId: preparation.runId,
       userId,
     });
@@ -3921,62 +4192,161 @@ async function handleAdvanceTailorResumeInterview(
 
   try {
     const nextConversation = [
-    ...preparation.tailoringInterview.conversation,
-    buildTailorResumeConversationMessage({
-      role: "user",
-      text: answer,
-    }),
-  ];
-  const planningSnapshot = buildTailorResumePlanningSnapshot(
-    preparation.tailoringInterview.sourceAnnotatedLatexCode,
-  );
-  const questioningStartedAt = Date.now();
-  const userMarkdownBeforeQuestioning = await readTailorResumeUserMarkdown(userId);
-  let questioningResult: Awaited<ReturnType<typeof advanceTailorResumeQuestioning>>;
-
-  await handleStepEvent({
-    attempt: readTailorResumeInterviewAttempt(
-      preparation.tailoringInterview.planningResult.questioningSummary,
-    ),
-    detail:
-      "Processing the latest answer and deciding whether to ask another question or wrap up the follow-up chat.",
-    durationMs: 0,
-    retrying: false,
-    status: "running",
-    stepCount: 5,
-    stepNumber: 2,
-    summary: "Continuing the follow-up questions",
-  });
-
-  try {
-    questioningResult = await advanceTailorResumeQuestioning({
-      conversation: nextConversation,
-      jobDescription: preparation.tailoringInterview.jobDescription,
-      onStreamEvent: options.onInterviewStreamEvent,
-      planningResult: preparation.tailoringInterview.planningResult,
-      planningSnapshot,
-      promptSettings: preparation.rawProfile.promptSettings.values,
-      userMarkdown: userMarkdownBeforeQuestioning,
-    });
-  } catch (error) {
-    const errorMessage = formatTailorResumeStepError(
-      2,
-      error instanceof Error
-        ? error.message
-        : "Unable to continue the tailoring follow-up questions.",
+      ...preparation.tailoringInterview.conversation,
+      buildTailorResumeConversationMessage({
+        role: "user",
+        text: answer,
+      }),
+    ];
+    const planningSnapshot = buildTailorResumePlanningSnapshot(
+      preparation.tailoringInterview.sourceAnnotatedLatexCode,
     );
+    const questioningStartedAt = Date.now();
+    const userMarkdownBeforeQuestioning =
+      await readTailorResumeUserMarkdown(userId);
+    let questioningResult: Awaited<
+      ReturnType<typeof advanceTailorResumeQuestioning>
+    >;
 
     await handleStepEvent({
       attempt: readTailorResumeInterviewAttempt(
         preparation.tailoringInterview.planningResult.questioningSummary,
       ),
+      detail:
+        "Processing the latest answer and deciding whether to ask another question or wrap up the follow-up chat.",
+      durationMs: 0,
+      retrying: false,
+      status: "running",
+      stepCount: 5,
+      stepNumber: 2,
+      summary: "Continuing the follow-up questions",
+    });
+
+    try {
+      questioningResult = await advanceTailorResumeQuestioning({
+        conversation: nextConversation,
+        jobDescription: preparation.tailoringInterview.jobDescription,
+        onStreamEvent: options.onInterviewStreamEvent,
+        onStepEvent: handleStepEvent,
+        planningResult: preparation.tailoringInterview.planningResult,
+        planningSnapshot,
+        promptSettings: preparation.rawProfile.promptSettings.values,
+        userMarkdown: userMarkdownBeforeQuestioning,
+      });
+    } catch (error) {
+      const attempt = readTailorResumeInterviewAttempt(
+        preparation.tailoringInterview.planningResult.questioningSummary,
+      );
+      const errorMessage = formatTailorResumeStepError(
+        2,
+        error instanceof Error
+          ? error.message
+          : "Unable to continue the tailoring follow-up questions.",
+      );
+
+      await handleStepEvent({
+        attempt,
+        detail: errorMessage,
+        durationMs: Math.max(0, Date.now() - questioningStartedAt),
+        retrying: false,
+        status: "failed",
+        stepCount: 5,
+        stepNumber: 2,
+        summary: "Continuing the follow-up questions",
+      });
+      await updateTailorResumeRunStatus({
+        error: errorMessage,
+        runId: preparation.runId,
+        status: "FAILED",
+        userId,
+      });
+      await logTailorResumeChatServedError({
+        action: "advanceTailorResumeInterview",
+        attempt,
+        error: errorMessage,
+        interview: preparation.tailoringInterview,
+        interviewId,
+        runId: preparation.runId,
+        userId,
+      });
+      await removeTailorResumeQuestionDecisionInterview({
+        interviewId,
+        userId,
+      });
+
+      return NextResponse.json(
+        {
+          error: errorMessage,
+          tailoredResumeDurationMs:
+            preparation.tailoringInterview.accumulatedModelDurationMs,
+        },
+        { status: 422 },
+      );
+    }
+
+    const accumulatedModelDurationMs =
+      preparation.tailoringInterview.accumulatedModelDurationMs +
+      questioningResult.generationDurationMs;
+    const userMarkdownSaveResult =
+      await persistTailorResumeUserMarkdownPatchResult({
+        baseState: userMarkdownBeforeQuestioning,
+        nonTechnologyTerms: questioningResult.nonTechnologyTerms,
+        patchResult: questioningResult.userMarkdownPatchResult,
+        userId,
+      });
+
+  if (!userMarkdownSaveResult.ok) {
+    const errorMessage = "Unable to save the tailoring follow-up memory update.";
+    await updateTailorResumeRunStatus({
+      error: errorMessage,
+      runId: preparation.runId,
+      status: "FAILED",
+      userId,
+    });
+    await logTailorResumeChatServedError({
+      action: "advanceTailorResumeInterview",
+      attempt: readTailorResumeInterviewAttempt(
+        preparation.tailoringInterview.planningResult.questioningSummary,
+      ),
+      error: errorMessage,
+      interview: preparation.tailoringInterview,
+      interviewId,
+      runId: preparation.runId,
+      userId,
+    });
+    await removeTailorResumeQuestionDecisionInterview({
+      interviewId,
+      userId,
+    });
+    return userMarkdownSaveResult.response;
+  }
+
+  const userMarkdownAfterQuestioning = userMarkdownSaveResult.userMarkdown;
+
+  if (
+    questioningResult.action === "done" &&
+    !hasTailorResumeUserMarkdownStateChanged({
+      after: userMarkdownAfterQuestioning,
+      before: userMarkdownBeforeQuestioning,
+    })
+  ) {
+    const attempt = readTailorResumeInterviewAttempt(
+      preparation.tailoringInterview.planningResult.questioningSummary,
+    );
+    const errorMessage =
+      "Step 2 ended without saving USER.md. Tailoring stopped so the latest answer can be saved before continuing.";
+
+    await handleStepEvent({
+      attempt,
       detail: errorMessage,
       durationMs: Math.max(0, Date.now() - questioningStartedAt),
+      emphasizedTechnologies:
+        preparation.tailoringInterview.planningResult.emphasizedTechnologies,
       retrying: false,
       status: "failed",
       stepCount: 5,
       stepNumber: 2,
-      summary: "Continuing the follow-up questions",
+      summary: "Finished the follow-up questions",
     });
     await updateTailorResumeRunStatus({
       error: errorMessage,
@@ -3984,42 +4354,27 @@ async function handleAdvanceTailorResumeInterview(
       status: "FAILED",
       userId,
     });
+    await logTailorResumeChatServedError({
+      action: "advanceTailorResumeInterview",
+      attempt,
+      error: errorMessage,
+      interview: preparation.tailoringInterview,
+      interviewId,
+      runId: preparation.runId,
+      userId,
+    });
 
     return NextResponse.json(
       {
         error: errorMessage,
-        tailoredResumeDurationMs:
-          preparation.tailoringInterview.accumulatedModelDurationMs,
+        tailoredResumeDurationMs: accumulatedModelDurationMs,
+        ...buildUserMemoryResponseFields(userMarkdownAfterQuestioning),
       },
       { status: 422 },
     );
   }
 
-  const accumulatedModelDurationMs =
-    preparation.tailoringInterview.accumulatedModelDurationMs +
-    questioningResult.generationDurationMs;
-  const userMarkdownSaveResult =
-    await persistTailorResumeUserMarkdownPatchResult({
-      baseState: userMarkdownBeforeQuestioning,
-      nonTechnologyTerms: questioningResult.nonTechnologyTerms,
-      patchResult:
-        questioningResult.action === "done"
-          ? null
-          : questioningResult.userMarkdownPatchResult,
-      userId,
-    });
-
-  if (!userMarkdownSaveResult.ok) {
-    await updateTailorResumeRunStatus({
-      error: "Unable to save the tailoring follow-up memory update.",
-      runId: preparation.runId,
-      status: "FAILED",
-      userId,
-    });
-    return userMarkdownSaveResult.response;
-  }
-
-  const userMarkdownAfterQuestioning = userMarkdownSaveResult.userMarkdown;
+  await options.onUserMemoryEvent?.(userMarkdownAfterQuestioning);
 
   if (questioningResult.action === "ask") {
     await handleStepEvent({
@@ -4143,27 +4498,27 @@ async function handleAdvanceTailorResumeInterview(
   });
   }
 
-  await handleStepEvent({
-    attempt: readTailorResumeInterviewAttempt(
-      preparation.tailoringInterview.planningResult.questioningSummary,
-    ),
-    detail:
-      "The assistant thinks it has enough context. Confirm Done to wrap up, or keep chatting to clarify anything else.",
-    durationMs: questioningResult.generationDurationMs,
-    emphasizedTechnologies:
-      preparation.tailoringInterview.planningResult.emphasizedTechnologies,
-    retrying: false,
-    status: "running",
-    stepCount: 5,
-    stepNumber: 2,
-    summary: "Waiting for you to finish or continue the follow-up chat",
-  });
-
   if (questioningResult.action !== "done") {
     throw new Error(
       `Unsupported interview action while awaiting completion: ${questioningResult.action}.`,
     );
   }
+
+  await handleStepEvent({
+    attempt: readTailorResumeInterviewAttempt(
+      preparation.tailoringInterview.planningResult.questioningSummary,
+    ),
+    detail:
+      "Saved the latest follow-up answer and started the remaining tailoring steps.",
+    durationMs: questioningResult.generationDurationMs,
+    emphasizedTechnologies:
+      preparation.tailoringInterview.planningResult.emphasizedTechnologies,
+    retrying: false,
+    status: "succeeded",
+    stepCount: 5,
+    stepNumber: 2,
+    summary: "Finished the follow-up questions",
+  });
 
   const completionRequestedAt = new Date().toISOString();
   const finalizedPlanningResult: TailorResumePlanningResult = {
@@ -4171,10 +4526,10 @@ async function handleAdvanceTailorResumeInterview(
     emphasizedTechnologies: questioningResult.emphasizedTechnologies,
     questioningSummary: questioningResult.questioningSummary,
   };
-  const nextInterview: TailorResumePendingInterview = {
+  const finalizedInterview: TailorResumePendingInterview = {
     ...preparation.tailoringInterview,
     accumulatedModelDurationMs,
-    completionRequestedAt,
+    completionRequestedAt: null,
     conversation: [
       ...nextConversation,
       buildTailorResumeConversationMessage({
@@ -4184,12 +4539,11 @@ async function handleAdvanceTailorResumeInterview(
       }),
     ],
     planningResult: finalizedPlanningResult,
-    pendingUserMarkdownEditOperations:
-      questioningResult.userMarkdownEditOperations,
-    status: "ready",
+    pendingUserMarkdownEditOperations: [],
+    status: "deciding",
     updatedAt: completionRequestedAt,
   };
-  const nextState = await withTailorResumeProfileLock(userId, async () => {
+  const finalizationState = await withTailorResumeProfileLock(userId, async () => {
     const latestState = await readTailorResumeProfileState(userId);
     const latestInterview = findTailorResumeWorkspaceInterview(
       latestState.rawProfile.workspace,
@@ -4217,7 +4571,7 @@ async function handleAdvanceTailorResumeInterview(
       ...latestState.rawProfile,
       workspace: upsertTailorResumeWorkspaceInterview(
         latestState.rawProfile.workspace,
-        nextInterview,
+        finalizedInterview,
         completionRequestedAt,
       ),
     };
@@ -4230,7 +4584,7 @@ async function handleAdvanceTailorResumeInterview(
     };
   });
 
-  if (!nextState) {
+  if (!finalizationState) {
     await updateTailorResumeRunStatus({
       error:
         "The base resume changed, or this tailoring run was canceled or overwritten while the follow-up chat was wrapping up.",
@@ -4249,24 +4603,17 @@ async function handleAdvanceTailorResumeInterview(
     );
   }
 
-  await updateTailorResumeRunStatus({
-    runId: preparation.runId,
-    status: "NEEDS_INPUT",
+  return await completeTailorResumeInterviewAndFinalize({
+    applicationId: preparation.applicationId,
+    lockedLinks: finalizationState.lockedLinks,
+    onStepEvent: handleStepEvent,
+    rawProfile: finalizationState.rawProfile,
     userId,
+    runId: preparation.runId,
+    stepTwoCompletionEvent: null,
+    tailoringInterview: finalizedInterview,
+    userMarkdown: userMarkdownAfterQuestioning,
   });
-
-    return NextResponse.json({
-      profile: mergeTailorResumeProfileWithLockedLinks(
-        nextState.rawProfile,
-        nextState.lockedLinks,
-        {
-          includeLockedOnly: true,
-        },
-      ),
-      tailoredResumeDurationMs: accumulatedModelDurationMs,
-      tailoringStatus: "needs_user_input" as const,
-      ...buildUserMemoryResponseFields(userMarkdownAfterQuestioning),
-    });
   } catch (error) {
     return failTailorResumeRunAfterBackendError({
       error,
@@ -4291,6 +4638,9 @@ async function handleCompleteTailorResumeInterview(
   options: {
     onStepEvent?: (
       event: TailorResumeGenerationStepEvent,
+    ) => void | Promise<void>;
+    onUserMemoryEvent?: (
+      state: TailorResumeUserMarkdownState,
     ) => void | Promise<void>;
   } = {},
 ): Promise<Response> {
@@ -4396,7 +4746,9 @@ async function handleCompleteTailorResumeInterview(
       stepEvent: event,
     });
     await updateTailorResumeRunStep({
+      action: "completeTailorResumeInterview",
       event,
+      interviewId,
       runId: preparation.runId,
       userId,
     });
@@ -4417,6 +4769,55 @@ async function handleCompleteTailorResumeInterview(
     if (!userMarkdownSaveResult.ok) {
       return userMarkdownSaveResult.response;
     }
+
+    if (!userMarkdownSaveResult.changed) {
+      const errorMessage =
+        "Step 2 ended without saving USER.md. Tailoring stopped so the latest answer can be saved before continuing.";
+
+      await handleStepEvent({
+        attempt: readTailorResumeInterviewAttempt(
+          preparation.tailoringInterview.planningResult.questioningSummary,
+        ),
+        detail: errorMessage,
+        durationMs: 0,
+        emphasizedTechnologies:
+          preparation.tailoringInterview.planningResult.emphasizedTechnologies,
+        retrying: false,
+        status: "failed",
+        stepCount: 5,
+        stepNumber: 2,
+        summary: "Finished the follow-up questions",
+      });
+      await updateTailorResumeRunStatus({
+        error: errorMessage,
+        runId: preparation.runId,
+        status: "FAILED",
+        userId,
+      });
+      await logTailorResumeChatServedError({
+        action: "completeTailorResumeInterview",
+        attempt: readTailorResumeInterviewAttempt(
+          preparation.tailoringInterview.planningResult.questioningSummary,
+        ),
+        error: errorMessage,
+        interview: preparation.tailoringInterview,
+        interviewId,
+        runId: preparation.runId,
+        userId,
+      });
+
+      return NextResponse.json(
+        {
+          error: errorMessage,
+          tailoredResumeDurationMs:
+            preparation.tailoringInterview.accumulatedModelDurationMs,
+          ...buildUserMemoryResponseFields(userMarkdownSaveResult.userMarkdown),
+        },
+        { status: 422 },
+      );
+    }
+
+    await options.onUserMemoryEvent?.(userMarkdownSaveResult.userMarkdown);
 
     return await completeTailorResumeInterviewAndFinalize({
       applicationId: preparation.applicationId,
@@ -4696,6 +5097,9 @@ function buildTailorResumeGenerationStreamResponse(
     onInterviewStreamEvent: (
       event: TailorResumeInterviewStreamEvent,
     ) => void | Promise<void>,
+    onUserMemoryEvent: (
+      state: TailorResumeUserMarkdownState,
+    ) => void | Promise<void>,
   ) => Promise<Response | undefined>,
 ) {
   const stream = new ReadableStream({
@@ -4715,6 +5119,12 @@ function buildTailorResumeGenerationStreamResponse(
               writer.sendEvent({
                 event: interviewStreamEvent,
                 type: "interview-stream",
+              });
+            },
+            (userMarkdown) => {
+              writer.sendEvent({
+                payload: buildUserMemoryResponseFields(userMarkdown),
+                type: "user-memory",
               });
             },
           );
@@ -5263,13 +5673,14 @@ export async function PATCH(request: Request) {
   if ("action" in body && body.action === "advanceTailorResumeInterview") {
     if (wantsTailorResumeStream(request)) {
       return buildTailorResumeGenerationStreamResponse(
-        (onStepEvent, onInterviewStreamEvent) =>
+        (onStepEvent, onInterviewStreamEvent, onUserMemoryEvent) =>
           handleAdvanceTailorResumeInterview(
             body as Record<string, unknown>,
             session.user.id,
             {
               onInterviewStreamEvent,
               onStepEvent,
+              onUserMemoryEvent,
             },
           ),
       );
@@ -5332,12 +5743,13 @@ export async function PATCH(request: Request) {
 
   if ("action" in body && body.action === "completeTailorResumeInterview") {
     if (wantsTailorResumeStream(request)) {
-      return buildTailorResumeGenerationStreamResponse((onStepEvent) =>
+      return buildTailorResumeGenerationStreamResponse((onStepEvent, _onInterviewStreamEvent, onUserMemoryEvent) =>
         handleCompleteTailorResumeInterview(
           body as Record<string, unknown>,
           session.user.id,
           {
             onStepEvent,
+            onUserMemoryEvent,
           },
         ),
       );

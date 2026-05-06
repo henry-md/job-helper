@@ -20,8 +20,8 @@ Step 2. Clarify missing details
 - The hard-coded first message asks whether examples should be generated. Clicking the small `Generate` action sends the first true Step 2 LLM request, which should answer with compact `technologyContexts` cards containing definitions and two example resume bullets per technology by default. If the user asks for more examples for a technology, keep using the card and return the requested count, up to the tool limit.
 - Questions should skip vague, generic, product-only, or low-signal terms such as "internet terminology"; low-priority terms should join only when they are concrete and share an obvious likely insertion point with stronger terms.
 - Step 2 no longer auto-generates follow-up chats after Step 1. Runs with uncovered keywords store a `pending` interview marker and show a `Start chat` action; only that click reads the latest `USER.md`, so parallel runs can benefit from edits made by earlier chats.
-- The model may request that the chat finish, but the chat only ends after the user presses Done. If the user keeps chatting, generation remains paused.
-- When the user's answer reveals durable context likely to matter later, the interview tool should submit one end-of-chat `USER.md` markdown patch operation set. Normal additions should append under a chosen heading path; restructuring should use exact-match replace/insert/delete operations. Failed exact matches are fed back to the model for a retry instead of allowing full-document replacement.
+- Step 2 interview tools deliberately separate display from mutation. `initiate_tailor_resume_probing_questions` is presentation-only (`assistantMessage` plus optional `technologyContexts` cards). `finish_tailor_resume_interview` is the only Step 2 tool that writes `USER.md` and ends the chat so the run can continue. `update_tailor_resume_non_technologies` is the only tool that removes rejected scraped keywords or persists non-technology deny-list terms. `skip_tailor_resume_interview` only records why no chat is useful.
+- When the user's answer reveals durable context likely to matter later, `finish_tailor_resume_interview` should submit one end-of-chat `USER.md` markdown patch operation set. Normal additions should append under a chosen heading path; restructuring should use exact-match replace/insert/delete operations. Failed exact matches are fed back to the model for a retry instead of allowing full-document replacement.
 - `USER.md` technology notes should say, for each discussed technology, whether the user has no experience, whether it can be listed in skills without changing an experience bullet, or a quoted candidate experience bullet plus the experience/project name and skills-section category that can support it.
 
 Step 3. Generate plaintext targeted edit plan
@@ -29,12 +29,13 @@ Step 3. Generate plaintext targeted edit plan
 - It sees whole-resume plaintext, document-ordered plaintext blocks keyed by `segmentId`, the job description, emphasized technologies from Step 1, and current `USER.md`.
 - It returns a tailoring thesis plus generalized plaintext edits for targeted blocks.
 - This stage decides what should change, but it does not write final LaTeX yet.
-- When a skills/technical-skills block is editable, Step 3 should strongly prefer skills-section coverage for extracted job technologies supported by the resume or USER.md, including low-priority terms unless USER.md explicitly says the user has no experience, no exposure, or does not want the keyword included. Allow light discretion for capability phrases that are useful extracted keywords but awkward standalone skills-list entries; for example, `RESTful APIs` may fit better in a bullet or keyword coverage than as a tool in Skills.
+- When a skills/technical-skills block is editable, Step 3 should add only actual skills: concrete tools, languages, frameworks, databases, infrastructure tools, developer tools, or named methods supported as real skills by the source resume or by a dedicated `USER.md` sentence/bullet for the exact technology. Capability phrases used for ATS peppering, such as `RESTful`, `RESTful APIs`, `cloud infrastructure`, or `data structures`, should stay out of Skills unless `USER.md` explicitly says that exact phrase can be listed as a skill. Skills-only tools such as Windsurf can be added to Skills from a dedicated `USER.md` note without forcing an experience bullet.
 - If Step 2 collected user-confirmed learnings, attach the compact questioning summary to the accepted plan so implementation can use those facts surgically.
 
 Step 4. Generate block-scoped edits
 - The implementation stage takes the accepted plan plus any user-confirmed learnings and returns exact LaTeX replacements for only the targeted segments.
 - It also receives the Step 1 emphasized-technology list as keyword guidance. Include high-priority terms wherever they are factually supported by the source resume, `USER.md`, interview learnings, or accepted plan; do not invent unsupported technology experience.
+- When Step 4 adapts a sentence or quoted bullet from `USER.md`, translate Markdown bold spans into LaTeX `\textbf{...}` and, when appropriate, bold only one or two exact job-emphasized words or short phrases rather than the whole sentence.
 - Failures here should retry the block-edit stage rather than forcing the model to rethink the whole thesis.
 - The goal is segment-safe replacements that preserve local LaTeX structure.
 - Block replacements should not polish unrelated details such as punctuation, dates of experience, employers, titles, metrics, separators, capitalization, or links.
@@ -58,6 +59,13 @@ Retry model:
 - Block-scoped implementation retries stay local to the selected segments and compile validation.
 - Page-count compaction retries stay local to the edited blocks until the preview fits or the attempt budget is exhausted, and they use a Step-5-specific retry budget instead of borrowing the generic edit-stage retry count.
 - Design goal: retry the failing stage, not the entire pipeline.
+
+Failure logging:
+- Durable Tailor Resume debug logs are stored in the `LatexBuildFailure` table. The table name is historical; it now stores structured Tailor Resume debug payloads as well as compile failures.
+- Every failed step event from steps 1-5 writes a JSON payload through `logTailorResumeStepFailure`, with sources named `step-1-failure` through `step-5-failure`. The JSON payload is stored in the table's `latexCode` text field and includes the run id, application id, job URL, job-description snapshot, step number, attempt, retrying state, duration, and failure detail.
+- Terminal run failures also write a `step-N-failure` payload with `logKind: "terminal-run-status"` so backend errors that do not pass through a normal model retry path still persist.
+- Existing specialized debug artifacts remain in the same table: extraction compile failures, Step 2 chat-served errors, Step 4 invalid replacements, and tailoring compile failures.
+- `/debug/errors` is the operator-facing view for these records. `TailorResumeRun` is only the latest run-status snapshot for the UI and should not be treated as the durable failure history.
 
 Relevant code paths:
 - Extraction: `lib/tailor-resume-extraction.ts`
