@@ -8,6 +8,8 @@ import {
 } from "../extension/src/tailor-overwrite-guard.ts";
 import { normalizeComparableUrl } from "../extension/src/comparable-job-url.ts";
 
+const matchingJobUrl = "https://jobs.example.com/roles/123?posting=abc";
+
 function buildPageIdentity(
   overrides: Partial<{
     canonicalUrl: string | null;
@@ -16,9 +18,9 @@ function buildPageIdentity(
   }> = {},
 ) {
   return {
-    canonicalUrl: "https://jobs.example.com/roles/123?utm_source=mail",
-    jobUrl: "https://jobs.example.com/roles/123?ref=extension",
-    pageUrl: "https://jobs.example.com/roles/123/#overview",
+    canonicalUrl: matchingJobUrl,
+    jobUrl: matchingJobUrl,
+    pageUrl: `${matchingJobUrl}#overview`,
     ...overrides,
   };
 }
@@ -50,7 +52,7 @@ function buildActiveTailoring(
     id: "run-123",
     jobDescription: "Role text",
     jobIdentifier: "Software Engineer",
-    jobUrl: "https://jobs.example.com/roles/123",
+    jobUrl: matchingJobUrl,
     kind: "active_generation" as const,
     lastStep: null,
     updatedAt: "2026-04-25T15:05:00.000Z",
@@ -88,7 +90,7 @@ function buildTailoredResumeSummary(
     emphasizedTechnologies: [],
     id: "tailored-123",
     jobIdentifier: "Software Engineer",
-    jobUrl: "https://jobs.example.com/roles/123?utm_campaign=saved",
+    jobUrl: matchingJobUrl,
     keywordCoverage: null,
     positionTitle: "Software Engineer",
     status: "ready",
@@ -124,7 +126,7 @@ test("returns a completed overwrite prompt when a saved tailored resume matches"
     error: null,
     id: "tailored-123",
     jobIdentifier: "Software Engineer",
-    jobUrl: "https://jobs.example.com/roles/123?utm_campaign=saved",
+    jobUrl: matchingJobUrl,
     kind: "completed",
     positionTitle: "Software Engineer",
     status: "ready",
@@ -204,17 +206,17 @@ test("matches the current page even when other jobs are running in parallel", ()
   assert.equal(result?.id, "run-123");
 });
 
-test("normalizeComparableUrl preserves stable job id query params", () => {
+test("normalizeComparableUrl preserves the full query string", () => {
   assert.equal(
     normalizeComparableUrl(
       "https://apply.careers.microsoft.com/careers?domain=microsoft.com&start=0&location=United+States&pid=1970393556744821&sort_by=match&filter_include_remote=1",
     ),
-    "https://apply.careers.microsoft.com/careers?pid=1970393556744821",
+    "https://apply.careers.microsoft.com/careers?domain=microsoft.com&start=0&location=United+States&pid=1970393556744821&sort_by=match&filter_include_remote=1",
   );
 });
 
-test("normalizeComparableUrl matches Workday canonical URLs to query-bearing browser tabs", () => {
-  assert.equal(
+test("normalizeComparableUrl keeps Workday canonical URLs separate from query-bearing browser tabs", () => {
+  assert.notEqual(
     normalizeComparableUrl(
       "https://pae.wd1.myworkdayjobs.com/en-US/Amentum_Careers/job/Entry-Level-Software-Engineer_R0160036",
     ),
@@ -224,8 +226,8 @@ test("normalizeComparableUrl matches Workday canonical URLs to query-bearing bro
   );
 });
 
-test("normalizeComparableUrl matches Workday career-site aliases", () => {
-  assert.equal(
+test("normalizeComparableUrl keeps Workday career-site aliases separate", () => {
+  assert.notEqual(
     normalizeComparableUrl(
       "https://pae.wd1.myworkdayjobs.com/en-US/Amentum_Careers/job/Entry-Level-Software-Engineer_R0160036",
     ),
@@ -264,7 +266,7 @@ test("does not treat different pid-based career pages as the same job", () => {
   );
 });
 
-test("still matches pid-based career pages when only non-identity query params differ", () => {
+test("does not match pid-based career pages when any query params differ", () => {
   assert.equal(
     matchesTailorOverwritePageIdentity({
       jobUrl:
@@ -278,11 +280,11 @@ test("still matches pid-based career pages when only non-identity query params d
           "https://apply.careers.microsoft.com/careers?domain=microsoft.com&pid=1970393556637410#job",
       },
     }),
-    true,
+    false,
   );
 });
 
-test("matches a saved tailored resume when the current page is a nested apply URL", () => {
+test("does not match a saved tailored resume when the current page is a nested apply URL", () => {
   assert.equal(
     matchesTailorOverwritePageIdentity({
       jobUrl: "https://jobs.example.com/roles/123",
@@ -292,6 +294,6 @@ test("matches a saved tailored resume when the current page is a nested apply UR
         pageUrl: "https://jobs.example.com/roles/123/apply",
       },
     }),
-    true,
+    false,
   );
 });

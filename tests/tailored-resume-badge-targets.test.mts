@@ -5,21 +5,35 @@ import {
   tailoredResumeBadgeTargetMatchesTabUrl,
 } from "../extension/src/tailored-resume-badge-targets.ts";
 
-test("matches a badge target against the same job page after query cleanup", () => {
+test("matches a badge target against the same exact job URL", () => {
   const targetUrls = normalizeTailoredResumeBadgeTargetUrls([
-    "https://jobs.example.com/roles/123?utm_campaign=saved",
+    "https://jobs.example.com/roles/123?job=abc",
   ]);
 
   assert.equal(
     tailoredResumeBadgeTargetMatchesTabUrl({
-      tabUrl: "https://jobs.example.com/roles/123?utm_source=extension#overview",
+      tabUrl: "https://jobs.example.com/roles/123?job=abc#overview",
       targetUrls,
     }),
     true,
   );
 });
 
-test("matches nested apply pages back to the saved job URL", () => {
+test("does not match when query params differ", () => {
+  const targetUrls = normalizeTailoredResumeBadgeTargetUrls([
+    "https://jobs.example.com/roles/123?job=abc",
+  ]);
+
+  assert.equal(
+    tailoredResumeBadgeTargetMatchesTabUrl({
+      tabUrl: "https://jobs.example.com/roles/123?job=abc&utm_source=extension",
+      targetUrls,
+    }),
+    false,
+  );
+});
+
+test("does not match nested apply pages back to the saved job URL", () => {
   const targetUrls = normalizeTailoredResumeBadgeTargetUrls([
     "https://jobs.example.com/roles/123",
   ]);
@@ -29,22 +43,7 @@ test("matches nested apply pages back to the saved job URL", () => {
       tabUrl: "https://jobs.example.com/roles/123/apply?source=extension",
       targetUrls,
     }),
-    true,
-  );
-});
-
-test("matches Workday aliases when hiding a stale badge", () => {
-  const targetUrls = normalizeTailoredResumeBadgeTargetUrls([
-    "https://pae.wd1.myworkdayjobs.com/en-US/Amentum_Careers/job/Entry-Level-Software-Engineer_R0160036",
-  ]);
-
-  assert.equal(
-    tailoredResumeBadgeTargetMatchesTabUrl({
-      tabUrl:
-        "https://pae.wd1.myworkdayjobs.com/en-US/2/job/US-VA-Dahlgren/Entry-Level-Software-Engineer_R0160036?source=extension",
-      targetUrls,
-    }),
-    true,
+    false,
   );
 });
 

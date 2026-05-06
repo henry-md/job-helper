@@ -37,7 +37,7 @@ test("hides a saved resume while a matching active run shell already owns that u
       {
         applicationId: null,
         existingTailoringId: null,
-        url: "https://apply.careers.microsoft.com/careers/job/123",
+        url: "https://apply.careers.microsoft.com/careers/job/123?domain=microsoft.com",
       },
     ],
     resumes: [
@@ -56,7 +56,7 @@ test("hides a saved resume while a matching active run shell already owns that u
   );
 });
 
-test("hides a saved Workday resume while a matching alias active run is visible", () => {
+test("keeps a saved Workday resume visible when an active alias URL differs", () => {
   const visibleResumes = filterVisibleTailoredResumes({
     activeReferences: [
       {
@@ -81,7 +81,7 @@ test("hides a saved Workday resume while a matching alias active run is visible"
 
   assert.deepEqual(
     visibleResumes.map((resume) => resume.id),
-    ["tailored-other"],
+    ["tailored-old", "tailored-other"],
   );
 });
 
@@ -115,7 +115,7 @@ test("hides saved fallback rows by application while replacement generation is a
   );
 });
 
-test("dedupes saved resumes that normalize to the same comparable job url", () => {
+test("keeps saved resumes separate when query params differ", () => {
   const visibleResumes = filterVisibleTailoredResumes({
     resumes: [
       buildTailoredResume({
@@ -137,7 +137,7 @@ test("dedupes saved resumes that normalize to the same comparable job url", () =
 
   assert.deepEqual(
     visibleResumes.map((resume) => resume.id),
-    ["tailored-new"],
+    ["tailored-new", "tailored-old"],
   );
 });
 

@@ -202,11 +202,11 @@ export function buildTailoredResumeReviewUrl(
   const normalizedTailoredResumeId = tailoredResumeId?.trim();
 
   if (!normalizedTailoredResumeId) {
-    return `${DEFAULT_DASHBOARD_URL}?tab=tailor`;
+    return `${DEFAULT_DASHBOARD_URL}?tab=saved`;
   }
 
   return `${DEFAULT_DASHBOARD_URL}?${new URLSearchParams({
-    tab: "tailor",
+    tab: "saved",
     tailoredResumeId: normalizedTailoredResumeId,
   }).toString()}`;
 }

@@ -39,7 +39,7 @@ function readDummyEntryUrls(entry: DummyEntry) {
   return [entry.pageUrl];
 }
 
-test("normalizes legacy Tailor storage keys onto one comparable URL", () => {
+test("keeps query-distinct Tailor storage keys separate", () => {
   const legacyKey =
     "https://apply.careers.microsoft.com/careers/job/123?domain=microsoft.com";
   const normalizedKey = "https://apply.careers.microsoft.com/careers/job/123";
@@ -60,8 +60,12 @@ test("normalizes legacy Tailor storage keys onto one comparable URL", () => {
     },
   });
 
-  assert.equal(result.changed, true);
-  assert.deepEqual(Object.keys(result.registry), [normalizedKey]);
+  assert.equal(result.changed, false);
+  assert.deepEqual(Object.keys(result.registry).sort(), [
+    legacyKey,
+    normalizedKey,
+  ].sort());
+  assert.equal(result.registry[legacyKey]?.capturedAt, "2026-04-26T18:00:00.000Z");
   assert.equal(result.registry[normalizedKey]?.capturedAt, "2026-04-26T18:05:00.000Z");
 });
 
@@ -91,7 +95,7 @@ test("finds the current-page registry entry even when the stored key is legacy",
   assert.equal(entry?.value.pageUrl, legacyKey);
 });
 
-test("finds a saved registry entry when the current page is a nested apply URL", () => {
+test("does not find a saved registry entry when the current page is a nested apply URL", () => {
   const savedUrl = "https://jobs.example.com/roles/123";
   const entry = findTailorStorageRegistryEntry({
     match: {
@@ -111,11 +115,10 @@ test("finds a saved registry entry when the current page is a nested apply URL",
     },
   });
 
-  assert.equal(entry?.key, savedUrl);
-  assert.equal(entry?.value.pageUrl, savedUrl);
+  assert.equal(entry, null);
 });
 
-test("collects saved registry keys under the current nested apply URL", () => {
+test("does not collect saved registry keys under the current nested apply URL", () => {
   const savedUrl = "https://jobs.example.com/roles/123";
   const matchingKeys = collectTailorStorageRegistryKeys({
     match: {
@@ -139,7 +142,7 @@ test("collects saved registry keys under the current nested apply URL", () => {
     },
   });
 
-  assert.deepEqual(matchingKeys, [savedUrl]);
+  assert.deepEqual(matchingKeys, []);
 });
 
 test("collects all matching registry keys for one comparable job URL", () => {
@@ -172,7 +175,7 @@ test("collects all matching registry keys for one comparable job URL", () => {
   assert.deepEqual(matchingKeys.sort(), [legacyKey, normalizedKey].sort());
 });
 
-test("prunes raw storage entries for every matching legacy/current key", () => {
+test("prunes raw storage entries only for the exact matching key", () => {
   const legacyKey =
     "https://apply.careers.microsoft.com/careers/job/123?domain=microsoft.com";
   const normalizedKey = "https://apply.careers.microsoft.com/careers/job/123";
@@ -197,5 +200,10 @@ test("prunes raw storage entries for every matching legacy/current key", () => {
   });
 
   assert.equal(pruned.changed, true);
-  assert.equal(pruned.value, null);
+  assert.deepEqual(pruned.value, {
+    [legacyKey]: {
+      capturedAt: "2026-04-26T18:00:00.000Z",
+      pageUrl: legacyKey,
+    },
+  });
 });

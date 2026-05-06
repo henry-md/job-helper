@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isJobHelperAppUrl } from "../extension/src/job-helper.ts";
+import {
+  buildTailoredResumeReviewUrl,
+  isJobHelperAppUrl,
+} from "../extension/src/job-helper.ts";
 
 test("isJobHelperAppUrl recognizes the configured app origin", () => {
   assert.equal(isJobHelperAppUrl("http://localhost:1285/dashboard?tab=tailor"), true);
@@ -14,4 +17,15 @@ test("isJobHelperAppUrl treats localhost and 127.0.0.1 as the same local app", (
 test("isJobHelperAppUrl does not match external job pages or other local ports", () => {
   assert.equal(isJobHelperAppUrl("https://jobs.example.com/roles/123"), false);
   assert.equal(isJobHelperAppUrl("http://127.0.0.1:1307/roles/123"), false);
+});
+
+test("buildTailoredResumeReviewUrl opens the canonical saved review route", () => {
+  assert.equal(
+    buildTailoredResumeReviewUrl(" tailored-123 "),
+    "http://localhost:1285/dashboard?tab=saved&tailoredResumeId=tailored-123",
+  );
+  assert.equal(
+    buildTailoredResumeReviewUrl(null),
+    "http://localhost:1285/dashboard?tab=saved",
+  );
 });

@@ -59,7 +59,7 @@ Tailor Resume object model:
     - desired plaintext rewrites per block
     - the planner thesis + metadata
     - `jobIdentifier`, which should prefer a visible job/requisition/posting id and fall back to the usual short disambiguator when no job number is available
-  - `jobUrl`, when the run came from a captured job page or a description with a URL header; URL matching lets the API return an existing tailored resume instead of generating a duplicate for the same posting
+  - `jobUrl`, when the run came from a captured job page or a description with a URL header; query-sensitive URL matching lets the API return an existing tailored resume for the same exact posting URL without collapsing jobs whose identity lives in query params
   - the saved OpenAI debug trace for developer inspection, including:
     - the full prompt for the Step 3 plaintext planning call
     - the full JSON output returned by the Step 3 call
@@ -84,7 +84,7 @@ Tailor Resume object model:
 
 7. Tailor Resume Run (`TailorResumeRun`)
 - Files: `prisma/schema.prisma`, `app/api/tailor-resume/route.ts`
-- Extension-originated tailoring creates or reuses a `JobApplication` for the normalized job URL before model generation begins.
+- Extension-originated tailoring creates or reuses a `JobApplication` for the normalized exact job URL before model generation begins.
 - A `TailorResumeRun` row tracks the generation state for that application:
   - `RUNNING` while the pipeline is actively generating
   - `NEEDS_INPUT` while the follow-up interview is waiting on the user
@@ -93,7 +93,7 @@ Tailor Resume object model:
   - `CANCELLED` when the user cancels/overwrites an active run
 - Run rows carry the latest step number/count/status/summary/detail/attempt/retry state so duplicate-tailoring checks can tell the user exactly what the existing run is doing.
 - The pending interview stored in the file-backed profile includes the DB `applicationId` and `tailorResumeRunId` so continuing an interview updates the same run row.
-- Duplicate checks for extension tailoring should prefer DB state for the normalized job URL/application: active run first, completed linked tailored resume second.
+- Duplicate checks for extension tailoring should prefer DB state for the normalized exact job URL/application: active run first, completed linked tailored resume second.
 
 8. Prompt Settings (`TailorResumePromptSettingsState`)
 - Files: `lib/system-prompt-settings.ts`, `lib/tailor-resume-types.ts`
@@ -157,7 +157,7 @@ Tailoring generation:
 - When the page-count guardrail is enabled and the compiled tailored preview exceeds the original resume's page count, the flow runs Step 5:
   - a refinement-style compaction pass that re-prompts only the existing edited blocks, sends highlighted rendered preview screenshots, and retries until the preview fits within the original page count or the attempt budget is exhausted
 - Compile retries stay scoped to the implementation pass so LaTeX escaping and block-boundary fixes do not force the model to rethink the whole editing thesis on every retry.
-- Extension-originated tailoring should pass the captured job URL separately from the job-description text and create/reuse a tracked `JobApplication` for the normalized URL before generation starts. The API should store live run state in `TailorResumeRun`; if the same application already has an active run or a linked tailored resume, return a conflict payload so the extension can ask whether to cancel/keep or overwrite.
+- Extension-originated tailoring should pass the captured job URL separately from the job-description text and create/reuse a tracked `JobApplication` for the normalized exact URL before generation starts. The API should store live run state in `TailorResumeRun`; if the same application already has an active run or a linked tailored resume, return a conflict payload so the extension can ask whether to cancel/keep or overwrite.
 
 Important rule:
 

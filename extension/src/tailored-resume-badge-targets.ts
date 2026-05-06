@@ -14,11 +14,7 @@ function isHttpUrl(value: string) {
 }
 
 function comparableJobUrlsMatch(left: string, right: string) {
-  if (left === right) {
-    return true;
-  }
-
-  return left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+  return left === right;
 }
 
 export function normalizeTailoredResumeBadgeTargetUrls(

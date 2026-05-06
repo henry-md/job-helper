@@ -7,6 +7,8 @@ import type {
   TailoredResumeSummary,
 } from "../extension/src/job-helper.ts";
 
+const matchingJobUrl = "https://jobs.example.com/roles/123?posting=abc";
+
 function buildPageIdentity(
   overrides: Partial<{
     canonicalUrl: string | null;
@@ -15,9 +17,9 @@ function buildPageIdentity(
   }> = {},
 ) {
   return {
-    canonicalUrl: "https://jobs.example.com/roles/123?utm_source=mail",
-    jobUrl: "https://jobs.example.com/roles/123?ref=extension",
-    pageUrl: "https://jobs.example.com/roles/123/#overview",
+    canonicalUrl: matchingJobUrl,
+    jobUrl: matchingJobUrl,
+    pageUrl: `${matchingJobUrl}#overview`,
     ...overrides,
   };
 }
@@ -40,7 +42,7 @@ function buildTailoredResumeSummary(
     ],
     id: "tailored-123",
     jobIdentifier: "Software Engineer",
-    jobUrl: "https://jobs.example.com/roles/123?utm_campaign=saved",
+    jobUrl: matchingJobUrl,
     keywordCoverage: null,
     positionTitle: "Software Engineer",
     status: "ready",
@@ -61,7 +63,7 @@ function buildActiveTailoring(
     id: "run-123",
     jobDescription: "Role text",
     jobIdentifier: "Software Engineer",
-    jobUrl: "https://jobs.example.com/roles/123",
+    jobUrl: matchingJobUrl,
     kind: "active_generation",
     lastStep: null,
     positionTitle: "Software Engineer",
@@ -89,10 +91,24 @@ test("returns a tab badge for a completed tailored resume matching the page URL"
         priority: "high",
       },
     ],
-    jobUrl: "https://jobs.example.com/roles/123?utm_campaign=saved",
+    jobUrl: matchingJobUrl,
     keywordCoverage: null,
     tailoredResumeId: "tailored-123",
   });
+});
+
+test("does not return a tab badge when the page query differs", () => {
+  const badge = resolveTailoredResumeTabBadge({
+    activeTailorings: [],
+    pageIdentity: buildPageIdentity({
+      canonicalUrl: "https://jobs.example.com/roles/123?posting=other",
+      jobUrl: "https://jobs.example.com/roles/123?posting=other",
+      pageUrl: "https://jobs.example.com/roles/123?posting=other",
+    }),
+    tailoredResumes: [buildTailoredResumeSummary()],
+  });
+
+  assert.equal(badge, null);
 });
 
 test("does not show the generated-resume badge while a matching run is active", () => {

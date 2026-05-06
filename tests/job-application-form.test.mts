@@ -65,7 +65,7 @@ test("parseJobApplicationDraftContext reuses shared draft field parsing", () => 
   });
 });
 
-test("filterVisibleJobApplicationsByUrl hides duplicate comparable job URLs", () => {
+test("filterVisibleJobApplicationsByUrl keeps query-distinct job URLs visible", () => {
   const visibleApplications = filterVisibleJobApplicationsByUrl([
     {
       id: "newer",
@@ -86,7 +86,7 @@ test("filterVisibleJobApplicationsByUrl hides duplicate comparable job URLs", ()
 
   assert.deepEqual(
     visibleApplications.map((application) => application.id),
-    ["newer", "neighboring-requisition"],
+    ["newer", "older", "neighboring-requisition"],
   );
 });
 

@@ -33,9 +33,9 @@ function buildRun(
 test("resolves streamed keywords from the newest active local tailoring run", () => {
   const badge = resolveActiveTailorRunKeywordBadge({
     pageIdentity: {
-      canonicalUrl: "https://jobs.example.com/roles/123",
+      canonicalUrl: "https://jobs.example.com/roles/123?utm_source=extension",
       jobUrl: null,
-      pageUrl: "https://jobs.example.com/roles/123#overview",
+      pageUrl: "https://jobs.example.com/roles/123?utm_source=extension#overview",
     },
     runs: [
       buildRun({
@@ -94,9 +94,9 @@ test("resolves streamed keywords from the newest active local tailoring run", ()
 test("keeps a matching active run even before keywords arrive", () => {
   const badge = resolveActiveTailorRunKeywordBadge({
     pageIdentity: {
-      canonicalUrl: "https://jobs.example.com/roles/123",
+      canonicalUrl: "https://jobs.example.com/roles/123?utm_source=extension",
       jobUrl: null,
-      pageUrl: "https://jobs.example.com/roles/123",
+      pageUrl: "https://jobs.example.com/roles/123?utm_source=extension",
     },
     runs: [buildRun()],
   });
@@ -162,9 +162,9 @@ test("keeps Step 1 scraped keywords when Step 2 carries a question subset", () =
 test("ignores completed local runs when resolving active keyword badges", () => {
   const badge = resolveActiveTailorRunKeywordBadge({
     pageIdentity: {
-      canonicalUrl: "https://jobs.example.com/roles/123",
+      canonicalUrl: "https://jobs.example.com/roles/123?utm_source=extension",
       jobUrl: null,
-      pageUrl: "https://jobs.example.com/roles/123",
+      pageUrl: "https://jobs.example.com/roles/123?utm_source=extension",
     },
     runs: [
       buildRun({

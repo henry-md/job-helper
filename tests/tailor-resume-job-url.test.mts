@@ -64,21 +64,21 @@ function buildTailoredResume(
   };
 }
 
-test("normalizeTailorResumeJobUrl removes hash and query params", () => {
+test("normalizeTailorResumeJobUrl preserves query params while removing hashes", () => {
   assert.equal(
     normalizeTailorResumeJobUrl(
       "HTTPS://Jobs.Example.com/roles/123/?b=2&utm_source=email&a=1#apply",
     ),
-    "https://jobs.example.com/roles/123",
+    "https://jobs.example.com/roles/123?b=2&utm_source=email&a=1",
   );
 });
 
-test("normalizeTailorResumeJobUrl preserves stable job id query params", () => {
+test("normalizeTailorResumeJobUrl keeps the full Microsoft query string", () => {
   assert.equal(
     normalizeTailorResumeJobUrl(
       "https://apply.careers.microsoft.com/careers?domain=microsoft.com&query=software+engineer&pid=1970393556637410&filter_include_remote=1",
     ),
-    "https://apply.careers.microsoft.com/careers?pid=1970393556637410",
+    "https://apply.careers.microsoft.com/careers?domain=microsoft.com&query=software+engineer&pid=1970393556637410&filter_include_remote=1",
   );
 });
 
@@ -87,12 +87,12 @@ test("normalizeTailorResumeJobUrl treats http and https variants as the same pos
     normalizeTailorResumeJobUrl(
       "http://apply.careers.microsoft.com/careers/job/1970393556754651?domain=microsoft.com",
     ),
-    "https://apply.careers.microsoft.com/careers/job/1970393556754651",
+    "https://apply.careers.microsoft.com/careers/job/1970393556754651?domain=microsoft.com",
   );
 });
 
-test("normalizeTailorResumeJobUrl matches Workday canonical and browser URL variants", () => {
-  assert.equal(
+test("normalizeTailorResumeJobUrl keeps Workday canonical and browser URLs separate", () => {
+  assert.notEqual(
     normalizeTailorResumeJobUrl(
       "https://pae.wd1.myworkdayjobs.com/en-US/Amentum_Careers/job/Entry-Level-Software-Engineer_R0160036",
     ),
@@ -102,8 +102,8 @@ test("normalizeTailorResumeJobUrl matches Workday canonical and browser URL vari
   );
 });
 
-test("normalizeTailorResumeJobUrl matches Workday career-site aliases", () => {
-  assert.equal(
+test("normalizeTailorResumeJobUrl keeps Workday career-site aliases separate", () => {
+  assert.notEqual(
     normalizeTailorResumeJobUrl(
       "https://pae.wd1.myworkdayjobs.com/en-US/Amentum_Careers/job/Entry-Level-Software-Engineer_R0160036",
     ),
@@ -137,7 +137,7 @@ test("readTailorResumeJobUrlFromDescription prefers canonical URL lines", () => 
   );
 });
 
-test("dedupeTailoredResumesByJobUrl keeps the newest resume for a comparable job URL", () => {
+test("dedupeTailoredResumesByJobUrl keeps query-distinct job URLs separate", () => {
   const records = dedupeTailoredResumesByJobUrl([
     buildTailoredResume({
       createdAt: "2026-04-20T12:00:00.000Z",
@@ -155,7 +155,7 @@ test("dedupeTailoredResumesByJobUrl keeps the newest resume for a comparable job
 
   assert.deepEqual(
     records.map((record) => record.id),
-    ["newer"],
+    ["newer", "older"],
   );
 });
 
@@ -198,7 +198,7 @@ test("findTailoredResumeByJobUrl matches normalized saved job URLs", () => {
   assert.equal(
     findTailoredResumeByJobUrl(
       records,
-      "https://jobs.example.com/roles/123/?a=1&b=2#details",
+      "https://jobs.example.com/roles/123?b=2&a=1#details",
     )?.id,
     "matching",
   );
@@ -209,17 +209,19 @@ test("buildNormalizedJobUrlHash hashes the normalized job URL", () => {
     buildNormalizedJobUrlHash(
       "HTTPS://Jobs.Example.com/roles/123/?b=2&utm_source=email&a=1#apply",
     ),
-    buildNormalizedJobUrlHash("https://jobs.example.com/roles/123"),
+    buildNormalizedJobUrlHash(
+      "https://jobs.example.com/roles/123?b=2&utm_source=email&a=1",
+    ),
   );
 });
 
 test("buildNormalizedJobUrlHash matches http and https variants", () => {
   assert.equal(
     buildNormalizedJobUrlHash(
-      "http://apply.careers.microsoft.com/careers/job/1970393556754651",
+      "http://apply.careers.microsoft.com/careers/job/1970393556754651?domain=microsoft.com",
     ),
     buildNormalizedJobUrlHash(
-      "https://apply.careers.microsoft.com/careers/job/1970393556754651",
+      "https://apply.careers.microsoft.com/careers/job/1970393556754651?domain=microsoft.com",
     ),
   );
 });
