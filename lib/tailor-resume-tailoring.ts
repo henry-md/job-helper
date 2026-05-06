@@ -9,6 +9,7 @@ import { applyTailorResumeLinkOverridesWithSummary } from "./tailor-resume-link-
 import { validateTailorResumeLatexDocument } from "./tailor-resume-link-validation.ts";
 import {
   buildTailorResumeKeywordCheckResult,
+  buildTailorResumeKeywordPresenceContext,
   resumeTextIncludesKeyword,
 } from "./tailor-resume-keyword-coverage.ts";
 import { formatTailorResumeTermWithCapitalFirst } from "./tailor-resume-non-technologies.ts";
@@ -1303,6 +1304,449 @@ function normalizeTechnologyName(value: string) {
   return value.trim().toLowerCase();
 }
 
+type TailorResumeUserMarkdownQuotedSentence = {
+  explicitBoldTerms: string[];
+  heading: string;
+  text: string;
+};
+
+function stripMarkdownStrongMarkers(value: string) {
+  return value.replace(/(\*\*|__)([^*_][\s\S]*?)\1/g, "$2");
+}
+
+function readMarkdownStrongTerms(value: string) {
+  const terms: string[] = [];
+  const strongPattern = /(\*\*|__)([^*_][\s\S]*?)\1/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = strongPattern.exec(value)) !== null) {
+    const term = stripMarkdownStrongMarkers(match[2] ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (term) {
+      terms.push(term);
+    }
+  }
+
+  return terms;
+}
+
+function readUserMarkdownQuotedSentences(
+  markdown: string,
+): TailorResumeUserMarkdownQuotedSentence[] {
+  const sentences: TailorResumeUserMarkdownQuotedSentence[] = [];
+  let currentHeading = "";
+
+  for (const line of markdown.split(/\r?\n/)) {
+    const trimmedLine = line.trim();
+    const headingMatch = /^(#{1,6})\s+(.+?)\s*#*$/.exec(trimmedLine);
+
+    if (headingMatch) {
+      currentHeading = stripMarkdownStrongMarkers(headingMatch[2] ?? "")
+        .replace(/^#+\s*/, "")
+        .trim();
+      continue;
+    }
+
+    const quotePattern = /["“]([^"”]{12,})["”]/g;
+    let quoteMatch: RegExpExecArray | null;
+
+    while ((quoteMatch = quotePattern.exec(trimmedLine)) !== null) {
+      const rawText = quoteMatch[1] ?? "";
+      const text = stripMarkdownStrongMarkers(rawText)
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (!text) {
+        continue;
+      }
+
+      sentences.push({
+        explicitBoldTerms: readMarkdownStrongTerms(rawText),
+        heading: currentHeading,
+        text,
+      });
+    }
+  }
+
+  return sentences;
+}
+
+function normalizeTextForUserMarkdownMatch(value: string) {
+  return stripMarkdownStrongMarkers(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9+#./-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function readTextMatchTokens(value: string) {
+  return normalizeTextForUserMarkdownMatch(value)
+    .split(" ")
+    .filter((token) => token.length >= 4 || /[+#./-]/.test(token));
+}
+
+function userMarkdownSentenceMatchesLatexText(input: {
+  sentence: TailorResumeUserMarkdownQuotedSentence;
+  text: string;
+}) {
+  const sentenceText = normalizeTextForUserMarkdownMatch(input.sentence.text);
+  const latexText = normalizeTextForUserMarkdownMatch(input.text);
+
+  if (!sentenceText || !latexText) {
+    return false;
+  }
+
+  if (sentenceText.includes(latexText) || latexText.includes(sentenceText)) {
+    return true;
+  }
+
+  const sentenceTokens = readTextMatchTokens(input.sentence.text);
+
+  if (sentenceTokens.length === 0) {
+    return false;
+  }
+
+  const latexTokens = new Set(readTextMatchTokens(input.text));
+  const matchedTokenCount = sentenceTokens.filter((token) =>
+    latexTokens.has(token),
+  ).length;
+
+  return matchedTokenCount >= 4 && matchedTokenCount / sentenceTokens.length >= 0.6;
+}
+
+function isTermBoundaryCharacter(character: string | undefined) {
+  return !character || !/[A-Za-z0-9+#./-]/.test(character);
+}
+
+function findStandaloneTermIndex(input: {
+  fromIndex?: number;
+  term: string;
+  text: string;
+}) {
+  const term = input.term.trim();
+
+  if (!term) {
+    return -1;
+  }
+
+  const lowerText = input.text.toLowerCase();
+  const lowerTerm = term.toLowerCase();
+  let index = lowerText.indexOf(lowerTerm, input.fromIndex ?? 0);
+
+  while (index >= 0) {
+    const before = input.text[index - 1];
+    const after = input.text[index + term.length];
+
+    if (isTermBoundaryCharacter(before) && isTermBoundaryCharacter(after)) {
+      return index;
+    }
+
+    index = lowerText.indexOf(lowerTerm, index + 1);
+  }
+
+  return -1;
+}
+
+function textIncludesStandaloneTerm(input: { term: string; text: string }) {
+  return findStandaloneTermIndex(input) >= 0;
+}
+
+function readBoldTermKey(term: string) {
+  return normalizeTextForUserMarkdownMatch(term);
+}
+
+function readUserMarkdownBoldCandidateTerms(input: {
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+  latexPlainText: string;
+  sentences: TailorResumeUserMarkdownQuotedSentence[];
+}) {
+  const candidates: string[] = [];
+  const addCandidate = (term: string) => {
+    const trimmedTerm = stripMarkdownStrongMarkers(term)
+      .replace(/\s+/g, " ")
+      .trim();
+    const termKey = readBoldTermKey(trimmedTerm);
+
+    if (!trimmedTerm || !termKey) {
+      return;
+    }
+
+    if (
+      !textIncludesStandaloneTerm({
+        term: trimmedTerm,
+        text: input.latexPlainText,
+      })
+    ) {
+      return;
+    }
+
+    const hasOverlappingCandidate = candidates.some((candidate) => {
+      const candidateKey = readBoldTermKey(candidate);
+      return (
+        candidateKey === termKey ||
+        candidateKey.includes(termKey) ||
+        termKey.includes(candidateKey)
+      );
+    });
+
+    if (!hasOverlappingCandidate) {
+      candidates.push(trimmedTerm);
+    }
+  };
+
+  for (const sentence of input.sentences) {
+    for (const explicitBoldTerm of sentence.explicitBoldTerms) {
+      addCandidate(explicitBoldTerm);
+    }
+  }
+
+  const sortedTechnologies = [...input.emphasizedTechnologies].sort((left, right) => {
+    if (left.priority !== right.priority) {
+      return left.priority === "high" ? -1 : 1;
+    }
+
+    return right.name.length - left.name.length;
+  });
+
+  for (const technology of sortedTechnologies) {
+    const appearsInMatchingUserMarkdownSentence = input.sentences.some(
+      (sentence) =>
+        textIncludesStandaloneTerm({
+          term: technology.name,
+          text: sentence.text,
+        }) ||
+        textIncludesStandaloneTerm({
+          term: technology.name,
+          text: sentence.heading,
+        }),
+    );
+
+    if (appearsInMatchingUserMarkdownSentence) {
+      addCandidate(technology.name);
+    }
+  }
+
+  return candidates;
+}
+
+function findMatchingLatexBraceIndex(latexCode: string, openBraceIndex: number) {
+  let depth = 0;
+
+  for (let index = openBraceIndex; index < latexCode.length; index += 1) {
+    const character = latexCode[index];
+
+    if (character === "\\") {
+      index += 1;
+      continue;
+    }
+
+    if (character === "{") {
+      depth += 1;
+      continue;
+    }
+
+    if (character !== "}") {
+      continue;
+    }
+
+    depth -= 1;
+
+    if (depth === 0) {
+      return index;
+    }
+  }
+
+  return null;
+}
+
+function isInsideLatexTextbfGroup(latexCode: string, index: number) {
+  let searchIndex = 0;
+
+  while (searchIndex < index) {
+    const commandIndex = latexCode.indexOf("\\textbf", searchIndex);
+
+    if (commandIndex < 0 || commandIndex >= index) {
+      return false;
+    }
+
+    const openBraceIndex = latexCode.indexOf("{", commandIndex + "\\textbf".length);
+
+    if (openBraceIndex < 0) {
+      return true;
+    }
+
+    if (openBraceIndex >= index) {
+      searchIndex = commandIndex + 1;
+      continue;
+    }
+
+    if (
+      latexCode
+        .slice(commandIndex + "\\textbf".length, openBraceIndex)
+        .trim() !== ""
+    ) {
+      searchIndex = commandIndex + 1;
+      continue;
+    }
+
+    const closeBraceIndex = findMatchingLatexBraceIndex(latexCode, openBraceIndex);
+
+    if (closeBraceIndex === null || closeBraceIndex >= index) {
+      return true;
+    }
+
+    searchIndex = commandIndex + 1;
+  }
+
+  return false;
+}
+
+function isInsideLatexCommandName(latexCode: string, index: number) {
+  let cursor = index - 1;
+
+  while (cursor >= 0 && /[A-Za-z]/.test(latexCode[cursor] ?? "")) {
+    cursor -= 1;
+  }
+
+  return latexCode[cursor] === "\\";
+}
+
+function convertMarkdownStrongMarkersToLatexBold(latexCode: string) {
+  return latexCode
+    .replace(/\*\*([^{}\n*]{1,120})\*\*/g, String.raw`\textbf{$1}`)
+    .replace(/__([^{}\n_]{1,120})__/g, String.raw`\textbf{$1}`);
+}
+
+function isTailorResumeSkillsSegment(change: { latexCode: string; segmentId: string }) {
+  return (
+    /\bskills?\b/i.test(change.segmentId) ||
+    /\\resume(?:Subheading|Section)\{[^{}]*skills?[^{}]*\}/i.test(
+      change.latexCode,
+    )
+  );
+}
+
+function applyLatexBoldToFirstStandaloneTerm(input: {
+  latexCode: string;
+  term: string;
+}) {
+  const variants = [
+    input.term,
+    input.term.replace(/#/g, String.raw`\#`),
+  ].filter((variant, index, variants) => variants.indexOf(variant) === index);
+  let bestMatch: { index: number; term: string } | null = null;
+
+  for (const variant of variants) {
+    let index = findStandaloneTermIndex({
+      term: variant,
+      text: input.latexCode,
+    });
+
+    while (index >= 0) {
+      if (
+        !isInsideLatexTextbfGroup(input.latexCode, index) &&
+        !isInsideLatexCommandName(input.latexCode, index)
+      ) {
+        if (!bestMatch || index < bestMatch.index) {
+          bestMatch = { index, term: variant };
+        }
+
+        break;
+      }
+
+      index = findStandaloneTermIndex({
+        fromIndex: index + variant.length,
+        term: variant,
+        text: input.latexCode,
+      });
+    }
+  }
+
+  if (!bestMatch) {
+    return input.latexCode;
+  }
+
+  const matchedTerm = input.latexCode.slice(
+    bestMatch.index,
+    bestMatch.index + bestMatch.term.length,
+  );
+
+  return [
+    input.latexCode.slice(0, bestMatch.index),
+    String.raw`\textbf{`,
+    matchedTerm,
+    "}",
+    input.latexCode.slice(bestMatch.index + bestMatch.term.length),
+  ].join("");
+}
+
+export function applyTailorResumeUserMarkdownBoldFormatting(input: {
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+  implementationChanges: Array<{ latexCode: string; segmentId: string }>;
+  userMarkdown?: TailorResumeUserMarkdownState | null;
+}): Array<{ latexCode: string; segmentId: string }> {
+  const markdown = input.userMarkdown?.markdown ?? "";
+  const userMarkdownSentences = readUserMarkdownQuotedSentences(markdown);
+
+  if (userMarkdownSentences.length === 0) {
+    return input.implementationChanges.map((change) => ({ ...change }));
+  }
+
+  return input.implementationChanges.map((change) => {
+    if (isTailorResumeSkillsSegment(change)) {
+      return {
+        ...change,
+        latexCode: stripMarkdownStrongMarkers(change.latexCode),
+      };
+    }
+
+    const latexPlainText = renderTailoredResumeLatexToPlainText(change.latexCode);
+    const matchingSentences = userMarkdownSentences.filter((sentence) =>
+      userMarkdownSentenceMatchesLatexText({
+        sentence,
+        text: latexPlainText,
+      }),
+    );
+
+    if (matchingSentences.length === 0) {
+      return { ...change };
+    }
+
+    const candidateTerms = readUserMarkdownBoldCandidateTerms({
+      emphasizedTechnologies: input.emphasizedTechnologies,
+      latexPlainText,
+      sentences: matchingSentences,
+    });
+    let latexCode = convertMarkdownStrongMarkersToLatexBold(change.latexCode);
+    let appliedTermCount = 0;
+
+    for (const candidateTerm of candidateTerms) {
+      const nextLatexCode = applyLatexBoldToFirstStandaloneTerm({
+        latexCode,
+        term: candidateTerm,
+      });
+
+      if (nextLatexCode === latexCode) {
+        continue;
+      }
+
+      latexCode = nextLatexCode;
+      appliedTermCount += 1;
+
+      if (appliedTermCount >= 2) {
+        break;
+      }
+    }
+
+    return {
+      ...change,
+      latexCode,
+    };
+  });
+}
+
 function learningDetailRejectsTechnologyExperience(detail: string) {
   return /\b(?:no|without)\s+(?:direct\s+)?(?:experience|exposure)|\bdo\s+not\s+add\b|\bdon't\s+add\b|\bdo\s+not\s+include\b|\bdon't\s+include\b|\bnot\s+include\b|\bunsupported\b|\bwithout\s+inventing\b/i.test(
     detail,
@@ -1892,6 +2336,105 @@ function buildImplementationRequiredTechnologies(input: {
   );
 }
 
+function userMarkdownRejectsTechnologyExperience(input: {
+  technologyName: string;
+  userMarkdown: string;
+}) {
+  const matchingSections: string[] = [];
+  let currentHeadingMatchesTechnology = false;
+  let currentSectionLines: string[] = [];
+  const flushCurrentSection = () => {
+    if (currentHeadingMatchesTechnology && currentSectionLines.length > 0) {
+      matchingSections.push(currentSectionLines.join("\n"));
+    }
+
+    currentHeadingMatchesTechnology = false;
+    currentSectionLines = [];
+  };
+  const matchingStandaloneLines = input.userMarkdown
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .flatMap((line) => {
+      const headingMatch = /^(?:#{1,6})\s+(.+)$/.exec(line);
+
+      if (headingMatch) {
+        flushCurrentSection();
+        currentHeadingMatchesTechnology = resumeTextIncludesKeyword({
+          term: input.technologyName,
+          text: headingMatch[1] ?? "",
+        });
+        currentSectionLines = currentHeadingMatchesTechnology ? [line] : [];
+        return [];
+      }
+
+      if (currentHeadingMatchesTechnology) {
+        currentSectionLines.push(line);
+      }
+
+      return resumeTextIncludesKeyword({
+        term: input.technologyName,
+        text: line,
+      })
+        ? [line]
+        : [];
+    });
+
+  flushCurrentSection();
+
+  return [...matchingSections, ...matchingStandaloneLines].some((text) => {
+    const grantsSkillsPermission =
+      /\b(?:can|may|ok(?:ay)?\s+to)\s+(?:list|include)\b/i.test(text) &&
+      /\bskills?\b/i.test(text);
+    const rejectsExperience =
+      /\b(?:no|without)\b[^.\n;]{0,120}\b(?:experience|exposure)\b/i.test(
+        text,
+      ) ||
+      /\b(?:do\s+not|don't|does\s+not|doesn't|cannot|can't)\s+have\b[^.\n;]{0,120}\b(?:experience|exposure)\b/i.test(
+        text,
+      ) ||
+      /\b(?:do\s+not|don't|should\s+not|shouldn't)\s+(?:invent|add|include|claim)\b/i.test(
+        text,
+      ) ||
+      /\bunsupported\b/i.test(text);
+
+    return rejectsExperience && !grantsSkillsPermission;
+  });
+}
+
+export function filterUnsupportedEmphasizedTechnologiesForPlanning(input: {
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+  resumePlainText: string;
+  userMarkdown?: TailorResumeUserMarkdownState;
+}) {
+  if (!input.userMarkdown) {
+    return input.emphasizedTechnologies;
+  }
+
+  const userMarkdown = input.userMarkdown;
+  const keywordPresenceContext = buildTailorResumeKeywordPresenceContext({
+    emphasizedTechnologies: input.emphasizedTechnologies,
+    originalResumeText: input.resumePlainText,
+    userMarkdown: userMarkdown.markdown,
+  });
+  const supportedTechnologyNames = new Set(
+    keywordPresenceContext.terms
+      .filter(
+        (term) =>
+          term.presentInOriginalResume ||
+          (term.presentInUserMarkdown &&
+            !userMarkdownRejectsTechnologyExperience({
+              technologyName: term.name,
+              userMarkdown: userMarkdown.markdown,
+            })),
+      )
+      .map((term) => normalizeTechnologyName(term.name)),
+  );
+
+  return input.emphasizedTechnologies.filter((technology) =>
+    supportedTechnologyNames.has(normalizeTechnologyName(technology.name)),
+  );
+}
+
 function buildTailoringImplementationInput(input: {
   jobDescription: string;
   planningBlocksById: Map<string, TailorResumePlanningBlock>;
@@ -2101,7 +2644,22 @@ export async function extractTailorResumeEmphasizedTechnologiesForQuestioning(in
       jobDescription: input.jobDescription,
       model,
     });
-  } catch {
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : "Model-assisted technology extraction failed.";
+    await emitTailorResumeGenerationStep(input.onStepEvent, {
+      attempt: 1,
+      detail:
+        `${errorMessage} Falling back to deterministic keyword hints so the run can continue.`,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      emphasizedTechnologies: technologyHintTechnologies,
+      retrying: true,
+      status: "failed",
+      stepNumber: 1,
+      summary: "Scrape keywords",
+    });
     extractedTechnologies = [];
   }
 
@@ -2197,11 +2755,22 @@ export async function planTailoredResume(input: {
           }),
         );
 
-  const emphasizedTechnologiesForPlanning =
+  const emphasizedTechnologiesAfterNonTechnologyFilter =
     filterTailorResumeNonTechnologiesFromEmphasizedTechnologies(
       await technologyExtractionPromise,
       input.userMarkdown?.nonTechnologies,
     );
+  const emphasizedTechnologiesForPlanning =
+    filterUnsupportedEmphasizedTechnologiesForPlanning({
+      emphasizedTechnologies: emphasizedTechnologiesAfterNonTechnologyFilter,
+      resumePlainText: planningSnapshot.resumePlainText,
+      userMarkdown: input.userMarkdown,
+    });
+  const supportedTechnologyNamesForPlanning = new Set(
+    emphasizedTechnologiesForPlanning.map((technology) =>
+      normalizeTechnologyName(technology.name),
+    ),
+  );
 
   for (let attempt = 1; attempt <= maxPlanningAttempts; attempt += 1) {
     const planInput = buildTailoringPlanInput({
@@ -2376,14 +2945,45 @@ export async function planTailoredResume(input: {
       const nextPlan = parseTailoredResumePlanResponse(JSON.parse(outputText));
       const nextPlanWithJobTechnologies: TailoredResumePlanResponse = {
         ...nextPlan,
-        emphasizedTechnologies: mergeTailorResumeJobDescriptionTechnologies({
-          employerName: input.employerName,
-          extractedTechnologies: emphasizedTechnologiesForPlanning,
-          jobDescription: input.jobDescription,
-          nonTechnologies: input.userMarkdown?.nonTechnologies,
-          plannerTechnologies: nextPlan.emphasizedTechnologies,
+        emphasizedTechnologies: filterUnsupportedEmphasizedTechnologiesForPlanning({
+          emphasizedTechnologies: mergeTailorResumeJobDescriptionTechnologies({
+            employerName: input.employerName,
+            extractedTechnologies: emphasizedTechnologiesForPlanning,
+            jobDescription: input.jobDescription,
+            nonTechnologies: input.userMarkdown?.nonTechnologies,
+            plannerTechnologies: nextPlan.emphasizedTechnologies,
+          }),
+          resumePlainText: planningSnapshot.resumePlainText,
+          userMarkdown: input.userMarkdown,
         }),
       };
+      const plannedResumePlainText = buildPlannedResumePlainText({
+        changes: nextPlanWithJobTechnologies.changes,
+        planningSnapshot,
+      });
+      const unsupportedPlannedTechnologies =
+        emphasizedTechnologiesAfterNonTechnologyFilter.filter(
+          (technology) =>
+            !supportedTechnologyNamesForPlanning.has(
+              normalizeTechnologyName(technology.name),
+            ) &&
+            resumeTextIncludesKeyword({
+              term: technology.name,
+              text: plannedResumePlainText,
+            }),
+        );
+
+      if (unsupportedPlannedTechnologies.length > 0) {
+        throw new Error(
+          [
+            "The Step 3 plan added technologies the user did not support in Step 2.",
+            `Unsupported keywords in planned text: ${unsupportedPlannedTechnologies
+              .map((technology) => technology.name)
+              .join(", ")}`,
+            "Remove those keywords from the planned resume text unless USER.md explicitly says they can be listed in skills or used as experience evidence.",
+          ].join("\n"),
+        );
+      }
       validateTailoredResumePlanChanges({
         changes: nextPlanWithJobTechnologies.changes,
         planningBlocks: planningSnapshot.blocks,
@@ -2391,10 +2991,7 @@ export async function planTailoredResume(input: {
       validateTailoredResumePlanningKeywordCoverage({
         keywordCheckResult: buildTailorResumeKeywordCheckResult({
           emphasizedTechnologies: nextPlanWithJobTechnologies.emphasizedTechnologies,
-          text: buildPlannedResumePlainText({
-            changes: nextPlanWithJobTechnologies.changes,
-            planningSnapshot,
-          }),
+          text: plannedResumePlainText,
         }),
       });
       lastPlanningResult = nextPlanWithJobTechnologies;
@@ -2784,6 +3381,13 @@ export async function implementTailoredResumePlan(input: {
       implementation = parseTailoredResumeImplementationResponse(
         JSON.parse(outputText),
       );
+      implementation = {
+        changes: applyTailorResumeUserMarkdownBoldFormatting({
+          emphasizedTechnologies: implementationRequiredTechnologies,
+          implementationChanges: implementation.changes,
+          userMarkdown: input.userMarkdown,
+        }),
+      };
     } catch (error) {
       lastError =
         error instanceof Error

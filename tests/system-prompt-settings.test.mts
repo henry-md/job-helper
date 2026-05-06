@@ -110,22 +110,24 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /Quoted bullets under technology-specific USER\.md headings/i);
   assert.match(prompt, /strong grounded candidates for experience-bullet edits/i);
   assert.match(prompt, /only by adding it to the skills section/i);
+  assert.match(prompt, /passes the skills-entry gate/i);
   assert.match(prompt, /experience-bullet replacement or swap/i);
   assert.match(prompt, /plan it as a swap/i);
   assert.match(prompt, /weakest or least job-relevant existing bullet/i);
   assert.match(prompt, /desiredPlainText to an empty string/i);
   assert.match(prompt, /deleting one whole bullet or line/i);
   assert.match(prompt, /primary goal is to make sure the final planned resume text includes every remaining high-priority keyword/i);
-  assert.match(prompt, /highly encourage a skills-section update/i);
-  assert.match(prompt, /evidence of user experience in the original resume or USER\.md/i);
-  assert.match(prompt, /low-priority extracted technology keywords unless USER\.md explicitly says/i);
-  assert.match(prompt, /no experience, no exposure, or does not want the keyword included/i);
-  assert.match(prompt, /Use light discretion for capability phrases/i);
-  assert.match(prompt, /RESTful APIs may be better in a bullet or keyword coverage/i);
-  assert.match(prompt, /in addition to any experience-bullet sentence/i);
-  assert.match(prompt, /Skills-section coverage is strongly encouraged/i);
+  assert.match(prompt, /When editing Skills or Technical Skills, add only actual skills/i);
+  assert.match(prompt, /dedicated USER\.md sentence\/bullet for that exact technology/i);
+  assert.match(prompt, /Do not add peppering\/capability phrases such as RESTful/i);
+  assert.match(prompt, /cloud infrastructure, data structures, production infrastructure/i);
+  assert.match(prompt, /Skills-only concrete tools like Windsurf/i);
+  assert.match(prompt, /Skills-entry gate/i);
+  assert.match(prompt, /not for every keyword used to pepper the resume/i);
+  assert.match(prompt, /Those terms may still appear naturally in experience bullets/i);
   assert.match(prompt, /closest existing category/i);
-  assert.match(prompt, /relying only on a sentence or bullet mention/i);
+  assert.match(prompt, /Concrete technologies with dedicated source-resume or USER\.md support may go into Skills/i);
+  assert.match(prompt, /capability phrases used to pepper fit/i);
   assert.match(prompt, /check_planned_resume_keyword_coverage/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
@@ -139,10 +141,11 @@ test("buildTailorResumePlanningSystemPrompt appends skills keyword coverage to s
   );
 
   assert.match(prompt, /Custom planning prompt\./);
-  assert.match(prompt, /Skills-section coverage is strongly encouraged/i);
+  assert.match(prompt, /Skills-entry gate/i);
+  assert.match(prompt, /Windsurf can be listed in a skills category/i);
   assert.match(
     prompt,
-    /RESTful APIs may belong in a bullet or ATS coverage check/i,
+    /RESTful, RESTful APIs, cloud infrastructure, data structures/i,
   );
 });
 
@@ -195,7 +198,7 @@ test("buildTailorResumeInterviewSystemPrompt keeps user-facing interview text co
   assert.match(prompt, /non-technology list/i);
   assert.match(prompt, /case-insensitive deny-list/i);
   assert.match(prompt, /stored alongside USER\.md, not inside USER\.md/i);
-  assert.match(prompt, /gives the user the final Done button/i);
+  assert.match(prompt, /starts the remaining tailoring steps/i);
   assert.match(prompt, /sample bullet, example, draft, clarification, or review/i);
   assert.match(prompt, /Go beside backend\/API work/i);
   assert.match(prompt, /JavaScript framework/i);
@@ -206,14 +209,14 @@ test("buildTailorResumeInterviewSystemPrompt keeps user-facing interview text co
   assert.match(prompt, /Not mentioned in your resume or USER\.md/i);
   assert.match(prompt, /one compact inline list/i);
   assert.match(prompt, /technologyContexts/i);
-  assert.match(prompt, /follow-up turns/i);
+  assert.match(prompt, /ordinary follow-up turns/i);
   assert.match(prompt, /compact collapsible cards/i);
   assert.match(prompt, /do not repeat any technology definition or example bullet/i);
   assert.match(prompt, /definitions or example bullets in assistantMessage/i);
   assert.match(prompt, /one-sentence explanation/i);
   assert.match(prompt, /Return exactly two examples by default/i);
   assert.match(prompt, /requested count for that technology, up to six examples/i);
-  assert.match(prompt, /providing technology-specific example bullets/i);
+  assert.match(prompt, /technology-specific example bullets/i);
   assert.match(prompt, /answer with technologyContexts cards/i);
   assert.match(prompt, /FAANG-level resume bullet suggestions/i);
   assert.match(prompt, /positive result in the same sentence/i);
@@ -223,8 +226,8 @@ test("buildTailorResumeInterviewSystemPrompt keeps user-facing interview text co
   assert.match(prompt, /10k msg\/sec with exactly-once semantics/i);
   assert.match(prompt, /do not need to be entirely new bullets/i);
   assert.match(prompt, /slight modification of that bullet/i);
-  assert.match(prompt, /not the technology name/i);
-  assert.match(prompt, /never `-- Cassandra`/i);
+  assert.match(prompt, /specific company or internship already present/i);
+  assert.match(prompt, /Never use job-posting product, team, platform/i);
   assert.match(prompt, /do not label the explanation as "Definition"/i);
   assert.match(prompt, /or "One-sentence"/i);
   assert.match(prompt, /do not label the bullets as "Example A"/i);
@@ -232,22 +235,31 @@ test("buildTailorResumeInterviewSystemPrompt keeps user-facing interview text co
   assert.match(prompt, /Apache Spark helps you process large amounts of data/i);
   assert.match(prompt, /Step 2 exists only to gather reusable context and update USER\.md/i);
   assert.match(prompt, /must not decide how to tailor the resume/i);
+  assert.match(prompt, /Never ask permission to update USER\.md after the user answers/i);
+  assert.match(prompt, /updating USER\.md is the point of this chat/i);
   assert.match(prompt, /Never ask whether to add, replace, append, insert, or swap a bullet/i);
   assert.match(prompt, /Step 3 planning chooses skills versus existing bullets versus appended bullets/i);
+  assert.match(prompt, /gives quoted bullets, names target employers\/projects/i);
+  assert.match(prompt, /Do not ask another placement, wording, permission/i);
   assert.match(prompt, /quoted user-confirmed experience-evidence bullets/i);
   assert.match(prompt, /technology-specific headings/i);
   assert.match(prompt, /Quoted bullets are user-confirmed experience evidence/i);
   assert.match(prompt, /not instructions to add, replace, append, insert, or swap/i);
   assert.match(prompt, /Step 3 planning decides whether that memory should become a skills entry/i);
   assert.match(prompt, /After each user answer, compare the full conversation against the current USER\.md/i);
-  assert.match(prompt, /include a USER\.md patch on that turn even if you still need to ask one more question/i);
+  assert.match(prompt, /explicit authorization to save memory now/i);
+  assert.match(prompt, /do not ask permission merely to update USER\.md/i);
+  assert.match(prompt, /save the cumulative facts when finishing/i);
   assert.match(prompt, /every durable fact from the entire chat/i);
   assert.match(prompt, /Do not write only the latest user message/i);
   assert.match(prompt, /Do not turn uncertain or adjacent experience into a quoted production-style claim/i);
   assert.match(prompt, /Unquoted bullets are factual notes or constraints/i);
   assert.match(prompt, /No direct production Cassandra experience/i);
-  assert.match(prompt, /initiate_tailor_resume_probing_questions may edit USER\.md only after the user has answered/i);
-  assert.match(prompt, /Step 2 owns high-priority keyword accounting/i);
+  assert.match(prompt, /initiate_tailor_resume_probing_questions is presentation-only/i);
+  assert.match(prompt, /finish_tailor_resume_interview is the only tool that writes USER\.md/i);
+  assert.match(prompt, /Do not ask "do you want me to update USER\.md" or "should I proceed"/i);
+  assert.match(prompt, /Step 2 records confirmed support/i);
+  assert.match(prompt, /does not need to prove every job keyword is usable before finishing/i);
   assert.match(prompt, /keywordDecisions/i);
   assert.match(prompt, /action "remove"/i);
   assert.equal(
@@ -270,8 +282,9 @@ test("buildTailorResumeInterviewSystemPrompt injects debug-force instructions", 
     /DEBUG_FORCE_CONVERSATION_IN_TAILOR_PIPELINE is enabled/i,
   );
   assert.match(prompt, /must ask at least one follow-up question/i);
-  assert.match(prompt, /would_ask_without_debug/);
-  assert.match(prompt, /forced_only/);
+  assert.match(prompt, /debug-forced outside the tool arguments/i);
+  assert.equal(prompt.includes("would_ask_without_debug"), false);
+  assert.equal(prompt.includes("forced_only"), false);
   assert.equal(prompt.includes("{{DEBUG_FORCE_BLOCK}}"), false);
 });
 
@@ -299,11 +312,32 @@ test("buildTailorResumeImplementationSystemPrompt injects retry feedback", () =>
   assert.match(prompt, /replaces a lower-signal bullet with user-confirmed technology experience/i);
   assert.match(prompt, /Do not move the technology only to skills/i);
   assert.match(prompt, /secondary goal is to avoid keyword regressions from that accepted plan/i);
-  assert.match(prompt, /preserve the planned skills keywords/i);
-  assert.match(prompt, /light discretion to keep a capability phrase such as RESTful APIs/i);
-  assert.match(prompt, /do not drop a keyword just because it also appears in an experience sentence/i);
+  assert.match(prompt, /preserve only the planned entries that are actual skills/i);
+  assert.match(prompt, /dedicated USER\.md sentence\/bullet for that exact technology/i);
+  assert.match(prompt, /Do not add capability phrases to Skills merely for keyword peppering/i);
+  assert.match(prompt, /If the accepted plan adds actual skills to a skills section/i);
+  assert.match(prompt, /Do not add extra capability phrases such as RESTful/i);
+  assert.match(prompt, /USER\.md-to-LaTeX formatting/i);
+  assert.match(prompt, /Markdown bold emphasis/i);
+  assert.match(prompt, /\\textbf\{word\}/);
+  assert.match(prompt, /one or two specific job-emphasized technologies or capabilities/i);
+  assert.match(prompt, /Do not bold the entire sentence/i);
+  assert.match(prompt, /never add inline bolding inside Skills or Technical Skills sections/i);
   assert.match(prompt, /check_implemented_resume_keyword_coverage/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
+});
+
+test("buildTailorResumeImplementationSystemPrompt appends USER.md bolding guidance to saved prompts", () => {
+  const prompt = buildTailorResumeImplementationSystemPrompt(
+    mergeSystemPromptSettings({
+      tailorResumeImplementation: "Custom implementation prompt.",
+    }),
+    {},
+  );
+
+  assert.match(prompt, /Custom implementation prompt\./);
+  assert.match(prompt, /USER\.md is Markdown, not LaTeX/i);
+  assert.match(prompt, /\\textbf\{\.\.\.\}/);
 });
 
 test("buildTailorResumeRefinementSystemPrompt injects retry feedback", () => {

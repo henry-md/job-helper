@@ -3,10 +3,12 @@ import test from "node:test";
 import { tailorResumeLatexExample } from "../lib/tailor-resume-latex-example.ts";
 import {
   applyTailorResumeBlockChanges,
+  applyTailorResumeUserMarkdownBoldFormatting,
   buildTechnologyExtractionInstructions,
   buildTechnologyExtractionReasoning,
   classifyTailoredResumeGenerationOutcome,
   extractTailorResumeJobDescriptionTechnologyHints,
+  filterUnsupportedEmphasizedTechnologiesForPlanning,
   mergeTailorResumeJobDescriptionTechnologies,
   parseTailorResumeTechnologyExtractionResponse,
   parseTailoredResumePlanResponse,
@@ -40,6 +42,50 @@ test("buildTechnologyExtractionInstructions frames Step 1 as resume-tailoring ke
 
 test("buildTechnologyExtractionReasoning keeps Step 1 on low reasoning", () => {
   assert.deepEqual(buildTechnologyExtractionReasoning(), { effort: "low" });
+});
+
+test("filterUnsupportedEmphasizedTechnologiesForPlanning treats no-experience USER.md notes as unsupported", () => {
+  const technologies = filterUnsupportedEmphasizedTechnologiesForPlanning({
+    emphasizedTechnologies: [
+      { evidence: "job posting", name: "Grafana", priority: "high" },
+      { evidence: "job posting", name: "Kubernetes", priority: "high" },
+      { evidence: "job posting", name: "Windsurf", priority: "low" },
+    ],
+    resumePlainText: "Built Kubernetes services with TypeScript.",
+    userMarkdown: {
+      markdown:
+        "# USER.md\n\n## Grafana\n\n- No direct Grafana experience; do not invent work-experience bullets.\n\n## Windsurf\n\n- Can list Windsurf in AI developer tooling skills.\n",
+      nonTechnologies: [],
+      updatedAt: null,
+    },
+  });
+
+  assert.deepEqual(
+    technologies.map((technology) => technology.name),
+    ["Kubernetes", "Windsurf"],
+  );
+});
+
+test("filterUnsupportedEmphasizedTechnologiesForPlanning reads no-experience notes under technology headings", () => {
+  const technologies = filterUnsupportedEmphasizedTechnologiesForPlanning({
+    emphasizedTechnologies: [
+      { evidence: "job posting", name: "Grafana", priority: "high" },
+      { evidence: "job posting", name: "Cilium", priority: "high" },
+      { evidence: "job posting", name: "React", priority: "high" },
+    ],
+    resumePlainText: "Built React interfaces.",
+    userMarkdown: {
+      markdown:
+        "# USER.md\n\n## ## Grafana\n\nNo direct Grafana experience.\n\n## ## Cilium\n\nDo not invent work-experience bullets.\n",
+      nonTechnologies: [],
+      updatedAt: null,
+    },
+  });
+
+  assert.deepEqual(
+    technologies.map((technology) => technology.name),
+    ["React"],
+  );
 });
 
 test("applyTailorResumeBlockChanges replaces a segment and re-normalizes ids", () => {
@@ -164,6 +210,116 @@ test("applyTailorResumeBlockChanges repairs a lone bare dollar sign in model out
   const strippedLatex = stripTailorResumeSegmentIds(updated.annotatedLatex);
 
   assert.equal(strippedLatex.includes(String.raw`\textbf{\$50K+/mo}`), true);
+});
+
+test("applyTailorResumeUserMarkdownBoldFormatting bolds job terms copied from quoted USER.md sentences", () => {
+  const changes = applyTailorResumeUserMarkdownBoldFormatting({
+    emphasizedTechnologies: [
+      {
+        evidence: "Posting names RESTful services.",
+        name: "RESTful services",
+        priority: "high",
+      },
+      {
+        evidence: "Posting names Cassandra.",
+        name: "Cassandra",
+        priority: "high",
+      },
+      {
+        evidence: "Posting names Go.",
+        name: "Go",
+        priority: "high",
+      },
+    ],
+    implementationChanges: [
+      {
+        latexCode:
+          String.raw`\resumeitem{Built Go streaming microservice to ingest data and expose RESTful services}`,
+        segmentId: "experience.entry-1.bullet-1",
+      },
+      {
+        latexCode:
+          String.raw`\resumeitem{Migrated time-series data from MongoDB to Cassandra to reduce costs}`,
+        segmentId: "experience.entry-2.bullet-1",
+      },
+      {
+        latexCode:
+          String.raw`\resumeitem{Technical Skills: Go, Cassandra, RESTful services}`,
+        segmentId: "resume.entry-3.bullet-1",
+      },
+      {
+        latexCode:
+          String.raw`\resumeitem{Built Go streaming microservice to ingest data and expose RESTful services}`,
+        segmentId: "technical-skills.section-1",
+      },
+      {
+        latexCode:
+          String.raw`\resumeSection{TECHNICAL SKILLS} **Go**, Cassandra, RESTful services`,
+        segmentId: "experience.entry-3.bullet-1",
+      },
+    ],
+    userMarkdown: {
+      markdown:
+        '# USER.md\n\n## Go\n\n- "Built Go streaming microservice to ingest data and expose RESTful services" -- Johns Hopkins University\n\n## Cassandra\n\n- "Migrated time-series data from MongoDB to Cassandra to reduce costs" -- KnoWhiz\n',
+      nonTechnologies: [],
+      updatedAt: null,
+    },
+  });
+
+  assert.match(changes[0]?.latexCode ?? "", /\\textbf\{RESTful services\}/);
+  assert.match(changes[0]?.latexCode ?? "", /\\textbf\{Go\}/);
+  assert.match(changes[1]?.latexCode ?? "", /\\textbf\{Cassandra\}/);
+  assert.equal(
+    changes[2]?.latexCode,
+    String.raw`\resumeitem{Technical Skills: Go, Cassandra, RESTful services}`,
+  );
+  assert.equal(
+    changes[3]?.latexCode,
+    String.raw`\resumeitem{Built Go streaming microservice to ingest data and expose RESTful services}`,
+  );
+  assert.equal(
+    changes[4]?.latexCode,
+    String.raw`\resumeSection{TECHNICAL SKILLS} Go, Cassandra, RESTful services`,
+  );
+});
+
+test("applyTailorResumeUserMarkdownBoldFormatting translates explicit markdown bold without double-wrapping", () => {
+  const changes = applyTailorResumeUserMarkdownBoldFormatting({
+    emphasizedTechnologies: [
+      {
+        evidence: "Posting names Go.",
+        name: "Go",
+        priority: "high",
+      },
+      {
+        evidence: "Posting names Spark.",
+        name: "Spark",
+        priority: "high",
+      },
+    ],
+    implementationChanges: [
+      {
+        latexCode:
+          String.raw`\resumeitem{Built **Go** streaming microservice with Spark}`,
+        segmentId: "experience.entry-1.bullet-1",
+      },
+      {
+        latexCode:
+          String.raw`\resumeitem{Built \textbf{Go} streaming microservice with Spark}`,
+        segmentId: "experience.entry-2.bullet-1",
+      },
+    ],
+    userMarkdown: {
+      markdown:
+        '# USER.md\n\n## Go\n\n- "Built **Go** streaming microservice with Spark" -- Johns Hopkins University\n',
+      nonTechnologies: [],
+      updatedAt: null,
+    },
+  });
+
+  assert.match(changes[0]?.latexCode ?? "", /\\textbf\{Go\}/);
+  assert.doesNotMatch(changes[0]?.latexCode ?? "", /\*\*Go\*\*/);
+  assert.doesNotMatch(changes[1]?.latexCode ?? "", /\\textbf\{\\textbf\{Go\}\}/);
 });
 
 test("classifyTailoredResumeGenerationOutcome returns generation_failure when no candidate was applied", () => {
