@@ -8,7 +8,6 @@ import {
   normalizeTailorResumeInterviewResponseForCurrentTurn,
   parseTailorResumeInterviewResponseFromModelOutput,
   tailorResumeAskMessageRequestsUserMarkdownPermission,
-  validateTailorResumeTechnologyContexts,
 } from "../lib/tailor-resume-questioning.ts";
 
 test("isDebugForceConversationInTailorPipelineEnabled reads common true values", () => {
@@ -142,58 +141,6 @@ test("extractTailorResumeExperiencePlacementNames reads resume employers and int
       ].join("\n"),
     ),
     ["NewForm AI", "KnoWhiz", "HF Engineering", "Johns Hopkins University"],
-  );
-});
-
-test("validateTailorResumeTechnologyContexts rejects job-product suffixes", () => {
-  assert.throws(
-    () =>
-      validateTailorResumeTechnologyContexts({
-        emphasizedTechnologyNames: ["Azure"],
-        resumeExperienceNames: [
-          "NewForm AI",
-          "KnoWhiz",
-          "HF Engineering",
-          "Johns Hopkins University",
-        ],
-        technologyContexts: [
-          {
-            definition:
-              "Azure is a cloud platform used for deploying and operating production services.",
-            examples: [
-              "Provisioned Azure Kubernetes Service with Infrastructure-as-Code to reduce deployment time 3x -- Purview Data Platform",
-              "Migrated Azure App Services workloads to improve availability 2x -- Azure App Services",
-            ],
-            name: "Azure",
-          },
-        ],
-      }),
-    /resume companies\/internships/i,
-  );
-});
-
-test("validateTailorResumeTechnologyContexts accepts resume placement suffixes", () => {
-  assert.doesNotThrow(() =>
-    validateTailorResumeTechnologyContexts({
-      emphasizedTechnologyNames: ["Azure"],
-      resumeExperienceNames: [
-        "NewForm AI",
-        "KnoWhiz",
-        "HF Engineering",
-        "Johns Hopkins University",
-      ],
-      technologyContexts: [
-        {
-          definition:
-            "Azure is a cloud platform used for deploying and operating production services.",
-          examples: [
-            "Provisioned Azure Kubernetes Service with Infrastructure-as-Code to reduce deployment time 3x -- NewForm",
-            "Migrated Azure App Services rollout for clinic dashboards to improve availability 2x -- Johns Hopkins University internship",
-          ],
-          name: "Azure",
-        },
-      ],
-    }),
   );
 });
 
@@ -350,7 +297,7 @@ test("detects ask messages that only request USER.md update permission", () => {
   );
 });
 
-test("normalizeTailorResumeInterviewResponseForCurrentTurn keeps permission asks without USER.md edits rejectable", () => {
+test("normalizeTailorResumeInterviewResponseForCurrentTurn keeps permission asks without USER.md edits visible", () => {
   const response = normalizeTailorResumeInterviewResponseForCurrentTurn({
     conversation: [
       {
@@ -633,6 +580,39 @@ test("parseTailorResumeInterviewResponseFromModelOutput keeps follow-up technolo
   ]);
 });
 
+test("parseTailorResumeInterviewResponseFromModelOutput preserves weak example cards", () => {
+  const response = parseTailorResumeInterviewResponseFromModelOutput({
+    output: [
+      {
+        arguments: JSON.stringify({
+          assistantMessage:
+            "Here are a couple of Azure ideas. Which, if any, match your experience?",
+          technologyContexts: [
+            {
+              definition:
+                "Azure is a cloud platform used for deploying and operating production services.",
+              examples: [
+                "Provisioned Azure Kubernetes Service -- Purview Data Platform",
+                "Migrated Azure workloads -- Azure App Services",
+              ],
+              name: "Azure",
+            },
+          ],
+        }),
+        call_id: "call-weak-examples",
+        name: "initiate_tailor_resume_probing_questions",
+        type: "function_call",
+      },
+    ],
+  });
+
+  assert.equal(response.response.action, "ask");
+  assert.deepEqual(response.response.technologyContexts[0]?.examples, [
+    "Provisioned Azure Kubernetes Service -- Purview Data Platform",
+    "Migrated Azure workloads -- Azure App Services",
+  ]);
+});
+
 test("parseTailorResumeInterviewResponseFromModelOutput allows requested extra technology examples", () => {
   const response = parseTailorResumeInterviewResponseFromModelOutput({
     output: [
@@ -670,49 +650,48 @@ test("parseTailorResumeInterviewResponseFromModelOutput allows requested extra t
   );
 });
 
-test("parseTailorResumeInterviewResponseFromModelOutput rejects duplicated technology card text", () => {
-  assert.throws(
-    () =>
-      parseTailorResumeInterviewResponseFromModelOutput({
-        output: [
-          {
-            arguments: JSON.stringify({
-              assistantMessage:
-                "Two Go bullet suggestions you can use outside NewForm:\n\n- Built a Go microservice for Quizlet imports, replacing a Python ETL and increasing throughput 4x while cutting memory use 60% -- KnoWhiz\n- Implemented a Go-based concurrent worker pool and AWS SQS consumers to process onboarding jobs at 2k jobs/sec, reducing processing lag 80% -- HF Engineering\n\nWhich of these should I add?",
-              technologyContexts: [
-                {
-                  definition:
-                    "Go is a compiled language designed for building high-performance backend services and concurrent systems.",
-                  examples: [
-                    "Built a Go microservice for Quizlet imports, replacing a Python ETL and increasing throughput 4x while cutting memory use 60% -- KnoWhiz",
-                    "Implemented a Go-based concurrent worker pool and AWS SQS consumers to process onboarding jobs at 2k jobs/sec, reducing processing lag 80% -- HF Engineering",
-                  ],
-                  name: "Go",
-                },
+test("parseTailorResumeInterviewResponseFromModelOutput preserves duplicated technology card text", () => {
+  const response = parseTailorResumeInterviewResponseFromModelOutput({
+    output: [
+      {
+        arguments: JSON.stringify({
+          assistantMessage:
+            "Two Go bullet suggestions you can use outside NewForm:\n\n- Built a Go microservice for Quizlet imports, replacing a Python ETL and increasing throughput 4x while cutting memory use 60% -- KnoWhiz\n- Implemented a Go-based concurrent worker pool and AWS SQS consumers to process onboarding jobs at 2k jobs/sec, reducing processing lag 80% -- HF Engineering\n\nWhich of these should I add?",
+          technologyContexts: [
+            {
+              definition:
+                "Go is a compiled language designed for building high-performance backend services and concurrent systems.",
+              examples: [
+                "Built a Go microservice for Quizlet imports, replacing a Python ETL and increasing throughput 4x while cutting memory use 60% -- KnoWhiz",
+                "Implemented a Go-based concurrent worker pool and AWS SQS consumers to process onboarding jobs at 2k jobs/sec, reducing processing lag 80% -- HF Engineering",
               ],
-            }),
-            call_id: "call-duplicate-card",
-            name: "initiate_tailor_resume_probing_questions",
-            type: "function_call",
-          },
-        ],
-      }),
-    /must not repeat the rendered definition or example bullets/i,
-  );
+              name: "Go",
+            },
+          ],
+        }),
+        call_id: "call-duplicate-card",
+        name: "initiate_tailor_resume_probing_questions",
+        type: "function_call",
+      },
+    ],
+  });
+
+  assert.equal(response.response.action, "ask");
+  assert.equal(response.response.technologyContexts[0]?.name, "Go");
+  assert.match(response.response.assistantMessage, /Two Go bullet suggestions/i);
 });
 
-test("parseTailorResumeInterviewResponseFromModelOutput rejects plain JSON text", () => {
-  assert.throws(
-    () =>
-      parseTailorResumeInterviewResponseFromModelOutput({
-        output_text: JSON.stringify({
-          action: "done",
-          debugDecision: "not_applicable",
-          learnings: [],
-        }),
-      }),
-    /tool call/i,
-  );
+test("parseTailorResumeInterviewResponseFromModelOutput coerces plain JSON text", () => {
+  const response = parseTailorResumeInterviewResponseFromModelOutput({
+    output_text: JSON.stringify({
+      action: "done",
+      debugDecision: "not_applicable",
+      learnings: [],
+    }),
+  });
+
+  assert.equal(response.response.action, "done");
+  assert.match(response.response.completionMessage, /enough context/i);
 });
 
 test("latestUserMessageDirectlyConfirmsTechnologyExperience detects concise technology confirmations", () => {
