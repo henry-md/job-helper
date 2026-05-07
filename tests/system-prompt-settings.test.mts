@@ -158,16 +158,13 @@ test("buildTailorResumePlanningSystemPrompt does not ask for job identifiers", (
   assert.doesNotMatch(prompt, /jobIdentifier/i);
 });
 
-test("buildTailorResumeInterviewSystemPrompt injects retry feedback", () => {
+test("buildTailorResumeInterviewSystemPrompt does not inject retry feedback", () => {
   const prompt = buildTailorResumeInterviewSystemPrompt(
     createDefaultSystemPromptSettings(),
-    {
-      feedback: "The previous interview response asked too many low-value follow-up questions.",
-    },
+    {},
   );
 
-  assert.match(prompt, /Previous interview feedback:/);
-  assert.match(prompt, /asked too many low-value follow-up questions/);
+  assert.doesNotMatch(prompt, /Previous interview feedback:/);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 
@@ -237,6 +234,7 @@ test("buildTailorResumeInterviewSystemPrompt keeps user-facing interview text co
   assert.match(prompt, /must not decide how to tailor the resume/i);
   assert.match(prompt, /Never ask permission to update USER\.md after the user answers/i);
   assert.match(prompt, /updating USER\.md is the point of this chat/i);
+  assert.match(prompt, /patch misses are not a reason to invalidate the Step 2 chat response/i);
   assert.match(prompt, /Never ask whether to add, replace, append, insert, or swap a bullet/i);
   assert.match(prompt, /Step 3 planning chooses skills versus existing bullets versus appended bullets/i);
   assert.match(prompt, /gives quoted bullets, names target employers\/projects/i);

@@ -4323,57 +4323,6 @@ async function handleAdvanceTailorResumeInterview(
 
   const userMarkdownAfterQuestioning = userMarkdownSaveResult.userMarkdown;
 
-  if (
-    questioningResult.action === "done" &&
-    !hasTailorResumeUserMarkdownStateChanged({
-      after: userMarkdownAfterQuestioning,
-      before: userMarkdownBeforeQuestioning,
-    })
-  ) {
-    const attempt = readTailorResumeInterviewAttempt(
-      preparation.tailoringInterview.planningResult.questioningSummary,
-    );
-    const errorMessage =
-      "Step 2 ended without saving USER.md. Tailoring stopped so the latest answer can be saved before continuing.";
-
-    await handleStepEvent({
-      attempt,
-      detail: errorMessage,
-      durationMs: Math.max(0, Date.now() - questioningStartedAt),
-      emphasizedTechnologies:
-        preparation.tailoringInterview.planningResult.emphasizedTechnologies,
-      retrying: false,
-      status: "failed",
-      stepCount: 5,
-      stepNumber: 2,
-      summary: "Finished the follow-up questions",
-    });
-    await updateTailorResumeRunStatus({
-      error: errorMessage,
-      runId: preparation.runId,
-      status: "FAILED",
-      userId,
-    });
-    await logTailorResumeChatServedError({
-      action: "advanceTailorResumeInterview",
-      attempt,
-      error: errorMessage,
-      interview: preparation.tailoringInterview,
-      interviewId,
-      runId: preparation.runId,
-      userId,
-    });
-
-    return NextResponse.json(
-      {
-        error: errorMessage,
-        tailoredResumeDurationMs: accumulatedModelDurationMs,
-        ...buildUserMemoryResponseFields(userMarkdownAfterQuestioning),
-      },
-      { status: 422 },
-    );
-  }
-
   await options.onUserMemoryEvent?.(userMarkdownAfterQuestioning);
 
   if (questioningResult.action === "ask") {
@@ -4768,53 +4717,6 @@ async function handleCompleteTailorResumeInterview(
 
     if (!userMarkdownSaveResult.ok) {
       return userMarkdownSaveResult.response;
-    }
-
-    if (!userMarkdownSaveResult.changed) {
-      const errorMessage =
-        "Step 2 ended without saving USER.md. Tailoring stopped so the latest answer can be saved before continuing.";
-
-      await handleStepEvent({
-        attempt: readTailorResumeInterviewAttempt(
-          preparation.tailoringInterview.planningResult.questioningSummary,
-        ),
-        detail: errorMessage,
-        durationMs: 0,
-        emphasizedTechnologies:
-          preparation.tailoringInterview.planningResult.emphasizedTechnologies,
-        retrying: false,
-        status: "failed",
-        stepCount: 5,
-        stepNumber: 2,
-        summary: "Finished the follow-up questions",
-      });
-      await updateTailorResumeRunStatus({
-        error: errorMessage,
-        runId: preparation.runId,
-        status: "FAILED",
-        userId,
-      });
-      await logTailorResumeChatServedError({
-        action: "completeTailorResumeInterview",
-        attempt: readTailorResumeInterviewAttempt(
-          preparation.tailoringInterview.planningResult.questioningSummary,
-        ),
-        error: errorMessage,
-        interview: preparation.tailoringInterview,
-        interviewId,
-        runId: preparation.runId,
-        userId,
-      });
-
-      return NextResponse.json(
-        {
-          error: errorMessage,
-          tailoredResumeDurationMs:
-            preparation.tailoringInterview.accumulatedModelDurationMs,
-          ...buildUserMemoryResponseFields(userMarkdownSaveResult.userMarkdown),
-        },
-        { status: 422 },
-      );
     }
 
     await options.onUserMemoryEvent?.(userMarkdownSaveResult.userMarkdown);

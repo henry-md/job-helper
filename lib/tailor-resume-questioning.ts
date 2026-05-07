@@ -35,7 +35,10 @@ import {
   formatTailorResumeTermWithCapitalFirst,
   normalizeTailorResumeNonTechnologyTerms,
 } from "./tailor-resume-non-technologies.ts";
-import { runWithTransientModelRetries } from "./tailor-resume-transient-retry.ts";
+import {
+  isTransientModelError,
+  runWithTransientModelRetries,
+} from "./tailor-resume-transient-retry.ts";
 import {
   applyTailorResumeUserMarkdownPatch,
   defaultTailorResumeUserMarkdown,
@@ -505,8 +508,6 @@ export async function generateTailorResumeTechnologyExamples(input: {
     resumePlainText: input.resumePlainText ?? "",
     technologies: input.technologies,
   });
-  let feedback = "";
-  let lastError = "Unable to generate technology examples.";
   let openingMessage = input.openingMessage?.trim() ?? "";
 
   if (input.streamOpening !== false || !openingMessage) {
@@ -518,116 +519,100 @@ export async function generateTailorResumeTechnologyExamples(input: {
         technologies: input.technologies,
       });
     } catch (error) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : "Unable to stream the opening technology examples question.";
-      await input.onStepEvent?.({
-        attempt: 1,
-        detail: errorMessage,
-        durationMs: Math.max(0, Date.now() - startedAt),
-        emphasizedTechnologies: input.technologies,
-        retrying: false,
-        status: "failed",
-        stepCount: 5,
-        stepNumber: 2,
-        summary: "Generating technology examples",
-      });
-      throw error;
-    }
-  }
-
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const instructions = buildTailorResumeTechnologyExamplesInstructions(feedback);
-    const response = await runWithTransientModelRetries({
-      onRetry: async (retryEvent) => {
+      if (isOpenAIRequestError(error)) {
+        const errorMessage =
+          error instanceof Error
+            ? error.message
+            : "Unable to stream the opening technology examples question.";
         await input.onStepEvent?.({
-          attempt,
-          detail:
-            `The Step 2 examples request hit a transient model error (${retryEvent.message}). ` +
-            `Retrying automatically (${retryEvent.nextAttempt}/${retryEvent.maxAttempts}).`,
+          attempt: 1,
+          detail: errorMessage,
           durationMs: Math.max(0, Date.now() - startedAt),
           emphasizedTechnologies: input.technologies,
-          retrying: true,
+          retrying: false,
           status: "failed",
           stepCount: 5,
           stepNumber: 2,
           summary: "Generating technology examples",
         });
-      },
-      operation: async () => {
-        const streamer = new TailorResumeInterviewArgsStreamer();
-        const reasoning = resolveTailorResumeInterviewReasoning(model);
-        const stream = client.responses.stream({
-          input: examplesInput,
-          instructions,
-          ...(reasoning ? { reasoning } : {}),
-          ...buildLowVerbosityTextConfig(model),
-          model,
-          tool_choice: "required",
-          tools: tailorResumeTechnologyExamplesTools,
-        });
-        const finalResponsePromise = stream.finalResponse();
+        throw error;
+      }
 
-        for await (const event of stream) {
-          if (
-            event.type === "response.function_call_arguments.delta" &&
-            typeof event.delta === "string" &&
-            event.delta.length > 0
-          ) {
-            const emitted = streamer.feed(event.delta);
+      openingMessage = buildFallbackTailorResumeExamplesQuestion();
+    }
+  }
 
-            if (input.onStreamEvent) {
-              for (const emittedEvent of emitted) {
-                await input.onStreamEvent(emittedEvent);
-              }
-            }
-          }
-        }
-
-        return (await finalResponsePromise) as TailoredResumeResponse;
-      },
-    });
-
-    try {
-      const parsed =
-        parseTailorResumeTechnologyExamplesResponseFromModelOutput(response);
-      validateTailorResumeTechnologyContexts({
-        emphasizedTechnologyNames: input.technologies.map(
-          (technology) => technology.name,
-        ),
-        resumeExperienceNames,
-        technologyContexts: parsed.response.technologyContexts,
-      });
-
-      return {
-        assistantMessage: openingMessage || parsed.response.assistantMessage,
-        generationDurationMs: Math.max(0, Date.now() - startedAt),
-        technologyContexts: parsed.response.technologyContexts,
-        toolCalls: parsed.toolCalls,
-      };
-    } catch (error) {
-      lastError =
-        error instanceof Error
-          ? error.message
-          : "The model returned invalid technology examples.";
+  const attempt = 1;
+  const instructions = buildTailorResumeTechnologyExamplesInstructions();
+  const response = await runWithTransientModelRetries({
+    onRetry: async (retryEvent) => {
       await input.onStepEvent?.({
         attempt,
-        detail: lastError,
+        detail:
+          `The Step 2 examples request hit a transient model error (${retryEvent.message}). ` +
+          `Retrying automatically (${retryEvent.nextAttempt}/${retryEvent.maxAttempts}).`,
         durationMs: Math.max(0, Date.now() - startedAt),
         emphasizedTechnologies: input.technologies,
-        retrying: attempt < 2,
+        retrying: true,
         status: "failed",
         stepCount: 5,
         stepNumber: 2,
         summary: "Generating technology examples",
       });
-      feedback =
-        `${lastError}\nCall exactly one valid examples tool. Keep assistantMessage short, put definitions/examples only in technologyContexts, and end every example bullet with a dash suffix naming one of the resume companies/internships provided in the input. Do not use job-posting product, team, platform, or technology names as suffixes.`;
-    }
-  }
+    },
+    operation: async () => {
+      const streamer = new TailorResumeInterviewArgsStreamer();
+      const reasoning = resolveTailorResumeInterviewReasoning(model);
+      const stream = client.responses.stream({
+        input: examplesInput,
+        instructions,
+        ...(reasoning ? { reasoning } : {}),
+        ...buildLowVerbosityTextConfig(model),
+        model,
+        tool_choice: "required",
+        tools: tailorResumeTechnologyExamplesTools,
+      });
+      const finalResponsePromise = stream.finalResponse();
 
-  throw new Error(lastError);
+      for await (const event of stream) {
+        if (
+          event.type === "response.function_call_arguments.delta" &&
+          typeof event.delta === "string" &&
+          event.delta.length > 0
+        ) {
+          const emitted = streamer.feed(event.delta);
+
+          if (input.onStreamEvent) {
+            for (const emittedEvent of emitted) {
+              await input.onStreamEvent(emittedEvent);
+            }
+          }
+        }
+      }
+
+      return (await finalResponsePromise) as TailoredResumeResponse;
+    },
+  });
+
+  const parsed =
+    parseTailorResumeTechnologyExamplesResponseFromModelOutput(response);
+  const technologyContexts =
+    parsed.response.technologyContexts.length > 0
+      ? parsed.response.technologyContexts
+      : buildFallbackTechnologyContexts(
+          input.technologies.map((technology) => technology.name),
+          resumeExperienceNames,
+        );
+
+  return {
+    assistantMessage:
+      openingMessage ||
+      parsed.response.assistantMessage ||
+      buildFallbackTailorResumeExamplesQuestion(),
+    generationDurationMs: Math.max(0, Date.now() - startedAt),
+    technologyContexts,
+    toolCalls: parsed.toolCalls,
+  };
 }
 
 export async function streamTailorResumeTechnologyExamplesOpeningQuestion(input: {
@@ -928,6 +913,53 @@ function readRecordString(value: unknown, key: string) {
   return readTrimmedString(value[key as keyof typeof value]);
 }
 
+function readRecordNumber(value: unknown, key: string) {
+  if (!value || typeof value !== "object" || !(key in value)) {
+    return null;
+  }
+
+  const candidate = value[key as keyof typeof value];
+
+  return typeof candidate === "number" && Number.isFinite(candidate)
+    ? candidate
+    : null;
+}
+
+function isOpenAIRequestError(error: unknown) {
+  if (isTransientModelError(error)) {
+    return true;
+  }
+
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  if (
+    readRecordNumber(error, "status") !== null ||
+    readRecordNumber(error, "statusCode") !== null ||
+    readRecordString(error, "request_id") ||
+    readRecordString(error, "requestID")
+  ) {
+    return true;
+  }
+
+  const name = readRecordString(error, "name");
+  const type = readRecordString(error, "type");
+
+  return (
+    /\b(?:OpenAI|API|RateLimit|Authentication|Permission|BadRequest|Conflict|InternalServer)\b/i.test(
+      name,
+    ) ||
+    /(?:_error|rate_limit|invalid_request|authentication|permission|server_error)/i.test(
+      type,
+    )
+  );
+}
+
+function buildFallbackTailorResumeExamplesQuestion() {
+  return "Which generated example bullets match your actual experience? Reply with the technology names and any one-line specifics I should preserve.";
+}
+
 export function isDebugForceConversationInTailorPipelineEnabled() {
   const value =
     process.env.DEBUG_FORCE_CONVERSATION_IN_TAILOR_PIPELINE
@@ -937,11 +969,11 @@ export function isDebugForceConversationInTailorPipelineEnabled() {
   return value === "true" || value === "1" || value === "yes";
 }
 
-function parseTailoredResumeQuestionLearning(
+function readTailoredResumeQuestionLearning(
   value: unknown,
-): TailoredResumeQuestionLearning {
+): TailoredResumeQuestionLearning | null {
   if (!value || typeof value !== "object") {
-    throw new Error("The model returned an invalid interview learning.");
+    return null;
   }
 
   const topic = "topic" in value ? readTrimmedString(value.topic) : "";
@@ -950,20 +982,12 @@ function parseTailoredResumeQuestionLearning(
     "targetSegmentIds" in value ? value.targetSegmentIds : null;
 
   if (!topic || !detail || !Array.isArray(rawTargetSegmentIds)) {
-    throw new Error("The model returned an incomplete interview learning.");
+    return null;
   }
 
-  const targetSegmentIds = rawTargetSegmentIds.map((segmentId) => {
-    const parsedSegmentId = readTrimmedString(segmentId);
-
-    if (!parsedSegmentId) {
-      throw new Error(
-        "The model returned an interview learning with an empty targetSegmentId.",
-      );
-    }
-
-    return parsedSegmentId;
-  });
+  const targetSegmentIds = rawTargetSegmentIds
+    .map((segmentId) => readTrimmedString(segmentId))
+    .filter(Boolean);
 
   return {
     detail,
@@ -980,12 +1004,12 @@ function parseTailorResumeTechnologyContexts(
   }
 
   if (!Array.isArray(value)) {
-    throw new Error("The model returned invalid technology context cards.");
+    return [];
   }
 
-  return value.map((entry) => {
+  return value.flatMap((entry) => {
     if (!entry || typeof entry !== "object") {
-      throw new Error("The model returned an invalid technology context card.");
+      return [];
     }
 
     const name =
@@ -999,22 +1023,18 @@ function parseTailorResumeTechnologyContexts(
         ? entry.examples.map(readTrimmedString).filter(Boolean)
         : [];
 
-    if (!name || !definition || examples.length < 2 || examples.length > 6) {
-      throw new Error(
-        "The model returned an incomplete technology context card.",
-      );
+    if (!name) {
+      return [];
     }
 
-    return {
-      definition,
-      examples,
+    return [{
+      definition:
+        definition ||
+        `${name} is one of the job-posting technologies to clarify.`,
+      examples: examples.slice(0, 6),
       name,
-    };
+    }];
   });
-}
-
-function normalizeTechnologyExampleSuffix(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9+#.]+/g, "");
 }
 
 function normalizeResumeExperiencePlacementName(value: string) {
@@ -1029,130 +1049,6 @@ function readTechnologyExampleDashSuffix(example: string) {
   const match = /\s(?:--|[-–—])\s*([^-–—]+?)\s*$/.exec(example);
 
   return match ? match[1]!.trim() : "";
-}
-
-function technologyExampleEndsWithTechnologyName(input: {
-  example: string;
-  technologyName: string;
-}) {
-  const suffix = readTechnologyExampleDashSuffix(input.example);
-
-  if (!suffix) {
-    return false;
-  }
-
-  return (
-    normalizeTechnologyExampleSuffix(suffix) ===
-    normalizeTechnologyExampleSuffix(input.technologyName)
-  );
-}
-
-function suffixMatchesResumeExperienceName(input: {
-  resumeExperienceName: string;
-  suffix: string;
-}) {
-  const normalizedSuffix = normalizeResumeExperiencePlacementKey(input.suffix);
-  const normalizedName = normalizeResumeExperiencePlacementKey(
-    input.resumeExperienceName,
-  );
-
-  if (!normalizedSuffix || !normalizedName) {
-    return false;
-  }
-
-  return (
-    normalizedSuffix === normalizedName ||
-    (normalizedSuffix.length >= 4 && normalizedName.startsWith(normalizedSuffix)) ||
-    (normalizedName.length >= 4 && normalizedSuffix.startsWith(normalizedName))
-  );
-}
-
-function technologyExampleUsesResumeExperienceSuffix(input: {
-  example: string;
-  resumeExperienceNames: string[];
-}) {
-  const suffix = readTechnologyExampleDashSuffix(input.example);
-
-  if (!suffix) {
-    return false;
-  }
-
-  return input.resumeExperienceNames.some((resumeExperienceName) =>
-    suffixMatchesResumeExperienceName({
-      resumeExperienceName,
-      suffix,
-    }),
-  );
-}
-
-function technologyExampleHasResultSignal(example: string) {
-  return (
-    /\b(?:to|with|while|by|for)\b.+(?:\d|reduce|reduced|reducing|improve|improved|improving|cut|cutting|lower|lowered|lowering|increase|increased|increasing|boost|boosted|boosting|accelerate|accelerated|accelerating|save|saved|saving|enable|enabled|enabling|scale|scaled|scaling|latency|throughput|cost|reliability|availability|retention|conversion|efficiency|productivity|accuracy|quality|semantics)\b/i.test(
-      example,
-    ) ||
-    /\b\d+(?:[.,]\d+)?\s*(?:%|x|ms|sec|secs|second|seconds|k|m)\b/i.test(
-      example,
-    )
-  );
-}
-
-export function validateTailorResumeTechnologyContexts(input: {
-  emphasizedTechnologyNames: string[];
-  resumeExperienceNames?: string[];
-  technologyContexts: TailorResumeTechnologyContext[];
-}) {
-  const resumeExperienceNames = input.resumeExperienceNames ?? [];
-
-  for (const technologyContext of input.technologyContexts) {
-    const normalizedName = technologyContext.name.trim().toLowerCase();
-    const isKnownTechnology = input.emphasizedTechnologyNames.some(
-      (technologyName) => {
-        const normalizedTechnologyName = technologyName.trim().toLowerCase();
-        return (
-          normalizedTechnologyName === normalizedName ||
-          normalizedTechnologyName.includes(normalizedName) ||
-          normalizedName.includes(normalizedTechnologyName)
-        );
-      },
-    );
-
-    if (!isKnownTechnology) {
-      throw new Error(
-        `Technology context "${technologyContext.name}" must match an emphasized technology being asked about.`,
-      );
-    }
-
-    for (const example of technologyContext.examples) {
-      if (
-        technologyExampleEndsWithTechnologyName({
-          example,
-          technologyName: technologyContext.name,
-        })
-      ) {
-        throw new Error(
-          `Technology context "${technologyContext.name}" has an invalid example suffix. Text after a dash must be the resume company/internship name, not the technology name.`,
-        );
-      }
-
-      if (
-        resumeExperienceNames.length > 0 &&
-        !technologyExampleUsesResumeExperienceSuffix({
-          example,
-          resumeExperienceNames,
-        })
-      ) {
-        throw new Error(
-          `Technology context "${technologyContext.name}" has an invalid example suffix. Every example must end with a dash suffix naming one of the user's resume companies/internships: ${resumeExperienceNames.join(", ")}. Do not use job-posting product, team, platform, project, or technology names.`,
-        );
-      }
-
-      if (!technologyExampleHasResultSignal(example)) {
-        throw new Error(
-          `Technology context "${technologyContext.name}" has a weak example bullet. Examples must be concise, FAANG-level bullet suggestions with the positive result in the same sentence.`,
-        );
-      }
-    }
-  }
 }
 
 function readResumeExperienceSectionLines(resumePlainText: string) {
@@ -1246,12 +1142,12 @@ function parseTailorResumeUserMarkdownEditOperations(
   }
 
   if (!Array.isArray(value)) {
-    throw new Error("The model returned invalid USER.md edit operations.");
+    return [];
   }
 
-  return value.map((entry) => {
+  return value.flatMap((entry) => {
     if (!entry || typeof entry !== "object") {
-      throw new Error("The model returned an invalid USER.md edit operation.");
+      return [];
     }
 
     const op = "op" in entry ? entry.op : null;
@@ -1263,7 +1159,7 @@ function parseTailorResumeUserMarkdownEditOperations(
       op !== "insert_before" &&
       op !== "replace_exact"
     ) {
-      throw new Error("The model returned an unsupported USER.md edit operation.");
+      return [];
     }
 
     const headingPath =
@@ -1273,7 +1169,7 @@ function parseTailorResumeUserMarkdownEditOperations(
             .filter(Boolean)
         : [];
 
-    return {
+    return [{
       anchorMarkdown:
         "anchorMarkdown" in entry && typeof entry.anchorMarkdown === "string"
           ? entry.anchorMarkdown
@@ -1292,7 +1188,7 @@ function parseTailorResumeUserMarkdownEditOperations(
           ? entry.oldMarkdown
           : "",
       op,
-    };
+    }];
   });
 }
 
@@ -1304,12 +1200,12 @@ function parseTailorResumeKeywordDecisions(
   }
 
   if (!Array.isArray(value)) {
-    throw new Error("The model returned invalid keyword decisions.");
+    return [];
   }
 
-  return value.map((entry) => {
+  return value.flatMap((entry) => {
     if (!entry || typeof entry !== "object") {
-      throw new Error("The model returned an invalid keyword decision.");
+      return [];
     }
 
     const name = "name" in entry ? readTrimmedString(entry.name) : "";
@@ -1320,14 +1216,14 @@ function parseTailorResumeKeywordDecisions(
     const reason = "reason" in entry ? readTrimmedString(entry.reason) : "";
 
     if (!name || !action || !reason) {
-      throw new Error("The model returned an incomplete keyword decision.");
+      return [];
     }
 
-    return {
+    return [{
       action,
       name,
       reason,
-    };
+    }];
   });
 }
 
@@ -1337,7 +1233,7 @@ function parseTailorResumeNonTechnologyTerms(value: unknown) {
   }
 
   if (!Array.isArray(value)) {
-    throw new Error("The model returned invalid non-technology terms.");
+    return [];
   }
 
   return normalizeTailorResumeNonTechnologyTerms(
@@ -1349,22 +1245,35 @@ function parseTailorResumeInterviewResponse(
   value: unknown,
   outputText: string,
 ): TailorResumeInterviewResponse {
+  const fallbackAskMessage =
+    outputText.trim() || "What else should I know before tailoring this resume?";
+
   if (!value || typeof value !== "object") {
-    throw new Error("The model did not return a valid interview response.");
+    return {
+      action: "ask",
+      assistantMessage: fallbackAskMessage,
+      completionMessage: "",
+      debugDecision: "not_applicable",
+      keywordDecisions: [],
+      learnings: [],
+      nonTechnologyTerms: [],
+      technologyContexts: [],
+      userMarkdownEditOperations: [],
+    };
   }
 
   const action =
     "action" in value &&
     (value.action === "ask" || value.action === "done" || value.action === "skip")
       ? value.action
-      : null;
+      : "ask";
   const debugDecision =
     "debugDecision" in value &&
     (value.debugDecision === "forced_only" ||
       value.debugDecision === "not_applicable" ||
       value.debugDecision === "would_ask_without_debug")
       ? value.debugDecision
-      : null;
+      : "not_applicable";
   const rawLearnings = "learnings" in value ? value.learnings : null;
   const keywordDecisions = parseTailorResumeKeywordDecisions(
     "keywordDecisions" in value ? value.keywordDecisions : undefined,
@@ -1381,53 +1290,60 @@ function parseTailorResumeInterviewResponse(
       : undefined,
   );
 
-  if (!action || !debugDecision || !Array.isArray(rawLearnings)) {
-    throw new Error("The model returned an incomplete interview response.");
-  }
-
   const parsedResponse: TailorResumeInterviewResponse = {
     action,
     assistantMessage:
       action === "ask"
-        ? readRecordString(value, "assistantMessage") || outputText
+        ? readRecordString(value, "assistantMessage") || fallbackAskMessage
         : "",
     completionMessage:
       action === "done"
-        ? readRecordString(value, "completionMessage") || outputText
+        ? readRecordString(value, "completionMessage") ||
+          outputText ||
+          "Thanks, I have enough context and will continue tailoring now."
         : "",
     debugDecision,
     keywordDecisions,
-    learnings: rawLearnings.map(parseTailoredResumeQuestionLearning),
+    learnings: Array.isArray(rawLearnings)
+      ? rawLearnings.flatMap((learning) => {
+          const parsedLearning = readTailoredResumeQuestionLearning(learning);
+
+          return parsedLearning ? [parsedLearning] : [];
+        })
+      : [],
     nonTechnologyTerms,
     technologyContexts: action === "ask" ? technologyContexts : [],
     userMarkdownEditOperations,
   };
 
-  if (parsedResponse.action === "ask") {
-    for (const technologyContext of parsedResponse.technologyContexts) {
-      if (
-        assistantMessageRepeatsTechnologyContext({
-          assistantMessage: parsedResponse.assistantMessage,
-          technologyContext,
-        })
-      ) {
-        throw new Error(
-          `Action "ask" must not repeat the rendered definition or example bullets for "${technologyContext.name}" in assistantMessage.`,
-        );
-      }
-    }
-  }
-
   return parsedResponse;
 }
 
-function parseToolCallArguments(toolCall: TailoredResumeFunctionToolCall) {
+function tryParseToolCallArguments(
+  toolCall: TailoredResumeFunctionToolCall | null | undefined,
+) {
+  if (!toolCall) {
+    return null;
+  }
+
   try {
     return JSON.parse(toolCall.arguments) as unknown;
   } catch {
-    throw new Error(
-      `The model called ${toolCall.name} with unreadable JSON arguments.`,
-    );
+    return null;
+  }
+}
+
+function tryParseJsonObject(value: string) {
+  if (!value.trim()) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
   }
 }
 
@@ -1435,54 +1351,36 @@ function parseTailorResumeTechnologyExamplesResponseFromModelOutput(
   response: TailoredResumeResponse,
 ) {
   const toolCalls = readFunctionToolCalls(response);
-
-  if (toolCalls.length !== 1) {
-    throw new Error("The model did not call exactly one examples tool.");
-  }
-
-  const toolCall = toolCalls[0]!;
-
-  if (toolCall.name !== "generate_tailor_resume_technology_examples") {
-    throw new Error(`The model called unknown examples tool ${toolCall.name}.`);
-  }
-
-  const value = parseToolCallArguments(toolCall);
-
-  if (!value || typeof value !== "object") {
-    throw new Error("The model returned invalid technology examples.");
-  }
+  const outputText = readOutputText(response);
+  const toolCall =
+    toolCalls.find(
+      (candidate) =>
+        candidate.name === "generate_tailor_resume_technology_examples",
+    ) ?? null;
+  const outputJson = tryParseJsonObject(outputText);
+  const value = tryParseToolCallArguments(toolCall) ?? outputJson;
 
   const assistantMessage =
-    "assistantMessage" in value
+    value && typeof value === "object" && "assistantMessage" in value
       ? readTrimmedString(value.assistantMessage)
       : "";
   const technologyContexts = parseTailorResumeTechnologyContexts(
-    "technologyContexts" in value ? value.technologyContexts : undefined,
+    value && typeof value === "object" && "technologyContexts" in value
+      ? value.technologyContexts
+      : undefined,
   );
-
-  if (!assistantMessage || technologyContexts.length === 0) {
-    throw new Error("The model returned incomplete technology examples.");
-  }
-
-  for (const technologyContext of technologyContexts) {
-    if (
-      assistantMessageRepeatsTechnologyContext({
-        assistantMessage,
-        technologyContext,
-      })
-    ) {
-      throw new Error(
-        `Examples assistantMessage must not repeat the rendered definition or example bullets for "${technologyContext.name}".`,
-      );
-    }
-  }
 
   return {
     response: {
-      assistantMessage,
+      assistantMessage: assistantMessage || (outputJson ? "" : outputText),
       technologyContexts,
     },
-    toolCalls: toolCalls.map(serializeTailorResumeConversationToolCall),
+    toolCalls: toolCalls
+      .filter(
+        (candidate) =>
+          candidate.name === "generate_tailor_resume_technology_examples",
+      )
+      .map(serializeTailorResumeConversationToolCall),
   };
 }
 
@@ -1531,20 +1429,41 @@ export function parseTailorResumeInterviewResponseFromModelOutput(
 ): ParsedTailorResumeInterviewModelOutput {
   const toolCalls = readFunctionToolCalls(response);
   const outputText = readOutputText(response);
+  const knownToolNames = new Set([
+    "initiate_tailor_resume_probing_questions",
+    "finish_tailor_resume_interview",
+    "skip_tailor_resume_interview",
+    "update_tailor_resume_non_technologies",
+  ]);
+  const toolCall =
+    toolCalls.find((candidate) => knownToolNames.has(candidate.name)) ?? null;
+  const outputJson = tryParseJsonObject(outputText);
+  const argumentsJson = tryParseToolCallArguments(toolCall) ?? outputJson;
+  const visibleOutputText = outputJson ? "" : outputText;
+  const conversationToolCalls = toolCall
+    ? [serializeTailorResumeConversationToolCall(toolCall)]
+    : [];
 
-  if (toolCalls.length !== 1) {
-    throw new Error(
-      outputText
-        ? "The model returned text instead of exactly one interview tool call."
-        : "The model did not call exactly one interview tool.",
-    );
+  if (!toolCall) {
+    return {
+      response: parseTailorResumeInterviewResponse(
+        {
+          ...(argumentsJson && typeof argumentsJson === "object"
+            ? argumentsJson
+            : {}),
+          action:
+            argumentsJson &&
+            typeof argumentsJson === "object" &&
+            "action" in argumentsJson
+              ? argumentsJson.action
+              : "ask",
+          debugDecision: "not_applicable",
+        },
+        visibleOutputText,
+      ),
+      toolCalls: conversationToolCalls,
+    };
   }
-
-  const toolCall = toolCalls[0]!;
-  const argumentsJson = parseToolCallArguments(toolCall);
-  const conversationToolCalls = [
-    serializeTailorResumeConversationToolCall(toolCall),
-  ];
 
   if (toolCall.name === "initiate_tailor_resume_probing_questions") {
     return {
@@ -1558,7 +1477,7 @@ export function parseTailorResumeInterviewResponseFromModelOutput(
         learnings: [],
         nonTechnologyTerms: [],
         userMarkdownEditOperations: [],
-      }, outputText),
+      }, visibleOutputText),
       toolCalls: conversationToolCalls,
     };
   }
@@ -1573,18 +1492,12 @@ export function parseTailorResumeInterviewResponseFromModelOutput(
         debugDecision: "not_applicable",
         keywordDecisions: [],
         nonTechnologyTerms: [],
-      }, outputText),
+      }, visibleOutputText),
       toolCalls: conversationToolCalls,
     };
   }
 
   if (toolCall.name === "skip_tailor_resume_interview") {
-    if (outputText) {
-      throw new Error(
-        "skip_tailor_resume_interview must not return user-facing assistant text.",
-      );
-    }
-
     return {
       response: {
         action: "skip",
@@ -1611,12 +1524,21 @@ export function parseTailorResumeInterviewResponseFromModelOutput(
         debugDecision: "not_applicable",
         learnings: [],
         userMarkdownEditOperations: [],
-      }, outputText),
+      }, visibleOutputText),
       toolCalls: conversationToolCalls,
     };
   }
 
-  throw new Error(`The model called unknown interview tool ${toolCall.name}.`);
+  return {
+    response: parseTailorResumeInterviewResponse(
+      {
+        action: "ask",
+        debugDecision: "not_applicable",
+      },
+      visibleOutputText,
+    ),
+    toolCalls: conversationToolCalls,
+  };
 }
 
 function serializePlannedBlocks(input: {
@@ -1781,15 +1703,6 @@ export function findAskWorthyMissingTailorResumeQuestionTerms(
   return context.terms
     .filter(isAskWorthyMissingTechnologyTerm)
     .map((term) => term.name);
-}
-
-function buildMissingTechnologySkipRejectionFeedback(terms: string[]) {
-  return [
-    "Do not skip the first Step 2 interview turn.",
-    `The deterministic keyword presence context says these important resume-searchable keywords are missing from both the original resume and USER.md: ${terms.join(", ")}.`,
-    "Ask one grouped question using initiate_tailor_resume_probing_questions. Keep assistantMessage short: list the missing skills and ask whether any match the user's experience. Put each technology's definition and example resume bullets in technologyContexts, not in assistantMessage. Use two examples by default.",
-    'Good assistantMessage shape: "Not mentioned in your resume or USER.md: Go, Cassandra, Spark.\\n\\nOpen any keyword below for a quick definition and two possible resume bullets. Do any of these match your experience? If so, which ones and where?"',
-  ].join("\n");
 }
 
 function getFallbackTechnologyDefinition(term: string) {
@@ -2169,7 +2082,7 @@ function buildTailorResumeTechnologyExamplesOpeningInstructions() {
   ].join("\n");
 }
 
-function buildTailorResumeTechnologyExamplesInstructions(feedback = "") {
+function buildTailorResumeTechnologyExamplesInstructions() {
   return [
     "You generate concise Step 2 resume-question examples for a browser extension.",
     "Call generate_tailor_resume_technology_examples exactly once.",
@@ -2181,7 +2094,6 @@ function buildTailorResumeTechnologyExamplesInstructions(feedback = "") {
     "The suffix says where the hypothetical bullet would go. Never use job-posting product, team, platform, project, technical-category, or technology names as suffixes.",
     "If relevance is uncertain, choose the closest resume company/internship anyway instead of inventing a product or project suffix.",
     "Do not invent that the user has this experience; these are examples for the user to accept or reject.",
-    feedback ? `Previous invalid response feedback:\n${feedback}` : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -2189,47 +2101,14 @@ function buildTailorResumeTechnologyExamplesInstructions(feedback = "") {
 
 function buildTailorResumeInterviewInstructions(input: {
   debugForceConversation?: boolean;
-  feedback?: string;
   promptSettings?: SystemPromptSettings;
 }) {
   return buildTailorResumeInterviewSystemPrompt(
     input.promptSettings ?? createDefaultSystemPromptSettings(),
     {
       debugForceConversation: input.debugForceConversation,
-      feedback: input.feedback,
     },
   );
-}
-
-function normalizeRenderedInterviewTextForComparison(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/[`*_#[\](){}>"']/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function assistantMessageRepeatsTechnologyContext(input: {
-  assistantMessage: string;
-  technologyContext: TailorResumeTechnologyContext;
-}) {
-  const assistantText = normalizeRenderedInterviewTextForComparison(
-    input.assistantMessage,
-  );
-  const copiedText = [
-    input.technologyContext.definition,
-    ...input.technologyContext.examples,
-  ].find((cardText) => {
-    const normalizedCardText =
-      normalizeRenderedInterviewTextForComparison(cardText);
-
-    return (
-      normalizedCardText.length > 24 &&
-      assistantText.includes(normalizedCardText)
-    );
-  });
-
-  return Boolean(copiedText);
 }
 
 function latestUserMessageRequestsAssistantReply(
@@ -2438,15 +2317,16 @@ function deriveTailorResumeQuestioningAgenda(input: {
   return firstTopic ?? input.previousSummary?.agenda ?? assistantTopic;
 }
 
-function validateTailorResumeInterviewResponse(input: {
+function normalizeTailorResumeInterviewResponse(input: {
   conversation: TailorResumeConversationMessage[];
-  debugForceConversation: boolean;
   emphasizedTechnologyNames: string[];
   plannedSegmentIds: Set<string>;
   previousSummary: TailoredResumeQuestioningSummary | null;
   response: TailorResumeInterviewResponse;
   resumeExperienceNames?: string[];
 }) {
+  void input.resumeExperienceNames;
+
   for (const learning of input.response.learnings) {
     const seenSegmentIds = new Set<string>();
     const validTargetSegmentIds: string[] = [];
@@ -2467,55 +2347,36 @@ function validateTailorResumeInterviewResponse(input: {
     learning.targetSegmentIds = validTargetSegmentIds;
   }
 
-  if (input.previousSummary) {
-  } else if (input.response.action === "done") {
-    throw new Error(
-      "The model called finish_tailor_resume_interview before the interview started. Use skip_tailor_resume_interview when no first question is needed.",
-    );
-  }
-
   if (
-    input.debugForceConversation &&
     !input.previousSummary &&
-    input.response.action !== "ask"
+    input.response.action === "done" &&
+    input.response.userMarkdownEditOperations.length === 0 &&
+    input.response.learnings.length === 0
   ) {
-    throw new Error(
-      "Debug mode requires at least one follow-up question on the first interview turn.",
-    );
+    input.response.action = "skip";
+    input.response.completionMessage = "";
   }
 
   if (input.response.action === "skip") {
     if (input.previousSummary) {
-      throw new Error(
-        'The model cannot return action "skip" after the interview has already started.',
-      );
+      input.response.action = "done";
+      input.response.completionMessage =
+        input.response.completionMessage ||
+        input.response.assistantMessage ||
+        "Thanks, I have enough context and will continue tailoring now.";
     }
 
-    if (input.response.assistantMessage) {
-      throw new Error('Action "skip" must not return assistantMessage.');
-    }
+    if (input.response.action === "skip") {
+      input.response.assistantMessage = "";
+      input.response.completionMessage = "";
+      input.response.debugDecision = "not_applicable";
+      input.response.keywordDecisions = [];
+      input.response.nonTechnologyTerms = [];
+      input.response.technologyContexts = [];
+      input.response.userMarkdownEditOperations = [];
 
-    if (input.response.completionMessage) {
-      throw new Error('Action "skip" must not return completionMessage.');
+      return;
     }
-
-    if (input.response.debugDecision !== "not_applicable") {
-      throw new Error('Action "skip" must use debugDecision "not_applicable".');
-    }
-
-    if (input.response.userMarkdownEditOperations.length > 0) {
-      throw new Error('Action "skip" must not edit USER.md.');
-    }
-
-    if (input.response.keywordDecisions.length > 0) {
-      throw new Error('Action "skip" must not change emphasized keywords.');
-    }
-
-    if (input.response.nonTechnologyTerms.length > 0) {
-      throw new Error('Action "skip" must not update non-technology terms.');
-    }
-
-    return;
   }
 
   const knownTechnologyNames = new Set(
@@ -2542,62 +2403,51 @@ function validateTailorResumeInterviewResponse(input: {
   );
 
   if (input.response.action === "ask" && !input.response.assistantMessage) {
-    throw new Error('Action "ask" must return user-facing assistant text.');
+    input.response.assistantMessage =
+      "What else should I know before tailoring this resume?";
   }
 
   if (
     input.response.action === "ask" &&
     input.response.assistantMessage.split(/\s+/).filter(Boolean).length > 650
   ) {
-    throw new Error(
-      'Action "ask" must keep the user-facing message skimmable and under 650 words.',
-    );
+    input.response.assistantMessage = input.response.assistantMessage
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 650)
+      .join(" ");
   }
 
   if (input.response.action === "ask" && input.response.completionMessage) {
-    throw new Error('Action "ask" must not return completionMessage.');
+    input.response.completionMessage = "";
   }
 
   if (input.response.action === "ask") {
     if (
       tailorResumeAskMessageRequestsUserMarkdownPermission(
         input.response.assistantMessage,
-      )
+      ) &&
+      input.response.userMarkdownEditOperations.length > 0
     ) {
-      throw new Error(
-        "Do not ask the user for permission to update USER.md. Step 2 exists to save durable memory from the user's answer. Call finish_tailor_resume_interview with USER.md edit operations now.",
-      );
+      input.response.action = "done";
+      input.response.completionMessage =
+        input.response.assistantMessage ||
+        "Thanks, I have enough context and will continue tailoring now.";
+      input.response.assistantMessage = "";
+      input.response.technologyContexts = [];
     }
 
-    if (latestUserMessageRequestsInterviewEnd(input.conversation)) {
-      throw new Error(
-        "The user asked to proceed or finish. Do not ask another confirmation question; call finish_tailor_resume_interview with USER.md edit operations now.",
-      );
-    }
-
-    if (isNonQuestionAskMessage(input.response.assistantMessage)) {
-      throw new Error(
-        'Action "ask" must ask the user a real follow-up question. Use skip_tailor_resume_interview when no question is needed.',
-      );
-    }
-
-    validateTailorResumeTechnologyContexts({
-      emphasizedTechnologyNames: input.emphasizedTechnologyNames,
-      resumeExperienceNames: input.resumeExperienceNames,
-      technologyContexts: input.response.technologyContexts,
-    });
-
-    for (const technologyContext of input.response.technologyContexts) {
-      if (
-        assistantMessageRepeatsTechnologyContext({
-          assistantMessage: input.response.assistantMessage,
-          technologyContext,
-        })
-      ) {
-        throw new Error(
-          `Action "ask" must not repeat the rendered definition or example bullets for "${technologyContext.name}" in assistantMessage. Keep assistantMessage to the concise question because technologyContexts are already shown as visible cards.`,
-        );
-      }
+    if (
+      input.response.action === "ask" &&
+      (latestUserMessageRequestsInterviewEnd(input.conversation) ||
+        isNonQuestionAskMessage(input.response.assistantMessage))
+    ) {
+      input.response.action = "done";
+      input.response.completionMessage =
+        input.response.assistantMessage ||
+        "Thanks, I have enough context and will continue tailoring now.";
+      input.response.assistantMessage = "";
+      input.response.technologyContexts = [];
     }
   }
 
@@ -2605,11 +2455,7 @@ function validateTailorResumeInterviewResponse(input: {
     input.response.action === "ask" &&
     input.response.userMarkdownEditOperations.length > 0
   ) {
-    if (!input.previousSummary) {
-      throw new Error(
-        'The first action "ask" turn must not edit USER.md before the user answers.',
-      );
-    }
+    input.response.userMarkdownEditOperations = [];
   }
 
   if (
@@ -2617,54 +2463,23 @@ function validateTailorResumeInterviewResponse(input: {
     !input.previousSummary &&
     input.response.keywordDecisions.length > 0
   ) {
-    throw new Error(
-      'The first action "ask" turn must not remove or confirm keywords before the user answers.',
-    );
+    input.response.keywordDecisions = [];
   }
 
   if (input.response.action === "done" && !input.response.completionMessage) {
-    throw new Error('Action "done" must return completionMessage.');
+    input.response.completionMessage =
+      "Thanks, I have enough context and will continue tailoring now.";
   }
 
   if (input.response.action === "done" && input.response.assistantMessage) {
-    throw new Error('Action "done" must not return ask-stage assistant text.');
-  }
-
-  if (
-    input.response.action === "done" &&
-    latestUserMessageRequestsAssistantReply(input.conversation) &&
-    !latestUserMessageRequestsInterviewEnd(input.conversation)
-  ) {
-    throw new Error(
-      "The latest user answer asks for an assistant reply. Use initiate_tailor_resume_probing_questions, answer in assistant text, and include one confirmation or correction question instead of ending the interview.",
-    );
+    input.response.completionMessage =
+      input.response.completionMessage || input.response.assistantMessage;
+    input.response.assistantMessage = "";
   }
 
   if (input.response.debugDecision !== "not_applicable") {
-    throw new Error(
-      `Action "${input.response.action}" must use debugDecision "not_applicable".`,
-    );
+    input.response.debugDecision = "not_applicable";
   }
-
-}
-
-function buildUserMarkdownPatchFailureFeedback(
-  result: Extract<TailorResumeUserMarkdownPatchResult, { ok: false }>,
-) {
-  return [
-    "Your USER.md edit operations could not be applied.",
-    "The current USER.md is included again in the input. Retry with exact text from that document, use append if an exact restructure is unnecessary, and do not include placeholder text.",
-    "",
-    "Patch result:",
-    JSON.stringify(
-      {
-        ok: result.ok,
-        results: result.results,
-      },
-      null,
-      2,
-    ),
-  ].join("\n");
 }
 
 export async function advanceTailorResumeQuestioning(input: {
@@ -2708,10 +2523,8 @@ export async function advanceTailorResumeQuestioning(input: {
   );
   const askWorthyMissingTerms =
     findAskWorthyMissingTailorResumeQuestionTerms(keywordPresenceContext);
-  let feedback = "";
-  let lastError = "Unable to decide whether resume follow-up questions are needed.";
 
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
+  for (let attempt = 1; attempt <= 1; attempt += 1) {
     const interviewInput = buildTailorResumeInterviewInput({
       conversation: input.conversation,
       jobDescription: input.jobDescription,
@@ -2723,7 +2536,6 @@ export async function advanceTailorResumeQuestioning(input: {
     });
     const instructions = buildTailorResumeInterviewInstructions({
       debugForceConversation,
-      feedback,
       promptSettings: input.promptSettings,
     });
     const response = await runWithTransientModelRetries({
@@ -2781,72 +2593,62 @@ export async function advanceTailorResumeQuestioning(input: {
     let parsedResponse: TailorResumeInterviewResponse;
     let parsedToolCalls: TailorResumeConversationToolCall[] = [];
 
-    try {
-      const parsedModelOutput =
-        parseTailorResumeInterviewResponseFromModelOutput(response);
-      parsedResponse = normalizeTailorResumeInterviewResponseForCurrentTurn({
-        conversation: input.conversation,
-        emphasizedTechnologyNames:
-          input.planningResult.emphasizedTechnologies.map(
-            (technology) => technology.name,
-          ),
-        previousSummary,
-        response: parsedModelOutput.response,
-      });
-      parsedToolCalls = parsedModelOutput.toolCalls;
-      validateTailorResumeInterviewResponse({
-        conversation: input.conversation,
-        debugForceConversation,
-        emphasizedTechnologyNames: input.planningResult.emphasizedTechnologies.map(
+    const parsedModelOutput =
+      parseTailorResumeInterviewResponseFromModelOutput(response);
+    parsedResponse = normalizeTailorResumeInterviewResponseForCurrentTurn({
+      conversation: input.conversation,
+      emphasizedTechnologyNames:
+        input.planningResult.emphasizedTechnologies.map(
           (technology) => technology.name,
         ),
-        plannedSegmentIds,
-        previousSummary,
-        response: parsedResponse,
-        resumeExperienceNames,
-      });
-    } catch (error) {
-      lastError =
-        error instanceof Error
-          ? error.message
-          : "The model returned an invalid interview response.";
-      await input.onStepEvent?.({
-        attempt,
-        detail: lastError,
-        durationMs: Math.max(0, Date.now() - startedAt),
-        emphasizedTechnologies: input.planningResult.emphasizedTechnologies,
-        retrying: attempt < 2,
-        status: "failed",
-        stepCount: 5,
-        stepNumber: 2,
-        summary: "Continuing the follow-up questions",
-      });
-      feedback =
-        `${lastError}\nCall exactly one valid interview tool. Use initiate_tailor_resume_probing_questions only for a real missing-detail question and optional technologyContexts cards. If you return example bullets, end every example with a dash suffix naming one of the resume companies/internships from the input; do not use job-posting product, team, platform, project, or technology names as suffixes. If the user supplied a paragraph, quoted bullets, no-experience notes, or skills-only constraints, do not ask permission to update USER.md; call finish_tailor_resume_interview with USER.md edit operations now. Use update_tailor_resume_non_technologies only for rejected keyword removals. Do not repeat technologyContexts definitions or examples in assistantMessage or normal assistant text. Keep the interview short and focused, group first-turn technology questions together, and call finish_tailor_resume_interview as soon as enough durable context is captured or the user asks to end.`;
-      continue;
-    }
+      previousSummary,
+      response: parsedModelOutput.response,
+    });
+    parsedToolCalls = parsedModelOutput.toolCalls;
+    normalizeTailorResumeInterviewResponse({
+      conversation: input.conversation,
+      emphasizedTechnologyNames: input.planningResult.emphasizedTechnologies.map(
+        (technology) => technology.name,
+      ),
+      plannedSegmentIds,
+      previousSummary,
+      response: parsedResponse,
+      resumeExperienceNames,
+    });
 
     if (
       input.conversation.length === 0 &&
       parsedResponse.action === "skip" &&
       askWorthyMissingTerms.length > 0
     ) {
-      lastError = buildMissingTechnologySkipRejectionFeedback(
-        askWorthyMissingTerms,
-      );
-      await input.onStepEvent?.({
-        attempt,
-        detail: lastError,
-        durationMs: Math.max(0, Date.now() - startedAt),
-        emphasizedTechnologies: input.planningResult.emphasizedTechnologies,
-        retrying: attempt < 2,
-        status: "failed",
-        stepCount: 5,
-        stepNumber: 2,
-        summary: "Continuing the follow-up questions",
-      });
-      feedback = lastError;
-      continue;
+      parsedResponse = {
+        action: "ask",
+        assistantMessage:
+          buildFallbackTailorResumeProbeQuestion(askWorthyMissingTerms),
+        completionMessage: "",
+        debugDecision: "not_applicable",
+        keywordDecisions: [],
+        learnings: [],
+        nonTechnologyTerms: [],
+        technologyContexts: buildFallbackTechnologyContexts(
+          askWorthyMissingTerms,
+          resumeExperienceNames,
+        ),
+        userMarkdownEditOperations: [],
+      };
+      parsedToolCalls = [
+        {
+          argumentsText: JSON.stringify(
+            {
+              assistantMessage: parsedResponse.assistantMessage,
+              technologyContexts: parsedResponse.technologyContexts,
+            },
+            null,
+            2,
+          ),
+          name: "initiate_tailor_resume_probing_questions",
+        },
+      ];
     }
 
     let userMarkdownPatchResult: TailorResumeUserMarkdownPatchResult | null = null;
@@ -2858,44 +2660,9 @@ export async function advanceTailorResumeQuestioning(input: {
       );
 
       if (!userMarkdownPatchResult.ok) {
-        lastError = "The USER.md edit operations could not be applied.";
-        await input.onStepEvent?.({
-          attempt,
-          detail: lastError,
-          durationMs: Math.max(0, Date.now() - startedAt),
-          emphasizedTechnologies: input.planningResult.emphasizedTechnologies,
-          retrying: attempt < 2,
-          status: "failed",
-          stepCount: 5,
-          stepNumber: 2,
-          summary: "Continuing the follow-up questions",
-        });
-        feedback = buildUserMarkdownPatchFailureFeedback(userMarkdownPatchResult);
-        continue;
+        userMarkdownPatchResult = null;
+        parsedResponse.userMarkdownEditOperations = [];
       }
-    }
-
-    if (
-      parsedResponse.action === "done" &&
-      (!userMarkdownPatchResult || !userMarkdownPatchResult.changed) &&
-      parsedResponse.nonTechnologyTerms.length === 0
-    ) {
-      lastError =
-        "finish_tailor_resume_interview must save USER.md changes before Step 2 can end.";
-      await input.onStepEvent?.({
-        attempt,
-        detail: lastError,
-        durationMs: Math.max(0, Date.now() - startedAt),
-        emphasizedTechnologies: input.planningResult.emphasizedTechnologies,
-        retrying: attempt < 2,
-        status: "failed",
-        stepCount: 5,
-        stepNumber: 2,
-        summary: "Continuing the follow-up questions",
-      });
-      feedback =
-        `${lastError}\nUse append operations to record every durable fact from the user's latest answer under technology-specific USER.md headings, then call finish_tailor_resume_interview. Do not finish with an empty userMarkdownEditOperations array when the user supplied experience, no-experience, or skills-only facts.`;
-      continue;
     }
 
     const nextEmphasizedTechnologies =
@@ -2907,11 +2674,15 @@ export async function advanceTailorResumeQuestioning(input: {
 
     if (parsedResponse.action === "skip") {
       return {
-        action: "skip",
+        action: "done",
+        completionMessage:
+          "Thanks, I have enough context and will continue tailoring now.",
         emphasizedTechnologies: nextEmphasizedTechnologies,
         generationDurationMs: Math.max(0, Date.now() - startedAt),
         nonTechnologyTerms: parsedResponse.nonTechnologyTerms,
         questioningSummary: null,
+        toolCalls: parsedToolCalls,
+        userMarkdownEditOperations: [],
         userMarkdownPatchResult,
       };
     }
@@ -2961,40 +2732,15 @@ export async function advanceTailorResumeQuestioning(input: {
     };
   }
 
-  if (input.conversation.length === 0 && askWorthyMissingTerms.length > 0) {
-    const assistantMessage =
-      buildFallbackTailorResumeProbeQuestion(askWorthyMissingTerms);
-    const technologyContexts =
-      buildFallbackTechnologyContexts(askWorthyMissingTerms, resumeExperienceNames);
-    const fallbackToolCallArguments = {
-      assistantMessage,
-      technologyContexts,
-    };
-
-    return {
-      action: "ask",
-      assistantMessage,
-      emphasizedTechnologies: input.planningResult.emphasizedTechnologies,
-      generationDurationMs: Math.max(0, Date.now() - startedAt),
-      nonTechnologyTerms: [],
-      questioningSummary: {
-        agenda: `Ask whether the user has experience with ${askWorthyMissingTerms
-          .slice(0, 6)
-          .join(", ")} before writing final edits.`,
-        askedQuestionCount: 1,
-        debugDecision: null,
-        learnings: [],
-      },
-      technologyContexts,
-      toolCalls: [
-        {
-          argumentsText: JSON.stringify(fallbackToolCallArguments, null, 2),
-          name: "initiate_tailor_resume_probing_questions",
-        },
-      ],
-      userMarkdownPatchResult: null,
-    };
-  }
-
-  throw new Error(lastError);
+  return {
+    action: "done",
+    completionMessage: "Thanks, I have enough context and will continue tailoring now.",
+    emphasizedTechnologies: input.planningResult.emphasizedTechnologies,
+    generationDurationMs: Math.max(0, Date.now() - startedAt),
+    nonTechnologyTerms: [],
+    questioningSummary: previousSummary,
+    toolCalls: [],
+    userMarkdownEditOperations: [],
+    userMarkdownPatchResult: null,
+  };
 }

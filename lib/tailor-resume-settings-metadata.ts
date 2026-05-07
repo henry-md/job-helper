@@ -26,7 +26,7 @@ export const tailorResumePromptFieldDefinitions = [
   {
     description:
       "Optional Step 2 AI-led follow-up questions before tailoring planning.",
-    helper: "Runtime tokens: {{FEEDBACK_BLOCK}}.",
+    helper: "Runtime tokens: none.",
     key: "tailorResumeInterview",
     minHeightClassName: "min-h-[320px]",
     title: "Tailoring Follow-Up Interview",

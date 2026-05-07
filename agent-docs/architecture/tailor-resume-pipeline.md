@@ -19,9 +19,10 @@ Step 2. Clarify missing details
 - Clicking `Start chat` re-reads the latest `USER.md`. If no uncovered keywords remain, the run skips Step 2 and starts planning. If uncovered keywords remain, the server persists a hard-coded first assistant message with `technologyContexts` cards but no examples and no OpenAI call.
 - The hard-coded first message asks whether examples should be generated. Clicking the small `Generate` action sends the first true Step 2 LLM request, which should answer with compact `technologyContexts` cards containing definitions and two example resume bullets per technology by default. If the user asks for more examples for a technology, keep using the card and return the requested count, up to the tool limit.
 - Questions should skip vague, generic, product-only, or low-signal terms such as "internet terminology"; low-priority terms should join only when they are concrete and share an obvious likely insertion point with stronger terms.
+- Step 2 chat responses are never invalidated for content quality, schema shape, duplicated text, weak examples, missing USER.md edits, failed markdown patch application, or awkward tool choice. Coerce what can be coerced, preserve what the model said, and let the user correct bad content in chat. Only OpenAI request/API failures may surface as Step 2 errors.
 - Step 2 no longer auto-generates follow-up chats after Step 1. Runs with uncovered keywords store a `pending` interview marker and show a `Start chat` action; only that click reads the latest `USER.md`, so parallel runs can benefit from edits made by earlier chats.
 - Step 2 interview tools deliberately separate display from mutation. `initiate_tailor_resume_probing_questions` is presentation-only (`assistantMessage` plus optional `technologyContexts` cards). `finish_tailor_resume_interview` is the only Step 2 tool that writes `USER.md` and ends the chat so the run can continue. `update_tailor_resume_non_technologies` is the only tool that removes rejected scraped keywords or persists non-technology deny-list terms. `skip_tailor_resume_interview` only records why no chat is useful.
-- When the user's answer reveals durable context likely to matter later, `finish_tailor_resume_interview` should submit one end-of-chat `USER.md` markdown patch operation set. Normal additions should append under a chosen heading path; restructuring should use exact-match replace/insert/delete operations. Failed exact matches are fed back to the model for a retry instead of allowing full-document replacement.
+- When the user's answer reveals durable context likely to matter later, `finish_tailor_resume_interview` should submit one end-of-chat `USER.md` markdown patch operation set. Normal additions should append under a chosen heading path; restructuring may use exact-match replace/insert/delete operations, but patch misses must not invalidate or retry the Step 2 chat response.
 - `USER.md` technology notes should say, for each discussed technology, whether the user has no experience, whether it can be listed in skills without changing an experience bullet, or a quoted candidate experience bullet plus the experience/project name and skills-section category that can support it.
 
 Step 3. Generate plaintext targeted edit plan
@@ -54,7 +55,7 @@ Step 5. Condense edits to keep page size from growing
 Retry model:
 - Extraction can retry LaTeX generation when the first pass is invalid.
 - Step 1 keyword extraction can fall back to deterministic hints if model-assisted keyword extraction fails.
-- Step 2 question decisions can retry invalid interview tool outputs without starting the chat until a valid ask/skip decision exists.
+- Step 2 question and example outputs are soft: malformed or low-quality model content must be coerced or shown instead of failing the run. Do not add Step 2 chat-response invalidation or retry feedback loops; only OpenAI request/API failures may surface as errors.
 - Planning can retry independently if the structured plan is empty or malformed.
 - Block-scoped implementation retries stay local to the selected segments and compile validation.
 - Page-count compaction retries stay local to the edited blocks until the preview fits or the attempt budget is exhausted, and they use a Step-5-specific retry budget instead of borrowing the generic edit-stage retry count.
@@ -64,7 +65,7 @@ Failure logging:
 - Durable Tailor Resume debug logs are stored in the `LatexBuildFailure` table. The table name is historical; it now stores structured Tailor Resume debug payloads as well as compile failures.
 - Every failed step event from steps 1-5 writes a JSON payload through `logTailorResumeStepFailure`, with sources named `step-1-failure` through `step-5-failure`. The JSON payload is stored in the table's `latexCode` text field and includes the run id, application id, job URL, job-description snapshot, step number, attempt, retrying state, duration, and failure detail.
 - Terminal run failures also write a `step-N-failure` payload with `logKind: "terminal-run-status"` so backend errors that do not pass through a normal model retry path still persist.
-- Existing specialized debug artifacts remain in the same table: extraction compile failures, Step 2 chat-served errors, Step 4 invalid replacements, and tailoring compile failures.
+- Existing specialized debug artifacts remain in the same table: extraction compile failures, Step 2 OpenAI/API errors, Step 4 invalid replacements, and tailoring compile failures.
 - `/debug/errors` is the operator-facing view for these records. `TailorResumeRun` is only the latest run-status snapshot for the UI and should not be treated as the durable failure history.
 
 Relevant code paths:

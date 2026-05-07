@@ -107,7 +107,7 @@ Tailor Resume object model:
   - tailored-resume block refinement / regeneration
   - automatic page-count compaction when a tailored resume grows beyond the original resume's page count
 - The stored values are editable from `/dashboard?tab=settings`.
-- The prompt strings may include template tokens such as `{{FEEDBACK_BLOCK}}`, `{{RETRY_INSTRUCTIONS}}`, and `{{MAX_ATTEMPTS}}`; runtime code expands those tokens before sending the final instructions to OpenAI.
+- The prompt strings may include template tokens such as `{{FEEDBACK_BLOCK}}`, `{{RETRY_INSTRUCTIONS}}`, and `{{MAX_ATTEMPTS}}`; runtime code expands those tokens before sending the final instructions to OpenAI. Step 2 interview prompts intentionally do not use `{{FEEDBACK_BLOCK}}` because Step 2 chat responses are not invalidated or retried for content/schema quality.
 - Missing keys fall back to the shipped defaults so older saved profiles remain forward-compatible when new prompt-controlled flows are added.
 
 9. Generation Settings (`TailorResumeGenerationSettingsState`)
@@ -126,7 +126,7 @@ Tailor Resume object model:
 - The interview model can update the document with markdown patch operations:
   - `append` under a chosen heading path for ordinary new memory
   - `replace_exact`, `insert_before`, `insert_after`, and `delete_exact` for deliberate restructuring
-- Exact-match operations must match once; failures are returned as structured retry feedback. Full-document replacement is intentionally not part of the model-facing edit contract.
+- Exact-match operations are best-effort for Step 2 memory capture. If they miss, the Step 2 chat response is not invalidated or retried; future turns or the user can correct the memory. Full-document replacement is intentionally not part of the model-facing edit contract.
 
 Current flow:
 

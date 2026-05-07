@@ -106,7 +106,7 @@ function buildTailorResumeInterviewToolContractBlock() {
     "11. If userMarkdownEditOperations is non-empty, do not ask for a separate confirmation to save them. Save the durable facts now with finish_tailor_resume_interview.\n" +
     "12. USER.md edit operations are transactional markdown patches. Supported op values are append, replace_exact, insert_before, insert_after, and delete_exact.\n" +
     "13. For append, set headingPath to the section path you want and markdown to the exact markdown to add. The app will create missing headings. Leave oldMarkdown, newMarkdown, and anchorMarkdown empty strings.\n" +
-    "14. For replace_exact, set oldMarkdown and newMarkdown. For insert_before/insert_after, set anchorMarkdown and markdown. For delete_exact, set markdown. Exact-match operations must match exactly once or the app will feed back an error for retry.\n" +
+    "14. For replace_exact, set oldMarkdown and newMarkdown. For insert_before/insert_after, set anchorMarkdown and markdown. For delete_exact, set markdown. Prefer append unless you are certain the exact anchor text is present; patch misses are not a reason to invalidate the Step 2 chat response.\n" +
     "15. keywordDecisions lives on update_tailor_resume_non_technologies and is the deterministic place to remove emphasized keywords after the user rejects them. Use action \"remove\" only when the user explicitly says a keyword is not a real requirement keyword, is nonsense, or should not count for this role.\n" +
     "16. nonTechnologyTerms is a durable case-insensitive deny-list for future Step 1 keyword scraping. It is structured user memory stored alongside USER.md, not inside USER.md. The app displays those names as inline badges with a capital first letter, but you should pass only the exact rejected keyword names from the current emphasized list.\n" +
     "17. On later follow-up turns, return an empty technologyContexts array unless the user explicitly asks for more technology-specific example bullets. Do not regenerate example cards while saving an answer or finishing the chat.\n" +
@@ -531,17 +531,13 @@ export function buildTailorResumeInterviewSystemPrompt(
   settings: SystemPromptSettings,
   input: {
     debugForceConversation?: boolean;
-    feedback?: string;
   },
 ) {
   const prompt = renderSystemPromptTemplate(settings.tailorResumeInterview, {
     DEBUG_FORCE_BLOCK: buildTailorResumeInterviewDebugBlock({
       debugForceConversation: input.debugForceConversation === true,
     }),
-    FEEDBACK_BLOCK: buildFeedbackBlock(
-      "Previous interview feedback",
-      input.feedback,
-    ),
+    FEEDBACK_BLOCK: "",
   }).trim();
 
   return [
