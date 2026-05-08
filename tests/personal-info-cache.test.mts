@@ -21,6 +21,13 @@ function buildPersonalInfo() {
       pdfUpdatedAt: null,
       resumeUpdatedAt: null,
     },
+    skillData: {
+      keywordClassifications: [],
+      resumeExperiences: [],
+      skills: [],
+      spareBullets: [],
+      updatedAt: "",
+    },
     syncState: {
       applicationsVersion: 1,
       tailoringVersion: 2,

@@ -11,6 +11,7 @@ import {
 import { getPrismaClient } from "@/lib/prisma";
 import { buildActiveTailoringStates } from "@/lib/tailor-resume-existing-tailoring-state";
 import { readTailorResumeResponseState } from "@/lib/tailor-resume-route-response-state";
+import { readTailorResumeStoredSkillData } from "@/lib/tailor-resume-skill-store";
 import { readTailorResumeUserMemory } from "@/lib/tailor-resume-user-memory";
 import { readTailorResumeWorkspaceInterviews } from "@/lib/tailor-resume-workspace-interviews";
 import { readUserSyncStateSnapshotForUser } from "@/lib/user-sync-state";
@@ -112,6 +113,22 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       };
     }
   })();
+  const tailorResumeSkillData = await (async () => {
+    try {
+      return await readTailorResumeStoredSkillData({
+        sourceAnnotatedLatexCode: tailorResumeState.profile.annotatedLatex.code,
+        userId: session.user.id,
+      });
+    } catch {
+      return {
+        keywordClassifications: [],
+        resumeExperiences: [],
+        skills: [],
+        spareBullets: [],
+        updatedAt: new Date().toISOString(),
+      };
+    }
+  })();
   const initialSyncState = await readUserSyncStateSnapshotForUser(session.user.id);
 
   const testOpenAIResponseEnabled = ["true", "1", "yes"].includes(
@@ -148,6 +165,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             tailorResumeDebugUiEnabled={isTruthyEnvValue(process.env.DEBUG_UI)}
             tailorResumeOpenAIReady={openAIReady}
             tailorResumeProfile={tailorResumeState.profile}
+            tailorResumeSkillData={tailorResumeSkillData}
             tailorResumeUserMemory={tailorResumeUserMemory}
             initialReviewingTailoredResumeId={
               initialDashboardRouteState.tailoredResumeId
