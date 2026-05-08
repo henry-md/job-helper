@@ -26,7 +26,13 @@ type TailoredResumeBadgePayload = {
   tailoredResumeId?: string;
 };
 
+type KeywordClassificationKind =
+  | "narrative"
+  | "non_skill"
+  | "skills_section";
+
 type TailoredResumeEmphasizedTechnologyPayload = {
+  classification?: KeywordClassificationKind;
   evidence?: string;
   name?: string;
   priority?: "high" | "low";
@@ -71,6 +77,29 @@ type NormalizedKeywordCoverageBucket = {
   totalTermCount: number;
 };
 
+type KeywordClassificationOverride = {
+  kind: KeywordClassificationKind;
+  priority: "high" | "low" | null;
+};
+
+function normalizeKeywordClassificationKind(
+  value: unknown,
+): KeywordClassificationKind | null {
+  if (value === "skills_section" || value === "hard") {
+    return "skills_section";
+  }
+
+  if (value === "narrative" || value === "soft") {
+    return "narrative";
+  }
+
+  if (value === "non_skill") {
+    return "non_skill";
+  }
+
+  return null;
+}
+
 const emphasizedTechnologyBadgeRootId =
   "job-helper-emphasized-technologies-badge";
 const pagePromptStyleId = "job-helper-page-prompt-styles";
@@ -80,6 +109,11 @@ const pagePromptWidth = "min(420px, calc(100vw - 32px))";
 let overlayTimeoutId: number | null = null;
 let lastShortcutAt = 0;
 const dismissedKeywordBadgeKeys = new Set<string>();
+let keywordClassificationSaveQueue: Promise<unknown> = Promise.resolve();
+const keywordClassificationOverridesByScope = new Map<
+  string,
+  Map<string, KeywordClassificationOverride>
+>();
 let lastShownKeywordBadgePayload: {
   badgeKey: string;
   payload: TailoredResumeBadgePayload;
@@ -150,6 +184,63 @@ function resolveKeywordBadgeDismissalKey(
   );
 }
 
+function rememberKeywordClassificationOverride(input: {
+  badgeKey: string;
+  kind: KeywordClassificationKind;
+  name: string;
+  payload: TailoredResumeBadgePayload;
+  priority?: "high" | "low" | null;
+}) {
+  const scope = resolveKeywordBadgeDismissalKey(input.payload, input.badgeKey);
+  const normalizedName = normalizeNonTechnologyTerm(input.name);
+
+  if (!scope || !normalizedName) {
+    return;
+  }
+
+  const scopeOverrides =
+    keywordClassificationOverridesByScope.get(scope) ?? new Map();
+  scopeOverrides.set(normalizedName, {
+    kind: input.kind,
+    priority:
+      input.kind === "non_skill" || !input.priority ? null : input.priority,
+  });
+  keywordClassificationOverridesByScope.set(scope, scopeOverrides);
+}
+
+function applyKeywordClassificationOverrides(
+  payload: TailoredResumeBadgePayload,
+  badgeKey: string,
+) {
+  const scope = resolveKeywordBadgeDismissalKey(payload, badgeKey);
+  const scopeOverrides = keywordClassificationOverridesByScope.get(scope);
+
+  if (!scopeOverrides || scopeOverrides.size === 0) {
+    return;
+  }
+
+  payload.emphasizedTechnologies = (payload.emphasizedTechnologies ?? []).map(
+    (technology) => {
+      const override = scopeOverrides.get(
+        normalizeNonTechnologyTerm(technology.name),
+      );
+
+      if (!override) {
+        return technology;
+      }
+
+      return {
+        ...technology,
+        classification: override.kind,
+        priority:
+          override.kind === "non_skill" || !override.priority
+            ? technology.priority
+            : override.priority,
+      };
+    },
+  );
+}
+
 async function rememberDismissedKeywordBadgeKey(dismissalKey: string) {
   dismissedKeywordBadgeKeys.add(dismissalKey);
 
@@ -170,6 +261,41 @@ async function rememberDismissedKeywordBadgeKey(dismissalKey: string) {
   } catch {
     // Dismissal still works in-memory for this session even if storage fails.
   }
+}
+
+function enqueueKeywordClassificationSave(payload: {
+  kind: KeywordClassificationKind;
+  name: string;
+  priority: "high" | "low" | null;
+}) {
+  keywordClassificationSaveQueue = keywordClassificationSaveQueue
+    .catch(() => undefined)
+    .then(() =>
+      chrome.runtime.sendMessage({
+        payload,
+        type: "JOB_HELPER_SAVE_KEYWORD_CLASSIFICATION",
+      }),
+    )
+    .then((response) => {
+      const result =
+        typeof response === "object" && response !== null
+          ? (response as { error?: string; ok?: boolean })
+          : null;
+
+      if (result && result.ok === false) {
+        throw new Error(result.error || "Could not save keyword classification.");
+      }
+
+      return response;
+    })
+    .catch((error) => {
+      console.warn(
+        "Job Helper could not save the keyword classification.",
+        error,
+      );
+    });
+
+  return keywordClassificationSaveQueue;
 }
 
 function cleanText(value: string | null | undefined, maxLength = 0) {
@@ -989,6 +1115,9 @@ function normalizeEmphasizedTechnologies(
 
     seen.add(dedupeKey);
     technologies.push({
+      classification:
+        normalizeKeywordClassificationKind(item.classification) ??
+        "skills_section",
       evidence: cleanText(item.evidence, 180),
       name,
       priority,
@@ -1068,75 +1197,265 @@ function createPromptCloseButton(label: string) {
   return closeButton;
 }
 
-function appendTechnologyGroup(
+function updateBadgePayloadKeywordClassification(input: {
+  kind: KeywordClassificationKind;
+  name: string;
+  payload: TailoredResumeBadgePayload;
+  priority?: "high" | "low" | null;
+}) {
+  const normalizedName = normalizeNonTechnologyTerm(input.name);
+
+  input.payload.emphasizedTechnologies = (
+    input.payload.emphasizedTechnologies ?? []
+  ).map((technology) =>
+      normalizeNonTechnologyTerm(technology.name) === normalizedName
+        ? {
+            ...technology,
+            classification: input.kind,
+            priority:
+              input.kind === "non_skill" || !input.priority
+                ? technology.priority
+                : input.priority,
+          }
+        : technology,
+  );
+}
+
+function appendDraggableKeywordMatrix(
   container: HTMLElement,
-  label: string,
+  payload: TailoredResumeBadgePayload,
+  badgeKey: string,
   technologies: Required<TailoredResumeEmphasizedTechnologyPayload>[],
 ) {
-  if (technologies.length === 0) {
-    return;
-  }
+  const buckets = [
+    {
+      id: "high:skills_section",
+      label: "High skills-section",
+      priority: "high",
+      kind: "skills_section",
+    },
+    {
+      id: "high:narrative",
+      label: "High narrative",
+      priority: "high",
+      kind: "narrative",
+    },
+    {
+      id: "low:skills_section",
+      label: "Low skills-section",
+      priority: "low",
+      kind: "skills_section",
+    },
+    {
+      id: "low:narrative",
+      label: "Low narrative",
+      priority: "low",
+      kind: "narrative",
+    },
+    { id: "non_skill", label: "Non-skill", priority: null, kind: "non_skill" },
+  ] as const;
+  const grid = document.createElement("div");
+  const matrix = document.createElement("div");
+  const nonSkillSection = document.createElement("div");
 
-  const section = document.createElement("div");
-  const heading = document.createElement("div");
-  const chipList = document.createElement("div");
-
-  styleElement(section, {
-    background: "transparent",
-    border: "0",
-    borderRadius: "0",
-    boxShadow: "none",
-    boxSizing: "border-box",
+  styleElement(grid, {
     display: "grid",
     gap: "8px",
-    margin: "0",
-    padding: "0",
   });
-  styleElement(heading, {
-    color: "#71717a",
-    fontSize: "10px",
-    fontWeight: "800",
-    letterSpacing: "0.2em",
-    lineHeight: "1.2",
-    textTransform: "uppercase",
+  styleElement(matrix, {
+    border: "1px solid rgba(244, 244, 245, 0.14)",
+    borderRadius: "10px",
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+    overflow: "hidden",
   });
-  styleElement(chipList, {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: "8px",
+  styleElement(nonSkillSection, {
+    border: "1px solid rgba(244, 244, 245, 0.14)",
+    borderRadius: "10px",
+    minHeight: "70px",
+    overflow: "hidden",
   });
-  heading.textContent = label;
 
-  for (const technology of technologies) {
-    const chip = document.createElement("span");
+  function createChip(technology: Required<TailoredResumeEmphasizedTechnologyPayload>) {
+    const chip = document.createElement("button");
+    const label = document.createElement("span");
+    const handle = document.createElement("span");
 
-    chip.textContent = technology.name;
-    if (technology.evidence) {
-      chip.title = technology.evidence;
-    }
+    chip.type = "button";
+    chip.draggable = true;
+    chip.dataset.keywordName = technology.name;
+    chip.title = technology.evidence || "Drag to change classification";
     styleElement(chip, {
+      alignItems: "center",
+      appearance: "none",
       background:
-        technology.priority === "high"
-          ? "rgba(16, 185, 129, 0.14)"
-          : "rgba(244, 244, 245, 0.07)",
+        technology.classification === "non_skill"
+          ? "rgba(113, 113, 122, 0.16)"
+          : technology.priority === "high"
+            ? "rgba(16, 185, 129, 0.14)"
+            : "rgba(244, 244, 245, 0.07)",
       border:
-        technology.priority === "high"
-          ? "1px solid rgba(52, 211, 153, 0.28)"
-          : "1px solid rgba(244, 244, 245, 0.12)",
+        technology.classification === "non_skill"
+          ? "1px solid rgba(161, 161, 170, 0.22)"
+          : technology.priority === "high"
+            ? "1px solid rgba(52, 211, 153, 0.28)"
+            : "1px solid rgba(244, 244, 245, 0.12)",
       borderRadius: "999px",
-      color: technology.priority === "high" ? "#d1fae5" : "#d4d4d8",
-      fontSize: "12px",
-      fontWeight: "650",
-      lineHeight: "1.35",
+      color: technology.classification === "non_skill" ? "#a1a1aa" : "#f4f4f5",
+      cursor: "grab",
+      display: "inline-flex",
+      font: "650 12px/1.35 Inter, ui-sans-serif, system-ui, sans-serif",
+      gap: "6px",
       maxWidth: "100%",
+      minHeight: "28px",
       overflowWrap: "anywhere",
-      padding: "6px 10px",
+      padding: "5px 7px 5px 10px",
+      textAlign: "left",
     });
-    chipList.append(chip);
+    styleElement(label, {
+      minWidth: "0",
+      overflowWrap: "anywhere",
+    });
+    styleElement(handle, {
+      color: "rgba(244, 244, 245, 0.55)",
+      flex: "0 0 auto",
+      fontSize: "13px",
+      lineHeight: "1",
+    });
+    label.textContent = technology.name;
+    handle.textContent = "↕";
+    chip.append(label, handle);
+    chip.addEventListener("dragstart", (event) => {
+      event.dataTransfer?.setData("text/plain", technology.name);
+      event.dataTransfer?.setData("application/x-job-helper-keyword", technology.name);
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = "move";
+      }
+      chip.style.opacity = "0.58";
+    });
+    chip.addEventListener("dragend", () => {
+      chip.style.opacity = "1";
+    });
+
+    return chip;
   }
 
-  section.append(heading, chipList);
-  container.append(section);
+  function appendBucket(bucket: (typeof buckets)[number], parent: HTMLElement) {
+    const bucketElement = document.createElement("div");
+    const heading = document.createElement("div");
+    const chipList = document.createElement("div");
+    const bucketTechnologies = technologies.filter((technology) =>
+      bucket.kind === "non_skill"
+        ? technology.classification === "non_skill"
+        : technology.priority === bucket.priority &&
+          technology.classification === bucket.kind,
+    );
+
+    bucketElement.dataset.keywordKind = bucket.kind;
+    bucketElement.dataset.keywordPriority = bucket.priority ?? "";
+    styleElement(bucketElement, {
+      background:
+        bucket.kind === "non_skill"
+          ? "rgba(39, 39, 42, 0.58)"
+          : "rgba(9, 9, 11, 0.34)",
+      borderRight: parent === matrix && bucket.kind === "skills_section"
+        ? "1px solid rgba(244, 244, 245, 0.14)"
+        : "0",
+      borderTop: parent === matrix && bucket.id.startsWith("low")
+        ? "1px solid rgba(244, 244, 245, 0.14)"
+        : "0",
+      boxSizing: "border-box",
+      display: "grid",
+      gap: "7px",
+      gridTemplateRows: "auto minmax(42px, 1fr)",
+      minHeight: parent === matrix ? "92px" : "70px",
+      minWidth: "0",
+      padding: "8px",
+    });
+    styleElement(heading, {
+      color: "rgba(244, 244, 245, 0.62)",
+      fontSize: "10px",
+      fontWeight: "800",
+      letterSpacing: "0.14em",
+      lineHeight: "1.2",
+      textTransform: "uppercase",
+    });
+    styleElement(chipList, {
+      alignContent: "start",
+      display: "flex",
+      flexWrap: "wrap",
+      gap: "6px",
+      height: "100%",
+      minHeight: "30px",
+    });
+    heading.textContent = bucket.label;
+
+    for (const technology of bucketTechnologies) {
+      chipList.append(createChip(technology));
+    }
+
+    bucketElement.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "move";
+      }
+      bucketElement.style.background =
+        bucket.kind === "non_skill"
+          ? "rgba(63, 63, 70, 0.76)"
+          : "rgba(16, 185, 129, 0.1)";
+    });
+    bucketElement.addEventListener("dragleave", () => {
+      bucketElement.style.background =
+        bucket.kind === "non_skill"
+          ? "rgba(39, 39, 42, 0.58)"
+          : "rgba(9, 9, 11, 0.34)";
+    });
+    bucketElement.addEventListener("drop", (event) => {
+      event.preventDefault();
+      bucketElement.style.background =
+        bucket.kind === "non_skill"
+          ? "rgba(39, 39, 42, 0.58)"
+          : "rgba(9, 9, 11, 0.34)";
+      const name =
+        event.dataTransfer?.getData("application/x-job-helper-keyword") ||
+        event.dataTransfer?.getData("text/plain") ||
+        "";
+
+      if (!name) {
+        return;
+      }
+
+      updateBadgePayloadKeywordClassification({
+        kind: bucket.kind,
+        name,
+        payload,
+        priority: bucket.priority,
+      });
+      rememberKeywordClassificationOverride({
+        badgeKey,
+        kind: bucket.kind,
+        name,
+        payload,
+        priority: bucket.priority,
+      });
+      void enqueueKeywordClassificationSave({
+        kind: bucket.kind,
+        name,
+        priority: bucket.priority,
+      });
+      showEmphasizedTechnologyBadge(payload, badgeKey);
+    });
+
+    bucketElement.append(heading, chipList);
+    parent.append(bucketElement);
+  }
+
+  for (const bucket of buckets.slice(0, 4)) {
+    appendBucket(bucket, matrix);
+  }
+  appendBucket(buckets[4]!, nonSkillSection);
+  grid.append(matrix, nonSkillSection);
+  container.append(grid);
 }
 
 function appendKeywordCoverageDisclosure(
@@ -1519,6 +1838,7 @@ function showEmphasizedTechnologyBadge(
   payload: TailoredResumeBadgePayload,
   badgeKey: string,
 ) {
+  applyKeywordClassificationOverrides(payload, badgeKey);
   const technologies = normalizeEmphasizedTechnologies(
     payload.emphasizedTechnologies,
     readNonTechnologyTermSet(payload),
@@ -1537,12 +1857,6 @@ function showEmphasizedTechnologyBadge(
     return;
   }
 
-  const highPriorityTechnologies = technologies.filter(
-    (technology) => technology.priority === "high",
-  );
-  const lowPriorityTechnologies = technologies.filter(
-    (technology) => technology.priority === "low",
-  );
   const badge = ensureEmphasizedTechnologyBadgeRoot();
   const content = document.createElement("div");
   const eyebrow = document.createElement("div");
@@ -1584,8 +1898,7 @@ function showEmphasizedTechnologyBadge(
     hideEmphasizedTechnologyBadge();
   });
   if (!appendKeywordCoverageDisclosure(groups, payload)) {
-    appendTechnologyGroup(groups, "High priority", highPriorityTechnologies);
-    appendTechnologyGroup(groups, "Low priority", lowPriorityTechnologies);
+    appendDraggableKeywordMatrix(groups, payload, badgeKey, technologies);
   }
   content.append(eyebrow);
   badge.replaceChildren(

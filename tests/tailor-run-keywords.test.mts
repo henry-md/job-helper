@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  readTailorResumeGenerationStepSummary,
+  type TailorResumeRunRecord,
+} from "../extension/src/job-helper.ts";
+import {
   readTailorRunKeywordTechnologies,
   readStoredTailoringRunRecord,
   resolveActiveTailorRunKeywordBadge,
 } from "../extension/src/tailor-run-keywords.ts";
-import type { TailorResumeRunRecord } from "../extension/src/job-helper.ts";
 
 function buildRun(
   overrides: Partial<TailorResumeRunRecord> = {},
@@ -156,6 +159,56 @@ test("keeps Step 1 scraped keywords when Step 2 carries a question subset", () =
   assert.deepEqual(
     technologies.map((technology) => technology.name),
     ["TypeScript", "Kubernetes"],
+  );
+});
+
+test("parses Step 2 blocking skills-section terms separately from all keywords", () => {
+  const step = readTailorResumeGenerationStepSummary({
+    attempt: 1,
+    blockingTechnologies: [
+      {
+        classification: "skills_section",
+        evidence: "Resume did not mention Kubernetes.",
+        name: "Kubernetes",
+        priority: "high",
+      },
+      {
+        classification: "skills_section",
+        evidence: "Resume did not mention Terraform.",
+        name: "Terraform",
+        priority: "low",
+      },
+    ],
+    detail: "Still waiting on 2 skills-section blockers.",
+    durationMs: 42,
+    emphasizedTechnologies: [
+      {
+        classification: "skills_section",
+        evidence: "Posting lists Kubernetes.",
+        name: "Kubernetes",
+        priority: "high",
+      },
+      {
+        classification: "narrative",
+        evidence: "Posting mentions load balancing.",
+        name: "Load balancing",
+        priority: "high",
+      },
+    ],
+    retrying: false,
+    status: "running",
+    stepCount: 5,
+    stepNumber: 2,
+    summary: "Waiting for skills-section support",
+  });
+
+  assert.deepEqual(
+    step?.blockingTechnologies?.map((technology) => technology.name),
+    ["Kubernetes", "Terraform"],
+  );
+  assert.deepEqual(
+    step?.emphasizedTechnologies?.map((technology) => technology.name),
+    ["Kubernetes", "Load balancing"],
   );
 });
 

@@ -34,6 +34,8 @@ Useful states:
 - `http://localhost:5186/index.html` shows the signed-out default state.
 - `http://localhost:5186/index.html?auth=signed-in&run=success` shows a connected
   account with the latest tailoring result.
+- `http://localhost:5186/index.html?auth=signed-in&run=step2-blocked` shows a
+  Step 2 keyword review with skills-section blocker badges.
 - `http://localhost:5186/index.html?snapshot=error` shows the active-tab error
   state.
 

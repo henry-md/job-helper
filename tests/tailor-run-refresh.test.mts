@@ -7,8 +7,20 @@ function buildRun(overrides: Partial<{
   capturedAt: string;
   generationStep: {
     attempt: number | null;
+    blockingTechnologies?: Array<{
+      classification?: "narrative" | "non_skill" | "skills_section";
+      evidence: string;
+      name: string;
+      priority: "high" | "low";
+    }>;
     detail: string | null;
     durationMs: number;
+    emphasizedTechnologies?: Array<{
+      classification?: "narrative" | "non_skill" | "skills_section";
+      evidence: string;
+      name: string;
+      priority: "high" | "low";
+    }>;
     retrying: boolean;
     status: "failed" | "running" | "skipped" | "succeeded";
     stepCount: number;
@@ -17,8 +29,20 @@ function buildRun(overrides: Partial<{
   } | null;
   generationStepTimings: Array<{
     attempt: number | null;
+    blockingTechnologies?: Array<{
+      classification?: "narrative" | "non_skill" | "skills_section";
+      evidence: string;
+      name: string;
+      priority: "high" | "low";
+    }>;
     detail: string | null;
     durationMs: number;
+    emphasizedTechnologies?: Array<{
+      classification?: "narrative" | "non_skill" | "skills_section";
+      evidence: string;
+      name: string;
+      priority: "high" | "low";
+    }>;
     observedAt: string | null;
     retrying: boolean;
     status: "failed" | "running" | "skipped" | "succeeded";
@@ -126,6 +150,55 @@ test("buildTailoringRunsRefreshKey changes when step timing history changes", ()
           summary: "Generating plaintext edit outline",
         },
       ],
+    }),
+  });
+
+  assert.notEqual(before, after);
+});
+
+test("buildTailoringRunsRefreshKey changes when Step 2 blocker badges change", () => {
+  const before = buildTailoringRunsRefreshKey({
+    "https://jobs.example.com/roles/1": buildRun({
+      generationStep: {
+        attempt: 1,
+        blockingTechnologies: [
+          {
+            classification: "skills_section",
+            evidence: "Resume did not mention Kubernetes.",
+            name: "Kubernetes",
+            priority: "high",
+          },
+        ],
+        detail: "Waiting on 1 skills-section blocker.",
+        durationMs: 1000,
+        retrying: false,
+        status: "running",
+        stepCount: 5,
+        stepNumber: 2,
+        summary: "Waiting for skills-section support",
+      },
+    }),
+  });
+  const after = buildTailoringRunsRefreshKey({
+    "https://jobs.example.com/roles/1": buildRun({
+      generationStep: {
+        attempt: 1,
+        blockingTechnologies: [
+          {
+            classification: "skills_section",
+            evidence: "Resume did not mention Terraform.",
+            name: "Terraform",
+            priority: "low",
+          },
+        ],
+        detail: "Waiting on 1 skills-section blocker.",
+        durationMs: 1000,
+        retrying: false,
+        status: "running",
+        stepCount: 5,
+        stepNumber: 2,
+        summary: "Waiting for skills-section support",
+      },
     }),
   });
 

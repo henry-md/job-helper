@@ -341,7 +341,7 @@ function buildExistingTailoringMessage(
   if (existingTailoring.kind === "pending_interview") {
     const roleLabel =
       existingTailoring.positionTitle || existingTailoring.companyName || "this role";
-    return `A Tailor Resume run for ${roleLabel} is waiting on Step 2 questions. Confirm overwrite in the side panel if you want to replace it.`;
+    return `A Tailor Resume run for ${roleLabel} is waiting on keyword review. Confirm overwrite in the side panel if you want to replace it.`;
   }
 
   const stageLabel = existingTailoring.lastStep
@@ -2706,20 +2706,23 @@ async function tailorResumeForTab(input: {
       endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
       generationStep:
         latestStepEvent ?? {
-	          attempt: null,
-	          detail:
-	            "Start the Step 2 chat when you are ready so the latest USER.md edits are used.",
+          attempt: null,
+          blockingTechnologies: isPendingInterview
+            ? activeQuestionStart.blockingTechnologies
+            : [],
+          detail:
+	            "Review the classified keywords, then press play when the skills-section blockers are resolved.",
           durationMs: 0,
           retrying: false,
           status: "running",
           stepCount: 5,
           stepNumber: 2,
-	          summary: "Ready to review scraped technologies",
-	        },
+          summary: "Review classified keywords",
+        },
       generationStepTimings: latestStepTimings,
       jobIdentifier:
         activeQuestionStart?.jobIdentifier ?? null,
-	      message: "Start the Step 2 chat in the side panel.",
+	      message: "Review keywords, then press play in the side panel.",
       pageTitle: pageContext.title || null,
       pageUrl: pageContext.url || null,
       positionTitle: isPendingInterview ? activeQuestionStart.positionTitle : null,
@@ -2734,7 +2737,7 @@ async function tailorResumeForTab(input: {
       await refreshPersonalInfoCache(authSession);
     } catch (error) {
       console.warn(
-        "Could not refresh the shared personal info cache before opening the Step 2 chat-start card.",
+        "Could not refresh the shared personal info cache before opening the Step 2 keyword-review card.",
         error,
       );
     }
@@ -2752,7 +2755,7 @@ async function tailorResumeForTab(input: {
       generationStep: null,
       generationStepTimings: latestStepTimings,
       jobIdentifier: activeInterview?.jobIdentifier ?? null,
-      message: "Resume questions are waiting in the side panel.",
+      message: "Review keywords in the side panel, then press play.",
       pageTitle: pageContext.title || null,
       pageUrl: pageContext.url || null,
       positionTitle: activeInterview?.positionTitle ?? null,
@@ -3135,12 +3138,15 @@ chrome.runtime.onInstalled.addListener(() => {
   console.log("Job Helper extension installed.");
 });
 
-chrome.commands.onCommand.addListener((command) => {
+chrome.commands.onCommand.addListener((command, tab) => {
   if (command !== CAPTURE_COMMAND_NAME) {
     return;
   }
 
-  void runCaptureFlow({ openSidePanel: true });
+  void runCaptureFlow({
+    openSidePanel: true,
+    tab: tab?.id ? tab : undefined,
+  });
 });
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
@@ -3407,6 +3413,58 @@ chrome.runtime.onMessage.addListener((
       });
 
       return {};
+    });
+  }
+
+  if (typedMessage?.type === "JOB_HELPER_SAVE_KEYWORD_CLASSIFICATION") {
+    return sendAsyncResponse(sendResponse, async () => {
+      const name = readPayloadString(typedMessage.payload, "name");
+      const kind = readPayloadString(typedMessage.payload, "kind");
+      const priority = readPayloadString(typedMessage.payload, "priority");
+
+      if (
+        !name ||
+        (kind !== "skills_section" &&
+          kind !== "narrative" &&
+          kind !== "non_skill" &&
+          kind !== "hard" &&
+          kind !== "soft")
+      ) {
+        throw new Error("Choose a keyword and classification.");
+      }
+
+      const authSession = await ensureJobHelperSession({ interactive: false });
+      const result = await patchTailorResume(
+        {
+          action: "saveKeywordClassification",
+          kind:
+            kind === "hard"
+              ? "skills_section"
+              : kind === "soft"
+                ? "narrative"
+                : kind,
+          name,
+          priority:
+            priority === "high" || priority === "low" ? priority : null,
+        },
+        authSession,
+      );
+
+      if (!result.ok) {
+        const payload = isRecord(result.payload) ? result.payload : {};
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Unable to save keyword classification.",
+        );
+      }
+
+      refreshSharedPersonalInfoCache(
+        authSession,
+        "keyword classification changed",
+      );
+
+      return { ok: true };
     });
   }
 

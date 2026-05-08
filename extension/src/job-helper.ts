@@ -76,10 +76,6 @@ const extensionEnv: Record<string, string | undefined> =
     : {};
 export const EXTENSION_DEBUG_UI_ENABLED =
   typeof __DEBUG_UI__ !== "undefined" ? __DEBUG_UI__ : false;
-export const EXTENSION_TOP_LEVEL_AI_CHAT_HIDDEN =
-  typeof __HIDE_TOP_LVL_AI_CHAT__ !== "undefined"
-    ? __HIDE_TOP_LVL_AI_CHAT__
-    : false;
 
 function normalizeAppBaseUrl(value: string | undefined) {
   const trimmedValue = value?.trim();
@@ -106,6 +102,8 @@ export const DEFAULT_TAILOR_RESUME_ENDPOINT =
   `${DEFAULT_APP_BASE_URL}/api/tailor-resume`;
 export const DEFAULT_TAILOR_RESUME_CHAT_ENDPOINT =
   `${DEFAULT_TAILOR_RESUME_ENDPOINT}/chat`;
+export const DEFAULT_TAILOR_RESUME_SUPPORT_CHAT_ENDPOINT =
+  `${DEFAULT_TAILOR_RESUME_ENDPOINT}/support-chat`;
 export const DEFAULT_TAILOR_RESUME_PREVIEW_ENDPOINT =
   `${DEFAULT_TAILOR_RESUME_ENDPOINT}/preview`;
 export const EXTENSION_AUTH_GOOGLE_ENDPOINT =
@@ -292,7 +290,13 @@ export type TailoredResumeSummary = {
   updatedAt: string;
 };
 
+export type TailorResumeKeywordKind =
+  | "narrative"
+  | "non_skill"
+  | "skills_section";
+
 export type TailoredResumeEmphasizedTechnology = {
+  classification?: TailorResumeKeywordKind;
   evidence: string;
   name: string;
   priority: "high" | "low";
@@ -323,6 +327,24 @@ export type TailoredResumeKeywordCoverage = {
   matcherVersion: 1;
   updatedAt: string;
 };
+
+function normalizeTailorResumeKeywordKind(
+  value: unknown,
+): TailorResumeKeywordKind | null {
+  if (value === "skills_section" || value === "hard") {
+    return "skills_section";
+  }
+
+  if (value === "narrative" || value === "soft") {
+    return "narrative";
+  }
+
+  if (value === "non_skill") {
+    return "non_skill";
+  }
+
+  return null;
+}
 
 export type TailorResumeGenerationSettingsSummary = {
   allowTailorResumeFollowUpQuestions: boolean;
@@ -359,6 +381,7 @@ export type PersonalInfoSummary = {
   generationSettings: TailorResumeGenerationSettingsSummary;
   originalResume: OriginalResumeSummary;
   syncState: UserSyncStateSnapshot;
+  skillData: TailorResumeStoredSkillData;
   tailoredResumes: TailoredResumeSummary[];
   tailoringInterview: TailorResumePendingInterviewSummary | null;
   tailoringInterviews: TailorResumePendingInterviewSummary[];
@@ -408,6 +431,49 @@ export type TailorResumeQuestioningSummary = {
   learningsCount: number;
 };
 
+export type TailorResumeKeywordClassificationRecord = {
+  id: string;
+  kind: "skills_section" | "narrative" | "non_skill";
+  name: string;
+  normalizedName: string;
+  priority: "high" | "low" | null;
+  updatedAt: string;
+};
+
+export type TailorResumeSkillRecord = {
+  id: string;
+  listInSkillsOnly: boolean;
+  name: string;
+  normalizedName: string;
+  updatedAt: string;
+};
+
+export type TailorResumeSpareBulletRecord = {
+  createdAt: string;
+  id: string;
+  quote: string;
+  replacesQuote: string | null;
+  resumeExperienceId: string;
+  skillIds: string[];
+  skills: TailorResumeSkillRecord[];
+  updatedAt: string;
+};
+
+export type TailorResumeResumeExperienceRecord = {
+  bulletSegmentIds: string[];
+  headingSegmentId: string;
+  id: string;
+  label: string;
+};
+
+export type TailorResumeStoredSkillData = {
+  keywordClassifications: TailorResumeKeywordClassificationRecord[];
+  resumeExperiences: TailorResumeResumeExperienceRecord[];
+  skills: TailorResumeSkillRecord[];
+  spareBullets: TailorResumeSpareBulletRecord[];
+  updatedAt: string;
+};
+
 export type TailorResumePendingInterviewSummary = {
   applicationId: string | null;
   companyName: string | null;
@@ -425,6 +491,7 @@ export type TailorResumePendingInterviewSummary = {
 
 export type TailorResumeGenerationStepSummary = {
   attempt: number | null;
+  blockingTechnologies?: TailoredResumeEmphasizedTechnology[];
   detail: string | null;
   durationMs: number;
   emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
@@ -463,6 +530,7 @@ export type TailorResumeExistingTailoringState =
       jobIdentifier: string | null;
       jobUrl: string | null;
       kind: "pending_interview";
+      blockingTechnologies: TailoredResumeEmphasizedTechnology[];
       emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
       interviewStatus: "deciding" | "pending" | "ready";
       positionTitle: string | null;
@@ -1015,7 +1083,10 @@ export function readTailoredResumeEmphasizedTechnologies(value: unknown) {
     }
 
     seen.add(dedupeKey);
+    const classification = normalizeTailorResumeKeywordKind(item.classification);
+
     technologies.push({
+      ...(classification ? { classification } : {}),
       evidence: readString(item.evidence),
       name,
       priority,
@@ -1232,6 +1303,9 @@ export function readTailorResumeGenerationStepSummary(
 
   return {
     attempt: attempt > 0 ? Math.floor(attempt) : null,
+    blockingTechnologies: readTailoredResumeEmphasizedTechnologies(
+      value.blockingTechnologies,
+    ),
     detail: readNullableString(value.detail),
     durationMs: Math.max(0, Math.floor(readNumber(value.durationMs))),
     emphasizedTechnologies: readTailoredResumeEmphasizedTechnologies(
@@ -1346,6 +1420,9 @@ export function readTailorResumeExistingTailoringState(
 
     return {
       applicationId: readNullableString(existingTailoring.applicationId),
+      blockingTechnologies: readTailoredResumeEmphasizedTechnologies(
+        existingTailoring.blockingTechnologies,
+      ),
       companyName: readNullableString(existingTailoring.companyName),
       createdAt,
       emphasizedTechnologies: readTailoredResumeEmphasizedTechnologies(
@@ -1627,6 +1704,192 @@ function readStringList(value: unknown) {
     : [];
 }
 
+export function buildEmptyTailorResumeStoredSkillData(): TailorResumeStoredSkillData {
+  return {
+    keywordClassifications: [],
+    resumeExperiences: [],
+    skills: [],
+    spareBullets: [],
+    updatedAt: "",
+  };
+}
+
+function readTailorResumeKeywordKind(value: unknown) {
+  const kind = readString(value).toLowerCase();
+
+  if (kind === "skills_section" || kind === "hard") {
+    return "skills_section";
+  }
+
+  if (kind === "narrative" || kind === "soft") {
+    return "narrative";
+  }
+
+  return kind === "non_skill" ? "non_skill" : null;
+}
+
+function readTailorResumeKeywordPriority(value: unknown) {
+  const priority = readString(value).toLowerCase();
+
+  return priority === "high" || priority === "low" ? priority : null;
+}
+
+function readTailorResumeSkillRecord(
+  value: unknown,
+): TailorResumeSkillRecord | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = readString(value.id);
+  const name = readString(value.name);
+  const normalizedName = readString(value.normalizedName);
+
+  if (!id || !name) {
+    return null;
+  }
+
+  return {
+    id,
+    listInSkillsOnly: value.listInSkillsOnly === true,
+    name,
+    normalizedName: normalizedName || name.toLowerCase(),
+    updatedAt: readString(value.updatedAt),
+  };
+}
+
+function readTailorResumeSpareBulletRecord(
+  value: unknown,
+): TailorResumeSpareBulletRecord | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = readString(value.id);
+  const quote = readString(value.quote);
+  const resumeExperienceId = readString(value.resumeExperienceId);
+
+  if (!id || !quote || !resumeExperienceId) {
+    return null;
+  }
+
+  const skills = Array.isArray(value.skills)
+    ? value.skills
+        .map(readTailorResumeSkillRecord)
+        .filter((skill): skill is TailorResumeSkillRecord => Boolean(skill))
+    : [];
+
+  return {
+    createdAt: readString(value.createdAt),
+    id,
+    quote,
+    replacesQuote: readNullableString(value.replacesQuote),
+    resumeExperienceId,
+    skillIds: readStringList(value.skillIds),
+    skills,
+    updatedAt: readString(value.updatedAt),
+  };
+}
+
+function readTailorResumeResumeExperienceRecord(
+  value: unknown,
+): TailorResumeResumeExperienceRecord | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = readString(value.id);
+  const headingSegmentId = readString(value.headingSegmentId);
+  const label = readString(value.label);
+
+  if (!id || !headingSegmentId || !label) {
+    return null;
+  }
+
+  return {
+    bulletSegmentIds: readStringList(value.bulletSegmentIds),
+    headingSegmentId,
+    id,
+    label,
+  };
+}
+
+function readTailorResumeKeywordClassificationRecord(
+  value: unknown,
+): TailorResumeKeywordClassificationRecord | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = readString(value.id);
+  const kind = readTailorResumeKeywordKind(value.kind);
+  const name = readString(value.name);
+  const normalizedName = readString(value.normalizedName);
+
+  if (!id || !kind || !name) {
+    return null;
+  }
+
+  return {
+    id,
+    kind,
+    name,
+    normalizedName: normalizedName || name.toLowerCase(),
+    priority: readTailorResumeKeywordPriority(value.priority),
+    updatedAt: readString(value.updatedAt),
+  };
+}
+
+export function readTailorResumeStoredSkillData(
+  value: unknown,
+): TailorResumeStoredSkillData {
+  const payloadRecord = isRecord(value) ? value : {};
+  const skillData = isRecord(payloadRecord.skillData)
+    ? payloadRecord.skillData
+    : payloadRecord;
+
+  if (!isRecord(skillData)) {
+    return buildEmptyTailorResumeStoredSkillData();
+  }
+
+  return {
+    keywordClassifications: Array.isArray(skillData.keywordClassifications)
+      ? skillData.keywordClassifications
+          .map(readTailorResumeKeywordClassificationRecord)
+          .filter(
+            (
+              classification,
+            ): classification is TailorResumeKeywordClassificationRecord =>
+              Boolean(classification),
+          )
+      : [],
+    resumeExperiences: Array.isArray(skillData.resumeExperiences)
+      ? skillData.resumeExperiences
+          .map(readTailorResumeResumeExperienceRecord)
+          .filter(
+            (
+              experience,
+            ): experience is TailorResumeResumeExperienceRecord =>
+              Boolean(experience),
+          )
+      : [],
+    skills: Array.isArray(skillData.skills)
+      ? skillData.skills
+          .map(readTailorResumeSkillRecord)
+          .filter((skill): skill is TailorResumeSkillRecord => Boolean(skill))
+      : [],
+    spareBullets: Array.isArray(skillData.spareBullets)
+      ? skillData.spareBullets
+          .map(readTailorResumeSpareBulletRecord)
+          .filter(
+            (spareBullet): spareBullet is TailorResumeSpareBulletRecord =>
+              Boolean(spareBullet),
+          )
+      : [],
+    updatedAt: readString(skillData.updatedAt),
+  };
+}
+
 function readUserMemorySummary(value: unknown): UserMemorySummary {
   const payloadRecord: Record<string, unknown> = isRecord(value) ? value : {};
   const directValue = isRecord(payloadRecord.userMemory)
@@ -1691,6 +1954,7 @@ export function readPersonalInfoSummary(input: {
     ),
     originalResume: readOriginalResumeSummary(input.tailorResumePayload),
     syncState: readUserSyncStateSnapshot(input.tailorResumePayload),
+    skillData: readTailorResumeStoredSkillData(payloadRecord.skillData),
     tailoredResumes: tailorResumeProfile?.tailoredResumes ?? [],
     tailoringInterview: tailorResumeProfile?.tailoringInterview ?? null,
     tailoringInterviews: tailorResumeProfile?.tailoringInterviews ?? [],
@@ -1743,6 +2007,7 @@ export function readPersonalInfoPayload(value: unknown): PersonalInfoSummary {
       "syncState" in payloadRecord
         ? readUserSyncStateSnapshot(payloadRecord.syncState)
         : emptyUserSyncStateSnapshot(),
+    skillData: readTailorResumeStoredSkillData(payloadRecord.skillData),
     tailoredResumes:
       directTailoredResumes.length > 0
         ? directTailoredResumes
