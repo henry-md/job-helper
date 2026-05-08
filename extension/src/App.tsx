@@ -12474,8 +12474,8 @@ function App() {
 
   const chatPageLabel =
     state.status === "ready"
-      ? state.snapshot.title || state.snapshot.url || "Current page"
-      : "Current page";
+      ? `Page attached: ${state.snapshot.title || state.snapshot.url || "Current page"}`
+      : "Resume support";
   const canSendChat =
     authState.status === "signedIn" &&
     chatSendStatus !== "streaming" &&
@@ -12483,8 +12483,7 @@ function App() {
   const canDeleteChat =
     authState.status === "signedIn" &&
     chatSendStatus !== "streaming" &&
-    chatMessages.length > 0 &&
-    Boolean(chatPageUrl);
+    chatMessages.length > 0;
 
   const focusTailoredPreviewEdit = useCallback(
     (editId: string) => {
@@ -12661,6 +12660,22 @@ function App() {
           : personalInfoState.status === "error"
             ? personalInfoState.error
             : `${draftSettingsUserMarkdown.length.toLocaleString()} chars`;
+    const skillsOnlySummary =
+      authState.status !== "signedIn"
+        ? "Connect Google to edit skills-only keywords."
+        : personalInfoState.status === "loading"
+          ? "Loading skills-only keywords..."
+          : personalInfoState.status === "error"
+            ? personalInfoState.error
+            : `${settingsSkillsOnlySkills.length.toLocaleString()} saved`;
+    const resumeBulletsSummary =
+      authState.status !== "signedIn"
+        ? "Connect Google to edit resume bullets."
+        : personalInfoState.status === "loading"
+          ? "Loading resume bullets..."
+          : personalInfoState.status === "error"
+            ? personalInfoState.error
+            : `${settingsSkillData.spareBullets.length.toLocaleString()} saved`;
 
     return (
       <section className="settings-page">
@@ -12750,72 +12765,6 @@ function App() {
               ))}
             </div>
           </div>
-          <div className="settings-toggle-row settings-toggle-row-keyword">
-            <div className="settings-toggle-copy">
-              <p className="settings-toggle-title">Step 2 questions</p>
-              <p className="settings-toggle-description">
-                Let tailoring pause to ask concise resume follow-up questions
-                before writing final edits.
-              </p>
-            </div>
-            <button
-              aria-checked={allowTailorResumeFollowUpQuestions}
-              aria-label="Step 2 questions"
-              className={`settings-switch ${
-                allowTailorResumeFollowUpQuestions ? "settings-switch-on" : ""
-              }`.trim()}
-              disabled={
-                authState.status !== "signedIn" ||
-                isSavingFollowUpQuestionSetting
-              }
-              role="switch"
-              type="button"
-              onClick={() =>
-                void updateFollowUpQuestionSetting(
-                  !allowTailorResumeFollowUpQuestions,
-                )
-              }
-            >
-              <span className="settings-switch-handle" aria-hidden="true" />
-            </button>
-          </div>
-          {followUpQuestionSettingError ? (
-            <p className="settings-inline-error">
-              {followUpQuestionSettingError}
-            </p>
-          ) : null}
-          <div className="settings-toggle-row settings-toggle-row-keyword">
-            <div className="settings-toggle-copy">
-              <p className="settings-toggle-title">Page count protection</p>
-              <p className="settings-toggle-description">
-                Run compaction when tailored edits would make the resume longer
-                than the original.
-              </p>
-            </div>
-            <button
-              aria-checked={preventPageCountIncrease}
-              aria-label="Page count protection"
-              className={`settings-switch ${
-                preventPageCountIncrease ? "settings-switch-on" : ""
-              }`.trim()}
-              disabled={
-                authState.status !== "signedIn" ||
-                isSavingPageCountProtectionSetting
-              }
-              role="switch"
-              type="button"
-              onClick={() =>
-                void updatePageCountProtectionSetting(!preventPageCountIncrease)
-              }
-            >
-              <span className="settings-switch-handle" aria-hidden="true" />
-            </button>
-          </div>
-          {pageCountProtectionSettingError ? (
-            <p className="settings-inline-error">
-              {pageCountProtectionSettingError}
-            </p>
-          ) : null}
           <div className="settings-toggle-row settings-toggle-row-keyword">
             <div className="settings-toggle-copy">
               <p className="settings-toggle-title">Coverage percentage basis</p>
@@ -13152,6 +13101,443 @@ function App() {
             </div>
           ) : null}
         </section>
+
+        <section className="snapshot-card settings-card">
+          <div className="settings-section-heading">
+            <p className="settings-section-eyebrow">User Memory</p>
+            <div className="settings-disclosure-title-row">
+              <h2 className="settings-disclosure-title">Skills-only keywords</h2>
+              <span className="settings-disclosure-pill">
+                {skillsOnlySummary}
+              </span>
+            </div>
+            <p className="settings-disclosure-description">
+              Exact tools that can be listed in Skills without adding a resume
+              bullet.
+            </p>
+          </div>
+
+          {authState.status !== "signedIn" ? (
+            <p className="placeholder">
+              Connect Google to edit skills-only keywords.
+            </p>
+          ) : personalInfoState.status === "loading" ? (
+            <p className="placeholder">Loading skills-only keywords...</p>
+          ) : personalInfoState.status === "error" ? (
+            <p className="placeholder">{personalInfoState.error}</p>
+          ) : (
+            <div className="settings-skills-only-panel">
+              <div className="settings-skills-only-add">
+                <input
+                  disabled={isSavingSettingsSkillsOnly}
+                  onChange={(event) =>
+                    setDraftSettingsSkillsOnlyName(event.target.value)
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void saveSettingsSkillsOnlySupport();
+                    }
+                  }}
+                  placeholder="Keyword to list only in Skills"
+                  value={draftSettingsSkillsOnlyName}
+                />
+                <button
+                  className="primary-action compact-action settings-account-action settings-skills-only-save"
+                  disabled={
+                    isSavingSettingsSkillsOnly ||
+                    !canSaveSettingsSkillsOnly
+                  }
+                  onClick={() => void saveSettingsSkillsOnlySupport()}
+                  type="button"
+                >
+                  <PlusIcon />
+                  <span>
+                    {isSavingSettingsSkillsOnly ? "Saving..." : "Add keyword"}
+                  </span>
+                </button>
+              </div>
+
+              {settingsSkillsOnlyError ? (
+                <p className="preview-error">{settingsSkillsOnlyError}</p>
+              ) : null}
+
+              <div className="settings-skills-only-list">
+                {settingsSkillsOnlySkills.length > 0 ? (
+                  settingsSkillsOnlySkills.map((skill) => (
+                    <span className="settings-skills-only-badge" key={skill.id}>
+                      <span>{skill.name}</span>
+                      <button
+                        aria-label={`Remove ${skill.name}`}
+                        className="settings-skills-only-remove"
+                        disabled={isSavingSettingsSkillsOnly}
+                        onClick={() =>
+                          void deleteSettingsSkillsOnlySupport(skill.id)
+                        }
+                        title={`Remove ${skill.name}`}
+                        type="button"
+                      >
+                        <CloseIcon />
+                      </button>
+                    </span>
+                  ))
+                ) : (
+                  <span className="settings-skills-only-empty">
+                    No skills-only keywords yet.
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section className="snapshot-card settings-card">
+          <div className="settings-section-heading">
+            <p className="settings-section-eyebrow">User Memory</p>
+            <div className="settings-disclosure-title-row">
+              <h2 className="settings-disclosure-title">Resume bullets</h2>
+              <span className="settings-disclosure-pill">
+                {resumeBulletsSummary}
+              </span>
+            </div>
+            <p className="settings-disclosure-description">
+              Saved skills-section support tied to specific resume experiences.
+            </p>
+          </div>
+
+          {authState.status !== "signedIn" ? (
+            <p className="placeholder">Connect Google to edit resume bullets.</p>
+          ) : personalInfoState.status === "loading" ? (
+            <p className="placeholder">Loading resume bullets...</p>
+          ) : personalInfoState.status === "error" ? (
+            <p className="placeholder">{personalInfoState.error}</p>
+          ) : (
+            <div className="settings-spare-bullet-panel">
+              <div className="settings-spare-bullet-form">
+                <label className="settings-spare-bullet-field">
+                  <span>Resume experience</span>
+                  <select
+                    disabled={
+                      isSavingSettingsSpareBullet ||
+                      settingsSkillData.resumeExperiences.length === 0
+                    }
+                    onChange={(event) =>
+                      setDraftSettingsSpareBulletExperienceId(
+                        event.target.value,
+                      )
+                    }
+                    value={draftSettingsSpareBulletExperienceId}
+                  >
+                    {settingsSkillData.resumeExperiences.length === 0 ? (
+                      <option value="">No parsed experiences</option>
+                    ) : null}
+                    {settingsSkillData.resumeExperiences.map((experience) => (
+                      <option key={experience.id} value={experience.id}>
+                        {experience.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="settings-spare-bullet-field">
+                  <span>Skills-section keywords</span>
+                  <input
+                    disabled={isSavingSettingsSpareBullet}
+                    onChange={(event) =>
+                      setDraftSettingsSpareBulletSkillNames(event.target.value)
+                    }
+                    placeholder="Comma-separated keywords"
+                    value={draftSettingsSpareBulletSkillNames}
+                  />
+                </label>
+
+                <SettingsSpareBulletQuoteField
+                  disabled={isSavingSettingsSpareBullet}
+                  fieldClassName="settings-spare-bullet-field-wide"
+                  measureLineCount={measureSettingsSpareBulletLineCount}
+                  onChange={setDraftSettingsSpareBulletQuote}
+                  placeholder="Built ..."
+                  replacesQuote={draftSettingsSpareBulletReplacesQuote}
+                  resumeExperienceId={draftSettingsSpareBulletExperienceId}
+                  value={draftSettingsSpareBulletQuote}
+                />
+
+                <label className="settings-spare-bullet-field settings-spare-bullet-field-wide">
+                  <span>Replaces quote</span>
+                  <textarea
+                    disabled={isSavingSettingsSpareBullet}
+                    onChange={(event) =>
+                      setDraftSettingsSpareBulletReplacesQuote(
+                        event.target.value,
+                      )
+                    }
+                    placeholder="Original bullet to replace"
+                    value={draftSettingsSpareBulletReplacesQuote}
+                  />
+                </label>
+              </div>
+
+              {settingsSpareBulletError ? (
+                <p className="preview-error">{settingsSpareBulletError}</p>
+              ) : null}
+
+              <div className="settings-spare-bullet-actions">
+                <button
+                  className="primary-action compact-action settings-account-action settings-spare-bullet-save"
+                  disabled={
+                    isSavingSettingsSpareBullet ||
+                    !canSaveSettingsSpareBullet
+                  }
+                  onClick={() => void saveSettingsSpareBullet()}
+                  type="button"
+                >
+                  <PlusIcon />
+                  <span>
+                    {isSavingSettingsSpareBullet ? "Saving..." : "Add bullet"}
+                  </span>
+                </button>
+              </div>
+
+              {settingsSkillData.spareBullets.length > 0 ? (
+                <div className="settings-spare-bullet-search">
+                  <label className="settings-spare-bullet-search-input-shell">
+                    <SearchIcon />
+                    <span className="sr-only">Search resume bullets</span>
+                    <input
+                      aria-label="Search resume bullets"
+                      onChange={(event) =>
+                        setSettingsSpareBulletSearchQuery(event.target.value)
+                      }
+                      placeholder="Search skills or bullet text"
+                      type="search"
+                      value={settingsSpareBulletSearchQuery}
+                    />
+                  </label>
+                  <div
+                    aria-label="Resume bullet search mode"
+                    className="settings-spare-bullet-search-modes"
+                  >
+                    {tailorResumeSpareBulletSearchModes.map((mode) => (
+                      <button
+                        aria-pressed={
+                          settingsSpareBulletSearchMode === mode.value
+                        }
+                        className={`settings-spare-bullet-search-mode ${
+                          settingsSpareBulletSearchMode === mode.value
+                            ? "settings-spare-bullet-search-mode-active"
+                            : ""
+                        }`.trim()}
+                        key={mode.value}
+                        onClick={() =>
+                          setSettingsSpareBulletSearchMode(mode.value)
+                        }
+                        type="button"
+                      >
+                        {mode.label}
+                      </button>
+                    ))}
+                  </div>
+                  {isSettingsSpareBulletSearchActive ? (
+                    <p className="settings-spare-bullet-search-summary">
+                      {visibleSettingsSpareBullets.length.toLocaleString()} of{" "}
+                      {settingsSkillData.spareBullets.length.toLocaleString()}{" "}
+                      resume bullets
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div className="settings-spare-bullet-list">
+                {settingsSkillData.spareBullets.length > 0 ? (
+                  visibleSettingsSpareBullets.length > 0 ? (
+	                    visibleSettingsSpareBullets.map((spareBullet) => {
+	                      const experience = settingsSkillData.resumeExperiences.find(
+	                        (candidate) =>
+	                          candidate.id === spareBullet.resumeExperienceId,
+	                      );
+                      const editDraft =
+                        settingsSpareBulletEditDraft?.id === spareBullet.id
+                          ? settingsSpareBulletEditDraft
+                          : null;
+
+	                      return (
+	                        <article
+	                          className="settings-spare-bullet-card"
+	                          key={spareBullet.id}
+	                        >
+	                          <div className="settings-spare-bullet-card-header">
+	                            <div className="settings-spare-bullet-card-copy">
+                              {editDraft ? (
+                                <div className="settings-spare-bullet-inline-grid">
+                                  <label className="settings-spare-bullet-field settings-spare-bullet-inline-field">
+                                    <span>Skills-section keywords</span>
+                                    <input
+                                      disabled={isSavingSettingsSpareBullet}
+                                      onChange={(event) =>
+                                        updateSettingsSpareBulletEditDraft({
+                                          skillNames: event.target.value,
+                                        })
+                                      }
+                                      value={editDraft.skillNames}
+                                    />
+                                  </label>
+                                  <label className="settings-spare-bullet-field settings-spare-bullet-inline-field">
+                                    <span>Resume experience</span>
+                                    <select
+                                      disabled={
+                                        isSavingSettingsSpareBullet ||
+                                        settingsSkillData.resumeExperiences
+                                          .length === 0
+                                      }
+                                      onChange={(event) =>
+                                        updateSettingsSpareBulletEditDraft({
+                                          resumeExperienceId:
+                                            event.target.value,
+                                        })
+                                      }
+                                      value={editDraft.resumeExperienceId}
+                                    >
+                                      {settingsSkillData.resumeExperiences.map(
+                                        (resumeExperience) => (
+                                          <option
+                                            key={resumeExperience.id}
+                                            value={resumeExperience.id}
+                                          >
+                                            {resumeExperience.label}
+                                          </option>
+                                        ),
+                                      )}
+                                    </select>
+                                  </label>
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="settings-spare-bullet-skills">
+                                    {spareBullet.skills.length > 0 ? (
+                                      spareBullet.skills.map((skill) => (
+                                        <span key={skill.id}>{skill.name}</span>
+                                      ))
+                                    ) : (
+                                      <span>No skills</span>
+                                    )}
+                                  </div>
+                                  <p className="settings-spare-bullet-experience">
+                                    {experience?.label ??
+                                      spareBullet.resumeExperienceId}
+                                  </p>
+                                </>
+                              )}
+	                            </div>
+	                            <div className="settings-spare-bullet-card-actions">
+	                              <button
+                                aria-label={
+                                  editDraft
+                                    ? "Save resume bullet"
+                                    : "Edit resume bullet"
+                                }
+                                className={
+                                  editDraft
+                                    ? "settings-spare-bullet-card-action-save"
+                                    : undefined
+                                }
+	                                disabled={
+                                  isSavingSettingsSpareBullet ||
+                                  (Boolean(editDraft) &&
+                                    !canSaveSettingsSpareBulletEdit)
+                                }
+	                                onClick={() =>
+                                  editDraft
+                                    ? void saveSettingsSpareBulletEdit()
+                                    : editSettingsSpareBullet(spareBullet)
+                                }
+	                                title={
+                                  editDraft
+                                    ? "Save resume bullet"
+                                    : "Edit resume bullet"
+                                }
+	                                type="button"
+	                              >
+                                {editDraft ? <CheckIcon /> : <PencilIcon />}
+	                              </button>
+	                              <button
+	                                aria-label="Delete resume bullet"
+                                disabled={isSavingSettingsSpareBullet}
+                                onClick={() =>
+                                  void deleteSettingsSpareBullet(spareBullet.id)
+                                }
+                                title="Delete resume bullet"
+                                type="button"
+                              >
+                                <TrashIcon />
+                              </button>
+	                            </div>
+	                          </div>
+
+                          {editDraft ? (
+                            <div className="settings-spare-bullet-inline-edit">
+                              <SettingsSpareBulletQuoteField
+                                disabled={isSavingSettingsSpareBullet}
+                                fieldClassName="settings-spare-bullet-inline-field"
+                                measureLineCount={
+                                  measureSettingsSpareBulletLineCount
+                                }
+                                onChange={(value) =>
+                                  updateSettingsSpareBulletEditDraft({
+                                    quote: value,
+                                  })
+                                }
+                                replacesQuote={editDraft.replacesQuote}
+                                resumeExperienceId={
+                                  editDraft.resumeExperienceId
+                                }
+                                value={editDraft.quote}
+                              />
+                              <label className="settings-spare-bullet-field settings-spare-bullet-inline-field">
+                                <span>Replaces quote</span>
+                                <textarea
+                                  disabled={isSavingSettingsSpareBullet}
+                                  onChange={(event) =>
+                                    updateSettingsSpareBulletEditDraft({
+                                      replacesQuote: event.target.value,
+                                    })
+                                  }
+                                  placeholder="Original bullet to replace"
+                                  value={editDraft.replacesQuote}
+                                />
+                              </label>
+                            </div>
+                          ) : (
+                            <>
+                              <p className="settings-spare-bullet-quote">
+                                {spareBullet.quote}
+                              </p>
+                              {spareBullet.replacesQuote ? (
+                                <div className="settings-spare-bullet-replaces">
+                                  <p>Replaces quote</p>
+                                  <blockquote>
+                                    {spareBullet.replacesQuote}
+                                  </blockquote>
+                                </div>
+                              ) : null}
+                            </>
+                          )}
+	                        </article>
+	                      );
+	                    })
+                  ) : (
+                    <p className="settings-spare-bullet-empty">
+                      No resume bullets match that search.
+                    </p>
+                  )
+                ) : (
+                  <p className="settings-spare-bullet-empty">
+                    No resume bullets yet.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </section>
       </section>
     );
   }
@@ -13337,12 +13723,10 @@ function App() {
               className="tailor-interview-finish-dialog"
               role="dialog"
             >
-              <p className="eyebrow">Tailor Resume Follow-Up</p>
-              <h2>Ready to finish?</h2>
+              <p className="eyebrow">Tailor Resume Keywords</p>
+              <h2>Ready to start?</h2>
               <p className="tailor-interview-finish-copy">
-                The assistant thinks it has enough detail to finish the tailored
-                resume. Press Done to continue, or keep chatting if you want to
-                clarify anything else first.
+                Review the keyword buckets, then press play to start tailoring.
               </p>
               <div className="tailor-interview-finish-actions">
                 <button
@@ -13351,7 +13735,7 @@ function App() {
                   type="button"
                   onClick={dismissTailorInterviewFinishPrompt}
                 >
-                  Keep chatting
+                  Keep reviewing
                 </button>
                 <button
                   className="primary-action compact-action"
@@ -13359,7 +13743,7 @@ function App() {
                   type="button"
                   onClick={() => void completeTailorInterview()}
                 >
-                  {isFinishingTailorInterview ? "Finishing..." : "Done"}
+                  {isFinishingTailorInterview ? "Starting..." : "Play"}
                 </button>
               </div>
             </section>
@@ -13723,12 +14107,10 @@ function App() {
                 className="tailor-interview-finish-dialog"
                 role="dialog"
               >
-                <p className="eyebrow">Tailor Resume Follow-Up</p>
-                <h2>We&apos;d like to end this chat</h2>
+                <p className="eyebrow">Tailor Resume Keywords</p>
+                <h2>Ready to start?</h2>
                 <p className="tailor-interview-finish-copy">
-                  The assistant thinks it has enough detail to finish the tailored
-                  resume. Press Done to continue, or keep chatting if you want to
-                  clarify anything else first.
+                  Review the keyword buckets, then press play to start tailoring.
                 </p>
                 <div className="tailor-interview-finish-actions">
                   <button
@@ -13737,7 +14119,7 @@ function App() {
                     type="button"
                     onClick={dismissTailorInterviewFinishPrompt}
                   >
-                    Keep chatting
+                    Keep reviewing
                   </button>
                   <button
                     className="primary-action compact-action"
@@ -13745,7 +14127,7 @@ function App() {
                     type="button"
                     onClick={() => void completeTailorInterview()}
                   >
-                    {isFinishingTailorInterview ? "Finishing..." : "Done"}
+                    {isFinishingTailorInterview ? "Starting..." : "Play"}
                   </button>
                 </div>
               </section>
@@ -13873,21 +14255,20 @@ function App() {
           </section>
         </div>
       ) : null}
-      {EXTENSION_TOP_LEVEL_AI_CHAT_HIDDEN ? null : (
-        <div className={`chat-dock ${isChatOpen ? "chat-dock-open" : ""}`}>
+      <div className={`chat-dock ${isChatOpen ? "chat-dock-open" : ""}`}>
           {isChatOpen ? (
-            <section className="chat-panel" aria-label="Job page chat">
+            <section className="chat-panel" aria-label="Resume support chat">
               <header className="chat-header">
                 <div className="chat-title-group">
-                  <p>Job Chat</p>
+                  <p>Resume Chat</p>
                   <span title={chatPageLabel}>{chatPageLabel}</span>
                 </div>
                 <div className="chat-header-actions">
                   <button
-                    aria-label="Delete chat for this URL"
+                    aria-label="Delete resume chat"
                     className="icon-action"
                     disabled={!canDeleteChat}
-                    title="Delete chat for this URL"
+                    title="Delete resume chat"
                     type="button"
                     onClick={() => void handleDeleteChat()}
                   >
@@ -13905,7 +14286,8 @@ function App() {
               </header>
 
               <div className="chat-tip">
-                This chat sees the current job page, your resume, and USER.md.
+                This chat can save skills-section support, fetch resume
+                experiences, and read your current LaTeX resume.
               </div>
 
               <div className="chat-messages" aria-live="polite">
@@ -13913,18 +14295,14 @@ function App() {
                   <p className="chat-placeholder">
                     Connect Google to start chatting.
                   </p>
-                ) : state.status !== "ready" ? (
-                  <p className="chat-placeholder">
-                    Open a regular job page to chat.
-                  </p>
                 ) : chatStatus === "loading" ? (
                   <p className="chat-placeholder">Loading chat...</p>
                 ) : chatStatus === "error" && chatMessages.length === 0 ? (
                   <p className="chat-placeholder">{chatError}</p>
                 ) : chatMessages.length === 0 ? (
                   <p className="chat-placeholder">
-                    Ask whether this role is worth applying to, where your resume
-                    matches, or what the posting really requires.
+                    Ask me to add a skills-section keyword, draft reusable
+                    resume bullet support, or inspect the current resume.
                   </p>
                 ) : (
                   chatMessages.map((message, index) => (
@@ -13961,7 +14339,7 @@ function App() {
                     authState.status !== "signedIn" ||
                     chatSendStatus === "streaming"
                   }
-                  placeholder="Ask about this job"
+                  placeholder="Ask about your resume support"
                   rows={2}
                   value={chatInput}
                   onChange={(event) => setChatInput(event.target.value)}
@@ -13979,17 +14357,16 @@ function App() {
             </section>
           ) : (
             <button
-              aria-label="Open job chat"
+              aria-label="Open resume chat"
               className="chat-launcher"
-              title="Open job chat"
+              title="Open resume chat"
               type="button"
               onClick={() => setIsChatOpen(true)}
             >
               <ChatBubbleIcon />
             </button>
           )}
-        </div>
-      )}
+      </div>
     </main>
   );
 }
