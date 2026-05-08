@@ -1003,7 +1003,7 @@ function buildUncoveredTailorResumeQuestionTechnologies(input: {
 function buildTailorResumeScrapedTechnologyContexts(
   technologies: TailoredResumeEmphasizedTechnology[],
 ): TailorResumeTechnologyContext[] {
-  return technologies.slice(0, 12).map((technology) => {
+  return technologies.map((technology) => {
     const name = formatTailorResumeTermWithCapitalFirst(technology.name);
     const evidence = technology.evidence.trim();
 

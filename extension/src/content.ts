@@ -993,10 +993,6 @@ function normalizeEmphasizedTechnologies(
       name,
       priority,
     });
-
-    if (technologies.length >= 16) {
-      break;
-    }
   }
 
   return technologies;
