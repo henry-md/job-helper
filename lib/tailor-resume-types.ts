@@ -97,9 +97,16 @@ export type TailorResumeConversationToolCall = {
   name: string;
 };
 
+export type TailorResumeTechnologyExampleKind = "existing" | "new";
+
+export type TailorResumeTechnologyExample = {
+  kind: TailorResumeTechnologyExampleKind;
+  text: string;
+};
+
 export type TailorResumeTechnologyContext = {
   definition: string;
-  examples: string[];
+  examples: TailorResumeTechnologyExample[];
   name: string;
 };
 
@@ -1236,9 +1243,21 @@ function parseTailorResumeTechnologyContext(
   );
   const definition = readNullableString(value.definition)?.trim() ?? "";
   const examples = Array.isArray(value.examples)
-    ? value.examples
-        .map((example) => readNullableString(example)?.trim() ?? "")
-        .filter(Boolean)
+    ? value.examples.flatMap(
+        (example: unknown): TailorResumeTechnologyExample[] => {
+          if (!isRecord(example)) {
+            return [];
+          }
+
+          const text = readNullableString(example.text)?.trim() ?? "";
+          const kind =
+            example.kind === "existing" || example.kind === "new"
+              ? example.kind
+              : null;
+
+          return text && kind ? [{ kind, text }] : [];
+        },
+      )
     : [];
 
   if (!name || !definition) {

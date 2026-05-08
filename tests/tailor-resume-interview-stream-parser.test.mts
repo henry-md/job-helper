@@ -14,14 +14,29 @@ test("emits text deltas as assistantMessage grows and cards as they close", () =
         name: "Go",
         definition:
           "Statically typed compiled programming language designed at Google.",
-        examples: ["Built a service in Go -- Go", "Migrated APIs to Go -- Go"],
+        examples: [
+          {
+            kind: "existing",
+            text: "Built a service in Go -- Go",
+          },
+          {
+            kind: "new",
+            text: "Migrated APIs to Go -- Go",
+          },
+        ],
       },
       {
         name: "Cassandra",
         definition: "Distributed wide-column NoSQL database.",
         examples: [
-          "Tuned Cassandra cluster -- Cassandra",
-          "Designed schema -- Cassandra",
+          {
+            kind: "existing",
+            text: "Tuned Cassandra cluster -- Cassandra",
+          },
+          {
+            kind: "new",
+            text: "Designed Cassandra schema -- Cassandra",
+          },
         ],
       },
     ],
@@ -69,6 +84,19 @@ test("emits text deltas as assistantMessage grows and cards as they close", () =
     (cards[0] as { card: { name: string } }).card.name,
     "Go",
   );
+  assert.deepEqual(
+    (cards[0] as { card: { examples: unknown[] } }).card.examples,
+    [
+      {
+        kind: "existing",
+        text: "Built a service in Go -- Go",
+      },
+      {
+        kind: "new",
+        text: "Migrated APIs to Go -- Go",
+      },
+    ],
+  );
   assert.equal(
     (cards[1] as { card: { name: string } }).card.name,
     "Cassandra",
@@ -96,6 +124,49 @@ test("handles escape sequences and partial unicode escapes safely", () => {
     .map((e) => (e.kind === "text-delta" ? e.delta : ""))
     .join("");
   assert.equal(reconstructed, 'Hello\n"world"');
+});
+
+test("does not emit cards whose examples omit the exact card term", () => {
+  const fullArgs = JSON.stringify({
+    assistantMessage: "Which of these match?",
+    technologyContexts: [
+      {
+        name: "Distributed systems",
+        definition:
+          "Distributed systems coordinate work across multiple machines.",
+        examples: [
+          {
+            kind: "existing",
+            text: "Designed distributed ad-similarity microservice with sharding and leader election -- NewForm AI",
+          },
+          {
+            kind: "new",
+            text: "Implemented distributed processing pipeline using job queues -- Johns Hopkins University",
+          },
+        ],
+      },
+      {
+        name: "Kafka",
+        definition: "Kafka is an event streaming platform.",
+        examples: [
+          {
+            kind: "existing",
+            text: "Built Kafka consumers to reduce backlog 70% -- NewForm AI",
+          },
+          {
+            kind: "new",
+            text: "Tuned Kafka partitions to improve event throughput 3x -- Johns Hopkins University",
+          },
+        ],
+      },
+    ],
+  });
+  const streamer = new TailorResumeInterviewArgsStreamer();
+  const events = streamer.feed(fullArgs);
+  const cards = events.filter((event) => event.kind === "card");
+
+  assert.equal(cards.length, 1);
+  assert.equal((cards[0] as { card: { name: string } }).card.name, "Kafka");
 });
 
 test("emits text from completionMessage when finish tool is called", () => {

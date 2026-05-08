@@ -8,6 +8,7 @@ import {
   normalizeTailorResumeInterviewResponseForCurrentTurn,
   parseTailorResumeInterviewResponseFromModelOutput,
   tailorResumeAskMessageRequestsUserMarkdownPermission,
+  validateTailorResumeTechnologyContextExampleTerms,
 } from "../lib/tailor-resume-questioning.ts";
 
 test("isDebugForceConversationInTailorPipelineEnabled reads common true values", () => {
@@ -203,8 +204,14 @@ test("normalizeTailorResumeInterviewResponseForCurrentTurn finishes timid memory
         {
           definition: "Grafana is an observability dashboarding tool.",
           examples: [
-            "Built Grafana dashboards that cut alert triage time 35%.",
-            "Integrated Grafana alerts to reduce noisy pages 40%.",
+            {
+              kind: "existing",
+              text: "Built Grafana dashboards that cut alert triage time 35%.",
+            },
+            {
+              kind: "new",
+              text: "Integrated Grafana alerts to reduce noisy pages 40%.",
+            },
           ],
           name: "Grafana",
         },
@@ -374,8 +381,14 @@ test("normalizeTailorResumeInterviewResponseForCurrentTurn strips ordinary follo
         {
           definition: "Go is used for backend services.",
           examples: [
-            "Built Go services that reduced latency 25%.",
-            "Migrated workers to Go and cut memory 40%.",
+            {
+              kind: "existing",
+              text: "Built Go services that reduced latency 25%.",
+            },
+            {
+              kind: "new",
+              text: "Migrated workers to Go and cut memory 40%.",
+            },
           ],
           name: "Go",
         },
@@ -557,8 +570,14 @@ test("parseTailorResumeInterviewResponseFromModelOutput keeps follow-up technolo
               definition:
                 "Cassandra is a distributed NoSQL database used for high-write, large-scale event or time-series data.",
               examples: [
-                "Designed Cassandra data models for high-volume event writes -- NewForm",
-                "Migrated time-series metrics into Cassandra-backed storage -- KnoWhiz",
+                {
+                  kind: "existing",
+                  text: "Designed Cassandra data models for high-volume event writes -- NewForm",
+                },
+                {
+                  kind: "new",
+                  text: "Migrated time-series metrics into Cassandra-backed storage -- KnoWhiz",
+                },
               ],
               name: "cassandra",
             },
@@ -575,9 +594,114 @@ test("parseTailorResumeInterviewResponseFromModelOutput keeps follow-up technolo
   assert.equal(response.response.technologyContexts.length, 1);
   assert.equal(response.response.technologyContexts[0]?.name, "Cassandra");
   assert.deepEqual(response.response.technologyContexts[0]?.examples, [
-    "Designed Cassandra data models for high-volume event writes -- NewForm",
-    "Migrated time-series metrics into Cassandra-backed storage -- KnoWhiz",
+    {
+      kind: "existing",
+      text: "Designed Cassandra data models for high-volume event writes -- NewForm",
+    },
+    {
+      kind: "new",
+      text: "Migrated time-series metrics into Cassandra-backed storage -- KnoWhiz",
+    },
   ]);
+});
+
+test("parseTailorResumeInterviewResponseFromModelOutput reads structured example kinds", () => {
+  const response = parseTailorResumeInterviewResponseFromModelOutput({
+    output: [
+      {
+        arguments: JSON.stringify({
+          assistantMessage:
+            "Here are two distributed systems options. Which one matches your experience?",
+          technologyContexts: [
+            {
+              definition:
+                "Distributed systems coordinate work across multiple machines.",
+              examples: [
+                {
+                  kind: "existing",
+                  text: "Reworked distributed systems Java batching with two-phase commits to cut import failures below 4% -- KnoWhiz",
+                },
+                {
+                  kind: "existing",
+                  text: "Refactored distributed systems API endpoints and inference services for platform-agnostic ad workflows -- NewForm AI",
+                },
+              ],
+              name: "distributed systems",
+            },
+          ],
+        }),
+        call_id: "call-structured-examples",
+        name: "initiate_tailor_resume_probing_questions",
+        type: "function_call",
+      },
+    ],
+  });
+
+  assert.equal(response.response.action, "ask");
+  assert.deepEqual(response.response.technologyContexts[0]?.examples, [
+    {
+      kind: "existing",
+      text: "Reworked distributed systems Java batching with two-phase commits to cut import failures below 4% -- KnoWhiz",
+    },
+    {
+      kind: "existing",
+      text: "Refactored distributed systems API endpoints and inference services for platform-agnostic ad workflows -- NewForm AI",
+    },
+  ]);
+});
+
+test("validateTailorResumeTechnologyContextExampleTerms rejects examples missing the card term before placement", () => {
+  const validation = validateTailorResumeTechnologyContextExampleTerms([
+    {
+      definition:
+        "Distributed systems coordinate work across multiple machines.",
+      examples: [
+        {
+          kind: "existing",
+          text: "Designed Spark streaming pipeline to aggregate event streams at 10k msg/sec -- NewForm AI",
+        },
+        {
+          kind: "new",
+          text: "Built a fault-tolerant microservice mesh -- Distributed systems",
+        },
+      ],
+      name: "Distributed systems",
+    },
+  ]);
+
+  assert.equal(validation.valid, false);
+  assert.deepEqual(
+    validation.issues.map((issue) => issue.exampleIndex),
+    [0, 1],
+  );
+  assert.match(validation.issues[0]?.sentence ?? "", /Spark streaming/i);
+  assert.doesNotMatch(
+    validation.issues[1]?.sentence ?? "",
+    /Distributed systems/i,
+  );
+});
+
+test("validateTailorResumeTechnologyContextExampleTerms accepts examples containing the exact card term", () => {
+  const validation = validateTailorResumeTechnologyContextExampleTerms([
+    {
+      definition:
+        "Distributed systems coordinate work across multiple machines.",
+      examples: [
+        {
+          kind: "existing",
+          text: "Reworked distributed systems batching to cut cross-node recovery from minutes to seconds -- NewForm AI",
+        },
+        {
+          kind: "existing",
+          text: "Improved distributed systems request routing to sustain 4x higher throughput during traffic spikes -- Johns Hopkins University",
+        },
+      ],
+      name: "Distributed systems",
+    },
+  ]);
+
+  assert.equal(validation.valid, true);
+  assert.deepEqual(validation.issues, []);
 });
 
 test("parseTailorResumeInterviewResponseFromModelOutput preserves weak example cards", () => {
@@ -592,8 +716,14 @@ test("parseTailorResumeInterviewResponseFromModelOutput preserves weak example c
               definition:
                 "Azure is a cloud platform used for deploying and operating production services.",
               examples: [
-                "Provisioned Azure Kubernetes Service -- Purview Data Platform",
-                "Migrated Azure workloads -- Azure App Services",
+                {
+                  kind: "existing",
+                  text: "Provisioned Azure Kubernetes Service -- Purview Data Platform",
+                },
+                {
+                  kind: "new",
+                  text: "Migrated Azure workloads -- Azure App Services",
+                },
               ],
               name: "Azure",
             },
@@ -608,8 +738,14 @@ test("parseTailorResumeInterviewResponseFromModelOutput preserves weak example c
 
   assert.equal(response.response.action, "ask");
   assert.deepEqual(response.response.technologyContexts[0]?.examples, [
-    "Provisioned Azure Kubernetes Service -- Purview Data Platform",
-    "Migrated Azure workloads -- Azure App Services",
+    {
+      kind: "existing",
+      text: "Provisioned Azure Kubernetes Service -- Purview Data Platform",
+    },
+    {
+      kind: "new",
+      text: "Migrated Azure workloads -- Azure App Services",
+    },
   ]);
 });
 
@@ -625,10 +761,22 @@ test("parseTailorResumeInterviewResponseFromModelOutput allows requested extra t
               definition:
                 "Go is a compiled language commonly used for backend services, workers, APIs, and infrastructure tooling.",
               examples: [
-                "Rewrote Quizlet import worker in Go, increasing throughput 3x and cutting memory usage 50% -- KnoWhiz",
-                "Implemented Go concurrent worker pool and AWS SQS consumers to process onboarding jobs at 200 jobs/sec, reducing backlog 75% -- HF Engineering",
-                "Built Go streaming service to ingest sensor data at 1k msg/sec with sub-250ms latency for near-real-time dashboards -- Johns Hopkins University",
-                "Replaced Java PDF parsing pipeline with a Go service to cut page generation from minutes to under 15s and reduce hosting costs 30% -- Chief of NYC Fire Dept Website",
+                {
+                  kind: "existing",
+                  text: "Rewrote Quizlet import worker in Go, increasing throughput 3x and cutting memory usage 50% -- KnoWhiz",
+                },
+                {
+                  kind: "new",
+                  text: "Implemented Go concurrent worker pool and AWS SQS consumers to process onboarding jobs at 200 jobs/sec, reducing backlog 75% -- HF Engineering",
+                },
+                {
+                  kind: "new",
+                  text: "Built Go streaming service to ingest sensor data at 1k msg/sec with sub-250ms latency for near-real-time dashboards -- Johns Hopkins University",
+                },
+                {
+                  kind: "new",
+                  text: "Replaced Java PDF parsing pipeline with a Go service to cut page generation from minutes to under 15s and reduce hosting costs 30% -- Chief of NYC Fire Dept Website",
+                },
               ],
               name: "Go",
             },
@@ -662,8 +810,14 @@ test("parseTailorResumeInterviewResponseFromModelOutput preserves duplicated tec
               definition:
                 "Go is a compiled language designed for building high-performance backend services and concurrent systems.",
               examples: [
-                "Built a Go microservice for Quizlet imports, replacing a Python ETL and increasing throughput 4x while cutting memory use 60% -- KnoWhiz",
-                "Implemented a Go-based concurrent worker pool and AWS SQS consumers to process onboarding jobs at 2k jobs/sec, reducing processing lag 80% -- HF Engineering",
+                {
+                  kind: "existing",
+                  text: "Built a Go microservice for Quizlet imports, replacing a Python ETL and increasing throughput 4x while cutting memory use 60% -- KnoWhiz",
+                },
+                {
+                  kind: "new",
+                  text: "Implemented a Go-based concurrent worker pool and AWS SQS consumers to process onboarding jobs at 2k jobs/sec, reducing processing lag 80% -- HF Engineering",
+                },
               ],
               name: "Go",
             },

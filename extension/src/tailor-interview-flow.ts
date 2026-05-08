@@ -3,6 +3,7 @@ import type {
   TailorResumeGenerationStepSummary,
   TailorResumePendingInterviewSummary,
   TailorResumeTechnologyContext,
+  TailorResumeTechnologyExample,
 } from "./job-helper";
 import type { TailorResumeInterviewStreamEvent } from "./tailor-resume-stream";
 
@@ -63,15 +64,22 @@ function normalizeTechnologyContextName(context: TailorResumeTechnologyContext) 
   return context.name.trim().toLowerCase();
 }
 
+function readTechnologyExampleText(example: TailorResumeTechnologyExample) {
+  return example.text;
+}
+
 function mergeTechnologyContextExamples(
-  firstExamples: readonly string[],
-  secondExamples: readonly string[],
+  firstExamples: readonly TailorResumeTechnologyExample[],
+  secondExamples: readonly TailorResumeTechnologyExample[],
 ) {
   const seenExamples = new Set<string>();
-  const examples: string[] = [];
+  const examples: TailorResumeTechnologyExample[] = [];
 
   for (const example of [...firstExamples, ...secondExamples]) {
-    const normalizedExample = example.trim().replace(/\s+/g, " ").toLowerCase();
+    const normalizedExample = readTechnologyExampleText(example)
+      .trim()
+      .replace(/\s+/g, " ")
+      .toLowerCase();
 
     if (!normalizedExample || seenExamples.has(normalizedExample)) {
       continue;

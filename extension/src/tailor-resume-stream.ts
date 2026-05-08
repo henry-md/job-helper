@@ -2,6 +2,7 @@ import {
   readTailorResumeGenerationStepSummary,
   type TailorResumeGenerationStepSummary,
   type TailorResumeTechnologyContext,
+  type TailorResumeTechnologyExample,
 } from "./job-helper";
 import {
   isNdjsonResponse,
@@ -33,6 +34,51 @@ function readTailorResumeInterviewStreamField(value: unknown) {
     : null;
 }
 
+function normalizeExampleTermMatchText(value: string) {
+  return value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function escapeExampleTermRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function technologyExampleContainsTerm(input: {
+  term: string;
+  text: string;
+}) {
+  const term = normalizeExampleTermMatchText(input.term);
+  const text = normalizeExampleTermMatchText(input.text).replace(
+    /\s(?:--|[-–—])\s*[^-–—]+?\s*$/,
+    "",
+  );
+
+  if (!term) {
+    return false;
+  }
+
+  const escapedTerm = escapeExampleTermRegExp(term).replace(/\s+/g, "\\s+");
+  const regexp = new RegExp(`(^|[^a-z0-9])${escapedTerm}(?=$|[^a-z0-9])`, "i");
+
+  return regexp.test(text);
+}
+
+function readTailorResumeTechnologyExample(
+  value: unknown,
+): TailorResumeTechnologyExample[] {
+  if (typeof value !== "object" || value === null) {
+    return [];
+  }
+
+  const example = value as Record<string, unknown>;
+  const text = typeof example.text === "string" ? example.text.trim() : "";
+  const kind =
+    example.kind === "existing" || example.kind === "new"
+      ? example.kind
+      : null;
+
+  return text && kind ? [{ kind, text }] : [];
+}
+
 function readTailorResumeInterviewTechnologyContext(
   value: unknown,
 ): TailorResumeTechnologyContext | null {
@@ -45,13 +91,20 @@ function readTailorResumeInterviewTechnologyContext(
   const definition =
     typeof record.definition === "string" ? record.definition.trim() : "";
   const examples = Array.isArray(record.examples)
-    ? record.examples
-        .filter((entry): entry is string => typeof entry === "string")
-        .map((entry) => entry.trim())
-        .filter(Boolean)
+    ? record.examples.flatMap(readTailorResumeTechnologyExample)
     : [];
 
-  if (!name || !definition || examples.length < 2) {
+  if (
+    !name ||
+    !definition ||
+    examples.length < 2 ||
+    !examples.every((example) =>
+      technologyExampleContainsTerm({
+        term: name,
+        text: example.text,
+      }),
+    )
+  ) {
     return null;
   }
 

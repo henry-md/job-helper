@@ -3017,6 +3017,33 @@ button:disabled {
   padding-left: 1px;
 }
 
+.interview-technology-example-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 13px;
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid rgba(148, 163, 184, 0.34);
+  border-radius: 999px;
+  color: rgba(226, 232, 240, 0.82);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  text-transform: uppercase;
+  vertical-align: 0.08em;
+  white-space: nowrap;
+}
+
+.interview-technology-example-badge-existing {
+  border-color: rgba(96, 165, 250, 0.34);
+  color: #bfdbfe;
+}
+
+.interview-technology-example-badge-new {
+  border-color: rgba(52, 211, 153, 0.36);
+  color: #a7f3d0;
+}
+
 .toolcall-details {
   margin-top: 10px;
   border: 1px solid rgba(244, 244, 245, 0.1);

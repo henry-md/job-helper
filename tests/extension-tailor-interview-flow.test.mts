@@ -90,7 +90,12 @@ test("merges streamed interview cards back into the final server conversation", 
     technologyContexts: [
       {
         definition: "Azure hosts cloud services.",
-        examples: ["Built Azure deployment -- NewForm"],
+        examples: [
+          {
+            kind: "existing",
+            text: "Built Azure deployment -- NewForm",
+          },
+        ],
         name: "Azure",
       },
     ],
@@ -136,7 +141,12 @@ test("merges streamed interview cards back into the final server conversation", 
   assert.deepEqual(merged?.conversation[0]?.technologyContexts, [
     {
       definition: "Azure hosts cloud services.",
-      examples: ["Built Azure deployment -- NewForm"],
+      examples: [
+        {
+          kind: "existing",
+          text: "Built Azure deployment -- NewForm",
+        },
+      ],
       name: "Azure",
     },
   ]);

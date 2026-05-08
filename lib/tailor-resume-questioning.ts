@@ -16,6 +16,7 @@ import type {
   TailorResumeConversationMessage,
   TailorResumeGenerationStepEvent,
   TailorResumeInterviewDebugDecision,
+  TailorResumeTechnologyExample,
   TailorResumeTechnologyContext,
   TailoredResumeEmphasizedTechnology,
   TailoredResumePlanningResult,
@@ -28,6 +29,7 @@ import type {
 } from "./tailor-resume-planning.ts";
 import {
   buildTailorResumeKeywordPresenceContext,
+  resumeTextIncludesKeyword,
   type TailorResumeKeywordPresenceContext,
   type TailorResumeKeywordPresenceContextTerm,
 } from "./tailor-resume-keyword-coverage.ts";
@@ -106,8 +108,25 @@ const tailorResumeTechnologyContextSchema = {
     examples: {
       type: "array",
       description:
-        "Meaningfully different, FAANG-level one-sentence resume bullet suggestions that include the exact technology keyword, stay concise, and include the positive result in the same sentence. Return exactly two by default, but return the number the user explicitly asks for when they request more examples, up to six. Prefer action + technical scope + measurable impact, e.g. reduced cost 40%, improved latency 2x, processed 10k msg/sec. End every example with a dash suffix for the specific resume company/internship where the bullet could fit, such as `-- NewForm AI` or `-- Johns Hopkins University`. The suffix must come from the user's resume, never from the job posting, product name, team name, platform category, or technology keyword.",
-      items: { type: "string" },
+        "Meaningfully different, FAANG-level one-sentence resume bullet suggestions that include the exact technology keyword, stay concise, and include the positive result in the same sentence. Return exactly two by default, but return the number the user explicitly asks for when they request more examples, up to six. Each item must include text plus kind. kind must be existing when the suggestion is a slight modification of a resume or USER.md bullet, and new when it is an entirely new bullet suggestion. Prefer action + technical scope + measurable impact, e.g. reduced cost 40%, improved latency 2x, processed 10k msg/sec. End every example text with a dash suffix for the specific resume company/internship where the bullet could fit, such as `-- NewForm AI` or `-- Johns Hopkins University`. The suffix must come from the user's resume, never from the job posting, product name, team name, platform category, or technology keyword.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          kind: {
+            type: "string",
+            enum: ["existing", "new"],
+            description:
+              "existing means this is a slight modification of an existing resume or USER.md bullet; new means this is an entirely new bullet suggestion.",
+          },
+          text: {
+            type: "string",
+            description:
+              "The visible one-sentence resume bullet suggestion, ending with the chosen resume placement suffix.",
+          },
+        },
+        required: ["text", "kind"],
+      },
       minItems: 2,
       maxItems: 6,
     },
@@ -403,6 +422,14 @@ type TailoredResumeResponse = {
   output_text?: string;
 };
 
+type TailorResumeTechnologyExamplesResponseInput = Array<{
+  content: Array<{
+    text: string;
+    type: "input_text";
+  }>;
+  role: "user";
+}>;
+
 type TailoredResumeFunctionToolCall = {
   arguments: string;
   callId: string | null;
@@ -487,6 +514,7 @@ export async function generateTailorResumeTechnologyExamples(input: {
   resumePlainText?: string;
   streamOpening?: boolean;
   technologies: TailoredResumeEmphasizedTechnology[];
+  userMarkdown?: string;
 }): Promise<{
   assistantMessage: string;
   generationDurationMs: number;
@@ -507,6 +535,7 @@ export async function generateTailorResumeTechnologyExamples(input: {
     resumeExperienceNames,
     resumePlainText: input.resumePlainText ?? "",
     technologies: input.technologies,
+    userMarkdown: input.userMarkdown ?? "",
   });
   let openingMessage = input.openingMessage?.trim() ?? "";
 
@@ -542,76 +571,116 @@ export async function generateTailorResumeTechnologyExamples(input: {
     }
   }
 
-  const attempt = 1;
   const instructions = buildTailorResumeTechnologyExamplesInstructions();
-  const response = await runWithTransientModelRetries({
-    onRetry: async (retryEvent) => {
-      await input.onStepEvent?.({
-        attempt,
-        detail:
-          `The Step 2 examples request hit a transient model error (${retryEvent.message}). ` +
-          `Retrying automatically (${retryEvent.nextAttempt}/${retryEvent.maxAttempts}).`,
-        durationMs: Math.max(0, Date.now() - startedAt),
-        emphasizedTechnologies: input.technologies,
-        retrying: true,
-        status: "failed",
-        stepCount: 5,
-        stepNumber: 2,
-        summary: "Generating technology examples",
-      });
-    },
-    operation: async () => {
-      const streamer = new TailorResumeInterviewArgsStreamer();
-      const reasoning = resolveTailorResumeInterviewReasoning(model);
-      const stream = client.responses.stream({
-        input: examplesInput,
-        instructions,
-        ...(reasoning ? { reasoning } : {}),
-        ...buildLowVerbosityTextConfig(model),
-        model,
-        tool_choice: "required",
-        tools: tailorResumeTechnologyExamplesTools,
-      });
-      const finalResponsePromise = stream.finalResponse();
+  const maxValidationAttempts = 2;
+  let parsed: ReturnType<
+    typeof parseTailorResumeTechnologyExamplesResponseFromModelOutput
+  > | null = null;
+  let validStreamEvents: TailorResumeInterviewStreamEvent[] = [];
+  let validationFeedback = "";
 
-      for await (const event of stream) {
-        if (
-          event.type === "response.function_call_arguments.delta" &&
-          typeof event.delta === "string" &&
-          event.delta.length > 0
-        ) {
-          const emitted = streamer.feed(event.delta);
+  for (
+    let validationAttempt = 1;
+    validationAttempt <= maxValidationAttempts;
+    validationAttempt += 1
+  ) {
+    const requestInput = appendTailorResumeTechnologyExamplesRetryFeedback(
+      examplesInput,
+      validationFeedback,
+    );
+    const attemptResult = await runWithTransientModelRetries({
+      onRetry: async (retryEvent) => {
+        await input.onStepEvent?.({
+          attempt: validationAttempt,
+          detail:
+            `The Step 2 examples request hit a transient model error (${retryEvent.message}). ` +
+            `Retrying automatically (${retryEvent.nextAttempt}/${retryEvent.maxAttempts}).`,
+          durationMs: Math.max(0, Date.now() - startedAt),
+          emphasizedTechnologies: input.technologies,
+          retrying: true,
+          status: "failed",
+          stepCount: 5,
+          stepNumber: 2,
+          summary: "Generating technology examples",
+        });
+      },
+      operation: async () => {
+        const streamEvents: TailorResumeInterviewStreamEvent[] = [];
+        const streamer = new TailorResumeInterviewArgsStreamer();
+        const reasoning = resolveTailorResumeInterviewReasoning(model);
+        const stream = client.responses.stream({
+          input: requestInput,
+          instructions,
+          ...(reasoning ? { reasoning } : {}),
+          ...buildLowVerbosityTextConfig(model),
+          model,
+          tool_choice: "required",
+          tools: tailorResumeTechnologyExamplesTools,
+        });
+        const finalResponsePromise = stream.finalResponse();
 
-          if (input.onStreamEvent) {
-            for (const emittedEvent of emitted) {
-              await input.onStreamEvent(emittedEvent);
-            }
+        for await (const event of stream) {
+          if (
+            event.type === "response.function_call_arguments.delta" &&
+            typeof event.delta === "string" &&
+            event.delta.length > 0
+          ) {
+            streamEvents.push(...streamer.feed(event.delta));
           }
         }
-      }
 
-      return (await finalResponsePromise) as TailoredResumeResponse;
-    },
-  });
+        return {
+          response: (await finalResponsePromise) as TailoredResumeResponse,
+          streamEvents,
+        };
+      },
+    });
+    const attemptParsed = parseTailorResumeTechnologyExamplesResponseFromModelOutput(
+      attemptResult.response,
+    );
+    const validation =
+      validateTailorResumeTechnologyContextExampleTerms(
+        attemptParsed.response.technologyContexts,
+      );
 
-  const parsed =
-    parseTailorResumeTechnologyExamplesResponseFromModelOutput(response);
+    parsed = attemptParsed;
+
+    if (validation.valid) {
+      validStreamEvents = attemptResult.streamEvents;
+      break;
+    }
+
+    validationFeedback = buildTailorResumeTechnologyExamplesRetryFeedback(
+      validation,
+      validationAttempt,
+      maxValidationAttempts,
+    );
+  }
+
   const technologyContexts =
-    parsed.response.technologyContexts.length > 0
+    parsed && validateTailorResumeTechnologyContextExampleTerms(
+      parsed.response.technologyContexts,
+    ).valid
       ? parsed.response.technologyContexts
       : buildFallbackTechnologyContexts(
           input.technologies.map((technology) => technology.name),
           resumeExperienceNames,
         );
 
+  if (parsed && validStreamEvents.length > 0 && input.onStreamEvent) {
+    for (const event of validStreamEvents) {
+      await input.onStreamEvent(event);
+    }
+  }
+
   return {
     assistantMessage:
       openingMessage ||
-      parsed.response.assistantMessage ||
+      parsed?.response.assistantMessage ||
       buildFallbackTailorResumeExamplesQuestion(),
     generationDurationMs: Math.max(0, Date.now() - startedAt),
     technologyContexts,
-    toolCalls: parsed.toolCalls,
+    toolCalls: parsed?.toolCalls ?? [],
   };
 }
 
@@ -925,6 +994,26 @@ function readRecordNumber(value: unknown, key: string) {
     : null;
 }
 
+function readTailorResumeTechnologyExample(
+  value: unknown,
+): TailorResumeTechnologyExample | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const text = "text" in value ? readTrimmedString(value.text) : "";
+  const kind =
+    "kind" in value && (value.kind === "existing" || value.kind === "new")
+      ? value.kind
+      : null;
+
+  if (!text) {
+    return null;
+  }
+
+  return kind ? { kind, text } : null;
+}
+
 function isOpenAIRequestError(error: unknown) {
   if (isTransientModelError(error)) {
     return true;
@@ -1020,7 +1109,15 @@ function parseTailorResumeTechnologyContexts(
       "definition" in entry ? readTrimmedString(entry.definition) : "";
     const examples =
       "examples" in entry && Array.isArray(entry.examples)
-        ? entry.examples.map(readTrimmedString).filter(Boolean)
+        ? entry.examples
+            .map((example: unknown) =>
+              readTailorResumeTechnologyExample(example),
+            )
+            .filter(
+              (
+                example: TailorResumeTechnologyExample | null,
+              ): example is TailorResumeTechnologyExample => Boolean(example),
+            )
         : [];
 
     if (!name) {
@@ -1035,6 +1132,97 @@ function parseTailorResumeTechnologyContexts(
       name,
     }];
   });
+}
+
+function readTailorResumeTechnologyExampleText(
+  example: TailorResumeTechnologyExample,
+) {
+  return example.text;
+}
+
+function readTailorResumeTechnologyExampleSentence(
+  example: TailorResumeTechnologyExample,
+) {
+  const text = readTailorResumeTechnologyExampleText(example).trim();
+  const suffix = readTechnologyExampleDashSuffix(text);
+
+  if (!suffix) {
+    return text;
+  }
+
+  return text.replace(/\s(?:--|[-–—])\s*[^-–—]+?\s*$/, "").trim();
+}
+
+type TailorResumeTechnologyExampleTermValidationIssue = {
+  exampleIndex: number;
+  sentence: string;
+  technology: string;
+  text: string;
+};
+
+export function validateTailorResumeTechnologyContextExampleTerms(
+  contexts: readonly TailorResumeTechnologyContext[],
+): {
+  issues: TailorResumeTechnologyExampleTermValidationIssue[];
+  valid: boolean;
+} {
+  if (contexts.length === 0) {
+    return {
+      issues: [
+        {
+          exampleIndex: 0,
+          sentence: "",
+          technology: "technologyContexts",
+          text: "No technologyContexts were returned.",
+        },
+      ],
+      valid: false,
+    };
+  }
+
+  const issues: TailorResumeTechnologyExampleTermValidationIssue[] = [];
+
+  for (const context of contexts) {
+    const technology = context.name.trim();
+
+    if (!technology) {
+      continue;
+    }
+
+    if (context.examples.length === 0) {
+      issues.push({
+        exampleIndex: 0,
+        sentence: "",
+        technology,
+        text: "No examples were returned for this technology.",
+      });
+      continue;
+    }
+
+    context.examples.forEach((example, index) => {
+      const text = readTailorResumeTechnologyExampleText(example);
+      const sentence = readTailorResumeTechnologyExampleSentence(example);
+
+      if (
+        !resumeTextIncludesKeyword({
+          term: technology,
+          text: sentence,
+        })
+      ) {
+        issues.push({
+          exampleIndex: index,
+          sentence,
+          technology,
+          text,
+        });
+      }
+    });
+  }
+
+  return {
+    issues,
+    valid: issues.length === 0,
+  };
 }
 
 function normalizeResumeExperiencePlacementName(value: string) {
@@ -1759,6 +1947,13 @@ function getFallbackTechnologyExamples(term: string) {
     ];
   }
 
+  if (normalizedTerm === "distributed systems") {
+    return [
+      "Reworked distributed systems batching and replication paths to reduce cross-node failure recovery from minutes to seconds.",
+      "Improved distributed systems request routing and backpressure controls to sustain 4x higher throughput during traffic spikes.",
+    ];
+  }
+
   if (normalizedTerm === "elasticsearch") {
     return [
       "Tuned Elasticsearch mappings and shard strategy to cut search p95 latency 48% across customer-facing analytics queries.",
@@ -1783,6 +1978,46 @@ function getFallbackTechnologyExamples(term: string) {
   return [
     `Applied ${term} to a production workflow to improve reliability, latency, or developer throughput with measurable impact.`,
     `Integrated ${term} into an existing system to reduce manual work and improve operational efficiency for the team.`,
+  ];
+}
+
+function isSoftKeywordForBulletExamples(term: string) {
+  const normalizedTerm = term.trim().toLowerCase();
+
+  return (
+    /\b(?:algorithms?|api development|cloud infrastructure|data structures?|distributed systems?|geospatial|microservices?|restful(?: apis?| services?)?|system architecture)\b/i.test(
+      normalizedTerm,
+    ) ||
+    /(?:^|\s)(?:ai|ml)\s+systems?$/.test(normalizedTerm)
+  );
+}
+
+function buildFallbackTechnologyExampleRecords(input: {
+  firstExample: string;
+  firstPlacement?: string;
+  secondExample: string;
+  secondPlacement?: string;
+  term: string;
+}): TailorResumeTechnologyExample[] {
+  const firstText = appendTechnologyExamplePlacement(
+    input.firstExample,
+    input.firstPlacement,
+  );
+  const secondText = appendTechnologyExamplePlacement(
+    input.secondExample,
+    input.secondPlacement,
+  );
+
+  if (isSoftKeywordForBulletExamples(input.term)) {
+    return [
+      { kind: "existing", text: firstText },
+      { kind: "existing", text: secondText },
+    ];
+  }
+
+  return [
+    { kind: "existing", text: firstText },
+    { kind: "new", text: secondText },
   ];
 }
 
@@ -1815,10 +2050,13 @@ export function buildFallbackTechnologyContexts(
 
     return {
       definition: getFallbackTechnologyDefinition(displayTerm),
-      examples: [
-        appendTechnologyExamplePlacement(firstExample, firstPlacement),
-        appendTechnologyExamplePlacement(secondExample, secondPlacement),
-      ],
+      examples: buildFallbackTechnologyExampleRecords({
+        firstExample,
+        firstPlacement,
+        secondExample,
+        secondPlacement,
+        term: displayTerm,
+      }),
       name: displayTerm,
     };
   });
@@ -1998,12 +2236,67 @@ function serializeResumeExperiencePlacementOptions(names: string[]) {
   return names.map((name, index) => `${index + 1}. ${name}`).join("\n");
 }
 
+function buildTailorResumeTechnologyExamplesRetryFeedback(
+  validation: {
+    issues: TailorResumeTechnologyExampleTermValidationIssue[];
+    valid: boolean;
+  },
+  attempt: number,
+  maxAttempts: number,
+) {
+  const issueLines = validation.issues.slice(0, 8).map((issue) => {
+    const sentence = issue.sentence || issue.text || "[empty example]";
+
+    return (
+      `- ${issue.technology} example ${String(issue.exampleIndex + 1)} ` +
+      `is missing the exact term "${issue.technology}" before the placement suffix: ${sentence}`
+    );
+  });
+
+  return [
+    `Previous attempt ${String(attempt)} of ${String(maxAttempts)} failed deterministic validation.`,
+    "Do not mention this validation failure in assistantMessage.",
+    "Every examples[].text sentence before its `-- <placement>` suffix must contain the exact technology name from that same technologyContexts card.",
+    "Related technologies, synonyms, or category words are not enough. For example, a Distributed systems card must say Distributed systems in each example sentence.",
+    "Return the full generate_tailor_resume_technology_examples tool call again.",
+    "Invalid examples:",
+    ...issueLines,
+  ].join("\n");
+}
+
+function appendTailorResumeTechnologyExamplesRetryFeedback(
+  input: TailorResumeTechnologyExamplesResponseInput,
+  feedback: string,
+): TailorResumeTechnologyExamplesResponseInput {
+  const trimmedFeedback = feedback.trim();
+
+  if (!trimmedFeedback) {
+    return input;
+  }
+
+  return [
+    ...input,
+    {
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text:
+            "Hidden deterministic retry feedback for the previous Step 2 example-generation attempt:\n" +
+            trimmedFeedback,
+        },
+      ],
+    },
+  ];
+}
+
 function buildTailorResumeTechnologyExamplesInput(input: {
   jobDescription: string;
   resumeExperienceNames: string[];
   resumePlainText: string;
   technologies: TailoredResumeEmphasizedTechnology[];
-}) {
+  userMarkdown: string;
+}): TailorResumeTechnologyExamplesResponseInput {
   return [
     {
       role: "user" as const,
@@ -2026,6 +2319,14 @@ function buildTailorResumeTechnologyExamplesInput(input: {
             "Original resume context, used only to choose which company/internship each example is for:\n" +
             (input.resumePlainText.trim()
               ? input.resumePlainText.slice(0, 8_000)
+              : "[not available]"),
+        },
+        {
+          type: "input_text" as const,
+          text:
+            "USER.md memory context, also usable as the source for existing-bullet modifications:\n" +
+            (input.userMarkdown.trim()
+              ? input.userMarkdown.slice(0, 8_000)
               : "[not available]"),
         },
         {
@@ -2088,9 +2389,13 @@ function buildTailorResumeTechnologyExamplesInstructions() {
     "Call generate_tailor_resume_technology_examples exactly once.",
     "assistantMessage must be short and ask which examples match the user's actual experience.",
     "Do not repeat definitions or example bullets in assistantMessage because technologyContexts render them visibly.",
-    "For each technology, return a plain-English definition and exactly two concise FAANG-level resume bullets.",
+    "For each technology, return a plain-English definition and exactly two concise FAANG-level resume bullets by default.",
+    "Each examples item must be structured as { text, kind }. Use kind \"existing\" when the text is a slight modification of an existing resume or USER.md bullet, and kind \"new\" when the text is an entirely new bullet suggestion.",
+    "The server deterministically rejects any example whose sentence before the `-- <placement>` suffix does not contain the exact technology name from that card.",
+    "For concrete actual skill keywords that could truthfully go in the Skills section, return one \"existing\" example and one \"new\" example by default.",
+    "For softer capability keywords that should not go in the Skills section, such as RESTful, RESTful APIs, API development, distributed systems, system architecture, cloud infrastructure, data structures, algorithms, microservices, AI systems, or geospatial, return only \"existing\" examples that slightly modify existing resume or USER.md bullets.",
     "Every bullet must include action, technical scope, and a positive result in the same sentence, preferably with a metric.",
-    "For every example bullet, choose one company/internship from the provided resume placement options and end the bullet with `-- <that exact option>`.",
+    "For every example bullet text, choose one company/internship from the provided resume placement options and end the bullet with `-- <that exact option>`.",
     "The suffix says where the hypothetical bullet would go. Never use job-posting product, team, platform, project, technical-category, or technology names as suffixes.",
     "If relevance is uncertain, choose the closest resume company/internship anyway instead of inventing a product or project suffix.",
     "Do not invent that the user has this experience; these are examples for the user to accept or reject.",

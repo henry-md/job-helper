@@ -393,8 +393,13 @@ export type TailorResumeConversationToolCall = {
 
 export type TailorResumeTechnologyContext = {
   definition: string;
-  examples: string[];
+  examples: TailorResumeTechnologyExample[];
   name: string;
+};
+
+export type TailorResumeTechnologyExample = {
+  kind: "existing" | "new";
+  text: string;
 };
 
 export type TailorResumeQuestioningSummary = {
@@ -896,7 +901,19 @@ function readTailorResumeTechnologyContext(
   const name = readString(value.name);
   const definition = readString(value.definition);
   const examples = Array.isArray(value.examples)
-    ? value.examples.map(readString).filter(Boolean)
+    ? value.examples.flatMap((example): TailorResumeTechnologyExample[] => {
+        if (!isRecord(example)) {
+          return [];
+        }
+
+        const text = readString(example.text);
+        const kind =
+          example.kind === "existing" || example.kind === "new"
+            ? example.kind
+            : null;
+
+        return text && kind ? [{ kind, text }] : [];
+      })
     : [];
 
   if (!name || !definition) {

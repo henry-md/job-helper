@@ -1,4 +1,8 @@
-import type { TailorResumeTechnologyContext } from "./tailor-resume-types.ts";
+import type {
+  TailorResumeTechnologyContext,
+  TailorResumeTechnologyExample,
+} from "./tailor-resume-types.ts";
+import { resumeTextIncludesKeyword } from "./tailor-resume-keyword-coverage.ts";
 
 export type InterviewStreamEmittedEvent =
   | {
@@ -17,6 +21,39 @@ export type TailorResumeInterviewStreamEvent =
   | { kind: "reset" };
 
 const interviewTextKeys = ["assistantMessage", "completionMessage"] as const;
+
+function readTailorResumeTechnologyExample(
+  value: unknown,
+): TailorResumeTechnologyExample[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+
+  const text =
+    "text" in value && typeof value.text === "string" ? value.text.trim() : "";
+  const kind =
+    "kind" in value && (value.kind === "existing" || value.kind === "new")
+      ? value.kind
+      : null;
+
+  return text && kind ? [{ kind, text }] : [];
+}
+
+function stripTechnologyExamplePlacementSuffix(text: string) {
+  return text.replace(/\s(?:--|[-–—])\s*[^-–—]+?\s*$/, "").trim();
+}
+
+function technologyExamplesContainTerm(
+  name: string,
+  examples: readonly TailorResumeTechnologyExample[],
+) {
+  return examples.every((example) =>
+    resumeTextIncludesKeyword({
+      term: name,
+      text: stripTechnologyExamplePlacementSuffix(example.text),
+    }),
+  );
+}
 
 export class TailorResumeInterviewArgsStreamer {
   private buffer = "";
@@ -245,13 +282,15 @@ export class TailorResumeInterviewArgsStreamer {
         const definition =
           typeof parsed.definition === "string" ? parsed.definition.trim() : "";
         const examples = Array.isArray(parsed.examples)
-          ? parsed.examples
-              .filter((entry): entry is string => typeof entry === "string")
-              .map((entry) => entry.trim())
-              .filter(Boolean)
+          ? parsed.examples.flatMap(readTailorResumeTechnologyExample)
           : [];
 
-        if (name && definition && examples.length >= 2) {
+        if (
+          name &&
+          definition &&
+          examples.length >= 2 &&
+          technologyExamplesContainTerm(name, examples)
+        ) {
           cards.push({ definition, examples, name });
         }
       } catch {

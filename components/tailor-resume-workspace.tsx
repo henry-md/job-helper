@@ -59,6 +59,7 @@ import type {
   TailorResumeProfile,
   TailorResumeSavedLinkUpdate,
   TailorResumeTechnologyContext,
+  TailorResumeTechnologyExample,
 } from "@/lib/tailor-resume-types";
 import type { TailorResumeUserMemoryState } from "@/lib/tailor-resume-user-memory";
 
@@ -667,6 +668,28 @@ function TailorResumeToolCallDetails({
   );
 }
 
+function readTechnologyExampleText(example: TailorResumeTechnologyExample) {
+  return example.text;
+}
+
+function readTechnologyExampleKind(example: TailorResumeTechnologyExample) {
+  return example.kind;
+}
+
+function readTechnologyExampleKindTooltip(
+  kind: ReturnType<typeof readTechnologyExampleKind>,
+) {
+  if (kind === "new") {
+    return "New bullet suggestion\u00a0\u2014 does not exist in resume or user.md";
+  }
+
+  if (kind === "existing") {
+    return "A slight modification of an existing bullet in resume or user.md";
+  }
+
+  return "";
+}
+
 function TailorResumeTechnologyContexts({
   contexts,
   messageId,
@@ -719,11 +742,29 @@ function TailorResumeTechnologyContexts({
               <p>{context.definition}</p>
               {context.examples.length > 0 ? (
                 <ul className="grid list-disc gap-1 pl-4">
-                  {context.examples.map((example, exampleIndex) => (
-                    <li key={`${context.name}:${String(exampleIndex)}`}>
-                      {example}
-                    </li>
-                  ))}
+                  {context.examples.map((example, exampleIndex) => {
+                    const text = readTechnologyExampleText(example);
+                    const kind = readTechnologyExampleKind(example);
+                    const tooltip = readTechnologyExampleKindTooltip(kind);
+
+                    return (
+                      <li key={`${context.name}:${String(exampleIndex)}`}>
+                        {text}
+                        {kind ? (
+                          <span
+                            className={`ml-1.5 inline-flex min-h-3 items-center rounded-full border px-1 align-[0.08em] text-[9px] font-extrabold uppercase leading-none ${
+                              kind === "existing"
+                                ? "border-sky-400/35 text-sky-200"
+                                : "border-emerald-400/35 text-emerald-200"
+                            }`}
+                            title={tooltip}
+                          >
+                            {kind}
+                          </span>
+                        ) : null}
+                      </li>
+                    );
+                  })}
                 </ul>
               ) : null}
             </div>

@@ -72,6 +72,7 @@ import {
   type TailorResumePreparationState,
   type TailorResumePendingInterviewSummary,
   type TailorResumeRunRecord,
+  type TailorResumeTechnologyExample,
   type TailorRunTimeDisplayMode,
   type TailoredResumeEmphasizedTechnology,
   type TailoredResumeSummary,
@@ -3094,6 +3095,28 @@ function ToolCallDetails({ toolCalls }: { toolCalls: ToolCallRecord[] }) {
   );
 }
 
+function readTechnologyExampleText(example: TailorResumeTechnologyExample) {
+  return example.text;
+}
+
+function readTechnologyExampleKind(example: TailorResumeTechnologyExample) {
+  return example.kind;
+}
+
+function readTechnologyExampleKindTooltip(
+  kind: ReturnType<typeof readTechnologyExampleKind>,
+) {
+  if (kind === "new") {
+    return "New bullet suggestion\u00a0\u2014 does not exist in resume or user.md";
+  }
+
+  if (kind === "existing") {
+    return "A slight modification of an existing bullet in resume or user.md";
+  }
+
+  return "";
+}
+
 function TailorInterviewTechnologyContexts({
   contexts,
   nonTechnologies,
@@ -3171,9 +3194,25 @@ function TailorInterviewTechnologyContexts({
               <p>{context.definition}</p>
               {context.examples.length > 0 ? (
                 <ul>
-                  {context.examples.map((example, index) => (
-                    <li key={`${context.name}:${String(index)}`}>{example}</li>
-                  ))}
+                  {context.examples.map((example, index) => {
+                    const text = readTechnologyExampleText(example);
+                    const kind = readTechnologyExampleKind(example);
+                    const tooltip = readTechnologyExampleKindTooltip(kind);
+
+                    return (
+                      <li key={`${context.name}:${String(index)}`}>
+                        {text}
+                        {kind ? (
+                          <span
+                            className={`interview-technology-example-badge interview-technology-example-badge-${kind}`}
+                            title={tooltip}
+                          >
+                            {kind}
+                          </span>
+                        ) : null}
+                      </li>
+                    );
+                  })}
                 </ul>
               ) : null}
             </div>

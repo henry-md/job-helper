@@ -1866,6 +1866,8 @@ async function handleGenerateTailorResumeInterviewExamples(
         : preparation.tailoringInterview.planningResult.emphasizedTechnologies;
     const examplesStartedAt = Date.now();
     const earlyOpeningMessage = await earlyOpeningMessagePromise;
+    const userMarkdownBeforeQuestioning =
+      await userMarkdownBeforeQuestioningPromise;
     const planningSnapshot = buildTailorResumePlanningSnapshot(
       preparation.tailoringInterview.sourceAnnotatedLatexCode,
     );
@@ -1899,6 +1901,7 @@ async function handleGenerateTailorResumeInterviewExamples(
         resumePlainText: planningSnapshot.resumePlainText,
         streamOpening: !earlyOpeningMessage,
         technologies: technologiesForExamples,
+        userMarkdown: userMarkdownBeforeQuestioning.markdown,
       });
     } catch (error) {
       const errorMessage = formatTailorResumeStepError(
@@ -1953,8 +1956,6 @@ async function handleGenerateTailorResumeInterviewExamples(
     const accumulatedModelDurationMs =
       preparation.tailoringInterview.accumulatedModelDurationMs +
       examplesResult.generationDurationMs;
-    const userMarkdownBeforeQuestioning =
-      await userMarkdownBeforeQuestioningPromise;
     const userMarkdownAfterQuestioning = userMarkdownBeforeQuestioning;
     const planningResultForQuestioning: TailorResumePlanningResult = {
       ...preparation.tailoringInterview.planningResult,
