@@ -5,7 +5,7 @@ export function applyTailorResumePageCountFailure(
   result: GenerateTailoredResumeResult,
   errorMessage: string,
 ): GenerateTailoredResumeResult {
-  const normalizedError = formatTailorResumeStepError(5, errorMessage);
+  const normalizedError = formatTailorResumeStepError(4, errorMessage);
 
   return {
     ...result,

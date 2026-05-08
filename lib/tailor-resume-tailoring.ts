@@ -708,7 +708,12 @@ function normalizeTailoredResumeEmphasizedTechnologies(
       !existingTechnology ||
       (existingTechnology.priority === "low" && technology.priority === "high")
     ) {
-      normalizedTechnologies.set(key, technology);
+      const classification =
+        technology.classification ?? existingTechnology?.classification;
+      normalizedTechnologies.set(key, {
+        ...technology,
+        ...(classification ? { classification } : {}),
+      });
     }
   }
 
@@ -2565,9 +2570,9 @@ export function buildPrePlanningTailoredResumePlanningResult(input: {
     questioningSummary: input.questioningSummary ?? null,
     thesis: {
       jobDescriptionFocus:
-        "Step 3 planning has not run yet; Step 2 is gathering missing resume context first.",
+        "Step 3 planning has not run yet; Step 2 is reviewing skills-section keyword coverage first.",
       resumeChanges:
-        "The plaintext edit plan will be generated after Step 2 questions are skipped or completed.",
+        "The plaintext edit plan will be generated after Step 2 keyword review is complete.",
     },
   } satisfies TailoredResumePlanningResult;
 }
@@ -2614,7 +2619,7 @@ export async function extractTailorResumeEmphasizedTechnologiesForQuestioning(in
       attempt: 1,
       detail:
         `Identified ${technologyHintTechnologies.length} job keyword ` +
-        `${technologyHintTechnologies.length === 1 ? "term" : "terms"} while preparing Step 2 questions.`,
+        `${technologyHintTechnologies.length === 1 ? "term" : "terms"} while preparing Step 2 keyword review.`,
       durationMs: Math.max(0, Date.now() - startedAt),
       emphasizedTechnologies: technologyHintTechnologies,
       retrying: false,
@@ -2678,8 +2683,8 @@ export async function extractTailorResumeEmphasizedTechnologiesForQuestioning(in
     attempt: 1,
     detail:
       emphasizedTechnologies.length > 0
-        ? `Prepared ${emphasizedTechnologies.length} job keyword ${emphasizedTechnologies.length === 1 ? "term" : "terms"} for Step 2 clarification and Step 3 planning.`
-        : "No concrete job keyword terms were identified for Step 2 clarification.",
+        ? `Prepared ${emphasizedTechnologies.length} job keyword ${emphasizedTechnologies.length === 1 ? "term" : "terms"} for Step 2 keyword review and Step 3 planning.`
+        : "No concrete job keyword terms were identified for Step 2 keyword review.",
     durationMs: Math.max(0, Date.now() - startedAt),
     emphasizedTechnologies,
     retrying: false,
@@ -2759,7 +2764,7 @@ export async function planTailoredResume(input: {
     filterTailorResumeNonTechnologiesFromEmphasizedTechnologies(
       await technologyExtractionPromise,
       input.userMarkdown?.nonTechnologies,
-    );
+    ).filter((technology) => technology.classification !== "non_skill");
   const emphasizedTechnologiesForPlanning =
     filterUnsupportedEmphasizedTechnologiesForPlanning({
       emphasizedTechnologies: emphasizedTechnologiesAfterNonTechnologyFilter,

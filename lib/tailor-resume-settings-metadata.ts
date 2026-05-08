@@ -25,11 +25,11 @@ export const tailorResumePromptFieldDefinitions = [
   },
   {
     description:
-      "Optional Step 2 AI-led follow-up questions before tailoring planning.",
+      "Legacy Step 2 follow-up interview prompt. The current Step 2 keyword review flow is deterministic and does not use this prompt.",
     helper: "Runtime tokens: none.",
     key: "tailorResumeInterview",
     minHeightClassName: "min-h-[320px]",
-    title: "Tailoring Follow-Up Interview",
+    title: "Legacy Tailoring Follow-Up Interview",
   },
   {
     description: "Step 4 LaTeX block generation for the tailored resume.",
@@ -63,18 +63,6 @@ export const tailorResumePromptFieldDefinitions = [
 }>;
 
 export const tailorResumeGenerationSettingDefinitions = [
-  {
-    description:
-      "When enabled, tailoring can ask concise follow-up questions before planning and writing LaTeX edits.",
-    key: "allowTailorResumeFollowUpQuestions",
-    title: "Allow Step 2 follow-up questions",
-  },
-  {
-    description:
-      "When enabled, tailoring automatically runs a highlighted follow-up compaction pass if the new preview exceeds the original resume's page count.",
-    key: "preventPageCountIncrease",
-    title: "Edits should not increase page count",
-  },
   {
     description:
       "Low-priority terms are always tracked and shown. This only chooses whether the displayed coverage percentage is calculated from high-priority terms or all tracked terms.",

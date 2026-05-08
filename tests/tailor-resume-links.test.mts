@@ -42,7 +42,6 @@ const linksExpectedToPass = [
   "tel:9142725561",
   "https://github.com/henry-md",
   "https://github.com/henry-md/ray-tracer",
-  "https://github.com/sciserver/BOOM",
   "https://henry-deutsch.com",
   "https://vincentdunn.com/",
   "https://devpost.com/software/check-it-out",
@@ -52,6 +51,7 @@ const linksExpectedNotToPass = [
   "https://linkedin.com/in/henry-deutsch",
   "https://chiefoffd.com/",
   "https://github.com/henry-mdd",
+  "https://github.com/sciserver/BOOM",
 ] as const;
 
 function readUniqueExampleLinks() {
@@ -215,6 +215,8 @@ test("links expected to pass do pass validation", async () => {
     const result = await validateTailorResumeLink({
       displayText: null,
       url,
+    }, {
+      fetchImpl: async () => new Response(null, { status: 200 }),
     });
 
     assert.equal(
@@ -230,6 +232,8 @@ test("links expected not to pass do not pass validation", async () => {
     const result = await validateTailorResumeLink({
       displayText: null,
       url,
+    }, {
+      fetchImpl: async () => new Response(null, { status: 404 }),
     });
 
     assert.notEqual(

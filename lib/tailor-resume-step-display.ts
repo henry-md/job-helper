@@ -24,6 +24,24 @@ type TailorResumeLiveStatusStep = TailorResumeRetryDisplayInput & {
   summary: string;
 };
 
+export const tailorResumeDisplayStepCount = 4;
+
+export function readTailorResumeDisplayStepNumber(stepNumber: number) {
+  if (!Number.isFinite(stepNumber) || stepNumber < 1) {
+    return 1;
+  }
+
+  return Math.min(Math.floor(stepNumber), tailorResumeDisplayStepCount);
+}
+
+export function readTailorResumeDisplayStepCount(stepCount: number) {
+  if (!Number.isFinite(stepCount) || stepCount < 1) {
+    return tailorResumeDisplayStepCount;
+  }
+
+  return Math.min(Math.floor(stepCount), tailorResumeDisplayStepCount);
+}
+
 function normalizeTailorResumeAttempt(attempt: number | null | undefined) {
   if (
     typeof attempt !== "number" ||
@@ -118,10 +136,12 @@ export function buildTailorResumeLiveStatusMessage(
   }
 
   const displayAttempt = readTailorResumeDisplayAttempt(step);
+  const displayStepNumber = readTailorResumeDisplayStepNumber(step.stepNumber);
+  const displayStepCount = readTailorResumeDisplayStepCount(step.stepCount);
 
   if (step.retrying) {
     return (
-      `Step ${String(step.stepNumber)}/${String(step.stepCount)}: ${step.summary} - ` +
+      `Step ${String(displayStepNumber)}/${String(displayStepCount)}: ${step.summary} - ` +
       formatTailorResumeRetryLabel(displayAttempt)
     );
   }
@@ -129,5 +149,5 @@ export function buildTailorResumeLiveStatusMessage(
   const attemptLabel =
     displayAttempt === null ? "" : ` (attempt ${String(displayAttempt)})`;
 
-  return `Step ${String(step.stepNumber)}/${String(step.stepCount)}: ${step.summary}${attemptLabel}`;
+  return `Step ${String(displayStepNumber)}/${String(displayStepCount)}: ${step.summary}${attemptLabel}`;
 }

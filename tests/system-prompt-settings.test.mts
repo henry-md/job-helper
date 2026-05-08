@@ -205,7 +205,7 @@ test("buildTailorResumeInterviewSystemPrompt keeps user-facing interview text co
   assert.match(prompt, /before the `-- <placement>` suffix/i);
   assert.match(prompt, /concrete actual skill keywords that could go in Skills/i);
   assert.match(prompt, /provide one existing and one new example/i);
-  assert.match(prompt, /softer capability keywords that should not go in Skills/i);
+  assert.match(prompt, /narrative keywords that should not go in Skills/i);
   assert.match(prompt, /provide only existing examples/i);
   assert.match(prompt, /technology-specific example bullets/i);
   assert.match(prompt, /put them in technologyContexts rather than inline assistantMessage text/i);

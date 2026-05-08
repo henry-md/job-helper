@@ -67,6 +67,6 @@ test("live status messages use retry wording when a retry is in flight", () => {
       stepNumber: 5,
       summary: "Keeping the tailored resume within the original page count",
     }),
-    "Step 5/5: Keeping the tailored resume within the original page count - Retrying (attempt 2)",
+    "Step 4/4: Keeping the tailored resume within the original page count - Retrying (attempt 2)",
   );
 });
