@@ -28,6 +28,13 @@ type TextRect = {
   width: number;
 };
 
+export type TailorResumeRenderedLineMeasurement = {
+  left: number;
+  pageNumber: number;
+  right: number;
+  width: number;
+};
+
 type DocumentMatchCharacter = {
   rect: TextRect | null;
 };
@@ -43,6 +50,7 @@ type DocumentMatchIndex = {
 export type TailorResumeSegmentLineMeasurement = {
   command: string | null;
   lineCount: number;
+  lines: TailorResumeRenderedLineMeasurement[];
   pageNumbers: number[];
   plainText: string;
   segmentId: string;
@@ -497,6 +505,31 @@ function findNormalizedRange(input: {
     };
   }
 
+  const longAnchorChunkLength = Math.min(160, Math.floor(normalizedAnchorText.length / 3));
+
+  if (longAnchorChunkLength >= 48) {
+    const prefixText = normalizedAnchorText.slice(0, longAnchorChunkLength);
+    const suffixText = normalizedAnchorText.slice(-longAnchorChunkLength);
+    const prefixStart = input.documentIndex.normalizedText.indexOf(
+      prefixText,
+      input.cursor,
+    );
+
+    if (prefixStart !== -1) {
+      const suffixStart = input.documentIndex.normalizedText.indexOf(
+        suffixText,
+        prefixStart + prefixText.length,
+      );
+
+      if (suffixStart !== -1) {
+        return {
+          end: suffixStart + suffixText.length,
+          start: prefixStart,
+        };
+      }
+    }
+  }
+
   const compactAnchorPositions: number[] = [];
   const compactAnchorParts: string[] = [];
 
@@ -542,11 +575,15 @@ function findNormalizedRange(input: {
   };
 }
 
-function countTextLines(rects: TextRect[]) {
+function measureTextLines(rects: TextRect[]): TailorResumeRenderedLineMeasurement[] {
   const lines: Array<{
+    bottom: number;
     height: number;
+    left: number;
     midline: number;
     pageNumber: number;
+    right: number;
+    top: number;
   }> = [];
 
   for (const rect of [...rects].sort((left, right) => {
@@ -561,6 +598,7 @@ function countTextLines(rects: TextRect[]) {
     return left.left - right.left;
   })) {
     const midline = rect.top + rect.height / 2;
+    const rectRight = rect.left + rect.width;
     const existingLine = lines.find(
       (line) =>
         line.pageNumber === rect.pageNumber &&
@@ -571,17 +609,34 @@ function countTextLines(rects: TextRect[]) {
       existingLine.midline =
         (existingLine.midline + midline) / 2;
       existingLine.height = Math.max(existingLine.height, rect.height);
+      existingLine.left = Math.min(existingLine.left, rect.left);
+      existingLine.right = Math.max(existingLine.right, rectRight);
+      existingLine.top = Math.min(existingLine.top, rect.top);
+      existingLine.bottom = Math.max(existingLine.bottom, rect.top + rect.height);
       continue;
     }
 
     lines.push({
+      bottom: rect.top + rect.height,
       height: rect.height,
+      left: rect.left,
       midline,
       pageNumber: rect.pageNumber,
+      right: rectRight,
+      top: rect.top,
     });
   }
 
-  return lines.length;
+  return lines.map((line) => ({
+    left: line.left,
+    pageNumber: line.pageNumber,
+    right: line.right,
+    width: Math.max(0, line.right - line.left),
+  }));
+}
+
+function countTextLines(rects: TextRect[]) {
+  return measureTextLines(rects).length;
 }
 
 function readRectsForRange(input: {
@@ -693,10 +748,12 @@ export async function measureTailorResumeLayout(input: {
     const pageNumbers = Array.from(
       new Set(rects.map((rect) => rect.pageNumber)),
     ).sort((left, right) => left - right);
+    const lines = measureTextLines(rects);
 
     segments.push({
       command: block.command,
-      lineCount: countTextLines(rects),
+      lineCount: lines.length,
+      lines,
       pageNumbers,
       plainText: block.plainText,
       segmentId: block.segmentId,

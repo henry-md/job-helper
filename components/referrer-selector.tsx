@@ -6,35 +6,7 @@ import type {
   JobApplicationDraft,
   ReferrerOption,
 } from "@/lib/job-application-types";
-
-function scoreMatch(name: string, query: string) {
-  const normalizedName = name.toLowerCase();
-  const normalizedQuery = query.trim().toLowerCase();
-
-  if (!normalizedQuery) {
-    return 1;
-  }
-
-  if (normalizedName.includes(normalizedQuery)) {
-    return normalizedQuery.length + 10;
-  }
-
-  let score = 0;
-  let queryIndex = 0;
-
-  for (const character of normalizedName) {
-    if (character === normalizedQuery[queryIndex]) {
-      score += 1;
-      queryIndex += 1;
-
-      if (queryIndex === normalizedQuery.length) {
-        return score;
-      }
-    }
-  }
-
-  return -1;
-}
+import { scoreFuzzyText } from "@/lib/fuzzy-search";
 
 export default function ReferrerSelector({
   companyOptions,
@@ -105,7 +77,7 @@ export default function ReferrerSelector({
     return referrerOptions
       .map((option) => ({
         option,
-        score: scoreMatch(
+        score: scoreFuzzyText(
           `${option.name} ${option.companyName ?? ""}`,
           query,
         ),
