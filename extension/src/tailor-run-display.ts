@@ -126,6 +126,46 @@ function readTailorRunStepTimingDuration(input: {
   return input.fallbackDurationMs ?? baseDurationMs;
 }
 
+function readPositiveTime(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+function readInferredMissingStepDuration(input: {
+  activeStepNumber: number | null;
+  fallbackRunningDurationMs: number;
+  runElapsedMs: number;
+  runStartedAtTime: number;
+  sortedTimings: TailorRunStepTimingDisplayInput[];
+  stepNumber: number;
+}) {
+  if (input.activeStepNumber === input.stepNumber) {
+    return input.fallbackRunningDurationMs;
+  }
+
+  if (input.stepNumber === 1) {
+    const nextObservedAtTime =
+      input.sortedTimings
+        .filter((timing) => timing.stepNumber > input.stepNumber)
+        .map((timing) => readPositiveTime(timing.observedAtTime))
+        .filter((time): time is number => time !== null)
+        .sort((left, right) => left - right)[0] ?? null;
+
+    if (
+      nextObservedAtTime !== null &&
+      Number.isFinite(input.runStartedAtTime) &&
+      input.runStartedAtTime > 0
+    ) {
+      return Math.max(0, nextObservedAtTime - input.runStartedAtTime);
+    }
+
+    return input.runElapsedMs;
+  }
+
+  return null;
+}
+
 export function formatTailorRunStepTimeDisplay(input: {
   activeStepNumber: number | null | undefined;
   mode: TailorRunTimeDisplayMode;
@@ -167,6 +207,10 @@ export function formatTailorRunStepTimeDisplay(input: {
   const sortedTimings = [...timingsByStepNumber.values()].sort(
     (left, right) => left.stepNumber - right.stepNumber,
   );
+  const visibleStepCount = Math.max(
+    activeStepNumber ?? 0,
+    sortedTimings.at(-1)?.stepNumber ?? 0,
+  );
   const terminalDurationMs = sortedTimings
     .filter((timing) => timing.status !== "running" && timing.retrying !== true)
     .reduce(
@@ -178,17 +222,38 @@ export function formatTailorRunStepTimeDisplay(input: {
     0,
     runElapsedMs - terminalDurationMs,
   );
-  const durations = sortedTimings.map((timing) =>
-    readTailorRunStepTimingDuration({
-      fallbackDurationMs:
-        activeStepNumber && timing.stepNumber === activeStepNumber
-          ? fallbackRunningDurationMs
-          : null,
-      isActive: Boolean(activeStepNumber && timing.stepNumber === activeStepNumber),
-      nowTime: input.nowTime,
-      timing,
-    }),
-  );
+  const durations = Array.from({ length: visibleStepCount }, (_, index) => {
+    const stepNumber = index + 1;
+
+    if (stepNumber === 2) {
+      return null;
+    }
+
+    const timing = timingsByStepNumber.get(stepNumber);
+
+    if (timing) {
+      return readTailorRunStepTimingDuration({
+        fallbackDurationMs:
+          activeStepNumber && timing.stepNumber === activeStepNumber
+            ? fallbackRunningDurationMs
+            : null,
+        isActive: Boolean(
+          activeStepNumber && timing.stepNumber === activeStepNumber,
+        ),
+        nowTime: input.nowTime,
+        timing,
+      });
+    }
+
+    return readInferredMissingStepDuration({
+      activeStepNumber,
+      fallbackRunningDurationMs,
+      runElapsedMs,
+      runStartedAtTime: input.runStartedAtTime,
+      sortedTimings,
+      stepNumber,
+    });
+  });
 
   if (durations.length === 0 && runElapsedMs > 0) {
     durations.push(runElapsedMs);
@@ -199,7 +264,9 @@ export function formatTailorRunStepTimeDisplay(input: {
   }
 
   return durations
-    .map((durationMs) => formatTailorRunDurationMs(durationMs))
+    .map((durationMs) =>
+      durationMs === null ? "-" : formatTailorRunDurationMs(durationMs),
+    )
     .join("/");
 }
 

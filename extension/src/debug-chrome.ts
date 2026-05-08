@@ -1,6 +1,7 @@
 import {
   AUTH_SESSION_STORAGE_KEY,
   DEFAULT_TAILOR_RESUME_ENDPOINT,
+  DEFAULT_TAILOR_RESUME_SUPPORT_CHAT_ENDPOINT,
   defaultExtensionPreferences,
   EXISTING_TAILORING_STORAGE_KEY,
   EXTENSION_PREFERENCES_STORAGE_KEY,
@@ -10,6 +11,7 @@ import {
   TAILORING_RUNS_STORAGE_KEY,
   type JobHelperAuthSession,
   type JobPageContext,
+  type TailorResumeStoredSkillData,
   type TailorResumeRunRecord,
 } from "./job-helper";
 import { emptyUserSyncStateSnapshot } from "../../lib/sync-state.ts";
@@ -28,6 +30,17 @@ type TabUpdatedListener = (
   changeInfo: chrome.tabs.OnUpdatedInfo,
   tab: chrome.tabs.Tab,
 ) => void;
+type DebugChatMessage = {
+  content: string;
+  createdAt: string;
+  id: string;
+  model: string | null;
+  role: "assistant" | "user";
+  toolCalls: Array<{
+    argumentsText: string;
+    name: string;
+  }>;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -103,12 +116,41 @@ const mockPageContext: JobPageContext = {
   url: "https://jobs.example.com/acme-ai/senior-product-engineer",
 };
 
+const mockStep2EmphasizedTechnologies = [
+  {
+    classification: "skills_section",
+    evidence: "Posting lists Kubernetes as a required platform skill.",
+    name: "Kubernetes",
+    priority: "high",
+  },
+  {
+    classification: "narrative",
+    evidence: "Posting asks for load balancing judgment.",
+    name: "Load balancing",
+    priority: "high",
+  },
+  {
+    classification: "skills_section",
+    evidence: "Posting lists Terraform as a preferred platform skill.",
+    name: "Terraform",
+    priority: "low",
+  },
+] satisfies NonNullable<
+  TailorResumeRunRecord["generationStep"]
+>["emphasizedTechnologies"];
+
+const mockStep2BlockingTechnologies = mockStep2EmphasizedTechnologies.filter(
+  (technology) => technology.classification === "skills_section",
+);
+
 function createMockTailoringRun(
   status: TailorResumeRunRecord["status"],
-  variant: "default" | "step5-error" | "step5-running" = "default",
+  variant: "default" | "step2-blocked" | "step5-error" | "step5-running" =
+    "default",
 ) {
   const isStep5Error = variant === "step5-error";
   const isStep5Retry = isStep5Error || variant === "step5-running";
+  const isStep2Blocked = variant === "step2-blocked";
   const nowTime = Date.now();
   const step1DurationMs = 44_000;
   const step2DurationMs = 72_000;
@@ -130,18 +172,34 @@ function createMockTailoringRun(
     companyName: "Acme AI",
     endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
     message:
-      status === "success"
+      isStep2Blocked
+        ? "Review keywords in the side panel, then press play."
+        : status === "success"
         ? "Tailored resume saved to Job Helper."
         : isStep5Retry
-            ? "Step 5/5: Keeping the tailored resume within the original page count - Retrying (attempt 2)"
+            ? "Step 4/4: Keeping the tailored resume within the original page count - Retrying (attempt 2)"
         : status === "running"
           ? "Tailoring your resume for this job..."
           : "Tailor Resume failed while generating the PDF.",
-    generationStep: isStep5Retry
+    generationStep: isStep2Blocked
+      ? {
+          attempt: 1,
+          blockingTechnologies: mockStep2BlockingTechnologies,
+          detail:
+            "Still waiting on 2 skills-section blockers. Add support or mark the terms narrative/non-skill before pressing play again.",
+          durationMs: step2DurationMs,
+          emphasizedTechnologies: mockStep2EmphasizedTechnologies,
+          retrying: false,
+          status: "running",
+          stepCount: 5,
+          stepNumber: 2,
+          summary: "Waiting for skills-section support",
+        }
+      : isStep5Retry
       ? {
           attempt: 2,
           detail:
-            "The model did not submit verified compaction candidates after 4 Step 5 tool rounds.",
+            "The model did not submit verified compaction candidates after 4 page-fit tool rounds.",
           durationMs: isStep5Error ? step4DurationMs : 0,
           retrying: true,
           status: "running",
@@ -150,7 +208,38 @@ function createMockTailoringRun(
           summary: "Keeping the tailored resume within the original page count",
         }
       : null,
-    generationStepTimings: isStep5Retry
+    generationStepTimings: isStep2Blocked
+      ? [
+          {
+            attempt: 1,
+            detail: "Classified scraped job keywords.",
+            durationMs: step1DurationMs,
+            emphasizedTechnologies: mockStep2EmphasizedTechnologies,
+            observedAt: new Date(capturedAtTime + step1DurationMs).toISOString(),
+            retrying: false,
+            status: "succeeded",
+            stepCount: 5,
+            stepNumber: 1,
+            summary: "Scrape keywords",
+          },
+          {
+            attempt: 1,
+            blockingTechnologies: mockStep2BlockingTechnologies,
+            detail:
+              "Still waiting on 2 skills-section blockers. Add support or mark the terms narrative/non-skill before pressing play again.",
+            durationMs: step2DurationMs,
+            emphasizedTechnologies: mockStep2EmphasizedTechnologies,
+            observedAt: new Date(
+              capturedAtTime + step1DurationMs + step2DurationMs,
+            ).toISOString(),
+            retrying: false,
+            status: "running",
+            stepCount: 5,
+            stepNumber: 2,
+            summary: "Waiting for skills-section support",
+          },
+        ]
+      : isStep5Retry
       ? [
           {
             attempt: 1,
@@ -212,7 +301,7 @@ function createMockTailoringRun(
           {
             attempt: 2,
             detail:
-              "The model did not submit verified compaction candidates after 4 Step 5 tool rounds.",
+              "The model did not submit verified compaction candidates after 4 page-fit tool rounds.",
             durationMs: isStep5Error ? step4DurationMs : 0,
             observedAt: new Date(runningStartedAtTime).toISOString(),
             retrying: true,
@@ -232,7 +321,7 @@ function createMockTailoringRun(
 	    tailoredResumeError:
       status === "error"
         ? isStep5Error
-          ? "The model did not submit verified compaction candidates after 4 Step 5 tool rounds."
+          ? "The model did not submit verified compaction candidates after 4 page-fit tool rounds."
           : "Debug failure state for visual testing."
         : null,
     tailoredResumeId: status === "success" ? "debug-tailored-resume" : null,
@@ -259,6 +348,61 @@ function createMockTailoredResumes() {
   ];
 }
 
+function createMockSkillData(): TailorResumeStoredSkillData {
+  const updatedAt = new Date("2026-04-21T22:50:00.000Z").toISOString();
+  const kubernetesSkill = {
+    id: "debug-skill-kubernetes",
+    listInSkillsOnly: false,
+    name: "Kubernetes",
+    normalizedName: "kubernetes",
+    updatedAt,
+  };
+  const postgresSkill = {
+    id: "debug-skill-postgresql",
+    listInSkillsOnly: false,
+    name: "PostgreSQL",
+    normalizedName: "postgresql",
+    updatedAt,
+  };
+
+  return {
+    keywordClassifications: [],
+    resumeExperiences: [
+      {
+        bulletSegmentIds: [
+          "work-experience.entry-1.bullet-1",
+          "work-experience.entry-1.bullet-2",
+        ],
+        headingSegmentId: "work-experience.entry-1",
+        id: "work-experience.entry-1",
+        label: "NewForm AI - Software Engineer Intern",
+      },
+      {
+        bulletSegmentIds: ["projects.entry-1.bullet-1"],
+        headingSegmentId: "projects.entry-1",
+        id: "projects.entry-1",
+        label: "Ray Tracer",
+      },
+    ],
+    skills: [kubernetesSkill, postgresSkill],
+    spareBullets: [
+      {
+        createdAt: updatedAt,
+        id: "debug-spare-bullet-kubernetes",
+        quote:
+          "Deployed Kubernetes-backed services with PostgreSQL persistence to support low-latency resume-tailoring review workflows.",
+        replacesQuote:
+          "Built backend review workflows with persistent storage and low-latency APIs.",
+        resumeExperienceId: "work-experience.entry-1",
+        skillIds: [kubernetesSkill.id, postgresSkill.id],
+        skills: [kubernetesSkill, postgresSkill],
+        updatedAt,
+      },
+    ],
+    updatedAt,
+  };
+}
+
 function readInitialAuthSession(searchParams: URLSearchParams) {
   return searchParams.get("auth") === "signed-in" ? mockSession : null;
 }
@@ -272,6 +416,10 @@ function readInitialTailoringRun(searchParams: URLSearchParams) {
 
   if (runState === "step4-running" || runState === "step5-running") {
     return createMockTailoringRun("running", "step5-running");
+  }
+
+  if (runState === "step2-blocked") {
+    return createMockTailoringRun("needs_input", "step2-blocked");
   }
 
   if (runState === "step4-error" || runState === "step5-error") {
@@ -315,6 +463,34 @@ function readRequestBody(
 function readBodyString(body: Record<string, unknown>, key: string) {
   const value = body[key];
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readBodyStringArray(body: Record<string, unknown>, key: string) {
+  const value = body[key];
+
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+function createDebugNdjsonResponse(events: unknown[]) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      for (const event of events) {
+        controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+      }
+
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/x-ndjson; charset=utf-8",
+    },
+    status: 200,
+  });
 }
 
 function readStorageValue(
@@ -366,6 +542,8 @@ export function installDebugChromeRuntime() {
   const nativeFetch = globalThis.fetch.bind(globalThis);
   let authSession = readInitialAuthSession(searchParams);
   let mockTailoredResumes = authSession ? createMockTailoredResumes() : [];
+  let mockSkillData = createMockSkillData();
+  let mockSupportChatMessages: DebugChatMessage[] = [];
   let mockTailoringRun = readInitialTailoringRun(searchParams);
 
   if (authSession) {
@@ -400,10 +578,32 @@ export function installDebugChromeRuntime() {
 
   function buildMockPersonalInfo() {
     const activeTailorings =
-      mockTailoringRun?.status === "running"
+      mockTailoringRun?.status === "needs_input" &&
+      mockTailoringRun.generationStep?.stepNumber === 2
         ? [
             {
               applicationId: mockTailoringRun.applicationId,
+              blockingTechnologies: mockStep2BlockingTechnologies,
+              companyName: mockTailoringRun.companyName,
+              createdAt: mockTailoringRun.capturedAt,
+              emphasizedTechnologies: mockStep2EmphasizedTechnologies,
+              id: "debug-pending-tailoring",
+              interviewStatus: "pending" as const,
+              jobDescription: mockPageContext.description,
+              jobIdentifier: mockTailoringRun.jobIdentifier,
+              jobUrl: mockTailoringRun.pageUrl,
+              kind: "pending_interview" as const,
+              positionTitle: mockTailoringRun.positionTitle,
+              questionCount: null,
+              updatedAt: mockTailoringRun.capturedAt,
+            },
+          ]
+        : mockTailoringRun?.status === "running"
+          ? [
+            {
+              applicationId: mockTailoringRun.applicationId,
+              blockingTechnologies: mockTailoringRun.generationStep
+                ?.blockingTechnologies ?? [],
               companyName: mockTailoringRun.companyName,
               createdAt: mockTailoringRun.capturedAt,
               id: "debug-active-tailoring",
@@ -437,6 +637,7 @@ export function installDebugChromeRuntime() {
         resumeUpdatedAt: new Date("2026-04-21T22:45:00.000Z").toISOString(),
       },
       syncState: emptyUserSyncStateSnapshot(),
+      skillData: mockSkillData,
       tailoredResumes: mockTailoredResumes,
       tailoringInterview: null,
       tailoringInterviews: [],
@@ -699,12 +900,157 @@ export function installDebugChromeRuntime() {
           : input.url;
     const method = (init?.method ?? "GET").toUpperCase();
 
+    if (url === DEFAULT_TAILOR_RESUME_SUPPORT_CHAT_ENDPOINT && method === "GET") {
+      return new Response(
+        JSON.stringify({
+          messages: authSession ? mockSupportChatMessages : [],
+          pageTitle: "Resume support",
+          url: "job-helper://resume-support-chat",
+        }),
+        {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          status: authSession ? 200 : 401,
+        },
+      );
+    }
+
+    if (
+      url === DEFAULT_TAILOR_RESUME_SUPPORT_CHAT_ENDPOINT &&
+      method === "DELETE"
+    ) {
+      mockSupportChatMessages = [];
+
+      return new Response(
+        JSON.stringify({
+          messages: [],
+          pageTitle: "Resume support",
+          url: "job-helper://resume-support-chat",
+        }),
+        {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          status: authSession ? 200 : 401,
+        },
+      );
+    }
+
+    if (url === DEFAULT_TAILOR_RESUME_SUPPORT_CHAT_ENDPOINT && method === "POST") {
+      if (!authSession) {
+        return new Response(JSON.stringify({ error: "Sign in to use chat." }), {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          status: 401,
+        });
+      }
+
+      const body = readRequestBody(init?.body);
+      const message = readBodyString(body, "message");
+      const createdAt = new Date().toISOString();
+      const userMessage: DebugChatMessage = {
+        content: message,
+        createdAt,
+        id: `debug-chat-user-${String(Date.now())}`,
+        model: null,
+        role: "user",
+        toolCalls: [],
+      };
+      const shouldCreateSkill = /\b(add|save|remember|create)\b/i.test(message);
+      const skillName = /\brust\b/i.test(message)
+        ? "Rust"
+        : /\bkubernetes\b/i.test(message)
+          ? "Kubernetes"
+          : "";
+      const toolCalls =
+        shouldCreateSkill && skillName
+          ? [
+              {
+                argumentsText: JSON.stringify(
+                  {
+                    listInSkillsOnly: true,
+                    name: skillName,
+                    reason: "Debug resume chat skill creation.",
+                  },
+                  null,
+                  2,
+                ),
+                name: "create_skills_section_skill",
+              },
+            ]
+          : [];
+
+      if (skillName) {
+        const normalizedName = skillName.toLowerCase();
+        const updatedAt = new Date().toISOString();
+        const existingSkill = mockSkillData.skills.find(
+          (skill) => skill.normalizedName === normalizedName,
+        );
+        const nextSkill =
+          existingSkill ??
+          {
+            id: `debug-skill-${normalizedName}`,
+            listInSkillsOnly: true,
+            name: skillName,
+            normalizedName,
+            updatedAt,
+          };
+
+        mockSkillData = {
+          ...mockSkillData,
+          skills: [
+            ...mockSkillData.skills.filter(
+              (skill) => skill.normalizedName !== normalizedName,
+            ),
+            {
+              ...nextSkill,
+              listInSkillsOnly: true,
+              updatedAt,
+            },
+          ],
+          updatedAt,
+        };
+      }
+
+      const assistantMessage: DebugChatMessage = {
+        content: skillName
+          ? `Saved ${skillName} as skills-section support.`
+          : "I can help save skills-section support or draft reusable resume bullets.",
+        createdAt,
+        id: `debug-chat-assistant-${String(Date.now())}`,
+        model: "debug",
+        role: "assistant",
+        toolCalls,
+      };
+
+      mockSupportChatMessages = [
+        ...mockSupportChatMessages,
+        userMessage,
+        assistantMessage,
+      ];
+
+      return createDebugNdjsonResponse([
+        {
+          message: userMessage,
+          type: "user-message",
+        },
+        {
+          message: assistantMessage,
+          skillData: skillName ? mockSkillData : null,
+          type: "done",
+        },
+      ]);
+    }
+
     if (url === DEFAULT_TAILOR_RESUME_ENDPOINT && method === "GET") {
       return new Response(
         JSON.stringify({
           profile: {
             tailoredResumes: authSession ? mockTailoredResumes : [],
           },
+          skillData: authSession ? mockSkillData : null,
         }),
         {
           headers: {
@@ -718,6 +1064,117 @@ export function installDebugChromeRuntime() {
     if (url === DEFAULT_TAILOR_RESUME_ENDPOINT && method === "PATCH") {
       const body = readRequestBody(init?.body);
       const action = readBodyString(body, "action");
+
+      if (action === "measureSpareBullet") {
+        const quote = readBodyString(body, "quote");
+        const lineCount =
+          quote.length > 120 ? 3 : quote.length > 70 ? 2 : quote ? 1 : 0;
+        const lastLineFillRatio = lineCount > 1 ? 0.72 : null;
+
+        return new Response(
+          JSON.stringify({
+            spareBulletMeasurement: {
+              lastLineFillRatio,
+              lineCount,
+              malformed:
+                lineCount > 1 &&
+                lastLineFillRatio !== null &&
+                lastLineFillRatio < 0.5,
+              pageCount: 1,
+              targetSegmentId: "debug-spare-bullet-target",
+            },
+          }),
+          {
+            headers: {
+              "Content-Type": "application/json",
+            },
+            status: 200,
+          },
+        );
+      }
+
+      if (action === "saveSpareBullet") {
+        const updatedAt = new Date().toISOString();
+        const id =
+          readBodyString(body, "id") ||
+          `debug-spare-bullet-${String(Date.now())}`;
+        const skillNames = readBodyStringArray(body, "skillNames")
+          .map((skill) => skill.trim())
+          .filter(Boolean);
+        const skills = skillNames.map((skillName) => {
+          const normalizedName = skillName.toLowerCase();
+          const existingSkill = mockSkillData.skills.find(
+            (skill) => skill.normalizedName === normalizedName,
+          );
+
+          return (
+            existingSkill ?? {
+              id: `debug-skill-${normalizedName.replace(/[^a-z0-9]+/g, "-")}`,
+              listInSkillsOnly: false,
+              name: skillName,
+              normalizedName,
+              updatedAt,
+            }
+          );
+        });
+        const nextSpareBullet = {
+          createdAt:
+            mockSkillData.spareBullets.find((bullet) => bullet.id === id)
+              ?.createdAt ?? updatedAt,
+          id,
+          quote: readBodyString(body, "quote"),
+          replacesQuote: readBodyString(body, "replacesQuote") || null,
+          resumeExperienceId: readBodyString(body, "resumeExperienceId"),
+          skillIds: skills.map((skill) => skill.id),
+          skills,
+          updatedAt,
+        };
+
+        mockSkillData = {
+          ...mockSkillData,
+          skills: [
+            ...mockSkillData.skills.filter(
+              (skill) =>
+                !skills.some(
+                  (nextSkill) => nextSkill.normalizedName === skill.normalizedName,
+                ),
+            ),
+            ...skills,
+          ],
+          spareBullets: [
+            nextSpareBullet,
+            ...mockSkillData.spareBullets.filter((bullet) => bullet.id !== id),
+          ],
+          updatedAt,
+        };
+
+        return new Response(JSON.stringify({ skillData: mockSkillData }), {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          status: 200,
+        });
+      }
+
+      if (action === "deleteSpareBullet") {
+        const id = readBodyString(body, "id");
+        const updatedAt = new Date().toISOString();
+
+        mockSkillData = {
+          ...mockSkillData,
+          spareBullets: mockSkillData.spareBullets.filter(
+            (bullet) => bullet.id !== id,
+          ),
+          updatedAt,
+        };
+
+        return new Response(JSON.stringify({ skillData: mockSkillData }), {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          status: 200,
+        });
+      }
 
       if (action === "deleteTailoredResumeArtifact") {
         const jobUrl = readBodyString(body, "jobUrl");

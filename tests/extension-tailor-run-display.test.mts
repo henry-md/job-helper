@@ -81,7 +81,7 @@ test("clamps missing or future loading elapsed time to zero", () => {
   );
 });
 
-test("formats specific tailor run timing as one value per completed and running step", () => {
+test("formats specific tailor run timing as one value per elapsed step", () => {
   const runStartedAtTime = Date.parse("2026-04-29T19:52:18.000Z");
   const step4ObservedAtTime = runStartedAtTime + 44_000 + 72_000 + 132_000;
 
@@ -122,7 +122,31 @@ test("formats specific tailor run timing as one value per completed and running 
         },
       ],
     }),
-    "0:44/1:12/2:12/0:17",
+    "0:44/-/2:12/-/0:17",
+  );
+});
+
+test("shows a Step 2 placeholder instead of a Step 2 duration", () => {
+  const runStartedAtTime = Date.parse("2026-04-29T19:52:18.000Z");
+  const step2ObservedAtTime = runStartedAtTime + 120_000;
+
+  assert.equal(
+    formatTailorRunStepTimeDisplay({
+      activeStepNumber: 2,
+      mode: "specific",
+      nowTime: step2ObservedAtTime + 7_000,
+      runStartedAtTime,
+      timings: [
+        {
+          durationMs: 7_000,
+          observedAtTime: step2ObservedAtTime,
+          retrying: false,
+          status: "running",
+          stepNumber: 2,
+        },
+      ],
+    }),
+    "2:00/-",
   );
 });
 
@@ -204,7 +228,7 @@ test("does not keep counting a stale earlier running step", () => {
         },
       ],
     }),
-    "0:41/0:00/0:26",
+    "0:41/-/0:26",
   );
 });
 
