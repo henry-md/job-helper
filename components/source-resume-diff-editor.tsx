@@ -1,10 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { TailoredResumeDiffCell } from "@/components/tailored-resume-diff-pane";
 import {
-  buildTailoredResumeDiffRows,
-  type TailoredResumeDiffSegment,
-} from "@/lib/tailor-resume-review";
+  clearTailoredResumeDiffBlockScrollSyncGuard,
+  createTailoredResumeDiffBlockScrollSyncState,
+  syncTailoredResumeDiffBlockScrollToAnalogousRow,
+  type TailoredResumeDiffBlockScrollSyncState,
+} from "@/lib/tailor-resume-diff-scroll-sync";
+import { buildTailoredResumeDiffRows } from "@/lib/tailor-resume-review";
+import type { TailoredResumeDiffRow } from "@/lib/tailor-resume-review";
 
 type SourceResumeDiffEditorProps = {
   baselineLatexCode: string;
@@ -14,188 +19,21 @@ type SourceResumeDiffEditorProps = {
   onChange: (value: string) => void;
 };
 
-type DiffSide = "baseline" | "draft";
+type SourceDiffSide = "original" | "tailored";
 
-type DiffScrollSyncState = {
-  expectedScrollTop: number;
-  frame: number | null;
-  ignoredSide: DiffSide | null;
-  releaseTimeout: number | null;
-};
-
-function clampScrollValue(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(value, max));
-}
-
-function measureElementTopWithinScrollContainer(
-  element: HTMLElement,
-  scrollContainer: HTMLElement,
+function readSourceResumeDiffTone(
+  rowType: TailoredResumeDiffRow["type"],
+  side: SourceDiffSide,
 ) {
-  const elementRect = element.getBoundingClientRect();
-  const scrollContainerRect = scrollContainer.getBoundingClientRect();
-
-  return elementRect.top - scrollContainerRect.top + scrollContainer.scrollTop;
-}
-
-function findVisibleDiffRowAnchor(input: {
-  rowElements: Map<number, HTMLElement>;
-  scrollContainer: HTMLElement;
-}) {
-  const sortedRows = [...input.rowElements.entries()].sort(
-    ([leftIndex], [rightIndex]) => leftIndex - rightIndex,
-  );
-
-  if (sortedRows.length === 0) {
-    return null;
+  if (side === "original" && rowType === "added") {
+    return "context";
   }
 
-  const scrollTop = input.scrollContainer.scrollTop;
-  let fallbackAnchor: {
-    index: number;
-    relativeOffset: number;
-  } | null = null;
-
-  for (const [index, rowElement] of sortedRows) {
-    const rowTop = measureElementTopWithinScrollContainer(
-      rowElement,
-      input.scrollContainer,
-    );
-    const rowHeight = Math.max(rowElement.offsetHeight, 1);
-    const rowBottom = rowTop + rowHeight;
-
-    fallbackAnchor = {
-      index,
-      relativeOffset: 1,
-    };
-
-    if (rowBottom < scrollTop + 1) {
-      continue;
-    }
-
-    return {
-      index,
-      relativeOffset: clampScrollValue((scrollTop - rowTop) / rowHeight, 0, 1),
-    };
+  if (side === "tailored" && rowType === "removed") {
+    return "context";
   }
 
-  return fallbackAnchor;
-}
-
-function clearDiffScrollSyncGuard(state: DiffScrollSyncState) {
-  if (state.frame !== null) {
-    window.cancelAnimationFrame(state.frame);
-    state.frame = null;
-  }
-
-  if (state.releaseTimeout !== null) {
-    window.clearTimeout(state.releaseTimeout);
-    state.releaseTimeout = null;
-  }
-
-  state.ignoredSide = null;
-}
-
-function syncDiffScrollToAnalogousRow(input: {
-  sourceRowElements: Map<number, HTMLElement>;
-  sourceScrollContainer: HTMLElement;
-  state: DiffScrollSyncState;
-  targetRowElements: Map<number, HTMLElement>;
-  targetScrollContainer: HTMLElement;
-  targetSide: DiffSide;
-}) {
-  const sourceAnchor = findVisibleDiffRowAnchor({
-    rowElements: input.sourceRowElements,
-    scrollContainer: input.sourceScrollContainer,
-  });
-
-  if (!sourceAnchor) {
-    return;
-  }
-
-  const targetRowElement = input.targetRowElements.get(sourceAnchor.index);
-
-  if (!targetRowElement) {
-    return;
-  }
-
-  const targetRowTop = measureElementTopWithinScrollContainer(
-    targetRowElement,
-    input.targetScrollContainer,
-  );
-  const targetRowHeight = Math.max(targetRowElement.offsetHeight, 1);
-  const maxTargetScrollTop = Math.max(
-    0,
-    input.targetScrollContainer.scrollHeight -
-      input.targetScrollContainer.clientHeight,
-  );
-  const nextScrollTop = clampScrollValue(
-    targetRowTop + targetRowHeight * sourceAnchor.relativeOffset,
-    0,
-    maxTargetScrollTop,
-  );
-
-  if (Math.abs(input.targetScrollContainer.scrollTop - nextScrollTop) < 1) {
-    return;
-  }
-
-  if (input.state.releaseTimeout !== null) {
-    window.clearTimeout(input.state.releaseTimeout);
-  }
-
-  input.state.ignoredSide = input.targetSide;
-  input.state.expectedScrollTop = nextScrollTop;
-  input.targetScrollContainer.scrollTop = nextScrollTop;
-  input.state.releaseTimeout = window.setTimeout(() => {
-    if (
-      input.state.ignoredSide === input.targetSide &&
-      Math.abs(input.targetScrollContainer.scrollTop - nextScrollTop) <= 2
-    ) {
-      input.state.ignoredSide = null;
-      input.state.releaseTimeout = null;
-    }
-  }, 80);
-}
-
-function readRowToneClassName(tone: "added" | "context" | "modified" | "removed") {
-  if (tone === "added") {
-    return "bg-emerald-400/10 text-emerald-100";
-  }
-
-  if (tone === "removed") {
-    return "bg-rose-400/10 text-rose-100";
-  }
-
-  return "bg-black/15 text-zinc-200";
-}
-
-function renderDiffSegments(
-  segments: TailoredResumeDiffSegment[] | undefined,
-  fallbackText: string | null,
-  tone: "modified" | "context" | "added" | "removed",
-) {
-  const hasInlineSegments =
-    tone === "modified" && typeof segments !== "undefined" && segments.length > 0;
-
-  if (!hasInlineSegments) {
-    return fallbackText ?? " ";
-  }
-
-  return segments.map((segment, index) => {
-    const segmentClassName =
-      segment.type === "added"
-        ? "rounded bg-emerald-400/24 text-transparent [box-decoration-break:clone]"
-        : segment.type === "removed"
-          ? "rounded bg-rose-400/24 text-transparent [box-decoration-break:clone]"
-          : segment.type === "context" && tone === "modified"
-            ? "text-transparent"
-            : "rounded bg-amber-300/24 text-transparent [box-decoration-break:clone]";
-
-    return (
-      <span className={segmentClassName} key={`${segment.type}-${index}`}>
-        {segment.text}
-      </span>
-    );
-  });
+  return rowType;
 }
 
 function SourceResumeReadonlyDiffPane({
@@ -232,24 +70,19 @@ function SourceResumeReadonlyDiffPane({
         >
           {rows.map((row, index) => (
             <button
-              className={`grid min-h-6 w-full grid-cols-[3.25rem_minmax(0,1fr)] text-left transition hover:bg-white/[0.03] ${readRowToneClassName(row.type)}`}
+              className="block w-full text-left transition hover:bg-white/[0.03]"
               key={`baseline-${index}`}
               onClick={() => onFocusDraftLine(draftLineNumberByRowIndex.get(index) ?? null)}
               ref={(element) => registerRowRef(index, element)}
               type="button"
             >
-              <span className="select-none border-r border-white/8 px-3 text-right font-mono text-[11px] leading-6 text-zinc-500">
-                {row.originalLineNumber ?? ""}
-              </span>
-              <pre className="overflow-x-hidden whitespace-pre-wrap break-words px-3 font-mono text-[12px] leading-6">
-                {row.type === "modified"
-                  ? renderDiffSegments(
-                      row.originalSegments,
-                      row.originalText,
-                      "modified",
-                    )
-                  : row.originalText ?? " "}
-              </pre>
+              <TailoredResumeDiffCell
+                lineNumber={row.originalLineNumber}
+                segments={row.originalSegments}
+                text={row.originalText}
+                tone={readSourceResumeDiffTone(row.type, "original")}
+                variant="source"
+              />
             </button>
           ))}
         </div>
@@ -269,16 +102,21 @@ export default function SourceResumeDiffEditor({
     () => buildTailoredResumeDiffRows(baselineLatexCode, draftLatexCode),
     [baselineLatexCode, draftLatexCode],
   );
+  const draftRows = useMemo(
+    () =>
+      rows.flatMap((row, index) =>
+        row.modifiedText === null ? [] : [{ index, row }],
+      ),
+    [rows],
+  );
   const baselineRowRefs = useRef(new Map<number, HTMLElement>());
   const draftRowRefs = useRef(new Map<number, HTMLElement>());
   const baselineScrollRef = useRef<HTMLDivElement | null>(null);
   const draftTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const diffScrollSyncStateRef = useRef<DiffScrollSyncState>({
-    expectedScrollTop: 0,
-    frame: null,
-    ignoredSide: null,
-    releaseTimeout: null,
-  });
+  const diffScrollSyncStateRef =
+    useRef<TailoredResumeDiffBlockScrollSyncState>(
+      createTailoredResumeDiffBlockScrollSyncState(),
+    );
   const [draftMirrorScrollTop, setDraftMirrorScrollTop] = useState(0);
 
   const isDirty = baselineLatexCode !== draftLatexCode;
@@ -287,11 +125,12 @@ export default function SourceResumeDiffEditor({
   }, [rows]);
 
   function registerDiffRowRef(
-    side: DiffSide,
+    side: SourceDiffSide,
     index: number,
     element: HTMLElement | null,
   ) {
-    const rowRefs = side === "baseline" ? baselineRowRefs.current : draftRowRefs.current;
+    const rowRefs =
+      side === "original" ? baselineRowRefs.current : draftRowRefs.current;
 
     if (element) {
       rowRefs.set(index, element);
@@ -301,10 +140,10 @@ export default function SourceResumeDiffEditor({
     rowRefs.delete(index);
   }
 
-  function handleDiffScroll(sourceSide: DiffSide) {
+  function handleDiffScroll(sourceSide: SourceDiffSide) {
     const state = diffScrollSyncStateRef.current;
     const sourceScrollContainer =
-      sourceSide === "baseline"
+      sourceSide === "original"
         ? baselineScrollRef.current
         : draftTextareaRef.current;
 
@@ -312,7 +151,7 @@ export default function SourceResumeDiffEditor({
       return;
     }
 
-    if (sourceSide === "draft") {
+    if (sourceSide === "tailored") {
       setDraftMirrorScrollTop(sourceScrollContainer.scrollTop);
     }
 
@@ -321,7 +160,7 @@ export default function SourceResumeDiffEditor({
         return;
       }
 
-      clearDiffScrollSyncGuard(state);
+      clearTailoredResumeDiffBlockScrollSyncGuard(state);
     }
 
     if (state.frame !== null) {
@@ -331,12 +170,13 @@ export default function SourceResumeDiffEditor({
     state.frame = window.requestAnimationFrame(() => {
       const latestState = diffScrollSyncStateRef.current;
       const latestSourceScrollContainer =
-        sourceSide === "baseline"
+        sourceSide === "original"
           ? baselineScrollRef.current
           : draftTextareaRef.current;
-      const targetSide: DiffSide = sourceSide === "baseline" ? "draft" : "baseline";
+      const targetSide: SourceDiffSide =
+        sourceSide === "original" ? "tailored" : "original";
       const targetScrollContainer =
-        targetSide === "baseline"
+        targetSide === "original"
           ? baselineScrollRef.current
           : draftTextareaRef.current;
 
@@ -346,20 +186,22 @@ export default function SourceResumeDiffEditor({
         return;
       }
 
-      syncDiffScrollToAnalogousRow({
+      syncTailoredResumeDiffBlockScrollToAnalogousRow({
         sourceRowElements:
-          sourceSide === "baseline"
+          sourceSide === "original"
             ? baselineRowRefs.current
             : draftRowRefs.current,
         sourceScrollContainer: latestSourceScrollContainer,
         state: latestState,
         targetRowElements:
-          targetSide === "baseline" ? baselineRowRefs.current : draftRowRefs.current,
+          targetSide === "original"
+            ? baselineRowRefs.current
+            : draftRowRefs.current,
         targetScrollContainer,
         targetSide,
       });
 
-      if (targetSide === "draft") {
+      if (targetSide === "tailored") {
         setDraftMirrorScrollTop(targetScrollContainer.scrollTop);
       }
     });
@@ -395,7 +237,7 @@ export default function SourceResumeDiffEditor({
     const scrollSyncState = diffScrollSyncStateRef.current;
 
     return () => {
-      clearDiffScrollSyncGuard(scrollSyncState);
+      clearTailoredResumeDiffBlockScrollSyncGuard(scrollSyncState);
     };
   }, []);
 
@@ -430,9 +272,9 @@ export default function SourceResumeDiffEditor({
       <SourceResumeReadonlyDiffPane
         draftLineNumberByRowIndex={draftLineNumberByRowIndex}
         onFocusDraftLine={focusDraftLine}
-        onScroll={() => handleDiffScroll("baseline")}
+        onScroll={() => handleDiffScroll("original")}
         registerRowRef={(index, element) =>
-          registerDiffRowRef("baseline", index, element)
+          registerDiffRowRef("original", index, element)
         }
         rows={rows}
         scrollRef={baselineScrollRef}
@@ -457,24 +299,19 @@ export default function SourceResumeDiffEditor({
               className="min-h-full"
               style={{ transform: `translateY(${-draftMirrorScrollTop}px)` }}
             >
-              {rows.map((row, index) => (
+              {draftRows.map(({ index, row }) => (
                 <div
-                  className={`grid min-h-6 grid-cols-[3.25rem_minmax(0,1fr)] ${readRowToneClassName(row.type)}`}
                   key={`draft-${index}`}
-                  ref={(element) => registerDiffRowRef("draft", index, element)}
+                  ref={(element) => registerDiffRowRef("tailored", index, element)}
                 >
-                  <div className="select-none border-r border-white/8 px-3 text-right font-mono text-[11px] leading-6 text-zinc-500">
-                    {row.modifiedLineNumber ?? ""}
-                  </div>
-                  <pre className="overflow-x-hidden whitespace-pre-wrap break-words px-3 font-mono text-[12px] leading-6 text-transparent">
-                    {row.type === "modified"
-                      ? renderDiffSegments(
-                          row.modifiedSegments,
-                          row.modifiedText,
-                          "modified",
-                        )
-                      : row.modifiedText ?? " "}
-                  </pre>
+                  <TailoredResumeDiffCell
+                    lineNumber={row.modifiedLineNumber}
+                    segments={row.modifiedSegments}
+                    text={row.modifiedText}
+                    textMode="transparent"
+                    tone={readSourceResumeDiffTone(row.type, "tailored")}
+                    variant="source"
+                  />
                 </div>
               ))}
             </div>
@@ -486,11 +323,11 @@ export default function SourceResumeDiffEditor({
             }`}
             disabled={disabled}
             onChange={(event) => onChange(event.target.value)}
-            onScroll={() => handleDiffScroll("draft")}
+            onScroll={() => handleDiffScroll("tailored")}
             ref={draftTextareaRef}
             spellCheck={false}
             style={{
-              paddingLeft: "4.75rem",
+              paddingLeft: "4rem",
               paddingRight: "0.75rem",
             }}
             value={draftLatexCode}

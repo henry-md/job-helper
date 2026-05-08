@@ -135,15 +135,21 @@ export function useTailoredResumeDiffScrollSync() {
 }
 
 export function TailoredResumeDiffCell({
+  className,
   lineNumber,
   segments,
+  textMode = "visible",
   text,
   tone,
+  variant = "review",
 }: {
+  className?: string;
   lineNumber: number | null;
   segments?: TailoredResumeDiffSegment[];
+  textMode?: "transparent" | "visible";
   text: string | null;
   tone: "added" | "context" | "modified" | "removed";
+  variant?: "review" | "source";
 }) {
   const toneClassName =
     tone === "added"
@@ -155,25 +161,51 @@ export function TailoredResumeDiffCell({
           : "bg-black/15 text-zinc-200";
 
   const hasInlineSegments = tone === "modified" && (segments?.length ?? 0) > 0;
+  const layoutClassName =
+    variant === "source"
+      ? "grid min-h-6 grid-cols-[3.25rem_minmax(0,1fr)] items-start"
+      : "grid min-h-8 grid-cols-[2.75rem_minmax(0,1fr)] items-start gap-2 px-2.5 py-1.5";
+  const lineNumberClassName =
+    variant === "source"
+      ? "select-none border-r border-white/8 px-3 text-right font-mono text-[11px] leading-6 text-zinc-500"
+      : "select-none border-r border-white/8 pr-2.5 text-right font-mono text-[10px] leading-[1.15rem] text-zinc-500";
+  const codeClassName =
+    variant === "source"
+      ? "overflow-x-hidden whitespace-pre-wrap break-words px-3 font-mono text-[13px] leading-6"
+      : "overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-[1.15rem]";
+  const transparentTextClassName =
+    textMode === "transparent" ? "text-transparent" : "";
 
   return (
     <div
-      className={`grid min-h-8 grid-cols-[2.75rem_minmax(0,1fr)] items-start gap-2 px-2.5 py-1.5 ${toneClassName}`}
+      className={`${layoutClassName} ${toneClassName} ${className ?? ""}`}
     >
-      <div className="select-none border-r border-white/8 pr-2.5 text-right font-mono text-[10px] leading-[1.15rem] text-zinc-500">
+      <div className={lineNumberClassName}>
         {lineNumber ?? ""}
       </div>
-      <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-[1.15rem]">
+      <pre className={`${codeClassName} ${transparentTextClassName}`}>
         {hasInlineSegments
           ? segments?.map((segment, index) => {
               const segmentClassName =
                 tone === "modified" && segment.type !== "context"
-                  ? "rounded [box-decoration-break:clone] bg-amber-300/18 text-amber-50"
+                  ? `rounded [box-decoration-break:clone] bg-amber-300/18 ${
+                      textMode === "transparent"
+                        ? "text-transparent"
+                        : "text-amber-50"
+                    }`
                   : segment.type === "added"
-                    ? "rounded [box-decoration-break:clone] bg-emerald-400/18 text-emerald-50"
+                    ? `rounded [box-decoration-break:clone] bg-emerald-400/18 ${
+                        textMode === "transparent"
+                          ? "text-transparent"
+                          : "text-emerald-50"
+                      }`
                     : segment.type === "removed"
-                      ? "rounded [box-decoration-break:clone] bg-rose-400/18 text-rose-50"
-                      : undefined;
+                      ? `rounded [box-decoration-break:clone] bg-rose-400/18 ${
+                          textMode === "transparent"
+                            ? "text-transparent"
+                            : "text-rose-50"
+                        }`
+                      : transparentTextClassName || undefined;
 
               return (
                 <span

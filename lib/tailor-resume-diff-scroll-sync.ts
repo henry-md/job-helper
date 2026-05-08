@@ -31,8 +31,8 @@ function measureElementTopWithinScrollContainer(
 }
 
 function findVisibleDiffBlockRowAnchor(input: {
-  rowElements: Map<number, HTMLDivElement>;
-  scrollContainer: HTMLDivElement;
+  rowElements: Map<number, HTMLElement>;
+  scrollContainer: HTMLElement;
 }) {
   const sortedRows = [...input.rowElements.entries()].sort(
     ([leftIndex], [rightIndex]) => leftIndex - rightIndex,
@@ -91,11 +91,11 @@ export function clearTailoredResumeDiffBlockScrollSyncGuard(
 }
 
 export function syncTailoredResumeDiffBlockScrollToAnalogousRow(input: {
-  sourceRowElements: Map<number, HTMLDivElement>;
-  sourceScrollContainer: HTMLDivElement;
+  sourceRowElements: Map<number, HTMLElement>;
+  sourceScrollContainer: HTMLElement;
   state: TailoredResumeDiffBlockScrollSyncState;
-  targetRowElements: Map<number, HTMLDivElement>;
-  targetScrollContainer: HTMLDivElement;
+  targetRowElements: Map<number, HTMLElement>;
+  targetScrollContainer: HTMLElement;
   targetSide: TailoredResumeDiffBlockSide;
 }) {
   const sourceAnchor = findVisibleDiffBlockRowAnchor({
