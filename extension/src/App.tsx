@@ -7953,28 +7953,15 @@ function App() {
       return;
     }
 
-    if (chatSendStatus === "streaming") {
-      return;
-    }
-
     if (authState.status !== "signedIn") {
       setChatMessages([]);
-      setChatPageUrl(null);
       setChatStatus("idle");
       setChatError(null);
       return;
     }
 
-    if (state.status !== "ready") {
-      setChatMessages([]);
-      setChatPageUrl(null);
-      setChatStatus("idle");
-      setChatError(null);
-      return;
-    }
-
-    void loadChatHistory(state.snapshot.url, authState.session.sessionToken);
-  }, [authState, chatSendStatus, isChatOpen, loadChatHistory, state]);
+    void loadChatHistory(authState.session.sessionToken);
+  }, [authState, isChatOpen, loadChatHistory]);
 
   useEffect(() => {
     if (!tailorInterview?.id) {
@@ -8847,7 +8834,6 @@ function App() {
   async function handleDeleteChat() {
     if (
       authState.status !== "signedIn" ||
-      !chatPageUrl ||
       chatSendStatus === "streaming"
     ) {
       return;
@@ -8857,7 +8843,7 @@ function App() {
     setChatError(null);
 
     try {
-      const response = await fetch(buildChatHistoryUrl(chatPageUrl), {
+      const response = await fetch(buildSupportChatHistoryUrl(), {
         credentials: "include",
         headers: {
           Authorization: `Bearer ${authState.session.sessionToken}`,
@@ -8896,19 +8882,19 @@ function App() {
       return;
     }
 
-    let pageContext: JobPageContext;
+    chatHistoryRequestIdRef.current += 1;
+
+    let pageContext: JobPageContext | null =
+      state.status === "ready" ? state.snapshot : null;
 
     try {
-      pageContext = await fetchSnapshot();
-      setState({ snapshot: pageContext, status: "ready" });
-    } catch (error) {
-      setChatError(getSnapshotErrorMessage(error));
-      setChatStatus("error");
-      return;
+      const snapshot = await fetchSnapshot();
+      pageContext = snapshot;
+      setState({ snapshot, status: "ready" });
+    } catch {
+      // Resume support chat is still useful away from a regular job page.
     }
 
-    const nextChatPageUrl = pageContext.url;
-    const shouldResetForUrl = chatPageUrl !== nextChatPageUrl;
     const optimisticUserMessage = createTemporaryChatMessage(
       "user",
       trimmedMessage,
@@ -8918,23 +8904,21 @@ function App() {
       "",
     );
 
-    setChatPageUrl(nextChatPageUrl);
     setChatInput("");
     setChatError(null);
     setChatStatus("ready");
     setChatSendStatus("streaming");
     setChatMessages((currentMessages) => [
-      ...(shouldResetForUrl ? [] : currentMessages),
+      ...currentMessages,
       optimisticUserMessage,
       optimisticAssistantMessage,
     ]);
 
     try {
-      const response = await fetch(DEFAULT_TAILOR_RESUME_CHAT_ENDPOINT, {
+      const response = await fetch(DEFAULT_TAILOR_RESUME_SUPPORT_CHAT_ENDPOINT, {
         body: JSON.stringify({
           message: trimmedMessage,
           pageContext,
-          url: nextChatPageUrl,
         }),
         credentials: "include",
         headers: {
@@ -8985,6 +8969,9 @@ function App() {
 
         if (event.type === "done") {
           const savedAssistantMessage = readChatMessage(event.message);
+          const nextSkillData = isRecord(event.skillData)
+            ? readTailorResumeStoredSkillData(event.skillData)
+            : null;
 
           if (savedAssistantMessage) {
             setChatMessages((currentMessages) =>
@@ -9000,6 +8987,22 @@ function App() {
                   : message,
               ),
             );
+          }
+
+          if (nextSkillData) {
+            applySettingsSkillData(nextSkillData, { preserveEditDraft: true });
+            setPersonalInfoState((currentState) =>
+              currentState.status === "ready"
+                ? {
+                    personalInfo: {
+                      ...currentState.personalInfo,
+                      skillData: nextSkillData,
+                    },
+                    status: "ready",
+                  }
+                : currentState,
+            );
+            void loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
           }
         }
       });
@@ -10505,7 +10508,7 @@ function App() {
         throw new Error(
           readTailorResumePayloadError(
             result.payload,
-            "Unable to start the resume follow-up chat.",
+            "Unable to continue tailoring from Step 2.",
           ),
         );
       }
@@ -10529,7 +10532,7 @@ function App() {
 
       await loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
 
-      if (matchingInterview) {
+      if (matchingInterview && matchingInterview.conversation.length > 0) {
         const mergedMatchingInterview =
           mergeTailorInterviewWithStreamedAssistantMessage(
             matchingInterview,
@@ -10557,7 +10560,7 @@ function App() {
       const message =
         error instanceof Error
           ? error.message
-          : "Unable to start the resume follow-up chat.";
+          : "Unable to continue tailoring from Step 2.";
 
       if (hasOpenedQuestionChat) {
         setTailorInterviewError(message);
@@ -10596,9 +10599,12 @@ function App() {
       activeTailorRunCardMatchesInterview({ card, interview: tailorInterview })
         ? tailorInterview
         : null);
-    const canOpenInterviewChat = Boolean(matchingCardInterview);
+    const canOpenInterviewChat = Boolean(
+      matchingCardInterview && matchingCardInterview.conversation.length > 0,
+    );
     const isQuestionStartPending =
-      !canOpenInterviewChat && card.interviewStatus === "pending";
+      !canOpenInterviewChat &&
+      (card.interviewStatus === "pending" || card.interviewStatus === "ready");
     const isQuestionGenerating =
       !canOpenInterviewChat &&
       (card.interviewStatus === "deciding" ||
@@ -10634,7 +10640,8 @@ function App() {
       status: card.step.status,
     });
     const stepLabel =
-      card.step.label === "Start chat" || card.step.label === "Question ready"
+      card.step.label === "Resolve skills-section" ||
+      card.step.label === "Ready to tailor"
         ? card.step.label
         : formatTailorResumeProgressStepLabel({
             label: card.step.label,
@@ -10650,6 +10657,11 @@ function App() {
           stepTimings: card.stepTimings,
         })
       : null;
+    const isStepTimingElapsedLabel =
+      tailorRunTimeDisplayMode === "specific" &&
+      (card.statusDisplayState === "loading" ||
+        card.statusDisplayState === "ready" ||
+        card.statusDisplayState === "warning");
     const elapsedTimeLabel =
       card.statusDisplayState === "loading"
         ? formatTailorRunStepTimeDisplay({
@@ -10661,30 +10673,47 @@ function App() {
           })
         : card.statusDisplayState === "ready" ||
             card.statusDisplayState === "warning"
-          ? canOpenInterviewChat
-            ? frozenWaitingStepDurationLabel
-            : formatTailorRunElapsedTime({
+          ? tailorRunTimeDisplayMode === "specific"
+            ? formatTailorRunStepTimeDisplay({
+                activeStepNumber: card.step.stepNumber,
+                mode: "specific",
                 nowTime: waitingReachedAtTime ?? card.startedAtTime,
-                startedAtTime: card.startedAtTime,
+                runStartedAtTime: card.startedAtTime,
+                timings: buildTailorRunStepTimingDisplayInputs(card.stepTimings),
               })
+            : canOpenInterviewChat
+              ? frozenWaitingStepDurationLabel
+              : formatTailorRunElapsedTime({
+                  nowTime: waitingReachedAtTime ?? card.startedAtTime,
+                  startedAtTime: card.startedAtTime,
+                })
           : null;
     const elapsedTimeAriaLabel =
       card.statusDisplayState === "loading"
-        ? tailorRunTimeDisplayMode === "specific"
+        ? isStepTimingElapsedLabel
           ? `Step timings ${elapsedTimeLabel}`
           : `Loading for ${elapsedTimeLabel}`
+        : isStepTimingElapsedLabel
+          ? `Step timings ${elapsedTimeLabel}`
         : `Waited after ${elapsedTimeLabel}`;
     const elapsedTimeTitle =
       card.statusDisplayState === "loading"
-        ? tailorRunTimeDisplayMode === "specific"
+        ? isStepTimingElapsedLabel
           ? `Step timings: ${elapsedTimeLabel}`
           : `Loading for ${elapsedTimeLabel}`
+        : isStepTimingElapsedLabel
+          ? `Step timings: ${elapsedTimeLabel}`
         : `Reached this waiting state after ${elapsedTimeLabel}`;
     const canStopCard = card.statusDisplayState !== "error";
     const shouldShowCardProgressCopy =
       card.statusDisplayState === "error" && Boolean(card.message || card.detail);
     const showKeywordAction =
       card.emphasizedTechnologies.length > 0 && Boolean(card.url);
+    const blockingTechnologyBadges = card.blockingTechnologies.filter(
+      (technology) =>
+        technology.classification === "skills_section" &&
+        technology.name.trim().length > 0,
+    );
 
     return (
       <section
@@ -10843,7 +10872,7 @@ function App() {
               }
               type="button"
               onClick={() => {
-                if (matchingCardInterview) {
+                if (canOpenInterviewChat && matchingCardInterview) {
                   setSelectedTailorInterviewId(matchingCardInterview.id);
                   setTailorInterview(matchingCardInterview);
                   revealTailorInterview({ focusComposer: true });
@@ -10861,9 +10890,29 @@ function App() {
                   {isQuestionGenerating
                     ? "Starting..."
                     : isQuestionStartPending
-                      ? "Start chat"
+                      ? card.interviewStatus === "ready"
+                        ? "Play"
+                        : "Recheck"
                       : "Answer"}
                 </span>
+                {blockingTechnologyBadges.length > 0 ? (
+                  <span
+                    aria-label={`Blocking skills-section keywords: ${blockingTechnologyBadges
+                      .map((technology) => technology.name)
+                      .join(", ")}`}
+                    className="tailor-run-blocker-badges"
+                  >
+                    {blockingTechnologyBadges.map((technology) => (
+                      <span
+                        className={`tailor-run-blocker-badge tailor-run-blocker-badge-${technology.priority}`}
+                        key={`${technology.priority}:${technology.name}`}
+                        title={technology.evidence || technology.name}
+                      >
+                        {technology.name}
+                      </span>
+                    ))}
+                  </span>
+                ) : null}
               </span>
               {elapsedTimeLabel ? (
                 <span
