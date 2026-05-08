@@ -68,7 +68,7 @@ function dedupeTechnologies(
   for (const technology of technologies) {
     const name = technology.name.trim();
 
-    if (!name) {
+    if (!name || technology.classification === "non_skill") {
       continue;
     }
 

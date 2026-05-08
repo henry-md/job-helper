@@ -87,14 +87,28 @@ test("buildPendingInterviewExistingTailoringState exposes all scraped keywords",
       displayName: "Example Corp - Software Engineer",
       emphasizedTechnologies: [
         {
+          classification: "skills_section",
           evidence: "Required section lists TypeScript.",
           name: "TypeScript",
           priority: "high",
         },
         {
+          classification: "skills_section",
           evidence: "Required section lists Kubernetes.",
           name: "Kubernetes",
           priority: "high",
+        },
+        {
+          classification: "narrative",
+          evidence: "Posting asks for load balancing.",
+          name: "Load balancing",
+          priority: "high",
+        },
+        {
+          classification: "skills_section",
+          evidence: "Nice-to-have section lists Terraform.",
+          name: "Terraform",
+          priority: "low",
         },
       ],
       jobIdentifier: "Software Engineer",
@@ -112,9 +126,22 @@ test("buildPendingInterviewExistingTailoringState exposes all scraped keywords",
     tailorResumeRunId: "run-123",
     uncoveredEmphasizedTechnologies: [
       {
+        classification: "skills_section",
         evidence: "Resume did not mention Kubernetes.",
         name: "Kubernetes",
         priority: "high",
+      },
+      {
+        classification: "narrative",
+        evidence: "Resume did not mention load balancing.",
+        name: "Load balancing",
+        priority: "high",
+      },
+      {
+        classification: "skills_section",
+        evidence: "Resume did not mention Terraform.",
+        name: "Terraform",
+        priority: "low",
       },
     ],
     updatedAt: "2026-05-05T14:00:05.000Z",
@@ -125,7 +152,11 @@ test("buildPendingInterviewExistingTailoringState exposes all scraped keywords",
 
   assert.deepEqual(
     existingTailoring.emphasizedTechnologies.map((technology) => technology.name),
-    ["TypeScript", "Kubernetes"],
+    ["TypeScript", "Kubernetes", "Load balancing", "Terraform"],
+  );
+  assert.deepEqual(
+    existingTailoring.blockingTechnologies.map((technology) => technology.name),
+    ["Kubernetes", "Terraform"],
   );
 });
 

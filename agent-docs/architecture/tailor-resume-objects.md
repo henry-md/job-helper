@@ -114,19 +114,27 @@ Tailor Resume object model:
 - Files: `lib/tailor-resume-generation-settings.ts`, `lib/tailor-resume-types.ts`
 - Stored under `profile.generationSettings`.
 - This keeps per-user boolean generation guardrails that are not prompt text themselves.
-- Current user-editable settings include whether Step 2 may pause for follow-up questions, whether tailoring should automatically reject page-count growth by running a compaction follow-up pass when needed, plus the keyword-coverage percentage basis.
-- Step 2 follow-up questions are a real product setting, so the toggle must be visible from the extension settings panel as well as the web dashboard before saved `allowTailorResumeFollowUpQuestions` state is allowed to affect a run.
-- Generation settings are versioned; unversioned/older saved Step-1-question-off values are legacy hidden state and are migrated back to on when read. Once the visible switch saves version 2, off remains an explicit user choice.
+- The current user-editable setting is the keyword-coverage percentage basis. Step 2 keyword review is always enabled and page-count growth is always rejected.
+- Legacy saved `allowTailorResumeFollowUpQuestions` and `preventPageCountIncrease` values may still appear in old profile JSON, but they must not control new runs.
 - These values are editable from `/dashboard?tab=settings`; extension-started behavior-affecting settings must also be visible in the extension settings panel.
 
-10. User Memory (`TailorResumeUserMemory`)
+10. Skills-Section Keyword, Classification, and Spare Bullet Tables
+- Files: `prisma/schema.prisma`, `lib/tailor-resume-skill-store.ts`, `lib/tailor-resume-resume-experiences.ts`, `lib/tailor-resume-types.ts`
+- `TailorResumeKeywordClassification` stores the user's/backend's durable app-facing classification for each normalized keyword: `SKILLS_SECTION`, `NARRATIVE`, or `NON_SKILL`. The Prisma enum maps the first two onto legacy database enum values for existing local databases.
+- `TailorResumeSkill` stores first-class skills-section keywords. `listInSkillsOnly` means the skill can support the Skills section without forcing a new or modified experience bullet.
+- `TailorResumeSpareBullet` stores user-approved skills-section support:
+  - `quote`: the bullet text Step 3/4 may use
+  - `replacesQuote`: nullable; when present, this is a modified-bullet support record and the model should replace the closest current source bullet in the required resume experience
+  - `resumeExperienceId`: required; derived from the annotated LaTeX heading segment for the owning experience/project
+  - many-to-many skills-section keywords through `TailorResumeSpareBulletSkill`
+- On spare-bullet save, mod bullets are fuzzily matched within the selected resume experience and rejected if another mod already targets the same top current bullet. This keeps the stored state from having two replacement bullets for one source bullet.
+- Resume experiences are not stored as durable rows yet. They are scanned from the current annotated LaTeX so heading edits/order changes do not require maintaining another synchronized object graph.
+- The extension top-level resume chat can create these same durable records through server-side tool calls. Its prompt should treat `skills_section` as "could go in the resume Skills section" first and use tools rather than prose whenever the user asks to save skills-section support.
+
+11. User Memory (`TailorResumeUserMemory`)
 - Files: `prisma/schema.prisma`, `lib/tailor-resume-user-memory.ts`
 - Stored in Prisma as a DB-backed Markdown document for the logged-in user, exposed as `USER.md` in settings.
-- The Step 2 tailoring interview receives this Markdown so it can avoid repeating questions the user has already answered.
-- The interview model can update the document with markdown patch operations:
-  - `append` under a chosen heading path for ordinary new memory
-  - `replace_exact`, `insert_before`, `insert_after`, and `delete_exact` for deliberate restructuring
-- Exact-match operations are best-effort for Step 2 memory capture. If they miss, the Step 2 chat response is not invalidated or retried; future turns or the user can correct the memory. Full-document replacement is intentionally not part of the model-facing edit contract.
+- USER.md remains editable for future bullet preferences and loose notes, but it no longer stores skills-section support or drives Step 2 blocker resolution.
 
 Current flow:
 
@@ -143,19 +151,12 @@ Current flow:
 Tailoring generation:
 
 - Tailor Resume no longer asks one model call to decide the strategy and write final LaTeX at the same time.
-- The tailoring flow now runs in four required stages plus one conditional guardrail:
-  - Step 1 extracts emphasized job technologies and deterministic keyword presence
-  - Step 2 stores a pending `Start chat` only when Step 1 keywords are missing from both the resume and `USER.md`; the click reads fresh `USER.md` and either skips or opens a hard-coded keyword-review chat before any Step 2 LLM call
-  - Step 3 runs an OpenAI planning pass over whole-resume plaintext and document-ordered blocks using the latest `USER.md`
+- The tailoring flow now runs in four required stages plus an always-on page-count guardrail:
+  - Step 1 extracts emphasized job keywords, then sorts them into high/low priority and skills-section/narrative/non-skill classification buckets
+  - Step 2 deterministically waits until all high-priority skills-section keywords are covered by the source resume, a skills-section skill, skills-only support, or a spare bullet; once ready, the user presses play to continue
+  - Step 3 runs an OpenAI planning pass over whole-resume plaintext, document-ordered blocks, current `USER.md`, and structured skill/spare-bullet evidence
   - Step 4 sees only the selected blocks and translates the approved plaintext plan plus any compressed user learnings back into block-local LaTeX replacements
-  - Step 5 conditionally compacts edited blocks when page-count protection is enabled and the preview grows
-- The questioning pass should stay rare. It should only ask when the answer would materially improve the tailored resume, cannot already be inferred from the current resume, and is adjacent enough to existing resume text that the experience is plausibly already there.
-- If the visible Step 2 setting is enabled, Step 2 may still decide to skip questions, but that decision must come from the Step 2 model/tool path using the original resume, job keywords, and `USER.md`, not from hidden persisted profile state.
-- If the visible Step 2 setting is disabled, the flow skips interactive questioning and passes `USER.md` memory as non-interactive context to planning and implementation.
-- When questioning does happen, persist only a compact summary of the learnings for the next model stage rather than forwarding the full chat transcript.
-- Existing `USER.md` memory can be copied into the compact learning summary when it answers a planned edit's factual gap; new durable facts from user answers can be written back to `USER.md` through patch operations.
-- When the page-count guardrail is enabled and the compiled tailored preview exceeds the original resume's page count, the flow runs Step 5:
-  - a refinement-style compaction pass that re-prompts only the existing edited blocks, sends highlighted rendered preview screenshots, and retries until the preview fits within the original page count or the attempt budget is exhausted
+- If the compiled tailored preview exceeds the original resume's page count, the guardrail re-prompts only the existing edited blocks, sends highlighted rendered preview screenshots, and retries until the preview fits within the original page count or the attempt budget is exhausted.
 - Compile retries stay scoped to the implementation pass so LaTeX escaping and block-boundary fixes do not force the model to rethink the whole editing thesis on every retry.
 - Extension-originated tailoring should pass the captured job URL separately from the job-description text and create/reuse a tracked `JobApplication` for the normalized exact URL before generation starts. The API should store live run state in `TailorResumeRun`; if the same application already has an active run or a linked tailored resume, return a conflict payload so the extension can ask whether to cancel/keep or overwrite.
 
@@ -177,6 +178,7 @@ Relevant code paths:
 - LaTeX compile helper: `lib/tailor-resume-latex.ts`
 - Review highlight implementation notes: `agent-docs/architecture/tailor-resume-preview-highlighting.md`
 - Saved profile + preview persistence: `lib/tailor-resume-storage.ts`
+- Keyword/skill/spare-bullet persistence: `lib/tailor-resume-skill-store.ts`
 - User memory persistence + patching: `lib/tailor-resume-user-memory.ts`
 - API orchestration: `app/api/tailor-resume/route.ts`
 - Preview route: `app/api/tailor-resume/preview/route.ts`

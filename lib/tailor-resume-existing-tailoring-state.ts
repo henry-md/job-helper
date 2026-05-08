@@ -1,9 +1,10 @@
 import type { TailorResumeDbRunRecord } from "./tailor-resume-route-response-state.ts";
 import { normalizeTailorResumeJobUrl } from "./tailor-resume-job-url.ts";
-import type {
-  TailoredResumeEmphasizedTechnology,
-  TailorResumeGenerationStepEvent,
-  TailorResumePendingInterview,
+import {
+  normalizeTailorResumeKeywordKind,
+  type TailoredResumeEmphasizedTechnology,
+  type TailorResumeGenerationStepEvent,
+  type TailorResumePendingInterview,
 } from "./tailor-resume-types.ts";
 import {
   isTailorResumeInterviewPendingQuestionStart,
@@ -13,6 +14,7 @@ import {
 export type TailorResumeExistingTailoringState =
   | {
       applicationId: string | null;
+      blockingTechnologies: TailoredResumeEmphasizedTechnology[];
       companyName: string | null;
       createdAt: string;
       id: string;
@@ -26,6 +28,7 @@ export type TailorResumeExistingTailoringState =
     }
   | {
       applicationId: string | null;
+      blockingTechnologies: TailoredResumeEmphasizedTechnology[];
       companyName: string | null;
       createdAt: string;
       id: string;
@@ -102,7 +105,10 @@ function readEmphasizedTechnologies(
     }
 
     seen.add(dedupeKey);
+    const classification = normalizeTailorResumeKeywordKind(item.classification);
+
     technologies.push({
+      ...(classification ? { classification } : {}),
       evidence: readString(item.evidence),
       name,
       priority,
@@ -110,6 +116,14 @@ function readEmphasizedTechnologies(
   }
 
   return technologies;
+}
+
+function readBlockingSkillsSectionTechnologies(
+  value: TailoredResumeEmphasizedTechnology[] | undefined,
+) {
+  return (value ?? []).filter(
+    (technology) => technology.classification === "skills_section",
+  );
 }
 
 function readExistingTailoringTime(value: TailorResumeExistingTailoringState) {
@@ -252,6 +266,7 @@ export function buildActiveRunExistingTailoringState(
 ): TailorResumeExistingTailoringState {
   return {
     applicationId: run.applicationId,
+    blockingTechnologies: [],
     companyName: run.application.company.name,
     createdAt: run.createdAt.toISOString(),
     id: run.id,
@@ -275,6 +290,9 @@ export function buildPendingInterviewExistingTailoringState(
 
   return {
     applicationId: run?.applicationId ?? tailoringInterview.applicationId,
+    blockingTechnologies: readBlockingSkillsSectionTechnologies(
+      tailoringInterview.uncoveredEmphasizedTechnologies,
+    ),
     companyName: tailoringInterview.planningResult.companyName || null,
     createdAt: run?.createdAt.toISOString() ?? tailoringInterview.createdAt,
     id: run?.id ?? tailoringInterview.tailorResumeRunId ?? tailoringInterview.id,
@@ -378,8 +396,10 @@ function readTailorResumeGenerationStepEvent(
 
   return {
     attempt: attempt > 0 ? Math.floor(attempt) : null,
+    blockingTechnologies: readEmphasizedTechnologies(value.blockingTechnologies),
     detail: readNullableString(value.detail),
     durationMs: readNumber(value.durationMs),
+    emphasizedTechnologies: readEmphasizedTechnologies(value.emphasizedTechnologies),
     retrying: value.retrying === true,
     status,
     stepCount: Math.max(1, Math.floor(stepCount)),
@@ -440,6 +460,9 @@ export function readTailorResumeExistingTailoringState(
 
     return {
       applicationId: readNullableString(existingTailoring.applicationId),
+      blockingTechnologies: readBlockingSkillsSectionTechnologies(
+        readEmphasizedTechnologies(existingTailoring.blockingTechnologies),
+      ),
       companyName: readNullableString(existingTailoring.companyName),
       createdAt,
       id,
@@ -462,6 +485,9 @@ export function readTailorResumeExistingTailoringState(
 
     return {
       applicationId: readNullableString(existingTailoring.applicationId),
+      blockingTechnologies: readBlockingSkillsSectionTechnologies(
+        readEmphasizedTechnologies(existingTailoring.blockingTechnologies),
+      ),
       companyName: readNullableString(existingTailoring.companyName),
       createdAt,
       emphasizedTechnologies: readEmphasizedTechnologies(

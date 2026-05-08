@@ -98,11 +98,22 @@ import {
   planTailoredResume,
 } from "@/lib/tailor-resume-tailoring";
 import {
-  buildTailorResumeKeywordPresenceContext,
   buildTailoredResumeKeywordCoverage,
 } from "@/lib/tailor-resume-keyword-coverage";
 import { formatTailorResumeTermWithCapitalFirst } from "@/lib/tailor-resume-non-technologies";
-import { tailorResumeScrapedTechnologiesMessage } from "@/lib/tailor-resume-interview-constants";
+import {
+  buildTailorResumeSkillsSectionKeywordCoverage,
+  buildTailorResumeSkillEvidenceMarkdown,
+  classifyTailorResumeEmphasizedTechnologies,
+  deleteTailorResumeSkill,
+  deleteTailorResumeSpareBullet,
+  readTailorResumeNonSkillClassificationNames,
+  readTailorResumeStoredSkillData,
+  saveTailorResumeKeywordClassification,
+  saveTailorResumeSkill,
+  saveTailorResumeSpareBullet,
+} from "@/lib/tailor-resume-skill-store";
+import { measureTailorResumeSpareBulletLineCount } from "@/lib/tailor-resume-spare-bullet-measurement";
 import {
   tailorResumeDebugErrorSources,
 } from "@/lib/tailor-resume-debug-errors";
@@ -116,6 +127,7 @@ import {
   emptyTailorResumeExtractionState,
   emptyTailorResumeLatexState,
   emptyTailorResumeWorkspaceState,
+  normalizeTailorResumeKeywordKind,
   type TailorResumeConversationMessage,
   type TailorResumeConversationToolCall,
   type TailorResumeGenerationStepEvent,
@@ -848,6 +860,16 @@ async function completeTailorResumeInterviewAndFinalize(input: {
   const generationSourceAnnotatedLatex = normalizeTailorResumeLatex(
     processedBaseAnnotatedLatex.latexCode,
   ).annotatedLatex;
+  const skillEvidenceMarkdown = await buildTailorResumeSkillEvidenceMarkdown({
+    sourceAnnotatedLatexCode: input.tailoringInterview.sourceAnnotatedLatexCode,
+    userId: input.userId,
+  });
+  const userMarkdownForModel: TailorResumeUserMarkdownState = skillEvidenceMarkdown
+    ? {
+        ...input.userMarkdown,
+        markdown: `${input.userMarkdown.markdown.trimEnd()}\n\n${skillEvidenceMarkdown}\n`,
+      }
+    : input.userMarkdown;
   const planningStage = await planTailoredResume({
     annotatedLatexCode: input.tailoringInterview.sourceAnnotatedLatexCode,
     employerName: input.tailoringInterview.planningResult.companyName || null,
@@ -857,7 +879,7 @@ async function completeTailorResumeInterviewAndFinalize(input: {
       input.tailoringInterview.planningResult.emphasizedTechnologies,
     promptSettings: input.rawProfile.promptSettings.values,
     questioningSummary: input.tailoringInterview.planningResult.questioningSummary,
-    userMarkdown: input.userMarkdown,
+    userMarkdown: userMarkdownForModel,
   });
 
   if (!planningStage.ok) {
@@ -906,7 +928,7 @@ async function completeTailorResumeInterviewAndFinalize(input: {
     planningResult,
     planningSnapshot: planningStage.planningSnapshot,
     promptSettings: input.rawProfile.promptSettings.values,
-    userMarkdown: input.userMarkdown,
+    userMarkdown: userMarkdownForModel,
   });
 
   return finalizeTailorResumeGeneration({
@@ -955,64 +977,163 @@ async function isTailorResumeRunInProgress(input: {
 
 function buildTailorResumeQuestionStartReadyStepEvent(
   emphasizedTechnologies?: TailorResumePlanningResult["emphasizedTechnologies"],
+  blockingTechnologies?: TailorResumePlanningResult["emphasizedTechnologies"],
 ): TailorResumeGenerationStepEvent {
   return {
     attempt: null,
+    ...(blockingTechnologies ? { blockingTechnologies } : {}),
     detail:
-      "Step 2 found scraped technologies that are not yet in the resume or USER.md. Start the chat when you want to review them.",
+      "Step 2 has classified the scraped keywords and is waiting for review. Press play when the skills-section blockers are resolved.",
     durationMs: 0,
     ...(emphasizedTechnologies ? { emphasizedTechnologies } : {}),
     retrying: false,
     status: "running",
     stepCount: 5,
     stepNumber: 2,
-    summary: "Ready to review scraped technologies",
+    summary: "Review classified keywords",
   };
 }
 
-function buildUncoveredTailorResumeQuestionTechnologies(input: {
+async function buildUncoveredTailorResumeQuestionTechnologies(input: {
   emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
   resumePlainText: string;
-  userMarkdown: TailorResumeUserMarkdownState;
+  userId: string;
 }) {
-  const emphasizedTechnologies =
-    filterTailorResumeNonTechnologiesFromEmphasizedTechnologies(
-      input.emphasizedTechnologies,
-      input.userMarkdown.nonTechnologies,
-    );
-  const keywordPresenceContext = buildTailorResumeKeywordPresenceContext({
-    emphasizedTechnologies,
+  const blockingSkillsSectionTechnologies = input.emphasizedTechnologies.filter(
+    (technology) => technology.classification === "skills_section",
+  );
+  const coverage = await buildTailorResumeSkillsSectionKeywordCoverage({
+    emphasizedTechnologies: blockingSkillsSectionTechnologies,
     originalResumeText: input.resumePlainText,
-    userMarkdown: input.userMarkdown.markdown,
+    userId: input.userId,
   });
-  const uncoveredNames = new Set(
-    keywordPresenceContext.terms
-      .filter((term) => !term.presentInOriginalResume && !term.presentInUserMarkdown)
-      .map((term) => term.name.trim().toLowerCase()),
-  );
 
-  if (uncoveredNames.size === 0) {
-    return [];
-  }
-
-  return emphasizedTechnologies.filter((technology) =>
-    uncoveredNames.has(technology.name.trim().toLowerCase()),
-  );
+  return coverage
+    .filter((term) => !term.covered)
+    .map((term) => term.technology);
 }
 
-function buildTailorResumeScrapedTechnologyContexts(
-  technologies: TailoredResumeEmphasizedTechnology[],
-): TailorResumeTechnologyContext[] {
-  return technologies.map((technology) => {
-    const name = formatTailorResumeTermWithCapitalFirst(technology.name);
-    const evidence = technology.evidence.trim();
+function formatSkillsSectionBlockerCount(count: number) {
+  return `${count} skills-section ${count === 1 ? "blocker" : "blockers"}`;
+}
+
+function hasTailorResumeQuestionTechnologyListChanged(
+  before: TailoredResumeEmphasizedTechnology[] | undefined,
+  after: TailoredResumeEmphasizedTechnology[],
+) {
+  return JSON.stringify(before ?? []) !== JSON.stringify(after);
+}
+
+async function reevaluateTailorResumeStepTwoCheckpoints(userId: string) {
+  return withTailorResumeProfileLock(userId, async () => {
+    const { lockedLinks, rawProfile } = await readTailorResumeProfileState(userId);
+    const interviews = readTailorResumeWorkspaceInterviews(rawProfile.workspace);
+
+    if (interviews.length === 0) {
+      await markTailoringChanged(userId);
+      return {
+        lockedLinks,
+        rawProfile,
+      };
+    }
+
+    let changed = false;
+    const nextInterviews: TailorResumePendingInterview[] = [];
+
+    for (const interview of interviews) {
+      if (
+        !isTailorResumeInterviewPendingQuestionStart(interview) &&
+        !isTailorResumeInterviewReady(interview)
+      ) {
+        nextInterviews.push(interview);
+        continue;
+      }
+
+      const classifiedTechnologies =
+        await classifyTailorResumeEmphasizedTechnologies({
+          technologies: interview.planningResult.emphasizedTechnologies,
+          userId,
+        });
+      const planningSnapshot = buildTailorResumePlanningSnapshot(
+        interview.sourceAnnotatedLatexCode,
+      );
+      const uncoveredEmphasizedTechnologies =
+        await buildUncoveredTailorResumeQuestionTechnologies({
+          emphasizedTechnologies: classifiedTechnologies,
+          resumePlainText: planningSnapshot.resumePlainText,
+          userId,
+        });
+      const nextStatus =
+        uncoveredEmphasizedTechnologies.length > 0 ? "pending" : "ready";
+      const nextInterview: TailorResumePendingInterview = {
+        ...interview,
+        planningResult: {
+          ...interview.planningResult,
+          emphasizedTechnologies: classifiedTechnologies,
+        },
+        status: nextStatus,
+        uncoveredEmphasizedTechnologies,
+        updatedAt: new Date().toISOString(),
+      };
+      const interviewChanged =
+        interview.status !== nextInterview.status ||
+        hasTailorResumeQuestionTechnologyListChanged(
+          interview.uncoveredEmphasizedTechnologies,
+          uncoveredEmphasizedTechnologies,
+        ) ||
+        hasTailorResumeQuestionTechnologyListChanged(
+          interview.planningResult.emphasizedTechnologies,
+          classifiedTechnologies,
+        );
+
+      if (interviewChanged) {
+        changed = true;
+        await updateTailorResumeRunStep({
+          action: "tailor",
+          event: {
+            attempt: null,
+            detail:
+              uncoveredEmphasizedTechnologies.length > 0
+                ? `Waiting on ${formatSkillsSectionBlockerCount(uncoveredEmphasizedTechnologies.length)}.`
+                : "All skills-section keywords are covered. Press play to start tailoring.",
+            durationMs: 0,
+            blockingTechnologies: uncoveredEmphasizedTechnologies,
+            emphasizedTechnologies: classifiedTechnologies,
+            retrying: false,
+            status: "running",
+            stepCount: 5,
+            stepNumber: 2,
+            summary: "Review classified keywords",
+          },
+          interviewId: interview.id,
+          runId: interview.tailorResumeRunId,
+          userId,
+        });
+      }
+
+      nextInterviews.push(interviewChanged ? nextInterview : interview);
+    }
+
+    const nextRawProfile: TailorResumeProfile = changed
+      ? {
+          ...rawProfile,
+          workspace: withTailorResumeWorkspaceInterviews(
+            rawProfile.workspace,
+            nextInterviews,
+            new Date().toISOString(),
+          ),
+        }
+      : rawProfile;
+
+    if (changed) {
+      await writeTailorResumeProfileAndMarkChanged(userId, nextRawProfile);
+    } else {
+      await markTailoringChanged(userId);
+    }
 
     return {
-      definition: evidence
-        ? `Scraped from the job posting: ${evidence}`
-        : "Scraped from the job posting as a missing technology keyword.",
-      examples: [],
-      name,
+      lockedLinks,
+      rawProfile: nextRawProfile,
     };
   });
 }
@@ -1027,6 +1148,7 @@ function buildTailorResumeQuestionStartInterview(input: {
   planningResult: TailorResumePlanningResult;
   sourceAnnotatedLatexCode: string;
   runId: string | null;
+  status: TailorResumePendingInterview["status"];
   uncoveredEmphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
 }) {
   const now = new Date().toISOString();
@@ -1045,7 +1167,7 @@ function buildTailorResumeQuestionStartInterview(input: {
     planningResult: input.planningResult,
     pendingUserMarkdownEditOperations: [],
     sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode,
-    status: "pending",
+    status: input.status,
     tailorResumeRunId: input.runId,
     uncoveredEmphasizedTechnologies: input.uncoveredEmphasizedTechnologies,
     updatedAt: now,
@@ -1062,6 +1184,7 @@ async function createTailorResumeQuestionStart(input: {
   planningResult: TailorResumePlanningResult;
   sourceAnnotatedLatexCode: string;
   runId: string | null;
+  status: TailorResumePendingInterview["status"];
   uncoveredEmphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
   userId: string;
 }) {
@@ -1095,6 +1218,7 @@ async function createTailorResumeQuestionStart(input: {
       planningResult: input.planningResult,
       runId: input.runId,
       sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode,
+      status: input.status,
       uncoveredEmphasizedTechnologies: input.uncoveredEmphasizedTechnologies,
     });
     const nextRawProfile: TailorResumeProfile = {
@@ -1114,75 +1238,6 @@ async function createTailorResumeQuestionStart(input: {
       lockedLinks: latestState.lockedLinks,
       rawProfile: nextRawProfile,
     } as const;
-  });
-}
-
-async function promoteTailorResumeKeywordReviewInterview(input: {
-  interview: TailorResumePendingInterview;
-  uncoveredEmphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
-  userId: string;
-}) {
-  const readyAt = new Date().toISOString();
-  const readyInterview: TailorResumePendingInterview = {
-    ...input.interview,
-    completionRequestedAt: null,
-    conversation: [
-      buildTailorResumeConversationMessage({
-        role: "assistant",
-        technologyContexts: buildTailorResumeScrapedTechnologyContexts(
-          input.uncoveredEmphasizedTechnologies,
-        ),
-        text: tailorResumeScrapedTechnologiesMessage,
-      }),
-    ],
-    pendingUserMarkdownEditOperations: [],
-    status: "ready",
-    uncoveredEmphasizedTechnologies: input.uncoveredEmphasizedTechnologies,
-    updatedAt: readyAt,
-  };
-
-  return withTailorResumeProfileLock(input.userId, async () => {
-    const latestState = await readTailorResumeProfileState(input.userId);
-    const latestInterview = findTailorResumeWorkspaceInterview(
-      latestState.rawProfile.workspace,
-      (interview) => interview.id === input.interview.id,
-    );
-    const runStillActive = await isTailorResumeRunStillActive({
-      runId: input.interview.tailorResumeRunId,
-      userId: input.userId,
-    });
-
-    if (
-      !latestInterview ||
-      latestInterview.status !== "deciding" ||
-      !runStillActive ||
-      hasTailorResumeGenerationSourceChanged({
-        currentLockedLinks: latestState.lockedLinks,
-        currentRawProfile: latestState.rawProfile,
-        snapshot: input.interview.generationSourceSnapshot,
-      })
-    ) {
-      return null;
-    }
-
-    const nextRawProfile: TailorResumeProfile = {
-      ...latestState.rawProfile,
-      jobDescription:
-        latestState.rawProfile.jobDescription || input.interview.jobDescription,
-      workspace: upsertTailorResumeWorkspaceInterview(
-        latestState.rawProfile.workspace,
-        readyInterview,
-        readyAt,
-      ),
-    };
-
-    await writeTailorResumeProfileAndMarkChanged(input.userId, nextRawProfile);
-
-    return {
-      interview: readyInterview,
-      lockedLinks: latestState.lockedLinks,
-      rawProfile: nextRawProfile,
-    };
   });
 }
 
@@ -1223,26 +1278,9 @@ async function claimTailorResumeQuestionStart(input: {
       return {
         kind: "response" as const,
         response: NextResponse.json(
-          { error: "There is no Step 2 chat to generate for that run." },
+          { error: "There is no Step 2 review checkpoint for that run." },
           { status: 409 },
         ),
-      };
-    }
-
-    if (isTailorResumeInterviewReady(matchingInterview)) {
-      return {
-        kind: "response" as const,
-        response: NextResponse.json({
-          profile: mergeTailorResumeProfileWithLockedLinks(
-            latestState.rawProfile,
-            latestState.lockedLinks,
-            {
-              includeLockedOnly: true,
-            },
-          ),
-          tailoredResumeDurationMs: matchingInterview.accumulatedModelDurationMs,
-          tailoringStatus: "needs_user_input" as const,
-        }),
       };
     }
 
@@ -1250,17 +1288,20 @@ async function claimTailorResumeQuestionStart(input: {
       return {
         kind: "response" as const,
         response: NextResponse.json(
-          { error: "That Step 2 chat is already being generated." },
+          { error: "That Step 2 review is already starting tailoring." },
           { status: 409 },
         ),
       };
     }
 
-    if (!isTailorResumeInterviewPendingQuestionStart(matchingInterview)) {
+    if (
+      !isTailorResumeInterviewPendingQuestionStart(matchingInterview) &&
+      !isTailorResumeInterviewReady(matchingInterview)
+    ) {
       return {
         kind: "response" as const,
         response: NextResponse.json(
-          { error: "That Step 2 chat cannot be generated from its current state." },
+          { error: "That Step 2 review cannot continue from its current state." },
           { status: 409 },
         ),
       };
@@ -1301,7 +1342,7 @@ async function claimTailorResumeQuestionStart(input: {
         response: NextResponse.json(
           {
             error:
-              "The base resume changed, or this tailoring run was canceled before its Step 2 chat could be generated. Review the latest Tailor Resume state and try again.",
+              "The base resume changed, or this tailoring run was canceled before Step 2 could continue. Review the latest Tailor Resume state and try again.",
           },
           { status: 409 },
         ),
@@ -1362,7 +1403,7 @@ async function handleStartTailorResumeInterview(
 
   if (!targetId) {
     return NextResponse.json(
-      { error: "Provide the Step 2 chat or tailoring run id to generate." },
+      { error: "Provide the Step 2 review or tailoring run id to continue." },
       { status: 400 },
     );
   }
@@ -1400,17 +1441,18 @@ async function handleStartTailorResumeInterview(
       claimed.interview.sourceAnnotatedLatexCode,
     );
     const uncoveredEmphasizedTechnologies =
-      buildUncoveredTailorResumeQuestionTechnologies({
+      await buildUncoveredTailorResumeQuestionTechnologies({
         emphasizedTechnologies:
           claimed.interview.planningResult.emphasizedTechnologies,
         resumePlainText: planningSnapshot.resumePlainText,
-        userMarkdown: userMarkdownBeforeStart,
+        userId,
       });
 
     await handleStepEvent({
       attempt: 1,
       detail:
-        "Re-reading the latest USER.md before opening the scraped-technology review chat.",
+        "Checking the latest skills-section keyword coverage before starting the tailoring draft.",
+      blockingTechnologies: uncoveredEmphasizedTechnologies,
       durationMs: 0,
       emphasizedTechnologies:
         claimed.interview.planningResult.emphasizedTechnologies,
@@ -1418,44 +1460,33 @@ async function handleStartTailorResumeInterview(
       status: "running",
       stepCount: 5,
       stepNumber: 2,
-      summary: "Starting keyword review chat",
+      summary: "Reviewing skills-section blockers",
     });
 
     if (uncoveredEmphasizedTechnologies.length > 0) {
-      const promoted = await promoteTailorResumeKeywordReviewInterview({
-        interview: claimed.interview,
+      const waitingAt = new Date().toISOString();
+      const waitingInterview: TailorResumePendingInterview = {
+        ...claimed.interview,
+        status: "pending",
         uncoveredEmphasizedTechnologies,
-        userId,
-      });
+        updatedAt: waitingAt,
+      };
+      const waitingRawProfile: TailorResumeProfile = {
+        ...claimed.rawProfile,
+        workspace: upsertTailorResumeWorkspaceInterview(
+          claimed.rawProfile.workspace,
+          waitingInterview,
+          waitingAt,
+        ),
+      };
 
-      if (!promoted) {
-        await updateTailorResumeRunStatus({
-          error:
-            "The base resume changed, or this tailoring run was canceled while its keyword review chat was being opened.",
-          runId: claimed.interview.tailorResumeRunId,
-          status: "FAILED",
-          userId,
-        });
-        await removeTailorResumeQuestionDecisionInterview({
-          interviewId: claimed.interview.id,
-          userId,
-        });
-        return NextResponse.json(
-          {
-            error:
-              "The base resume changed, or this tailoring run was canceled while its keyword review chat was being opened. Review the latest Tailor Resume state and try again.",
-            tailoredResumeDurationMs:
-              claimed.interview.accumulatedModelDurationMs,
-            ...buildUserMemoryResponseFields(userMarkdownBeforeStart),
-          },
-          { status: 409 },
-        );
-      }
+      await writeTailorResumeProfileAndMarkChanged(userId, waitingRawProfile);
 
       await handleStepEvent({
         attempt: 1,
         detail:
-          "The scraped-technology review chat is ready. No model call has run yet; generate examples only if the user asks for them.",
+          `Still waiting on ${formatSkillsSectionBlockerCount(uncoveredEmphasizedTechnologies.length)}. Add a spare bullet, mark the term narrative/non-skill, or add skills-only support before pressing play again.`,
+        blockingTechnologies: uncoveredEmphasizedTechnologies,
         durationMs: Math.max(0, Date.now() - startedAt),
         emphasizedTechnologies:
           claimed.interview.planningResult.emphasizedTechnologies,
@@ -1463,7 +1494,7 @@ async function handleStartTailorResumeInterview(
         status: "running",
         stepCount: 5,
         stepNumber: 2,
-        summary: "Waiting for scraped keyword review",
+        summary: "Waiting for skills-section support",
       });
       await updateTailorResumeRunStatus({
         runId: claimed.interview.tailorResumeRunId,
@@ -1472,8 +1503,8 @@ async function handleStartTailorResumeInterview(
       });
       return NextResponse.json({
         profile: mergeTailorResumeProfileWithLockedLinks(
-          promoted.rawProfile,
-          promoted.lockedLinks,
+          waitingRawProfile,
+          claimed.lockedLinks,
           {
             includeLockedOnly: true,
           },
@@ -1487,15 +1518,16 @@ async function handleStartTailorResumeInterview(
     await handleStepEvent({
       attempt: 1,
       detail:
-        "Every scraped technology is already covered by the resume or USER.md, so this run can skip the chat.",
+        "Every skills-section keyword is covered by the resume, a spare bullet, or skills-only support. Starting the tailoring draft.",
+      blockingTechnologies: [],
       durationMs: Math.max(0, Date.now() - startedAt),
       emphasizedTechnologies:
         claimed.interview.planningResult.emphasizedTechnologies,
       retrying: false,
-      status: "skipped",
+      status: "succeeded",
       stepCount: 5,
       stepNumber: 2,
-      summary: "Clarify missing details",
+      summary: "Skills-section coverage ready",
     });
 
     try {
@@ -1541,9 +1573,9 @@ async function handleStartTailorResumeInterview(
   } catch (error) {
     return failTailorResumeRunAfterBackendError({
       error,
-      fallbackMessage: "Unable to start the Step 2 chat.",
+      fallbackMessage: "Unable to continue from Step 2 review.",
       fallbackStepNumber: 2,
-      fallbackSummary: "Starting follow-up chat",
+      fallbackSummary: "Reviewing skills-section blockers",
       lastStepEvent,
       onStepEvent: handleStepEvent,
       runId: claimed.interview.tailorResumeRunId,
@@ -1592,6 +1624,14 @@ function readTailorResumeGenerateExamplesTechnologyNames(
   }
 
   return names;
+}
+
+function readStringList(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is string => typeof item === "string");
 }
 
 async function handleRequestTailorResumeInterviewCompletion(
@@ -3129,22 +3169,7 @@ async function finalizeTailorResumeGeneration(input: {
       const generatedPageCount = await countPdfPages(tailoringResult.previewPdf);
       const precheckDurationMs = Math.max(0, Date.now() - pageCountStepStartedAt);
 
-      if (!input.rawProfile.generationSettings.values.preventPageCountIncrease) {
-        pageCountStepHandled = true;
-        await input.onStepEvent?.({
-          attempt: null,
-          detail:
-            generatedPageCount > targetPageCount
-              ? `Page-count guard is disabled, so automatic compaction did not run even though the preview expanded to ${buildPageCountLimitLabel(generatedPageCount)}.`
-              : `Page-count guard is disabled, and the preview already fits within ${buildPageCountLimitLabel(targetPageCount)}.`,
-          durationMs: precheckDurationMs,
-          retrying: false,
-          status: "skipped",
-          stepCount: 5,
-          stepNumber: 5,
-          summary: "Keeping the tailored resume within the original page count",
-        });
-      } else if (generatedPageCount <= targetPageCount) {
+      if (generatedPageCount <= targetPageCount) {
         pageCountStepHandled = true;
         await input.onStepEvent?.({
           attempt: null,
@@ -3215,35 +3240,20 @@ async function finalizeTailorResumeGeneration(input: {
 
       pageCountStepHandled = true;
 
-      if (input.rawProfile.generationSettings.values.preventPageCountIncrease) {
-        await input.onStepEvent?.({
-          attempt: null,
-          detail:
-            `Page-count verification could not be completed, so Step 5 did not run: ${errorMessage}`,
-          durationMs,
-          retrying: false,
-          status: "skipped",
-          stepCount: 5,
-          stepNumber: 5,
-          summary: "Keeping the tailored resume within the original page count",
-        });
-        tailoringResult = applyTailorResumePageCountFailure(
-          tailoringResult,
-          errorMessage,
-        );
-      } else {
-        await input.onStepEvent?.({
-          attempt: null,
-          detail:
-            `Page-count guard is disabled, and page-count verification could not be completed: ${errorMessage}`,
-          durationMs,
-          retrying: false,
-          status: "skipped",
-          stepCount: 5,
-          stepNumber: 5,
-          summary: "Keeping the tailored resume within the original page count",
-        });
-      }
+      await input.onStepEvent?.({
+        attempt: null,
+        detail: `Page-count verification could not be completed: ${errorMessage}`,
+        durationMs,
+        retrying: false,
+        status: "failed",
+        stepCount: 5,
+        stepNumber: 5,
+        summary: "Keeping the tailored resume within the original page count",
+      });
+      tailoringResult = applyTailorResumePageCountFailure(
+        tailoringResult,
+        errorMessage,
+      );
     }
   } else if (tailoringResult.outcome !== "generation_failure") {
     pageCountStepHandled = true;
@@ -3264,7 +3274,7 @@ async function finalizeTailorResumeGeneration(input: {
     tailoringResult = {
       ...tailoringResult,
       validationError: formatTailorResumeStepError(
-        tailoringResult.previewPdf ? 5 : 4,
+        4,
         tailoringResult.validationError,
       ),
     };
@@ -3851,224 +3861,112 @@ async function handleTailorResumeGeneration(
       preparation.rawProfile,
       preparation.lockedLinks,
     );
-    const allowFollowUpQuestions =
-      preparation.rawProfile.generationSettings.values
-        .allowTailorResumeFollowUpQuestions;
     const userMarkdownForPlanning = await readTailorResumeUserMarkdown(userId);
+    const storedNonSkillNames =
+      await readTailorResumeNonSkillClassificationNames(userId);
     const keywordStage =
       await extractTailorResumeEmphasizedTechnologiesForQuestioning({
         employerName: preparation.companyName,
         jobDescription: preparation.jobDescription,
-        nonTechnologies: userMarkdownForPlanning.nonTechnologies,
+        nonTechnologies: [
+          ...userMarkdownForPlanning.nonTechnologies,
+          ...storedNonSkillNames,
+        ],
         onStepEvent: handleStepEvent,
-    });
-    let accumulatedModelDurationMs = keywordStage.generationDurationMs;
+      });
+    const classifiedEmphasizedTechnologies =
+      await classifyTailorResumeEmphasizedTechnologies({
+        legacyNonSkillNames: userMarkdownForPlanning.nonTechnologies,
+        technologies: keywordStage.emphasizedTechnologies,
+        userId,
+      });
+    const accumulatedModelDurationMs = keywordStage.generationDurationMs;
     const prePlanningResult = buildPrePlanningTailoredResumePlanningResult({
       companyName: preparation.companyName,
-      emphasizedTechnologies: keywordStage.emphasizedTechnologies,
+      emphasizedTechnologies: classifiedEmphasizedTechnologies,
     });
     const sourcePlanningSnapshot = buildTailorResumePlanningSnapshot(
       generationSourceAnnotatedLatex,
     );
     const uncoveredEmphasizedTechnologies =
-      buildUncoveredTailorResumeQuestionTechnologies({
-        emphasizedTechnologies: keywordStage.emphasizedTechnologies,
+      await buildUncoveredTailorResumeQuestionTechnologies({
+        emphasizedTechnologies: classifiedEmphasizedTechnologies,
         resumePlainText: sourcePlanningSnapshot.resumePlainText,
-        userMarkdown: userMarkdownForPlanning,
-      });
-
-    if (allowFollowUpQuestions && uncoveredEmphasizedTechnologies.length > 0) {
-      const questionStart = await createTailorResumeQuestionStart({
-        accumulatedModelDurationMs,
-        applicationId: preparation.applicationId,
-        generationSourceSnapshot,
-        jobDescription: preparation.jobDescription,
-        jobUrl: preparation.jobUrl,
-        planningDebug: {
-          outputJson: null,
-          prompt: null,
-          skippedReason:
-            "Step 3 planning has not run yet because Step 2 clarification is waiting for the user to generate the chat.",
-        },
-        planningResult: prePlanningResult,
-        runId: preparation.runId,
-        sourceAnnotatedLatexCode: generationSourceAnnotatedLatex,
-        uncoveredEmphasizedTechnologies,
         userId,
       });
 
-      if (questionStart.kind === "stale") {
-        const errorMessage =
-          "The base resume changed, or this tailoring run was canceled or overwritten while Step 2 was preparing a chat start.";
-
-        await updateTailorResumeRunStatus({
-          error: errorMessage,
-          runId: preparation.runId,
-          status: "FAILED",
-          userId,
-        });
-        return NextResponse.json(
-          {
-            error: `${errorMessage} Review the latest Tailor Resume state and try again.`,
-            tailoredResumeDurationMs: accumulatedModelDurationMs,
-          },
-          { status: 409 },
-        );
-      }
-
-      await updateTailorResumeRunStatus({
-        runId: preparation.runId,
-        status: "NEEDS_INPUT",
-        userId,
-      });
-      await handleStepEvent(
-        buildTailorResumeQuestionStartReadyStepEvent(
-          keywordStage.emphasizedTechnologies,
-        ),
-      );
-      const pendingQuestionStartTailoring =
-        buildPendingInterviewExistingTailoringState(questionStart.interview);
-
-      return NextResponse.json({
-        activeTailorings: [pendingQuestionStartTailoring],
-        existingTailoring: pendingQuestionStartTailoring,
-        profile: mergeTailorResumeProfileWithLockedLinks(
-          questionStart.rawProfile,
-          questionStart.lockedLinks,
-          {
-            includeLockedOnly: true,
-          },
-        ),
-        tailoredResumeDurationMs: accumulatedModelDurationMs,
-        tailoringStatus: "question_start_pending" as const,
-        userMarkdown: userMarkdownForPlanning,
-      });
-  } else {
-    await handleStepEvent({
-      attempt: null,
-      detail:
-        allowFollowUpQuestions
-          ? "Step 2 found no scraped technologies missing from both the resume and USER.md, so planning can start without a chat."
-          : "Step 2 follow-up questions are disabled, so planning will use the existing resume and USER.md.",
-      durationMs: 0,
-      emphasizedTechnologies: keywordStage.emphasizedTechnologies,
-      retrying: false,
-      status: "skipped",
-      stepCount: 5,
-      stepNumber: 2,
-      summary: "Clarify missing details",
-    });
-  }
-
-  const planningStage = await planTailoredResume({
-    annotatedLatexCode: processedBaseAnnotatedLatex.latexCode,
-    employerName: preparation.companyName,
-    jobDescription: preparation.jobDescription,
-    onStepEvent: handleStepEvent,
-    precomputedEmphasizedTechnologies: prePlanningResult.emphasizedTechnologies,
-    promptSettings: preparation.rawProfile.promptSettings.values,
-    questioningSummary: prePlanningResult.questioningSummary,
-    userMarkdown: userMarkdownForPlanning,
-  });
-  accumulatedModelDurationMs += planningStage.generationDurationMs;
-
-  if (!planningStage.ok) {
-    await withTailorResumeProfileLock(userId, async () => {
-      const latestState = await readTailorResumeProfileState(userId);
-      const failedProfile =
-        preparation.rawProfile.jobDescription !== preparation.jobDescription
-          ? mergeTailorResumeFailedGeneration({
-              currentRawProfile: latestState.rawProfile,
-              jobDescription: preparation.jobDescription,
-              snapshotRawProfile: preparation.rawProfile,
-            })
-          : latestState.rawProfile;
-
-      if (failedProfile !== latestState.rawProfile) {
-        await writeTailorResumeProfileAndMarkChanged(userId, failedProfile);
-      }
-    });
-
-    const failureMessage = buildTailorResumeAttemptFailureMessage({
-      attempts: planningStage.attempts,
-      stepNumber: 3,
-      validationError: planningStage.validationError,
-    });
-
-    await updateTailorResumeRunStatus({
-      error: failureMessage,
-      runId: preparation.runId,
-      status: "FAILED",
-      userId,
-    });
-
-    return NextResponse.json(
-      {
-        error: failureMessage,
-        tailoredResumeDurationMs: accumulatedModelDurationMs,
-      },
-      { status: 422 },
-    );
-  }
-
-  const planningResult: TailorResumePlanningResult = {
-    ...planningStage.planningResult,
-    questioningSummary: prePlanningResult.questioningSummary,
-  };
-
-  const tailoringResult = await implementTailoredResumePlan({
-    annotatedLatexCode: processedBaseAnnotatedLatex.latexCode,
-    generationDurationMsBase: accumulatedModelDurationMs,
-    jobDescription: preparation.jobDescription,
-    linkOverrides: buildKnownTailorResumeLinks(
-      preparation.rawProfile.links,
-      preparation.lockedLinks,
-    ),
-    onBuildFailure: (latexCode, error, attempt) =>
-      logLatexBuildFailure({
-        userId,
-        source: tailorResumeDebugErrorSources.tailoringCompileFailure,
-        latexCode,
-        error,
-        attempt,
-      }),
-    onInvalidReplacement: (payload, error, attempt) =>
-      logTailorResumeDebugError({
-        userId,
-        source: tailorResumeDebugErrorSources.tailoringInvalidReplacement,
-        latexCode: payload,
-        error,
-        attempt,
-      }),
-    onStepEvent: handleStepEvent,
-    planningDebug: planningStage.planningDebug,
-    planningResult,
-    planningSnapshot: planningStage.planningSnapshot,
-    promptSettings: preparation.rawProfile.promptSettings.values,
-    userMarkdown: userMarkdownForPlanning,
-  });
-
-    const response = await finalizeTailorResumeGeneration({
+    const questionStart = await createTailorResumeQuestionStart({
+      accumulatedModelDurationMs,
       applicationId: preparation.applicationId,
-      generationSourceAnnotatedLatex,
       generationSourceSnapshot,
       jobDescription: preparation.jobDescription,
       jobUrl: preparation.jobUrl,
-      lockedLinks: preparation.lockedLinks,
-      normalizedBaseLatex,
-      onStepEvent: handleStepEvent,
-      overwrittenDbTailoredResumeIds: preparation.overwrittenDbTailoredResumeIds,
-      overwrittenTailoredResumeIds: preparation.overwrittenTailoredResumeIds,
-      processedBaseSavedLinkUpdateCount: processedBaseAnnotatedLatex.updatedCount,
-      processedBaseSavedLinkUpdates: processedBaseAnnotatedLatex.updatedLinks,
-      rawProfile: preparation.rawProfile,
+      planningDebug: {
+        outputJson: null,
+        prompt: null,
+        skippedReason:
+          "Step 3 planning has not run yet because Step 2 is waiting for the user to review classified keywords and press play.",
+      },
+      planningResult: prePlanningResult,
       runId: preparation.runId,
-      tailoringResult,
+      sourceAnnotatedLatexCode: generationSourceAnnotatedLatex,
+      status: uncoveredEmphasizedTechnologies.length > 0 ? "pending" : "ready",
+      uncoveredEmphasizedTechnologies,
       userId,
-      userMarkdown: userMarkdownForPlanning,
     });
 
-    return response;
+    if (questionStart.kind === "stale") {
+      const errorMessage =
+        "The base resume changed, or this tailoring run was canceled or overwritten while Step 2 was preparing keyword review.";
+
+      await updateTailorResumeRunStatus({
+        error: errorMessage,
+        runId: preparation.runId,
+        status: "FAILED",
+        userId,
+      });
+      return NextResponse.json(
+        {
+          error: `${errorMessage} Review the latest Tailor Resume state and try again.`,
+          tailoredResumeDurationMs: accumulatedModelDurationMs,
+        },
+        { status: 409 },
+      );
+    }
+
+    await updateTailorResumeRunStatus({
+      runId: preparation.runId,
+      status: "NEEDS_INPUT",
+      userId,
+    });
+    await handleStepEvent(
+      buildTailorResumeQuestionStartReadyStepEvent(
+        classifiedEmphasizedTechnologies,
+        uncoveredEmphasizedTechnologies,
+      ),
+    );
+    const pendingQuestionStartTailoring =
+      buildPendingInterviewExistingTailoringState(questionStart.interview);
+    const skillData = await readTailorResumeStoredSkillData({
+      sourceAnnotatedLatexCode: generationSourceAnnotatedLatex,
+      userId,
+    });
+
+    return NextResponse.json({
+      activeTailorings: [pendingQuestionStartTailoring],
+      existingTailoring: pendingQuestionStartTailoring,
+      profile: mergeTailorResumeProfileWithLockedLinks(
+        questionStart.rawProfile,
+        questionStart.lockedLinks,
+        {
+          includeLockedOnly: true,
+        },
+      ),
+      skillData,
+      tailoredResumeDurationMs: accumulatedModelDurationMs,
+      tailoringStatus: "question_start_pending" as const,
+      ...buildUserMemoryResponseFields(userMarkdownForPlanning),
+    });
   } catch (error) {
     return failTailorResumeRunAfterBackendError({
       error,
@@ -5486,6 +5384,10 @@ export async function GET(request: Request) {
         })
       : Promise.resolve(null),
   ]);
+  const skillData = await readTailorResumeStoredSkillData({
+    sourceAnnotatedLatexCode: rawProfile.annotatedLatex.code,
+    userId: session.user.id,
+  }).catch(() => null);
   const activeTailoringInterviews = readTailorResumeWorkspaceInterviews(
     rawProfile.workspace,
   );
@@ -5502,6 +5404,7 @@ export async function GET(request: Request) {
     ...(applicationSummary ?? {}),
     existingTailoring,
     profile,
+    skillData,
     syncState,
     ...buildUserMemoryResponseFields(userMarkdown),
   });
@@ -5694,6 +5597,278 @@ export async function PATCH(request: Request) {
         onSaved: () => markTailoringChanged(session.user.id),
       },
     );
+  }
+
+  if ("action" in body && body.action === "saveKeywordClassification") {
+    const requestBody = body as Record<string, unknown>;
+    const name =
+      typeof requestBody.name === "string" ? requestBody.name.trim() : "";
+    const kind = normalizeTailorResumeKeywordKind(requestBody.kind);
+    const priority =
+      requestBody.priority === "high" || requestBody.priority === "low"
+        ? requestBody.priority
+        : null;
+
+    if (!name || !kind) {
+      return NextResponse.json(
+        { error: "Provide a keyword name and classification." },
+        { status: 400 },
+      );
+    }
+
+    try {
+      const keywordClassification = await saveTailorResumeKeywordClassification({
+        kind,
+        name,
+        priority,
+        userId: session.user.id,
+      });
+      const { lockedLinks, rawProfile } =
+        await reevaluateTailorResumeStepTwoCheckpoints(session.user.id);
+      const skillData = await readTailorResumeStoredSkillData({
+        sourceAnnotatedLatexCode: rawProfile.annotatedLatex.code,
+        userId: session.user.id,
+      });
+
+      return NextResponse.json({
+        keywordClassification,
+        profile: mergeTailorResumeProfileWithLockedLinks(rawProfile, lockedLinks, {
+          includeLockedOnly: true,
+        }),
+        skillData,
+      });
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unable to save keyword classification.",
+        },
+        { status: 400 },
+      );
+    }
+  }
+
+  if ("action" in body && body.action === "saveSkill") {
+    const requestBody = body as Record<string, unknown>;
+    const name =
+      typeof requestBody.name === "string" ? requestBody.name.trim() : "";
+    const listInSkillsOnly = requestBody.listInSkillsOnly === true;
+
+    if (!name) {
+      return NextResponse.json(
+        { error: "Provide a skill name." },
+        { status: 400 },
+      );
+    }
+
+    try {
+      const skill = await saveTailorResumeSkill({
+        listInSkillsOnly,
+        name,
+        userId: session.user.id,
+      });
+      const { lockedLinks, rawProfile } =
+        await reevaluateTailorResumeStepTwoCheckpoints(session.user.id);
+      const skillData = await readTailorResumeStoredSkillData({
+        sourceAnnotatedLatexCode: rawProfile.annotatedLatex.code,
+        userId: session.user.id,
+      });
+
+      return NextResponse.json({
+        profile: mergeTailorResumeProfileWithLockedLinks(rawProfile, lockedLinks, {
+          includeLockedOnly: true,
+        }),
+        skill,
+        skillData,
+      });
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error ? error.message : "Unable to save the skill.",
+        },
+        { status: 400 },
+      );
+    }
+  }
+
+  if ("action" in body && body.action === "deleteSkill") {
+    const requestBody = body as Record<string, unknown>;
+    const id = typeof requestBody.id === "string" ? requestBody.id.trim() : "";
+
+    if (!id) {
+      return NextResponse.json(
+        { error: "Provide the skills-only keyword to remove." },
+        { status: 400 },
+      );
+    }
+
+    try {
+      await deleteTailorResumeSkill({
+        id,
+        userId: session.user.id,
+      });
+      const { lockedLinks, rawProfile } =
+        await reevaluateTailorResumeStepTwoCheckpoints(session.user.id);
+      const skillData = await readTailorResumeStoredSkillData({
+        sourceAnnotatedLatexCode: rawProfile.annotatedLatex.code,
+        userId: session.user.id,
+      });
+
+      return NextResponse.json({
+        profile: mergeTailorResumeProfileWithLockedLinks(rawProfile, lockedLinks, {
+          includeLockedOnly: true,
+        }),
+        skillData,
+      });
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unable to remove skills-only support.",
+        },
+        { status: 400 },
+      );
+    }
+  }
+
+  if ("action" in body && body.action === "measureSpareBullet") {
+    const requestBody = body as Record<string, unknown>;
+    const quote = typeof requestBody.quote === "string" ? requestBody.quote : "";
+    const replacesQuote =
+      typeof requestBody.replacesQuote === "string"
+        ? requestBody.replacesQuote
+        : null;
+    const resumeExperienceId =
+      typeof requestBody.resumeExperienceId === "string"
+        ? requestBody.resumeExperienceId
+        : "";
+
+    try {
+      const { rawProfile } = await readTailorResumeProfileState(session.user.id);
+      const spareBulletMeasurement =
+        await measureTailorResumeSpareBulletLineCount({
+          quote,
+          replacesQuote,
+          resumeExperienceId,
+          sourceAnnotatedLatexCode: rawProfile.annotatedLatex.code,
+        });
+
+      return NextResponse.json({ spareBulletMeasurement });
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unable to measure the spare bullet.",
+        },
+        { status: 400 },
+      );
+    }
+  }
+
+  if ("action" in body && body.action === "saveSpareBullet") {
+    const requestBody = body as Record<string, unknown>;
+    const id = typeof requestBody.id === "string" ? requestBody.id.trim() : null;
+    const quote = typeof requestBody.quote === "string" ? requestBody.quote : "";
+    const replacesQuote =
+      typeof requestBody.replacesQuote === "string"
+        ? requestBody.replacesQuote
+        : null;
+    const resumeExperienceId =
+      typeof requestBody.resumeExperienceId === "string"
+        ? requestBody.resumeExperienceId
+        : "";
+    const skillNames = readStringList(requestBody.skillNames);
+
+    try {
+      const { rawProfile } = await readTailorResumeProfileState(session.user.id);
+      const spareBullet = await saveTailorResumeSpareBullet({
+        id,
+        quote,
+        replacesQuote,
+        resumeExperienceId,
+        skillNames,
+        sourceAnnotatedLatexCode: rawProfile.annotatedLatex.code,
+        userId: session.user.id,
+      });
+      const refreshed = await reevaluateTailorResumeStepTwoCheckpoints(
+        session.user.id,
+      );
+      const skillData = await readTailorResumeStoredSkillData({
+        sourceAnnotatedLatexCode: refreshed.rawProfile.annotatedLatex.code,
+        userId: session.user.id,
+      });
+
+      return NextResponse.json({
+        profile: mergeTailorResumeProfileWithLockedLinks(
+          refreshed.rawProfile,
+          refreshed.lockedLinks,
+          {
+            includeLockedOnly: true,
+          },
+        ),
+        skillData,
+        spareBullet,
+      });
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unable to save the spare bullet.",
+        },
+        { status: 400 },
+      );
+    }
+  }
+
+  if ("action" in body && body.action === "deleteSpareBullet") {
+    const requestBody = body as Record<string, unknown>;
+    const id = typeof requestBody.id === "string" ? requestBody.id.trim() : "";
+
+    if (!id) {
+      return NextResponse.json(
+        { error: "Provide the spare bullet to delete." },
+        { status: 400 },
+      );
+    }
+
+    try {
+      await deleteTailorResumeSpareBullet({
+        id,
+        userId: session.user.id,
+      });
+      const { lockedLinks, rawProfile } =
+        await reevaluateTailorResumeStepTwoCheckpoints(session.user.id);
+      const skillData = await readTailorResumeStoredSkillData({
+        sourceAnnotatedLatexCode: rawProfile.annotatedLatex.code,
+        userId: session.user.id,
+      });
+
+      return NextResponse.json({
+        profile: mergeTailorResumeProfileWithLockedLinks(rawProfile, lockedLinks, {
+          includeLockedOnly: true,
+        }),
+        skillData,
+      });
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unable to delete the spare bullet.",
+        },
+        { status: 400 },
+      );
+    }
   }
 
   return withTailorResumeProfileLock(session.user.id, async () => {
