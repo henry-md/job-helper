@@ -5940,8 +5940,7 @@ function App() {
     setIsSettingsUserMarkdownOpen(false);
     setSettingsUserMarkdownError(null);
     setSettingsNonTechnologyError(null);
-    setFollowUpQuestionSettingError(null);
-    setPageCountProtectionSettingError(null);
+    setSettingsSpareBulletError(null);
     setKeywordCoverageSettingError(null);
   }
 
@@ -5999,6 +5998,311 @@ function App() {
       ),
     );
     setSettingsNonTechnologyError(null);
+  }
+
+  function chooseDefaultSettingsSpareBulletExperience(
+    skillData: TailorResumeStoredSkillData,
+  ) {
+    return skillData.resumeExperiences[0]?.id ?? "";
+  }
+
+  function applySettingsSkillData(
+    nextSkillData: TailorResumeStoredSkillData,
+    options: { preserveEditDraft?: boolean } = {},
+  ) {
+    setSettingsSkillData(nextSkillData);
+    setDraftSettingsSpareBulletExperienceId((currentValue) =>
+      nextSkillData.resumeExperiences.some(
+        (experience) => experience.id === currentValue,
+      )
+        ? currentValue
+        : chooseDefaultSettingsSpareBulletExperience(nextSkillData),
+    );
+    setSettingsSpareBulletEditDraft((currentDraft) => {
+      if (!options.preserveEditDraft) {
+        return null;
+      }
+
+      return currentDraft &&
+        nextSkillData.spareBullets.some(
+          (spareBullet) => spareBullet.id === currentDraft.id,
+        )
+        ? currentDraft
+        : null;
+    });
+  }
+
+  function clearSettingsSpareBulletForm(
+    skillData: TailorResumeStoredSkillData = settingsSkillData,
+  ) {
+    setDraftSettingsSpareBulletExperienceId(
+      chooseDefaultSettingsSpareBulletExperience(skillData),
+    );
+    setDraftSettingsSpareBulletSkillNames("");
+    setDraftSettingsSpareBulletQuote("");
+    setDraftSettingsSpareBulletReplacesQuote("");
+    setSettingsSpareBulletError(null);
+  }
+
+  function editSettingsSpareBullet(
+    spareBullet: TailorResumeStoredSkillData["spareBullets"][number],
+  ) {
+    setSettingsSpareBulletEditDraft({
+      id: spareBullet.id,
+      quote: spareBullet.quote,
+      replacesQuote: spareBullet.replacesQuote ?? "",
+      resumeExperienceId: spareBullet.resumeExperienceId,
+      skillNames: formatSettingsSpareBulletSkills(spareBullet),
+    });
+    setSettingsSpareBulletError(null);
+  }
+
+  function updateSettingsSpareBulletEditDraft(
+    patch: Partial<Omit<SettingsSpareBulletEditDraft, "id">>,
+  ) {
+    setSettingsSpareBulletEditDraft((currentDraft) =>
+      currentDraft ? { ...currentDraft, ...patch } : currentDraft,
+    );
+  }
+
+  async function patchSettingsSkillData(body: Record<string, unknown>) {
+    if (authState.status !== "signedIn") {
+      return null;
+    }
+
+    const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
+      body: JSON.stringify(body),
+      credentials: "include",
+      headers: {
+        Authorization: `Bearer ${authState.session.sessionToken}`,
+        "Content-Type": "application/json",
+      },
+      method: "PATCH",
+    });
+    const payload = await response.json().catch(() => ({}));
+
+    if (response.status === 401) {
+      await invalidateAuthSession();
+      return null;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        readTailorResumePayloadError(
+          payload,
+          "Unable to save resume bullet support.",
+        ),
+      );
+    }
+
+    return readTailorResumeStoredSkillData(payload);
+  }
+
+  async function saveSettingsSkillsOnlySupport() {
+    if (!canSaveSettingsSkillsOnly) {
+      return;
+    }
+
+    setIsSavingSettingsSkillsOnly(true);
+    setSettingsSkillsOnlyError(null);
+
+    try {
+      const nextSkillData = await patchSettingsSkillData({
+        action: "saveSkill",
+        listInSkillsOnly: true,
+        name: draftSettingsSkillsOnlyName.trim(),
+      });
+
+      if (nextSkillData) {
+        applySettingsSkillData(nextSkillData, { preserveEditDraft: true });
+        setDraftSettingsSkillsOnlyName("");
+        void loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
+      }
+    } catch (error) {
+      setSettingsSkillsOnlyError(
+        error instanceof Error
+          ? error.message
+          : "Unable to save skills-only support.",
+      );
+    } finally {
+      setIsSavingSettingsSkillsOnly(false);
+    }
+  }
+
+  async function deleteSettingsSkillsOnlySupport(skillId: string) {
+    setIsSavingSettingsSkillsOnly(true);
+    setSettingsSkillsOnlyError(null);
+
+    try {
+      const nextSkillData = await patchSettingsSkillData({
+        action: "deleteSkill",
+        id: skillId,
+      });
+
+      if (nextSkillData) {
+        applySettingsSkillData(nextSkillData, { preserveEditDraft: true });
+        void loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
+      }
+    } catch (error) {
+      setSettingsSkillsOnlyError(
+        error instanceof Error
+          ? error.message
+          : "Unable to remove skills-only support.",
+      );
+    } finally {
+      setIsSavingSettingsSkillsOnly(false);
+    }
+  }
+
+  const measureSettingsSpareBulletLineCount = useCallback(
+    async (input: SettingsSpareBulletLineMeasurementInput) => {
+      if (authState.status !== "signedIn") {
+        return null;
+      }
+
+      const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
+        body: JSON.stringify({
+          action: "measureSpareBullet",
+          quote: input.quote,
+          replacesQuote: input.replacesQuote.trim() || null,
+          resumeExperienceId: input.resumeExperienceId,
+        }),
+        credentials: "include",
+        headers: {
+          Authorization: `Bearer ${authState.session.sessionToken}`,
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (response.status === 401) {
+        await invalidateAuthSession();
+        return null;
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          readTailorResumePayloadError(
+            payload,
+            "Unable to measure the rendered bullet line count.",
+          ),
+        );
+      }
+
+      const measurement = isRecord(payload)
+        ? readTailorResumeSpareBulletLineMeasurement(
+            payload.spareBulletMeasurement,
+          )
+        : null;
+
+      if (!measurement) {
+        throw new Error("Unable to measure the rendered bullet line count.");
+      }
+
+      return measurement;
+    },
+    [authState, invalidateAuthSession],
+  );
+
+  async function saveSettingsSpareBullet() {
+    if (!canSaveSettingsSpareBullet) {
+      return;
+    }
+
+    setIsSavingSettingsSpareBullet(true);
+    setSettingsSpareBulletError(null);
+
+    try {
+      const nextSkillData = await patchSettingsSkillData({
+        action: "saveSpareBullet",
+        id: null,
+        quote: draftSettingsSpareBulletQuote,
+        replacesQuote: draftSettingsSpareBulletReplacesQuote.trim() || null,
+        resumeExperienceId: draftSettingsSpareBulletExperienceId,
+        skillNames: splitSettingsSkillNames(draftSettingsSpareBulletSkillNames),
+      });
+
+      if (nextSkillData) {
+        applySettingsSkillData(nextSkillData, { preserveEditDraft: true });
+        clearSettingsSpareBulletForm(nextSkillData);
+        void loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
+      }
+    } catch (error) {
+      setSettingsSpareBulletError(
+        error instanceof Error
+          ? error.message
+          : "Unable to save resume bullet support.",
+      );
+    } finally {
+      setIsSavingSettingsSpareBullet(false);
+    }
+  }
+
+  async function saveSettingsSpareBulletEdit() {
+    if (!settingsSpareBulletEditDraft || !canSaveSettingsSpareBulletEdit) {
+      return;
+    }
+
+    setIsSavingSettingsSpareBullet(true);
+    setSettingsSpareBulletError(null);
+
+    try {
+      const nextSkillData = await patchSettingsSkillData({
+        action: "saveSpareBullet",
+        id: settingsSpareBulletEditDraft.id,
+        quote: settingsSpareBulletEditDraft.quote,
+        replacesQuote: settingsSpareBulletEditDraft.replacesQuote.trim() || null,
+        resumeExperienceId: settingsSpareBulletEditDraft.resumeExperienceId,
+        skillNames: splitSettingsSkillNames(
+          settingsSpareBulletEditDraft.skillNames,
+        ),
+      });
+
+      if (nextSkillData) {
+        setSettingsSpareBulletEditDraft(null);
+        applySettingsSkillData(nextSkillData);
+        void loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
+      }
+    } catch (error) {
+      setSettingsSpareBulletError(
+        error instanceof Error
+          ? error.message
+          : "Unable to save resume bullet support.",
+      );
+    } finally {
+      setIsSavingSettingsSpareBullet(false);
+    }
+  }
+
+  async function deleteSettingsSpareBullet(spareBulletId: string) {
+    setIsSavingSettingsSpareBullet(true);
+    setSettingsSpareBulletError(null);
+
+    try {
+      const nextSkillData = await patchSettingsSkillData({
+        action: "deleteSpareBullet",
+        id: spareBulletId,
+      });
+
+      if (nextSkillData) {
+        applySettingsSkillData(nextSkillData);
+
+        if (settingsSpareBulletEditDraft?.id === spareBulletId) {
+          setSettingsSpareBulletEditDraft(null);
+        }
+
+        void loadPersonalInfo({ forceFresh: true, preserveCurrent: true });
+      }
+    } catch (error) {
+      setSettingsSpareBulletError(
+        error instanceof Error
+          ? error.message
+          : "Unable to delete resume bullet support.",
+      );
+    } finally {
+      setIsSavingSettingsSpareBullet(false);
+    }
   }
 
   function applySavedUserMarkdown(nextUserMarkdown: UserMarkdownSummary) {
@@ -6515,105 +6819,6 @@ function App() {
     }
   }
 
-  async function updateFollowUpQuestionSetting(
-    nextAllowFollowUpQuestions: boolean,
-  ) {
-    if (authState.status !== "signedIn") {
-      setFollowUpQuestionSettingError(
-        "Connect Google before changing Step 2 questions.",
-      );
-      return;
-    }
-
-    if (
-      allowTailorResumeFollowUpQuestions === nextAllowFollowUpQuestions ||
-      isSavingFollowUpQuestionSetting
-    ) {
-      return;
-    }
-
-    const previousPersonalInfo = personalInfo ?? lastReadyPersonalInfoRef.current;
-    const optimisticPersonalInfo = previousPersonalInfo
-      ? {
-          ...previousPersonalInfo,
-          generationSettings: {
-            ...previousPersonalInfo.generationSettings,
-            allowTailorResumeFollowUpQuestions: nextAllowFollowUpQuestions,
-          },
-        }
-      : null;
-
-    setIsSavingFollowUpQuestionSetting(true);
-    setFollowUpQuestionSettingError(null);
-
-    if (optimisticPersonalInfo) {
-      lastReadyPersonalInfoRef.current = optimisticPersonalInfo;
-      setPersonalInfoState({
-        personalInfo: optimisticPersonalInfo,
-        status: "ready",
-      });
-      publishPersonalInfoToSharedCache(optimisticPersonalInfo);
-    }
-
-    try {
-      const result = await patchTailorResume({
-        action: "saveGenerationSettings",
-        generationSettings: {
-          allowTailorResumeFollowUpQuestions: nextAllowFollowUpQuestions,
-        },
-      });
-
-      if (!result.ok) {
-        throw new Error(
-          readTailorResumePayloadError(
-            result.payload,
-            "Unable to save Step 2 questions.",
-          ),
-        );
-      }
-
-      const nextGenerationSettings =
-        readTailorResumeGenerationSettingsSummary(result.payload);
-
-      setPersonalInfoState((currentState) => {
-        if (currentState.status !== "ready") {
-          return currentState;
-        }
-
-        const nextPersonalInfo = {
-          ...currentState.personalInfo,
-          generationSettings: nextGenerationSettings,
-        };
-
-        lastReadyPersonalInfoRef.current = nextPersonalInfo;
-        publishPersonalInfoToSharedCache(nextPersonalInfo);
-
-        return {
-          personalInfo: nextPersonalInfo,
-          status: "ready",
-        };
-      });
-
-      void loadPersonalInfo({ preserveCurrent: true });
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unable to save Step 2 questions.";
-
-      if (previousPersonalInfo) {
-        lastReadyPersonalInfoRef.current = previousPersonalInfo;
-        setPersonalInfoState({
-          personalInfo: previousPersonalInfo,
-          status: "ready",
-        });
-        publishPersonalInfoToSharedCache(previousPersonalInfo);
-      }
-
-      setFollowUpQuestionSettingError(message);
-    } finally {
-      setIsSavingFollowUpQuestionSetting(false);
-    }
-  }
-
   async function updateKeywordCoveragePriorityScope(
     includeLowPriorityTerms: boolean,
   ) {
@@ -6712,107 +6917,6 @@ function App() {
       setKeywordCoverageSettingError(message);
     } finally {
       setIsSavingKeywordCoverageSetting(false);
-    }
-  }
-
-  async function updatePageCountProtectionSetting(
-    nextPreventPageCountIncrease: boolean,
-  ) {
-    if (authState.status !== "signedIn") {
-      setPageCountProtectionSettingError(
-        "Connect Google before changing page-count protection.",
-      );
-      return;
-    }
-
-    if (
-      preventPageCountIncrease === nextPreventPageCountIncrease ||
-      isSavingPageCountProtectionSetting
-    ) {
-      return;
-    }
-
-    const previousPersonalInfo = personalInfo ?? lastReadyPersonalInfoRef.current;
-    const optimisticPersonalInfo = previousPersonalInfo
-      ? {
-          ...previousPersonalInfo,
-          generationSettings: {
-            ...previousPersonalInfo.generationSettings,
-            preventPageCountIncrease: nextPreventPageCountIncrease,
-          },
-        }
-      : null;
-
-    setIsSavingPageCountProtectionSetting(true);
-    setPageCountProtectionSettingError(null);
-
-    if (optimisticPersonalInfo) {
-      lastReadyPersonalInfoRef.current = optimisticPersonalInfo;
-      setPersonalInfoState({
-        personalInfo: optimisticPersonalInfo,
-        status: "ready",
-      });
-      publishPersonalInfoToSharedCache(optimisticPersonalInfo);
-    }
-
-    try {
-      const result = await patchTailorResume({
-        action: "saveGenerationSettings",
-        generationSettings: {
-          preventPageCountIncrease: nextPreventPageCountIncrease,
-        },
-      });
-
-      if (!result.ok) {
-        throw new Error(
-          readTailorResumePayloadError(
-            result.payload,
-            "Unable to save page-count protection.",
-          ),
-        );
-      }
-
-      const nextGenerationSettings =
-        readTailorResumeGenerationSettingsSummary(result.payload);
-
-      setPersonalInfoState((currentState) => {
-        if (currentState.status !== "ready") {
-          return currentState;
-        }
-
-        const nextPersonalInfo = {
-          ...currentState.personalInfo,
-          generationSettings: nextGenerationSettings,
-        };
-
-        lastReadyPersonalInfoRef.current = nextPersonalInfo;
-        publishPersonalInfoToSharedCache(nextPersonalInfo);
-
-        return {
-          personalInfo: nextPersonalInfo,
-          status: "ready",
-        };
-      });
-
-      void loadPersonalInfo({ preserveCurrent: true });
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Unable to save page-count protection.";
-
-      if (previousPersonalInfo) {
-        lastReadyPersonalInfoRef.current = previousPersonalInfo;
-        setPersonalInfoState({
-          personalInfo: previousPersonalInfo,
-          status: "ready",
-        });
-        publishPersonalInfoToSharedCache(previousPersonalInfo);
-      }
-
-      setPageCountProtectionSettingError(message);
-    } finally {
-      setIsSavingPageCountProtectionSetting(false);
     }
   }
 
@@ -7102,7 +7206,17 @@ function App() {
       setDraftSettingsUserMarkdown(defaultUserMarkdown);
       setDraftSettingsNonTechnologies([]);
       setDraftSettingsNonTechnologyInput("");
+      const emptySkillData = buildEmptyTailorResumeStoredSkillData();
+      setSettingsSkillData(emptySkillData);
+      setSettingsSpareBulletEditDraft(null);
+      setDraftSettingsSpareBulletExperienceId("");
+      setDraftSettingsSpareBulletSkillNames("");
+      setDraftSettingsSkillsOnlyName("");
+      setDraftSettingsSpareBulletQuote("");
+      setDraftSettingsSpareBulletReplacesQuote("");
       setSettingsUserMarkdownError(null);
+      setSettingsSpareBulletError(null);
+      setSettingsSkillsOnlyError(null);
       return;
     }
 
@@ -7126,6 +7240,14 @@ function App() {
     setDraftSettingsNonTechnologies(nextUserMarkdown.nonTechnologies);
     setDraftSettingsNonTechnologyInput("");
     setSettingsUserMarkdownError(null);
+    setSettingsSkillData(personalInfoState.personalInfo.skillData);
+    setDraftSettingsSpareBulletExperienceId((currentValue) =>
+      personalInfoState.personalInfo.skillData.resumeExperiences.some(
+        (experience) => experience.id === currentValue,
+      )
+        ? currentValue
+        : personalInfoState.personalInfo.skillData.resumeExperiences[0]?.id ?? "",
+    );
   }, [
     authState.status,
     personalInfoState,
@@ -7133,6 +7255,23 @@ function App() {
     savedSettingsUserMarkdown.nonTechnologies,
     savedSettingsUserMarkdown.updatedAt,
   ]);
+
+  useEffect(() => {
+    if (authState.status !== "signedIn" || personalInfoState.status !== "ready") {
+      return;
+    }
+
+    const nextSkillData = personalInfoState.personalInfo.skillData;
+
+    setSettingsSkillData(nextSkillData);
+    setDraftSettingsSpareBulletExperienceId((currentValue) =>
+      nextSkillData.resumeExperiences.some(
+        (experience) => experience.id === currentValue,
+      )
+        ? currentValue
+        : nextSkillData.resumeExperiences[0]?.id ?? "",
+    );
+  }, [authState.status, personalInfoState]);
 
   useEffect(() => {
     if (authState.status !== "signedIn") {
