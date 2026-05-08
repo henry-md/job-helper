@@ -28,12 +28,11 @@ import {
   buildTailoredResumeReviewUrl,
   DEFAULT_DASHBOARD_URL,
   DEFAULT_JOB_APPLICATIONS_ENDPOINT,
-  DEFAULT_TAILOR_RESUME_CHAT_ENDPOINT,
   DEFAULT_TAILOR_RESUME_ENDPOINT,
   DEFAULT_TAILOR_RESUME_PREVIEW_ENDPOINT,
+  DEFAULT_TAILOR_RESUME_SUPPORT_CHAT_ENDPOINT,
   EXTENSION_DEBUG_UI_ENABLED,
   EXTENSION_PREFERENCES_STORAGE_KEY,
-  EXTENSION_TOP_LEVEL_AI_CHAT_HIDDEN,
   EXISTING_TAILORING_STORAGE_KEY,
   LAST_TAILORING_STORAGE_KEY,
   normalizeComparableUrl,
@@ -47,7 +46,9 @@ import {
   type JobHelperAuthUser,
   type JobPageContext,
   type PersonalInfoSummary,
+  type TailorResumeStoredSkillData,
   type UserMarkdownSummary,
+  buildEmptyTailorResumeStoredSkillData,
   defaultUserMarkdown,
   defaultExtensionPreferences,
   formatNonTechnologyTerm,
@@ -56,6 +57,7 @@ import {
   normalizeNonTechnologyTerms,
   readExtensionPreferences,
   readPersonalInfoPayload,
+  readTailorResumeStoredSkillData,
   readTailorResumePreparationState,
   readJobUrlFromPageContext,
   readTailoredResumeSummaries,
@@ -128,6 +130,7 @@ import {
   formatTailorResumeProgressStatusLabel,
   readTailorResumeProgressAttemptBadgeLabel,
   readTailorResumeDisplayAttempt,
+  readTailorResumeDisplayStepNumber,
 } from "../../lib/tailor-resume-step-display.ts";
 import {
   resolveCompletedTailoringForPage,
@@ -164,6 +167,16 @@ import {
 import {
   splitTailoredResumesByArchiveState,
 } from "../../lib/tailored-resume-archive-state.ts";
+import {
+  filterTailorResumeSpareBulletsForSearch,
+  tailorResumeSpareBulletSearchModes,
+  type TailorResumeSpareBulletSearchMode,
+} from "../../lib/tailor-resume-spare-bullet-search.ts";
+import {
+  formatTailorResumeSpareBulletLineCount,
+  readTailorResumeSpareBulletLineTone,
+  type TailorResumeSpareBulletLineMeasurement,
+} from "../../lib/tailor-resume-spare-bullet-line-display.ts";
 
 type PanelState =
   | { status: "idle"; snapshot: null }
@@ -191,6 +204,33 @@ type DashboardOpenActionState = "idle" | "running";
 
 type PanelTab = "applications" | "debug" | "settings" | "tailor";
 type TailoredResumeArchiveFilter = "archived" | "unarchived";
+
+type SettingsSpareBulletEditDraft = {
+  id: string;
+  quote: string;
+  replacesQuote: string;
+  resumeExperienceId: string;
+  skillNames: string;
+};
+
+type SettingsSpareBulletQuoteFieldProps = {
+  disabled: boolean;
+  fieldClassName?: string;
+  measureLineCount: (
+    input: SettingsSpareBulletLineMeasurementInput,
+  ) => Promise<TailorResumeSpareBulletLineMeasurement | null>;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  replacesQuote: string;
+  resumeExperienceId: string;
+  value: string;
+};
+
+type SettingsSpareBulletLineMeasurementInput = {
+  quote: string;
+  replacesQuote: string;
+  resumeExperienceId: string;
+};
 
 type PersonalInfoState =
   | { personalInfo: null; status: "idle" | "loading" }
@@ -226,6 +266,7 @@ type PersonalDeleteImpact = {
 
 type ActiveTailorRunCard = {
   applicationId: string | null;
+  blockingTechnologies: TailoredResumeEmphasizedTechnology[];
   deleteTarget: TailorRunDeleteTarget | null;
   detail: string | null;
   emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
@@ -681,6 +722,35 @@ function readTailorResumePayloadError(value: unknown, fallbackMessage: string) {
     : fallbackMessage;
 }
 
+function readTailorResumeSpareBulletLineMeasurement(
+  value: unknown,
+): TailorResumeSpareBulletLineMeasurement | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const lineCount = typeof value.lineCount === "number" ? value.lineCount : 0;
+  const pageCount = typeof value.pageCount === "number" ? value.pageCount : 0;
+  const targetSegmentId =
+    typeof value.targetSegmentId === "string" ? value.targetSegmentId : "";
+
+  if (!Number.isFinite(lineCount) || lineCount <= 0 || !targetSegmentId) {
+    return null;
+  }
+
+  return {
+    lastLineFillRatio:
+      typeof value.lastLineFillRatio === "number" &&
+      Number.isFinite(value.lastLineFillRatio)
+        ? value.lastLineFillRatio
+        : null,
+    lineCount,
+    malformed: value.malformed === true,
+    pageCount: Number.isFinite(pageCount) && pageCount > 0 ? pageCount : 0,
+    targetSegmentId,
+  };
+}
+
 function readStringPayloadValue(value: unknown, key: string) {
   return isRecord(value) && typeof value[key] === "string"
     ? value[key].trim()
@@ -873,6 +943,7 @@ function buildTailorInterviewFailureStep(input: {
   if (lastTiming) {
     return {
       attempt: lastTiming.attempt,
+      blockingTechnologies: lastTiming.blockingTechnologies,
       detail: input.message,
       durationMs: lastTiming.durationMs,
       emphasizedTechnologies: lastTiming.emphasizedTechnologies,
@@ -1430,10 +1501,10 @@ function buildTailoringRunRecordFromExistingTailoring(input: {
       jobIdentifier,
       message:
         interviewStatus === "pending"
-          ? "Generate the Step 2 chat when you are ready."
+          ? "Review the classified keywords when you are ready."
           : interviewStatus === "deciding"
-            ? "Generating the Step 2 chat."
-            : "Resume questions are waiting in the side panel.",
+            ? "Classifying the job keywords."
+            : "Review keywords, then press play in the side panel.",
       pageTitle,
       pageUrl,
       positionTitle: input.existingTailoring.positionTitle,
@@ -1552,14 +1623,9 @@ const TAILOR_RUN_PROGRESS_STEP_DEFINITIONS = [
     stepNumber: 3,
   },
   {
-    label: "Apply resume changes",
+    label: "Apply changes and fit page",
     shortLabel: "Edit",
     stepNumber: 4,
-  },
-  {
-    label: "Keep the original page count",
-    shortLabel: "Fit",
-    stepNumber: 5,
   },
 ] as const;
 
@@ -1600,13 +1666,14 @@ function buildTailorRunProgressStepsFromGenerationStep(
   }
 
   const displayAttempt = readTailorResumeDisplayAttempt(step);
+  const activeStepNumber = readTailorResumeDisplayStepNumber(step.stepNumber);
 
   return createTailorRunProgressSteps().map((candidate) => {
-    if (candidate.stepNumber < step.stepNumber) {
+    if (candidate.stepNumber < activeStepNumber) {
       return { ...candidate, status: "succeeded" as const };
     }
 
-    if (candidate.stepNumber > step.stepNumber) {
+    if (candidate.stepNumber > activeStepNumber) {
       return candidate;
     }
 
@@ -1866,6 +1933,40 @@ function readTailorRunKeywordTechnologiesFromExistingTailoring(
   return existingTailoring.emphasizedTechnologies;
 }
 
+function readTailorRunBlockingTechnologiesFromRun(
+  run: Pick<TailorResumeRunRecord, "generationStep" | "generationStepTimings">,
+) {
+  if (run.generationStep?.blockingTechnologies) {
+    return run.generationStep.blockingTechnologies;
+  }
+
+  const stepTimings = run.generationStepTimings ?? [];
+
+  for (let index = stepTimings.length - 1; index >= 0; index -= 1) {
+    const blockers = stepTimings[index]?.blockingTechnologies;
+
+    if (blockers) {
+      return blockers;
+    }
+  }
+
+  return [];
+}
+
+function readTailorRunBlockingTechnologiesFromExistingTailoring(
+  existingTailoring: TailorResumeExistingTailoringState,
+) {
+  if (existingTailoring.kind === "pending_interview") {
+    return existingTailoring.blockingTechnologies;
+  }
+
+  if (existingTailoring.kind === "active_generation") {
+    return existingTailoring.lastStep?.blockingTechnologies ?? [];
+  }
+
+  return [];
+}
+
 function buildActiveTailorRunKeywordBadgeKey(card: ActiveTailorRunCard) {
   return `tailor-run-keywords:${
     card.pageKey ??
@@ -1904,6 +2005,7 @@ function buildActiveTailorRunCardFromRun(input: {
 
   return {
     applicationId: input.run.applicationId ?? null,
+    blockingTechnologies: readTailorRunBlockingTechnologiesFromRun(input.run),
     deleteTarget: buildTailorRunDeleteTarget({
       jobUrl: url,
       tailoredResumeId: input.run.tailoredResumeId ?? null,
@@ -1996,36 +2098,47 @@ function buildActiveTailorRunCardFromExistingTailoring(input: {
     input.existingTailoring.kind === "pending_interview"
       ? input.existingTailoring.interviewStatus
       : null;
-  const pendingInterviewStep =
-    interviewStatus === "pending"
+  const previousRunStepNumber =
+    typeof input.previousRun?.generationStep?.stepNumber === "number"
+      ? input.previousRun.generationStep.stepNumber
+      : null;
+  const shouldUsePendingInterviewStep =
+    previousRunStepNumber === null || previousRunStepNumber <= 2;
+  const pendingInterviewStep = !shouldUsePendingInterviewStep
+    ? null
+    : interviewStatus === "pending"
       ? {
           ...nextCard.step,
-          label: "Start chat",
-          shortLabel: "Start",
+          label: "Resolve skills-section",
+          shortLabel: "Blocked",
           status: "current" as const,
           stepNumber: 2,
         }
       : interviewStatus === "ready"
         ? {
             ...nextCard.step,
-            label: "Question ready",
-            shortLabel: "Ready",
+            label: "Ready to tailor",
+            shortLabel: "Play",
             status: "current" as const,
             stepNumber: 2,
           }
-	    : interviewStatus === "deciding"
-	      ? {
-	          ...nextCard.step,
-	              label: "Starting chat",
-	              shortLabel: "Clarify",
-	              status: "current" as const,
-	              stepNumber: 2,
-	            }
+        : interviewStatus === "deciding"
+          ? {
+              ...nextCard.step,
+              label: "Starting tailoring",
+              shortLabel: "Starting",
+              status: "current" as const,
+              stepNumber: 2,
+            }
           : null;
 
   return {
     ...nextCard,
     applicationId: input.existingTailoring.applicationId,
+    blockingTechnologies:
+      readTailorRunBlockingTechnologiesFromExistingTailoring(
+        input.existingTailoring,
+      ),
     deleteTarget: buildTailorRunDeleteTarget({
       jobUrl: url,
       tailoredResumeId: null,
@@ -2042,9 +2155,10 @@ function buildActiveTailorRunCardFromExistingTailoring(input: {
     interviewStatus,
     sortTime: startedAtTime,
     statusDisplayState:
-      interviewStatus === "pending" || interviewStatus === "ready"
+      shouldUsePendingInterviewStep &&
+      (interviewStatus === "pending" || interviewStatus === "ready")
         ? "ready"
-        : interviewStatus === "deciding"
+        : shouldUsePendingInterviewStep && interviewStatus === "deciding"
           ? "loading"
           : input.statusDisplayState ?? nextCard.statusDisplayState,
     startedAtTime,
@@ -2073,6 +2187,9 @@ function buildActiveTailorRunCardFromPreparation(input: {
 
   return {
     applicationId: input.run?.applicationId ?? null,
+    blockingTechnologies: input.run
+      ? readTailorRunBlockingTechnologiesFromRun(input.run)
+      : [],
     deleteTarget: buildTailorRunDeleteTarget({
       jobUrl: url,
       tailoredResumeId: null,
@@ -2783,10 +2900,8 @@ function readChatMessages(value: unknown) {
     .filter((message): message is ChatMessageRecord => Boolean(message));
 }
 
-function buildChatHistoryUrl(pageUrl: string) {
-  const url = new URL(DEFAULT_TAILOR_RESUME_CHAT_ENDPOINT);
-  url.searchParams.set("url", pageUrl);
-  return url.toString();
+function buildSupportChatHistoryUrl() {
+  return DEFAULT_TAILOR_RESUME_SUPPORT_CHAT_ENDPOINT;
 }
 
 function createTemporaryChatMessage(
@@ -2898,6 +3013,223 @@ function TrashIcon() {
       <path d="M10 11v6M14 11v6" />
       <path d="M9 7l1-2h4l1 2" />
       <path d="M7 7l1 13h8l1-13" />
+    </svg>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M4 20h4l11-11-4-4L4 16v4Z" />
+      <path d="m13.5 6.5 4 4" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="m5 12.5 4.2 4.2L19 7" />
+    </svg>
+  );
+}
+
+type SettingsSpareBulletLineMeasurementState =
+  | { key: string; status: "error"; message: string }
+  | { key: string; status: "idle" }
+  | { key: string; status: "measuring" }
+  | {
+      key: string;
+      measurement: TailorResumeSpareBulletLineMeasurement;
+      status: "ready";
+    };
+
+function buildSettingsSpareBulletMeasurementKey(
+  input: SettingsSpareBulletLineMeasurementInput,
+) {
+  const quote = input.quote.trim();
+  const resumeExperienceId = input.resumeExperienceId.trim();
+
+  if (!quote || !resumeExperienceId) {
+    return "";
+  }
+
+  return JSON.stringify([
+    quote,
+    input.replacesQuote.trim(),
+    resumeExperienceId,
+  ]);
+}
+
+function useSettingsSpareBulletLineMeasurement(input: {
+  measureLineCount: SettingsSpareBulletQuoteFieldProps["measureLineCount"];
+  quote: string;
+  replacesQuote: string;
+  resumeExperienceId: string;
+}) {
+  const { measureLineCount, quote, replacesQuote, resumeExperienceId } = input;
+  const key = useMemo(
+    () =>
+      buildSettingsSpareBulletMeasurementKey({
+        quote,
+        replacesQuote,
+        resumeExperienceId,
+      }),
+    [quote, replacesQuote, resumeExperienceId],
+  );
+  const [state, setState] = useState<SettingsSpareBulletLineMeasurementState>({
+    key: "",
+    status: "idle",
+  });
+
+  useEffect(() => {
+    if (!key) {
+      return;
+    }
+
+    let isCancelled = false;
+    const timeout = window.setTimeout(() => {
+      setState({ key, status: "measuring" });
+
+      void measureLineCount({
+        quote,
+        replacesQuote,
+        resumeExperienceId,
+      })
+        .then((measurement) => {
+          if (!isCancelled) {
+            setState(
+              measurement
+                ? { key, measurement, status: "ready" }
+                : { key, status: "idle" },
+            );
+          }
+        })
+        .catch((error: unknown) => {
+          if (!isCancelled) {
+            setState({
+              key,
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Unable to measure line count.",
+              status: "error",
+            });
+          }
+        });
+    }, 650);
+
+    return () => {
+      isCancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [key, measureLineCount, quote, replacesQuote, resumeExperienceId]);
+
+  return state.key === key ? state : { key, status: "idle" as const };
+}
+
+function SettingsSpareBulletLineCountBadge({
+  state,
+}: {
+  state: SettingsSpareBulletLineMeasurementState;
+}) {
+  if (state.status === "idle") {
+    return null;
+  }
+
+  if (state.status === "measuring") {
+    return (
+      <span className="settings-spare-bullet-line-badge settings-spare-bullet-line-badge-measuring">
+        Measuring
+      </span>
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <span
+        className="settings-spare-bullet-line-badge settings-spare-bullet-line-badge-danger"
+        title={state.message}
+      >
+        Check failed
+      </span>
+    );
+  }
+
+  const { measurement } = state;
+  const titleParts = [
+    "Rendered PDF line count for this selected resume experience.",
+    `Candidate PDF pages: ${measurement.pageCount.toLocaleString()}.`,
+  ];
+
+  if (measurement.lastLineFillRatio !== null) {
+    titleParts.push(
+      `Last line fill: ${Math.round(measurement.lastLineFillRatio * 100)}%.`,
+    );
+  }
+
+  if (measurement.malformed) {
+    titleParts.push("Malformed shape: final line is under 50% filled.");
+  }
+
+  return (
+    <span
+      className={`settings-spare-bullet-line-badge settings-spare-bullet-line-badge-${readTailorResumeSpareBulletLineTone(measurement.lineCount)}`}
+      title={titleParts.join(" ")}
+    >
+      {formatTailorResumeSpareBulletLineCount(measurement.lineCount)}
+    </span>
+  );
+}
+
+function SettingsSpareBulletQuoteField({
+  disabled,
+  fieldClassName,
+  measureLineCount,
+  onChange,
+  placeholder,
+  replacesQuote,
+  resumeExperienceId,
+  value,
+}: SettingsSpareBulletQuoteFieldProps) {
+  const lineMeasurement = useSettingsSpareBulletLineMeasurement({
+    measureLineCount,
+    quote: value,
+    replacesQuote,
+    resumeExperienceId,
+  });
+
+  return (
+    <label
+      className={`settings-spare-bullet-field ${fieldClassName ?? ""}`.trim()}
+    >
+      <span className="settings-spare-bullet-label-row">
+        <span>Resume bullet</span>
+        <SettingsSpareBulletLineCountBadge state={lineMeasurement} />
+      </span>
+      <textarea
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        value={value}
+      />
+    </label>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <circle cx="11" cy="11" r="6" />
+      <path d="m16 16 4 4" />
     </svg>
   );
 }
@@ -3306,6 +3638,19 @@ function areAllTailorInterviewScrapedTermsNonTechnologies(input: {
   );
 }
 
+function splitSettingsSkillNames(value: string) {
+  return value
+    .split(",")
+    .map((skill) => skill.trim())
+    .filter(Boolean);
+}
+
+function formatSettingsSpareBulletSkills(
+  spareBullet: TailorResumeStoredSkillData["spareBullets"][number],
+) {
+  return spareBullet.skills.map((skill) => skill.name).join(", ");
+}
+
 function TailorInterviewThinkingIndicator() {
   return (
     <div
@@ -3389,6 +3734,26 @@ function App() {
   );
   const [draftSettingsNonTechnologies, setDraftSettingsNonTechnologies] =
     useState<string[]>([]);
+  const [settingsSkillData, setSettingsSkillData] =
+    useState<TailorResumeStoredSkillData>(buildEmptyTailorResumeStoredSkillData);
+  const [settingsSpareBulletSearchQuery, setSettingsSpareBulletSearchQuery] =
+    useState("");
+  const [settingsSpareBulletSearchMode, setSettingsSpareBulletSearchMode] =
+    useState<TailorResumeSpareBulletSearchMode>("both");
+  const [settingsSpareBulletEditDraft, setSettingsSpareBulletEditDraft] =
+    useState<SettingsSpareBulletEditDraft | null>(null);
+  const [draftSettingsSpareBulletExperienceId, setDraftSettingsSpareBulletExperienceId] =
+    useState("");
+  const [draftSettingsSpareBulletSkillNames, setDraftSettingsSpareBulletSkillNames] =
+    useState("");
+  const [draftSettingsSkillsOnlyName, setDraftSettingsSkillsOnlyName] =
+    useState("");
+  const [draftSettingsSpareBulletQuote, setDraftSettingsSpareBulletQuote] =
+    useState("");
+  const [
+    draftSettingsSpareBulletReplacesQuote,
+    setDraftSettingsSpareBulletReplacesQuote,
+  ] = useState("");
   const [
     pendingInterviewNonTechnologyTerms,
     setPendingInterviewNonTechnologyTerms,
@@ -3405,9 +3770,17 @@ function App() {
     useState(false);
   const [isSavingSettingsNonTechnologies, setIsSavingSettingsNonTechnologies] =
     useState(false);
+  const [isSavingSettingsSpareBullet, setIsSavingSettingsSpareBullet] =
+    useState(false);
+  const [isSavingSettingsSkillsOnly, setIsSavingSettingsSkillsOnly] =
+    useState(false);
   const [settingsUserMarkdownError, setSettingsUserMarkdownError] =
     useState<string | null>(null);
   const [settingsNonTechnologyError, setSettingsNonTechnologyError] =
+    useState<string | null>(null);
+  const [settingsSpareBulletError, setSettingsSpareBulletError] =
+    useState<string | null>(null);
+  const [settingsSkillsOnlyError, setSettingsSkillsOnlyError] =
     useState<string | null>(null);
   const [tailoredResumePreviewState, setTailoredResumePreviewState] =
     useState<ResumePreviewState>({ objectUrl: null, status: "idle" });
@@ -3470,14 +3843,6 @@ function App() {
   const [isSavingKeywordCoverageSetting, setIsSavingKeywordCoverageSetting] =
     useState(false);
   const [keywordCoverageSettingError, setKeywordCoverageSettingError] =
-    useState<string | null>(null);
-  const [isSavingFollowUpQuestionSetting, setIsSavingFollowUpQuestionSetting] =
-    useState(false);
-  const [followUpQuestionSettingError, setFollowUpQuestionSettingError] =
-    useState<string | null>(null);
-  const [isSavingPageCountProtectionSetting, setIsSavingPageCountProtectionSetting] =
-    useState(false);
-  const [pageCountProtectionSettingError, setPageCountProtectionSettingError] =
     useState<string | null>(null);
   const [isArchivingAllTailoredResumes, setIsArchivingAllTailoredResumes] =
     useState(false);
@@ -3544,7 +3909,6 @@ function App() {
     useState<ChatSendStatus>("idle");
   const [chatInput, setChatInput] = useState("");
   const [chatError, setChatError] = useState<string | null>(null);
-  const [chatPageUrl, setChatPageUrl] = useState<string | null>(null);
   const chatHistoryRequestIdRef = useRef(0);
   const tailorInterviewMessagesEndRef = useRef<HTMLDivElement | null>(null);
   const tailorInterviewCardRef = useRef<HTMLElement | null>(null);
@@ -4387,16 +4751,15 @@ function App() {
   );
 
   const loadChatHistory = useCallback(
-    async (pageUrl: string, sessionToken: string) => {
+    async (sessionToken: string) => {
       const requestId = chatHistoryRequestIdRef.current + 1;
       chatHistoryRequestIdRef.current = requestId;
-      setChatPageUrl(pageUrl);
       setChatMessages([]);
       setChatStatus("loading");
       setChatError(null);
 
       try {
-        const response = await fetch(buildChatHistoryUrl(pageUrl), {
+        const response = await fetch(buildSupportChatHistoryUrl(), {
           credentials: "include",
           headers: {
             Authorization: `Bearer ${sessionToken}`,
@@ -4441,10 +4804,6 @@ function App() {
   const includeLowPriorityTermsInKeywordCoverage =
     personalInfo?.generationSettings.includeLowPriorityTermsInKeywordCoverage ??
     false;
-  const allowTailorResumeFollowUpQuestions =
-    personalInfo?.generationSettings.allowTailorResumeFollowUpQuestions ?? true;
-  const preventPageCountIncrease =
-    personalInfo?.generationSettings.preventPageCountIncrease ?? true;
   const displayedApplications = personalInfo?.applications.slice(0, 12) ?? [];
   const pendingPersonalDeleteImpact = buildPendingPersonalDeleteImpact({
     applications: personalInfo?.applications ?? [],
@@ -4629,6 +4988,35 @@ function App() {
     savedSettingsUserMarkdown.nonTechnologies.join("\n");
   const isSettingsUserMarkdownChanged =
     draftSettingsUserMarkdown !== savedSettingsUserMarkdown.markdown;
+  const canSaveSettingsSpareBullet =
+    draftSettingsSpareBulletQuote.trim().length > 0 &&
+    draftSettingsSpareBulletExperienceId.trim().length > 0 &&
+    splitSettingsSkillNames(draftSettingsSpareBulletSkillNames).length > 0;
+  const settingsSkillsOnlySkills = settingsSkillData.skills.filter(
+    (skill) => skill.listInSkillsOnly,
+  );
+  const canSaveSettingsSkillsOnly =
+    draftSettingsSkillsOnlyName.trim().length > 0;
+  const canSaveSettingsSpareBulletEdit =
+    settingsSpareBulletEditDraft !== null &&
+    settingsSpareBulletEditDraft.quote.trim().length > 0 &&
+    settingsSpareBulletEditDraft.resumeExperienceId.trim().length > 0 &&
+    splitSettingsSkillNames(settingsSpareBulletEditDraft.skillNames).length > 0;
+  const visibleSettingsSpareBullets = useMemo(
+    () =>
+      filterTailorResumeSpareBulletsForSearch({
+        mode: settingsSpareBulletSearchMode,
+        query: settingsSpareBulletSearchQuery,
+        spareBullets: settingsSkillData.spareBullets,
+      }),
+    [
+      settingsSkillData.spareBullets,
+      settingsSpareBulletSearchMode,
+      settingsSpareBulletSearchQuery,
+    ],
+  );
+  const isSettingsSpareBulletSearchActive =
+    settingsSpareBulletSearchQuery.trim().length > 0;
   const isTailorInterviewAwaitingCompletion = Boolean(
     tailorInterview?.completionRequestedAt,
   );
@@ -4902,8 +5290,8 @@ function App() {
               "Tailoring finished. Open Preview or Review edits in the side panel."
             : captureState === "needs_input" || tailorInterview
               ? isTailorInterviewAwaitingCompletion
-                ? "Press Done or keep chatting to wrap up the resume follow-up."
-                : "Answer the resume follow-up below."
+                ? "Review keywords, then press play to start tailoring."
+                : "Review keywords, then press play to start tailoring."
               : captureState === "error"
                 ? lastTailoringRunMessage ||
                   (authState.status !== "signedIn"
@@ -5029,12 +5417,12 @@ function App() {
         )
       : activeTailoring?.kind === "pending_interview"
         ? activeTailoring.interviewStatus === "pending"
-          ? "Generate the Step 2 chat when you are ready."
+          ? "Review the classified keywords when you are ready."
           : activeTailoring.interviewStatus === "deciding"
-            ? "Generating the Step 2 chat."
+            ? "Classifying the job keywords."
             : isTailorInterviewAwaitingCompletion
-              ? "Press Done or keep chatting to wrap up the resume follow-up."
-              : "Answer the resume follow-up below."
+              ? "Review keywords, then press play to start tailoring."
+              : "Review keywords, then press play to start tailoring."
         : completedTailoringJobLabel
           ? buildCompletedTailoringMessage({
               jobLabel: completedTailoringJobLabel,
