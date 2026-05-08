@@ -143,11 +143,77 @@ export type TailorResumePendingInterviewStatus =
   | "ready";
 
 export type TailoredResumeEmphasizedTechnologyPriority = "high" | "low";
+export type TailorResumeKeywordKind =
+  | "narrative"
+  | "non_skill"
+  | "skills_section";
+
+export function normalizeTailorResumeKeywordKind(
+  value: unknown,
+): TailorResumeKeywordKind | null {
+  if (value === "skills_section" || value === "hard") {
+    return "skills_section";
+  }
+
+  if (value === "narrative" || value === "soft") {
+    return "narrative";
+  }
+
+  if (value === "non_skill") {
+    return "non_skill";
+  }
+
+  return null;
+}
 
 export type TailoredResumeEmphasizedTechnology = {
+  classification?: TailorResumeKeywordKind;
   evidence: string;
   name: string;
   priority: TailoredResumeEmphasizedTechnologyPriority;
+};
+
+export type TailorResumeKeywordClassificationRecord = {
+  id: string;
+  kind: TailorResumeKeywordKind;
+  name: string;
+  normalizedName: string;
+  priority: TailoredResumeEmphasizedTechnologyPriority | null;
+  updatedAt: string;
+};
+
+export type TailorResumeSkillRecord = {
+  id: string;
+  listInSkillsOnly: boolean;
+  name: string;
+  normalizedName: string;
+  updatedAt: string;
+};
+
+export type TailorResumeSpareBulletRecord = {
+  createdAt: string;
+  id: string;
+  quote: string;
+  replacesQuote: string | null;
+  resumeExperienceId: string;
+  skillIds: string[];
+  skills: TailorResumeSkillRecord[];
+  updatedAt: string;
+};
+
+export type TailorResumeResumeExperienceRecord = {
+  bulletSegmentIds: string[];
+  headingSegmentId: string;
+  id: string;
+  label: string;
+};
+
+export type TailorResumeStoredSkillData = {
+  keywordClassifications: TailorResumeKeywordClassificationRecord[];
+  resumeExperiences: TailorResumeResumeExperienceRecord[];
+  skills: TailorResumeSkillRecord[];
+  spareBullets: TailorResumeSpareBulletRecord[];
+  updatedAt: string;
 };
 
 export type TailorResumeKeywordDecision = {
@@ -201,6 +267,7 @@ export type TailorResumeGenerationStepStatus =
 
 export type TailorResumeGenerationStepEvent = {
   attempt: number | null;
+  blockingTechnologies?: TailoredResumeEmphasizedTechnology[];
   detail: string | null;
   durationMs: number;
   emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
@@ -800,12 +867,14 @@ function parseTailoredResumeEmphasizedTechnology(
     value.priority === "high" || value.priority === "low"
       ? value.priority
       : null;
+  const classification = normalizeTailorResumeKeywordKind(value.classification);
 
   if (!name || !priority) {
     return null;
   }
 
   return {
+    ...(classification ? { classification } : {}),
     evidence,
     name,
     priority,

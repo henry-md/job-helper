@@ -22,6 +22,9 @@ model User {
   screenshots             JobApplicationScreenshot[]
   tailorResumeLockedLinks TailorResumeLockedLink[]
   tailorResumeUserMemory  TailorResumeUserMemory?
+  tailorResumeKeywordClassifications TailorResumeKeywordClassification[]
+  tailorResumeSkills      TailorResumeSkill[]
+  tailorResumeSpareBullets TailorResumeSpareBullet[]
   tailorResumeChatThreads TailorResumeChatThread[]
   tailorResumeChatMessages TailorResumeChatMessage[]
   tailorResumeRuns        TailorResumeRun[]
@@ -67,6 +70,73 @@ model TailorResumeUserMemory {
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([updatedAt(sort: Desc)])
+}
+
+enum TailorResumeKeywordKind {
+  SKILLS_SECTION @map("HARD")
+  NARRATIVE      @map("SOFT")
+  NON_SKILL
+}
+
+enum TailorResumeKeywordPriority {
+  HIGH
+  LOW
+}
+
+model TailorResumeKeywordClassification {
+  id             String                  @id @default(cuid())
+  userId         String
+  name           String
+  normalizedName String
+  kind           TailorResumeKeywordKind
+  priority       TailorResumeKeywordPriority?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+  user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, normalizedName])
+  @@index([userId, kind, updatedAt(sort: Desc)])
+}
+
+model TailorResumeSkill {
+  id               String                    @id @default(cuid())
+  userId           String
+  name             String
+  normalizedName   String
+  listInSkillsOnly Boolean                   @default(false)
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+  spareBullets     TailorResumeSpareBulletSkill[]
+  user             User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, normalizedName])
+  @@index([userId, updatedAt(sort: Desc)])
+}
+
+model TailorResumeSpareBullet {
+  id                 String                    @id @default(cuid())
+  userId             String
+  quote              String                    @db.Text
+  replacesQuote      String?                   @db.Text
+  resumeExperienceId String
+  createdAt          DateTime                  @default(now())
+  updatedAt          DateTime                  @updatedAt
+  skills             TailorResumeSpareBulletSkill[]
+  user               User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, resumeExperienceId, updatedAt(sort: Desc)])
+  @@index([userId, updatedAt(sort: Desc)])
+}
+
+model TailorResumeSpareBulletSkill {
+  spareBulletId String
+  skillId       String
+  createdAt     DateTime                @default(now())
+  skill         TailorResumeSkill       @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  spareBullet   TailorResumeSpareBullet @relation(fields: [spareBulletId], references: [id], onDelete: Cascade)
+
+  @@id([spareBulletId, skillId])
+  @@index([skillId])
 }
 
 enum TailorResumeChatRole {
