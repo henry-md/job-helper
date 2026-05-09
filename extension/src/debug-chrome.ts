@@ -341,6 +341,57 @@ function createMockTailoredResumes() {
       jobIdentifier: null,
       jobUrl: "https://careers.microsoft.com/jobs/debug-tailored-resume",
       keywordCoverage: null,
+      openAiDebug: {
+        implementation: {
+          outputJson:
+            '{\n  "changes": [\n    {\n      "segmentId": "work-experience.entry-1.bullet-1",\n      "latexCode": "\\\\resumeItem{Shipped Kubernetes deployment automation for production services.}"\n    }\n  ]\n}',
+          prompt: "Debug Step 4 implementation prompt.",
+          skippedReason: null,
+          systemPrompt: "Debug Step 4 implementation system prompt.",
+          toolCalls: [
+            {
+              id: "debug-step-4-tool-1",
+              input:
+                '{\n  "changes": [\n    {\n      "segmentId": "work-experience.entry-1.bullet-1",\n      "latexCode": "\\\\resumeItem{Shipped Kubernetes deployment automation for production services.}"\n    }\n  ],\n  "lineCountSegmentIds": []\n}',
+              output:
+                '{\n  "keywordCoverage": {\n    "missingHighPriority": [],\n    "presentHighPriority": ["Kubernetes"]\n  }\n}',
+              toolName: "check_implemented_resume_keyword_coverage",
+            },
+          ],
+        },
+        keywordExtraction: {
+          outputJson:
+            '{\n  "emphasizedTechnologies": [\n    {\n      "name": "Kubernetes",\n      "priority": "high",\n      "evidence": "Required infrastructure experience."\n    }\n  ]\n}',
+          prompt: "Debug Step 1 keyword extraction prompt.",
+          skippedReason: null,
+          systemPrompt: "Debug Step 1 keyword extraction system prompt.",
+        },
+        keywordReview: {
+          outputJson:
+            '{\n  "conversation": [],\n  "questioningSummary": null\n}',
+          prompt: null,
+          skippedReason:
+            "Step 2 used deterministic keyword review without follow-up model tool calls.",
+          systemPrompt: "Debug Step 2 interview system prompt.",
+        },
+        planning: {
+          outputJson:
+            '{\n  "changes": [\n    {\n      "segmentId": "work-experience.entry-1.bullet-1",\n      "desiredPlainText": "Shipped Kubernetes deployment automation for production services.",\n      "reason": "Highlights required infrastructure experience."\n    }\n  ]\n}',
+          prompt: "Debug Step 3 planning prompt.",
+          skippedReason: null,
+          systemPrompt: "Debug Step 3 planning system prompt.",
+          toolCalls: [
+            {
+              id: "debug-step-3-tool-1",
+              input:
+                '{\n  "changes": [\n    {\n      "segmentId": "work-experience.entry-1.bullet-1",\n      "desiredPlainText": "Shipped Kubernetes deployment automation for production services."\n    }\n  ]\n}',
+              output:
+                '{\n  "missingHighPriority": [],\n  "presentHighPriority": ["Kubernetes"]\n}',
+              toolName: "check_planned_resume_keyword_coverage",
+            },
+          ],
+        },
+      },
       positionTitle: "Software Engineer",
       status: "ready",
       updatedAt: new Date("2026-04-21T23:17:00.000Z").toISOString(),
@@ -404,7 +455,25 @@ function createMockSkillData(): TailorResumeStoredSkillData {
 }
 
 function readInitialAuthSession(searchParams: URLSearchParams) {
-  return searchParams.get("auth") === "signed-in" ? mockSession : null;
+  if (searchParams.get("auth") !== "signed-in") {
+    return null;
+  }
+
+  const debugEmail = searchParams.get("debugEmail")?.trim();
+  const debugUserId = searchParams.get("debugUserId")?.trim();
+  const debugName = searchParams.get("debugName")?.trim();
+
+  return {
+    ...mockSession,
+    sessionToken:
+      searchParams.get("debugSessionToken")?.trim() || mockSession.sessionToken,
+    user: {
+      ...mockSession.user,
+      email: debugEmail || mockSession.user.email,
+      id: debugUserId || mockSession.user.id,
+      name: debugName || mockSession.user.name,
+    },
+  };
 }
 
 function readInitialTailoringRun(searchParams: URLSearchParams) {
@@ -438,6 +507,10 @@ function readInitialExtensionPreferences(searchParams: URLSearchParams) {
       searchParams.get("compact") === "1" ||
       searchParams.get("compact") === "true" ||
       searchParams.get("compact") === "on",
+    supportChatTipDismissed:
+      searchParams.get("dismissSupportChatTip") === "1" ||
+      searchParams.get("dismissSupportChatTip") === "true" ||
+      searchParams.get("dismissSupportChatTip") === "on",
     tailorRunTimeDisplayMode:
       rawTimeMode === "aggregate" || rawTimeMode === "specific"
         ? rawTimeMode
@@ -490,6 +563,12 @@ function createDebugNdjsonResponse(events: unknown[]) {
       "Content-Type": "text/x-ndjson; charset=utf-8",
     },
     status: 200,
+  });
+}
+
+function waitForDebugDelay(delayMs: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, delayMs);
   });
 }
 
@@ -567,6 +646,7 @@ export function installDebugChromeRuntime() {
 
   if (
     initialExtensionPreferences.compactTailorRun ||
+    initialExtensionPreferences.supportChatTipDismissed ||
     initialExtensionPreferences.tailorRunTimeDisplayMode !==
       defaultExtensionPreferences.tailorRunTimeDisplayMode
   ) {
@@ -949,6 +1029,10 @@ export function installDebugChromeRuntime() {
 
       const body = readRequestBody(init?.body);
       const message = readBodyString(body, "message");
+      const debugChatDelayMs = Math.min(
+        Math.max(Number(searchParams.get("chatDelayMs") ?? "0") || 0, 0),
+        10_000,
+      );
       const createdAt = new Date().toISOString();
       const userMessage: DebugChatMessage = {
         content: message,
@@ -1014,6 +1098,10 @@ export function installDebugChromeRuntime() {
         };
       }
 
+      if (debugChatDelayMs > 0) {
+        await waitForDebugDelay(debugChatDelayMs);
+      }
+
       const assistantMessage: DebugChatMessage = {
         content: skillName
           ? `Saved ${skillName} as skills-section support.`
@@ -1069,7 +1157,12 @@ export function installDebugChromeRuntime() {
         const quote = readBodyString(body, "quote");
         const lineCount =
           quote.length > 120 ? 3 : quote.length > 70 ? 2 : quote ? 1 : 0;
-        const lastLineFillRatio = lineCount > 1 ? 0.72 : null;
+        const shouldRenderMalformed = /\bmalformed\b/i.test(quote);
+        const lastLineFillRatio = lineCount > 1
+          ? shouldRenderMalformed
+            ? 0.32
+            : 0.72
+          : null;
 
         return new Response(
           JSON.stringify({

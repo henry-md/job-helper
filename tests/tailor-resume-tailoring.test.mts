@@ -10,6 +10,7 @@ import {
   extractTailorResumeJobDescriptionTechnologyHints,
   filterUnsupportedEmphasizedTechnologiesForPlanning,
   mergeTailorResumeJobDescriptionTechnologies,
+  mergeTailorResumeScrapedKeywordSnapshot,
   parseTailorResumeTechnologyExtractionResponse,
   parseTailoredResumePlanResponse,
   readRequiredTailorResumeQuestioningKeywords,
@@ -42,6 +43,66 @@ test("buildTechnologyExtractionInstructions frames Step 1 as resume-tailoring ke
 
 test("buildTechnologyExtractionReasoning keeps Step 1 on low reasoning", () => {
   assert.deepEqual(buildTechnologyExtractionReasoning(), { effort: "low" });
+});
+
+test("mergeTailorResumeScrapedKeywordSnapshot preserves reviewed classifications after planning", () => {
+  const technologies = mergeTailorResumeScrapedKeywordSnapshot({
+    planningTechnologies: [
+      {
+        evidence: "Planner repeated load balancing as a high priority term.",
+        name: "Load Balancing",
+        priority: "high",
+      },
+      {
+        evidence: "Planner added Go from the final edit plan.",
+        name: "Go",
+        priority: "high",
+      },
+    ],
+    scrapedTechnologies: [
+      {
+        classification: "narrative",
+        evidence: "Saved classification says this belongs in bullet wording.",
+        name: "Load balancing",
+        priority: "low",
+      },
+      {
+        classification: "skills_section",
+        evidence: "The posting lists Kubernetes.",
+        name: "Kubernetes",
+        priority: "high",
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    technologies.map((technology) => ({
+      classification: technology.classification,
+      name: technology.name,
+      priority: technology.priority,
+    })),
+    [
+      {
+        classification: "narrative",
+        name: "Load balancing",
+        priority: "low",
+      },
+      {
+        classification: "skills_section",
+        name: "Kubernetes",
+        priority: "high",
+      },
+      {
+        classification: undefined,
+        name: "Go",
+        priority: "high",
+      },
+    ],
+  );
+  assert.equal(
+    technologies[0]?.evidence,
+    "Saved classification says this belongs in bullet wording.",
+  );
 });
 
 test("filterUnsupportedEmphasizedTechnologiesForPlanning treats no-experience USER.md notes as unsupported", () => {
@@ -281,6 +342,29 @@ test("applyTailorResumeUserMarkdownBoldFormatting bolds job terms copied from qu
     changes[4]?.latexCode,
     String.raw`\resumeSection{TECHNICAL SKILLS} Go, Cassandra, RESTful services`,
   );
+});
+
+test("applyTailorResumeUserMarkdownBoldFormatting bolds every structured spare-bullet skill tag", () => {
+  const changes = applyTailorResumeUserMarkdownBoldFormatting({
+    emphasizedTechnologies: [],
+    implementationChanges: [
+      {
+        latexCode:
+          String.raw`\resumeitem{Built Go and Cassandra ingestion jobs with Spark orchestration}`,
+        segmentId: "experience.entry-1.bullet-1",
+      },
+    ],
+    userMarkdown: {
+      markdown:
+        '# USER.md\n\n## Structured skills-section keyword support\n\nThe following entries come from first-class skills-section support objects, not USER.md. Treat quoted spare bullets as user-approved evidence candidates.\n\n## Go, Cassandra, Spark\n\n- Resume experience id: johns-hopkins\n- Candidate spare bullet: "Built Go and Cassandra ingestion jobs with Spark orchestration"\n',
+      nonTechnologies: [],
+      updatedAt: null,
+    },
+  });
+
+  assert.match(changes[0]?.latexCode ?? "", /\\textbf\{Go\}/);
+  assert.match(changes[0]?.latexCode ?? "", /\\textbf\{Cassandra\}/);
+  assert.match(changes[0]?.latexCode ?? "", /\\textbf\{Spark\}/);
 });
 
 test("applyTailorResumeUserMarkdownBoldFormatting translates explicit markdown bold without double-wrapping", () => {

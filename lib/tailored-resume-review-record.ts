@@ -1,6 +1,8 @@
-import type {
-  TailoredResumeBlockEditRecord,
-  TailoredResumeRecord,
+import {
+  parseTailoredResumeOpenAiDebugTrace,
+  type TailoredResumeBlockEditRecord,
+  type TailoredResumeOpenAiDebugTrace,
+  type TailoredResumeRecord,
 } from "./tailor-resume-types.ts";
 
 export type TailoredResumeReviewEdit = Pick<
@@ -18,7 +20,7 @@ export type TailoredResumeReviewEdit = Pick<
 
 export type TailoredResumeReviewRecord = Pick<
   TailoredResumeRecord,
-  "displayName" | "error" | "id" | "pdfUpdatedAt" | "updatedAt"
+  "displayName" | "error" | "id" | "openAiDebug" | "pdfUpdatedAt" | "updatedAt"
 > & {
   annotatedLatexCode: string | null;
   companyName: string | null;
@@ -42,6 +44,31 @@ function readNullableString(value: unknown) {
 
 function readNullableRawString(value: unknown) {
   return typeof value === "string" ? value : null;
+}
+
+function buildFallbackOpenAiDebugTrace(): TailoredResumeOpenAiDebugTrace {
+  return {
+    implementation: {
+      outputJson: null,
+      prompt: null,
+      skippedReason: "No saved Step 4 implementation debug trace is available.",
+    },
+    keywordExtraction: {
+      outputJson: null,
+      prompt: null,
+      skippedReason: "No saved Step 1 keyword extraction debug trace is available.",
+    },
+    keywordReview: {
+      outputJson: null,
+      prompt: null,
+      skippedReason: "No saved Step 2 keyword review debug trace is available.",
+    },
+    planning: {
+      outputJson: null,
+      prompt: null,
+      skippedReason: "No saved Step 3 planning debug trace is available.",
+    },
+  };
 }
 
 function readTailoredResumeReviewEdit(
@@ -104,6 +131,9 @@ export function readTailoredResumeReviewRecord(
   const id = readString(value.id);
   const displayName = readString(value.displayName);
   const updatedAt = readString(value.updatedAt);
+  const openAiDebug =
+    parseTailoredResumeOpenAiDebugTrace(value.openAiDebug) ??
+    buildFallbackOpenAiDebugTrace();
   const edits = Array.isArray(value.edits)
     ? value.edits
         .map(readTailoredResumeReviewEdit)
@@ -121,6 +151,7 @@ export function readTailoredResumeReviewRecord(
     edits,
     error: readNullableString(value.error),
     id,
+    openAiDebug,
     pdfUpdatedAt: readNullableString(value.pdfUpdatedAt),
     positionTitle: readNullableString(value.positionTitle),
     sourceAnnotatedLatexCode: readNullableRawString(value.sourceAnnotatedLatexCode),

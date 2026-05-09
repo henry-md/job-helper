@@ -23,6 +23,7 @@ Step 2. Review skills-section blockers
 - USER.md remains editable for future preferences and loose notes, but it is no longer the durable storage layer for skills-section support.
 - Saving a keyword classification, skills-section skill, skills-only support, or spare bullet immediately rechecks all pending Step 2 checkpoints for the user.
 - Even when no blockers remain, Step 2 remains a review gate. The UI shows a play action so the user can inspect the keyword matrix and optionally reclassify a term before Step 3 begins.
+- The master chat is the lower-right `Resume Chat` in the extension, backed by `POST /api/tailor-resume/support-chat` and `OPENAI_MASTER_CHAT_MODEL`. It can create first-class skills-section support. When it drafts spare bullet support, expose the same rendered PDF line-count and malformed-bullet checks used by Settings so it can avoid three-line or malformed bullets before saving.
 
 Step 3. Generate plaintext targeted edit plan
 - The OpenAI planning stage runs only after Step 2 is unblocked and the user presses play.
@@ -32,23 +33,24 @@ Step 3. Generate plaintext targeted edit plan
 - When a spare bullet has `replacesQuote`, the server fuzzily searches the chosen resume experience's current bullet segments and passes the top replacement candidate, confidence, and current text as deterministic evidence. The durable source of truth is the quoted text plus required resume experience, not a long-lived source segment id.
 - When a skills/technical-skills block is editable, Step 3 should add only skills-section keywords or skills-only support. Narrative keywords may influence phrasing in experience bullets but should not be forced into Skills.
 
-Step 4. Generate block-scoped edits
+Step 4A. Generate block-scoped edits
 - The implementation stage takes the accepted plan plus any user-confirmed learnings and returns exact LaTeX replacements for only the targeted segments.
 - It also receives the Step 1 emphasized-technology list as keyword guidance. Include high-priority terms wherever they are factually supported by the source resume, `USER.md`, interview learnings, or accepted plan; do not invent unsupported technology experience.
-- When Step 4 adapts a sentence or quoted bullet from `USER.md`, translate Markdown bold spans into LaTeX `\textbf{...}` and, when appropriate, bold only one or two exact job-emphasized words or short phrases rather than the whole sentence.
+- When Step 4A adapts a sentence or quoted bullet from `USER.md`, translate Markdown bold spans into LaTeX `\textbf{...}` and, when appropriate, bold only one or two exact job-emphasized words or short phrases rather than the whole sentence.
 - Failures here should retry the block-edit stage rather than forcing the model to rethink the whole thesis.
 - The goal is segment-safe replacements that preserve local LaTeX structure.
 - Block replacements should not polish unrelated details such as punctuation, dates of experience, employers, titles, metrics, separators, capitalization, or links.
+- Before final JSON submission, the implementation model must call the Step 4A health-check tool. That tool reports keyword coverage, the rendered page count, every malformed rendered resume bullet, and exact line counts only for explicitly requested segment ids. A changed malformed bullet is a retryable Step 4A rejection; pre-existing malformed bullets elsewhere are surfaced as warnings.
 
-Step 4b. Condense edits to keep page size from growing
+Step 4B. Keep the original page count
 - Page-count growth is always invalid. If the tailored preview exceeds the source resume's page count, run a compaction/refinement loop over the edited blocks only.
 - Use rendered PDF line measurements to estimate how many lines must be recovered, annotate original/current blocks with measured line counts, and ask the model only for candidates it believes can remove a rendered line.
 - The compaction pass should self-check before final submission: let the model call the rendered-line measurement tool, read the exact acceptance/rejection result, revise if needed, and only then submit the final candidate set for server-side validation.
-- Measure candidate replacements in the full LaTeX document and accept only candidates whose exact block-level rendered line count drops versus the current working replacement for that block, whether that current state came from Step 4 or a prior accepted Step 5 reduction. Keep the current block version for any candidate that does not create a user-visible line reduction.
+- Measure candidate replacements in the full LaTeX document and accept only candidates whose exact block-level rendered line count drops versus the current working replacement for that block, whether that current state came from Step 4A or a prior accepted Step 4B reduction. Keep the current block version for any candidate that does not create a user-visible line reduction.
 - Compaction reasons should lead with the job-description fit change and mention shortening only as a passing fragment, not as the main justification.
-- Rebuild from the immutable Step 4 edit set plus accepted reductions and repeat until the compiled preview empirically fits or the attempt budget is exhausted.
+- Rebuild from the immutable Step 4A edit set plus accepted reductions and repeat until the compiled preview empirically fits or the attempt budget is exhausted.
 - Retry context should include concise memory of prior measured failures, including the segment, candidate snippet, current/original/candidate line counts, and rejection reason, so later attempts avoid recycling the same same-line-count edits.
-- Persist `generatedByStep` on every review block: `4` for initial block generation and `5` only when the compaction guardrail accepted a replacement for that block. When `DEBUG_UI` is enabled, review cards show this as a lower-right badge with hover context.
+- Persist `generatedByStep` on every review block: `4` for Step 4A initial block generation and `5` for historical storage compatibility only when Step 4B accepted a page-count replacement. When `DEBUG_UI` is enabled, review cards show this as a lower-right badge with hover context.
 - This is a follow-up guardrail stage, not a second full-resume rewrite.
 
 Retry model:
@@ -56,8 +58,8 @@ Retry model:
 - Step 1 keyword extraction can fall back to deterministic hints if model-assisted keyword extraction fails.
 - Step 2 has no model output. It can only wait for user data, become ready, or start Step 3 when the user presses play.
 - Planning can retry independently if the structured plan is empty or malformed.
-- Block-scoped implementation retries stay local to the selected segments and compile validation.
-- Page-count compaction retries stay local to the edited blocks until the preview fits or the attempt budget is exhausted, and they use their own retry budget instead of borrowing the generic edit-stage retry count.
+- Step 4A block-scoped implementation retries stay local to the selected segments and compile validation.
+- Step 4B page-count compaction retries stay local to the edited blocks until the preview fits or the attempt budget is exhausted, and they use their own retry budget instead of borrowing the generic edit-stage retry count.
 - Design goal: retry the failing stage, not the entire pipeline.
 
 Failure logging:
@@ -71,6 +73,6 @@ Relevant code paths:
 - Extraction: `lib/tailor-resume-extraction.ts`
 - Step 1 keyword extraction + Step 3 planning + Step 4 implementation: `lib/tailor-resume-tailoring.ts`
 - First-class skill/spare-bullet storage: `lib/tailor-resume-skill-store.ts`
-- Page-count compaction: `lib/tailor-resume-page-count-compaction.ts`
+- Step 4B page-count compaction: `lib/tailor-resume-page-count-compaction.ts`
 - Prompt definitions: `lib/system-prompt-settings.ts`
 - Route orchestration + persistence: `app/api/tailor-resume/route.ts`

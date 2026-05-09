@@ -95,6 +95,7 @@ export type TailorResumeConversationMessage = {
 export type TailorResumeConversationToolCall = {
   argumentsText: string;
   name: string;
+  outputText?: string;
 };
 
 export type TailorResumeTechnologyExampleKind = "existing" | "new";
@@ -335,14 +336,25 @@ export type TailoredResumeKeywordCoverage = {
   updatedAt: string;
 };
 
+export type TailoredResumeOpenAiDebugToolCall = {
+  id: string;
+  input: string;
+  output: string | null;
+  toolName: string;
+};
+
 export type TailoredResumeOpenAiDebugStage = {
   outputJson: string | null;
   prompt: string | null;
   skippedReason: string | null;
+  systemPrompt?: string | null;
+  toolCalls?: TailoredResumeOpenAiDebugToolCall[];
 };
 
 export type TailoredResumeOpenAiDebugTrace = {
   implementation: TailoredResumeOpenAiDebugStage;
+  keywordExtraction?: TailoredResumeOpenAiDebugStage;
+  keywordReview?: TailoredResumeOpenAiDebugStage;
   planning: TailoredResumeOpenAiDebugStage;
 };
 
@@ -356,6 +368,7 @@ export type TailorResumePendingInterview = {
   id: string;
   jobDescription: string;
   jobUrl: string | null;
+  keywordExtractionDebug?: TailoredResumeOpenAiDebugStage;
   planningDebug: TailoredResumeOpenAiDebugStage;
   planningResult: TailoredResumePlanningResult;
   pendingUserMarkdownEditOperations: TailorResumeUserMarkdownPatchOperation[];
@@ -1203,16 +1216,29 @@ function parseTailoredResumeOpenAiDebugStage(
     value.skippedReason === null
       ? null
       : readNullableString(value.skippedReason);
+  const systemPrompt =
+    value.systemPrompt === null || value.systemPrompt === undefined
+      ? null
+      : readNullableString(value.systemPrompt);
+  const toolCalls = parseTailoredResumeOpenAiDebugToolCalls(value.toolCalls);
 
   if (
     (value.prompt !== null && prompt === null) ||
     (value.outputJson !== null && outputJson === null) ||
-    (value.skippedReason !== null && skippedReason === null)
+    (value.skippedReason !== null && skippedReason === null) ||
+    (value.systemPrompt !== null &&
+      value.systemPrompt !== undefined &&
+      systemPrompt === null)
   ) {
     return null;
   }
 
-  if (prompt === null && outputJson === null && !skippedReason) {
+  if (
+    prompt === null &&
+    outputJson === null &&
+    !skippedReason &&
+    toolCalls.length === 0
+  ) {
     return null;
   }
 
@@ -1220,10 +1246,53 @@ function parseTailoredResumeOpenAiDebugStage(
     outputJson,
     prompt,
     skippedReason,
+    systemPrompt,
+    ...(toolCalls.length > 0 ? { toolCalls } : {}),
   };
 }
 
-function parseTailoredResumeOpenAiDebugTrace(
+function parseTailoredResumeOpenAiDebugToolCall(
+  value: unknown,
+): TailoredResumeOpenAiDebugToolCall | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = readNullableString(value.id);
+  const input = readNullableString(value.input);
+  const output = value.output === null ? null : readNullableString(value.output);
+  const toolName = readNullableString(value.toolName);
+
+  if (
+    !id ||
+    !input ||
+    !toolName ||
+    (value.output !== null && output === null)
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+    input,
+    output,
+    toolName,
+  };
+}
+
+function parseTailoredResumeOpenAiDebugToolCalls(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailoredResumeOpenAiDebugToolCall[];
+  }
+
+  return value
+    .map(parseTailoredResumeOpenAiDebugToolCall)
+    .filter((toolCall): toolCall is TailoredResumeOpenAiDebugToolCall =>
+      Boolean(toolCall),
+    );
+}
+
+export function parseTailoredResumeOpenAiDebugTrace(
   value: unknown,
 ): TailoredResumeOpenAiDebugTrace | null {
   if (!isRecord(value)) {
@@ -1234,6 +1303,10 @@ function parseTailoredResumeOpenAiDebugTrace(
   const implementation = parseTailoredResumeOpenAiDebugStage(
     value.implementation,
   );
+  const keywordExtraction = parseTailoredResumeOpenAiDebugStage(
+    value.keywordExtraction,
+  );
+  const keywordReview = parseTailoredResumeOpenAiDebugStage(value.keywordReview);
 
   if (!planning || !implementation) {
     return null;
@@ -1241,6 +1314,8 @@ function parseTailoredResumeOpenAiDebugTrace(
 
   return {
     implementation,
+    ...(keywordExtraction ? { keywordExtraction } : {}),
+    ...(keywordReview ? { keywordReview } : {}),
     planning,
   };
 }
@@ -1361,6 +1436,8 @@ function parseTailorResumeConversationToolCall(
   const name = readNullableString(value.name)?.trim() ?? "";
   const argumentsText =
     typeof value.argumentsText === "string" ? value.argumentsText : null;
+  const outputText =
+    typeof value.outputText === "string" ? value.outputText : null;
 
   if (!name || argumentsText === null) {
     return null;
@@ -1369,6 +1446,7 @@ function parseTailorResumeConversationToolCall(
   return {
     argumentsText,
     name,
+    ...(outputText ? { outputText } : {}),
   };
 }
 
@@ -1448,6 +1526,9 @@ function parseTailorResumePendingInterview(
   const jobDescription = readNullableString(value.jobDescription);
   const jobUrl = readNullableString(value.jobUrl);
   const sourceAnnotatedLatexCode = readNullableString(value.sourceAnnotatedLatexCode);
+  const keywordExtractionDebug = parseTailoredResumeOpenAiDebugStage(
+    value.keywordExtractionDebug,
+  );
   const planningDebug = parseTailoredResumeOpenAiDebugStage(value.planningDebug);
   const planningResult = parseTailoredResumePlanningResult(value.planningResult);
   const generationSourceSnapshot = parseTailorResumeGenerationSourceSnapshot(
@@ -1496,6 +1577,7 @@ function parseTailorResumePendingInterview(
     id,
     jobDescription,
     jobUrl,
+    ...(keywordExtractionDebug ? { keywordExtractionDebug } : {}),
     planningDebug,
     planningResult,
     pendingUserMarkdownEditOperations,
