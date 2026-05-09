@@ -1,0 +1,3 @@
+- Symptom: a Tailor Resume run waiting on Step 2 could show a Step 1 timing like `110:40/-` and keep growing after keyword scraping had already ended.
+- Root cause: pending Step 2 cards can be reconstructed without local Step 1 timing history. The specific timing formatter inferred missing Step 1 from total run elapsed time when it had no observed Step 2 boundary.
+- Fix: when a later step is active and Step 1 timing is missing, freeze the inferred Step 1 duration at `0:00` instead of using live run elapsed time. Real observed Step 1 or Step 2 boundary timings still display normally.

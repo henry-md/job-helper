@@ -8,6 +8,7 @@ import {
   shouldClearCompletedLocalTailorRun,
   shouldRenderLegacyTailorRunShell,
   shouldRenderTailorRunShell,
+  shouldShowTailorRunInterviewAction,
 } from "../extension/src/tailor-run-display.ts";
 
 test("prefers stored active-run identity over the current tab metadata", () => {
@@ -150,6 +151,21 @@ test("shows a Step 2 placeholder instead of a Step 2 duration", () => {
   );
 });
 
+test("does not keep counting missing Step 1 timing while Step 2 is waiting", () => {
+  const runStartedAtTime = Date.parse("2026-04-29T19:52:18.000Z");
+
+  assert.equal(
+    formatTailorRunStepTimeDisplay({
+      activeStepNumber: 2,
+      mode: "specific",
+      nowTime: runStartedAtTime + 110 * 60 * 1000 + 40_000,
+      runStartedAtTime,
+      timings: [],
+    }),
+    "0:00/-",
+  );
+});
+
 test("formats aggregate tailor run timing as the total elapsed value", () => {
   const runStartedAtTime = Date.parse("2026-04-29T19:52:18.000Z");
 
@@ -229,6 +245,27 @@ test("does not keep counting a stale earlier running step", () => {
       ],
     }),
     "0:41/-/0:26",
+  );
+});
+
+test("hides the Step 2 interview action after tailoring advances to Step 3", () => {
+  assert.equal(
+    shouldShowTailorRunInterviewAction({
+      canOpenInterviewChat: false,
+      interviewStatus: "deciding",
+      isQuestionGenerating: true,
+      stepNumber: 3,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldShowTailorRunInterviewAction({
+      canOpenInterviewChat: false,
+      interviewStatus: "deciding",
+      isQuestionGenerating: true,
+      stepNumber: 2,
+    }),
+    true,
   );
 });
 

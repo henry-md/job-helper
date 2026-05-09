@@ -61,6 +61,8 @@ type TailorRunStepTimingStatus =
   | "skipped"
   | "succeeded";
 
+type TailorRunInterviewStatus = "deciding" | "pending" | "ready";
+
 export type TailorRunTimeDisplayMode = "aggregate" | "specific";
 
 export type TailorRunStepTimingDisplayInput = {
@@ -160,7 +162,9 @@ function readInferredMissingStepDuration(input: {
       return Math.max(0, nextObservedAtTime - input.runStartedAtTime);
     }
 
-    return input.runElapsedMs;
+    return input.activeStepNumber && input.activeStepNumber > input.stepNumber
+      ? 0
+      : input.runElapsedMs;
   }
 
   return null;
@@ -268,6 +272,30 @@ export function formatTailorRunStepTimeDisplay(input: {
       durationMs === null ? "-" : formatTailorRunDurationMs(durationMs),
     )
     .join("/");
+}
+
+export function shouldShowTailorRunInterviewAction(input: {
+  canOpenInterviewChat: boolean;
+  interviewStatus: TailorRunInterviewStatus | null | undefined;
+  isQuestionGenerating: boolean;
+  stepNumber: number | null | undefined;
+}) {
+  const activeStepNumber =
+    typeof input.stepNumber === "number" && Number.isFinite(input.stepNumber)
+      ? Math.floor(input.stepNumber)
+      : null;
+
+  if (activeStepNumber !== null && activeStepNumber > 2) {
+    return false;
+  }
+
+  return Boolean(
+    input.canOpenInterviewChat ||
+      input.isQuestionGenerating ||
+      input.interviewStatus === "deciding" ||
+      input.interviewStatus === "pending" ||
+      input.interviewStatus === "ready",
+  );
 }
 
 export function shouldRenderTailorRunShell(input: {

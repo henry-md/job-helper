@@ -77,6 +77,8 @@ type NormalizedKeywordCoverageBucket = {
   totalTermCount: number;
 };
 
+type KeywordCoverageTone = "added" | "missing" | "shared";
+
 type KeywordClassificationOverride = {
   kind: KeywordClassificationKind;
   priority: "high" | "low" | null;
@@ -370,7 +372,7 @@ function normalizeCoverageTermNames(value: unknown) {
     Array.isArray(value)
       ? value.flatMap((item) => (typeof item === "string" ? [item] : []))
       : [],
-    20,
+    Number.POSITIVE_INFINITY,
   );
 }
 
@@ -396,7 +398,7 @@ function normalizeKeywordCoverageTerms(value: unknown) {
       continue;
     }
 
-    const key = name.toLowerCase();
+    const key = `${priority}:${name.toLowerCase()}`;
 
     if (seen.has(key)) {
       continue;
@@ -409,10 +411,6 @@ function normalizeKeywordCoverageTerms(value: unknown) {
       presentInTailored: term.presentInTailored === true,
       priority,
     });
-
-    if (terms.length >= 30) {
-      break;
-    }
   }
 
   return terms;
@@ -450,7 +448,7 @@ function normalizeKeywordCoverageBucket(
           terms
             .filter((term) => !term.presentInOriginal && term.presentInTailored)
             .map((term) => term.name),
-          20,
+          Number.POSITIVE_INFINITY,
         )
       : normalizeCoverageTermNames(value.addedTerms);
   const sharedTerms =
@@ -459,16 +457,16 @@ function normalizeKeywordCoverageBucket(
           terms
             .filter((term) => term.presentInOriginal && term.presentInTailored)
             .map((term) => term.name),
-          20,
+          Number.POSITIVE_INFINITY,
         )
       : intersectCoverageTermNames(matchedOriginalTerms, matchedTailoredTerms);
   const missingTerms =
     terms.length > 0
       ? uniqueStrings(
           terms
-            .filter((term) => !term.presentInOriginal && !term.presentInTailored)
+            .filter((term) => !term.presentInTailored)
             .map((term) => term.name),
-          20,
+          Number.POSITIVE_INFINITY,
         )
       : [];
 
@@ -501,20 +499,20 @@ function buildKeywordCoverageBucketFromTerms(
       terms
         .filter((term) => !term.presentInOriginal && term.presentInTailored)
         .map((term) => term.name),
-      20,
+      Number.POSITIVE_INFINITY,
     ),
     missingTerms: uniqueStrings(
       terms
-        .filter((term) => !term.presentInOriginal && !term.presentInTailored)
+        .filter((term) => !term.presentInTailored)
         .map((term) => term.name),
-      20,
+      Number.POSITIVE_INFINITY,
     ),
     originalHitCount: terms.filter((term) => term.presentInOriginal).length,
     sharedTerms: uniqueStrings(
       terms
         .filter((term) => term.presentInOriginal && term.presentInTailored)
         .map((term) => term.name),
-      20,
+      Number.POSITIVE_INFINITY,
     ),
     tailoredHitCount: terms.filter((term) => term.presentInTailored).length,
     terms,
@@ -550,24 +548,92 @@ function readKeywordCoverageBuckets(payload: TailoredResumeBadgePayload) {
               !nonTechnologyTerms.has(normalizeNonTechnologyTerm(term.name)),
           ) ?? [],
         );
-  const lowPriority = allPriorities
+  const displayAllPriorities = allPriorities ?? highPriority;
+  const lowPriority = displayAllPriorities
     ? buildKeywordCoverageBucketFromTerms(
-        allPriorities.terms.filter((term) => term.priority === "low"),
+        displayAllPriorities.terms.filter((term) => term.priority === "low"),
       )
     : null;
   const summary = payload.includeLowPriorityTermsInKeywordCoverage
-    ? allPriorities
+    ? displayAllPriorities
     : highPriority;
 
-  if (!summary || !highPriority) {
+  if (!summary || !highPriority || !displayAllPriorities) {
     return null;
   }
 
   return {
+    allPriorities: displayAllPriorities,
     highPriority,
     lowPriority,
     summary,
   };
+}
+
+function resolveKeywordCoverageTone(
+  term: NormalizedKeywordCoverageTerm,
+): KeywordCoverageTone {
+  if (!term.presentInTailored) {
+    return "missing";
+  }
+
+  return term.presentInOriginal ? "shared" : "added";
+}
+
+function buildKeywordCoverageToneMap(bucket: NormalizedKeywordCoverageBucket) {
+  const tones = new Map<string, KeywordCoverageTone>();
+
+  for (const term of bucket.terms) {
+    const normalizedName = normalizeNonTechnologyTerm(term.name);
+
+    if (!normalizedName) {
+      continue;
+    }
+
+    const tone = resolveKeywordCoverageTone(term);
+    tones.set(`${term.priority}:${normalizedName}`, tone);
+
+    if (!tones.has(normalizedName)) {
+      tones.set(normalizedName, tone);
+    }
+  }
+
+  return tones;
+}
+
+function countKeywordCoverageTones(bucket: NormalizedKeywordCoverageBucket) {
+  const counts = {
+    added: 0,
+    missing: 0,
+    shared: 0,
+  };
+
+  for (const term of bucket.terms) {
+    counts[resolveKeywordCoverageTone(term)] += 1;
+  }
+
+  return counts;
+}
+
+function readTechnologyKeywordCoverageTone(
+  technology: Required<TailoredResumeEmphasizedTechnologyPayload>,
+  tones?: Map<string, KeywordCoverageTone>,
+) {
+  if (!tones || technology.classification === "non_skill") {
+    return null;
+  }
+
+  const normalizedName = normalizeNonTechnologyTerm(technology.name);
+
+  if (!normalizedName) {
+    return null;
+  }
+
+  return (
+    tones.get(`${technology.priority}:${normalizedName}`) ??
+    tones.get(normalizedName) ??
+    null
+  );
 }
 
 function formatKeywordCoverageScope(payload: TailoredResumeBadgePayload) {
@@ -1102,8 +1168,15 @@ function normalizeEmphasizedTechnologies(
     const name = cleanText(item.name, 80);
     const priority = item.priority === "high" ? "high" : item.priority === "low" ? "low" : null;
     const normalizedName = normalizeNonTechnologyTerm(name);
+    const classification =
+      normalizeKeywordClassificationKind(item.classification) ??
+      "skills_section";
 
-    if (!name || !priority || nonTechnologyTerms.has(normalizedName)) {
+    if (
+      !name ||
+      !priority ||
+      (classification !== "non_skill" && nonTechnologyTerms.has(normalizedName))
+    ) {
       continue;
     }
 
@@ -1115,9 +1188,7 @@ function normalizeEmphasizedTechnologies(
 
     seen.add(dedupeKey);
     technologies.push({
-      classification:
-        normalizeKeywordClassificationKind(item.classification) ??
-        "skills_section",
+      classification,
       evidence: cleanText(item.evidence, 180),
       name,
       priority,
@@ -1226,6 +1297,7 @@ function appendDraggableKeywordMatrix(
   payload: TailoredResumeBadgePayload,
   badgeKey: string,
   technologies: Required<TailoredResumeEmphasizedTechnologyPayload>[],
+  coverageTones?: Map<string, KeywordCoverageTone>,
 ) {
   const buckets = [
     {
@@ -1280,28 +1352,72 @@ function appendDraggableKeywordMatrix(
     const chip = document.createElement("button");
     const label = document.createElement("span");
     const handle = document.createElement("span");
+    const coverageTone = readTechnologyKeywordCoverageTone(
+      technology,
+      coverageTones,
+    );
+    const coverageStatus =
+      coverageTone === "shared"
+        ? "Present before and after tailoring"
+        : coverageTone === "added"
+          ? "Added by tailoring"
+          : coverageTone === "missing"
+            ? "Missing after tailoring"
+            : "";
+    const titleParts: string[] = [];
+    const chipBackground =
+      coverageTone === "added"
+        ? "rgba(16, 185, 129, 0.18)"
+        : coverageTone === "missing"
+          ? "rgba(244, 63, 94, 0.13)"
+          : coverageTone === "shared"
+            ? "rgba(14, 165, 233, 0.13)"
+            : technology.classification === "non_skill"
+              ? "rgba(113, 113, 122, 0.16)"
+              : technology.priority === "high"
+                ? "rgba(16, 185, 129, 0.14)"
+                : "rgba(244, 244, 245, 0.07)";
+    const chipBorder =
+      coverageTone === "added"
+        ? "1px solid rgba(52, 211, 153, 0.34)"
+        : coverageTone === "missing"
+          ? "1px solid rgba(251, 113, 133, 0.34)"
+          : coverageTone === "shared"
+            ? "1px solid rgba(56, 189, 248, 0.32)"
+            : technology.classification === "non_skill"
+              ? "1px solid rgba(161, 161, 170, 0.22)"
+              : technology.priority === "high"
+                ? "1px solid rgba(52, 211, 153, 0.28)"
+                : "1px solid rgba(244, 244, 245, 0.12)";
+    const chipColor =
+      coverageTone === "added"
+        ? "#d1fae5"
+        : coverageTone === "missing"
+          ? "#ffe4e6"
+          : coverageTone === "shared"
+            ? "#e0f2fe"
+            : technology.classification === "non_skill"
+              ? "#a1a1aa"
+              : "#f4f4f5";
+
+    if (coverageStatus) {
+      titleParts.push(coverageStatus);
+    }
+    if (technology.evidence) {
+      titleParts.push(technology.evidence);
+    }
 
     chip.type = "button";
     chip.draggable = true;
     chip.dataset.keywordName = technology.name;
-    chip.title = technology.evidence || "Drag to change classification";
+    chip.title = titleParts.join(" - ") || "Drag to change classification";
     styleElement(chip, {
       alignItems: "center",
       appearance: "none",
-      background:
-        technology.classification === "non_skill"
-          ? "rgba(113, 113, 122, 0.16)"
-          : technology.priority === "high"
-            ? "rgba(16, 185, 129, 0.14)"
-            : "rgba(244, 244, 245, 0.07)",
-      border:
-        technology.classification === "non_skill"
-          ? "1px solid rgba(161, 161, 170, 0.22)"
-          : technology.priority === "high"
-            ? "1px solid rgba(52, 211, 153, 0.28)"
-            : "1px solid rgba(244, 244, 245, 0.12)",
+      background: chipBackground,
+      border: chipBorder,
       borderRadius: "999px",
-      color: technology.classification === "non_skill" ? "#a1a1aa" : "#f4f4f5",
+      color: chipColor,
       cursor: "grab",
       display: "inline-flex",
       font: "650 12px/1.35 Inter, ui-sans-serif, system-ui, sans-serif",
@@ -1461,6 +1577,8 @@ function appendDraggableKeywordMatrix(
 function appendKeywordCoverageDisclosure(
   container: HTMLElement,
   payload: TailoredResumeBadgePayload,
+  badgeKey: string,
+  technologies: Required<TailoredResumeEmphasizedTechnologyPayload>[],
 ) {
   const buckets = readKeywordCoverageBuckets(payload);
   const tailoredResumeId = cleanText(payload.tailoredResumeId, 160);
@@ -1480,9 +1598,11 @@ function appendKeywordCoverageDisclosure(
   const helpWrap = document.createElement("span");
   const helpButton = document.createElement("button");
   const helpTooltip = document.createElement("span");
-  const termSections = document.createElement("div");
+  const matrixContainer = document.createElement("div");
   const action = document.createElement("button");
   const scopeLabel = formatKeywordCoverageScope(payload);
+  const coverageToneCounts = countKeywordCoverageTones(buckets.allPriorities);
+  const coverageTones = buildKeywordCoverageToneMap(buckets.allPriorities);
 
   styleElement(details, {
     background: "transparent",
@@ -1591,9 +1711,8 @@ function appendKeywordCoverageDisclosure(
     width: "260px",
     zIndex: "2147483647",
   });
-  styleElement(termSections, {
+  styleElement(matrixContainer, {
     display: "grid",
-    gap: "9px",
     minWidth: "0",
   });
   styleElement(action, {
@@ -1676,7 +1795,7 @@ function appendKeywordCoverageDisclosure(
     "Explain resume keyword change colors",
   );
   helpTooltip.textContent =
-    "Both = already present. New = added by tailoring. Missing = still absent.";
+    "Both = present before and after. New = added by tailoring. Missing = absent after tailoring.";
 
   const positionHelpTooltip = () => {
     const triggerRect = helpButton.getBoundingClientRect();
@@ -1726,104 +1845,22 @@ function appendKeywordCoverageDisclosure(
   window.addEventListener("scroll", repositionVisibleHelpTooltip, true);
   helpWrap.append(helpButton);
 
-  function appendTermChips(
-    chipList: HTMLElement,
-    input: {
-      color: string;
-      terms: string[];
-      tone: "added" | "missing" | "shared";
-    },
-  ) {
-    for (const term of input.terms) {
-      const chip = document.createElement("span");
-      const isAdded = input.tone === "added";
-      const isMissing = input.tone === "missing";
-
-      chip.textContent = term;
-      styleElement(chip, {
-        background: isAdded
-          ? "rgba(16, 185, 129, 0.18)"
-          : isMissing
-            ? "rgba(244, 63, 94, 0.13)"
-            : "rgba(14, 165, 233, 0.13)",
-        border: `1px solid ${input.color}`,
-        borderRadius: "999px",
-        color: isAdded ? "#d1fae5" : isMissing ? "#ffe4e6" : "#e0f2fe",
-        fontSize: "11px",
-        fontWeight: "750",
-        lineHeight: "1.15",
-        maxWidth: "100%",
-        overflowWrap: "anywhere",
-        padding: "4px 8px",
-      });
-      chipList.append(chip);
-    }
-  }
-
-  function appendCoverageSection(
-    label: string,
-    bucket: NormalizedKeywordCoverageBucket | null,
-  ) {
-    if (!bucket || bucket.totalTermCount <= 0) {
-      return;
-    }
-
-    const section = document.createElement("div");
-    const heading = document.createElement("div");
-    const chipList = document.createElement("div");
-
-    styleElement(section, {
-      display: "grid",
-      gap: "6px",
-      minWidth: "0",
-    });
-    styleElement(heading, {
-      color: "rgba(212, 212, 216, 0.62)",
-      fontSize: "9px",
-      fontWeight: "800",
-      letterSpacing: "0.18em",
-      lineHeight: "1.2",
-      textTransform: "uppercase",
-    });
-    styleElement(chipList, {
-      display: "flex",
-      flexWrap: "wrap",
-      gap: "5px",
-      minWidth: "0",
-    });
-
-    heading.textContent = label;
-    appendTermChips(chipList, {
-      color: "rgba(56, 189, 248, 0.32)",
-      terms: bucket.sharedTerms,
-      tone: "shared",
-    });
-    appendTermChips(chipList, {
-      color: "rgba(52, 211, 153, 0.34)",
-      terms: bucket.addedTerms,
-      tone: "added",
-    });
-    appendTermChips(chipList, {
-      color: "rgba(251, 113, 133, 0.34)",
-      terms: bucket.missingTerms,
-      tone: "missing",
-    });
-
-    section.append(heading, chipList);
-    termSections.append(section);
-  }
-
   legendItems.append(
-    createLegendItem(`Both ${buckets.summary.sharedTerms.length}`, "#38bdf8"),
-    createLegendItem(`New ${buckets.summary.addedTerms.length}`, "#34d399"),
-    createLegendItem(`Missing ${buckets.summary.missingTerms.length}`, "#fb7185"),
+    createLegendItem(`Both ${coverageToneCounts.shared}`, "#38bdf8"),
+    createLegendItem(`New ${coverageToneCounts.added}`, "#34d399"),
+    createLegendItem(`Missing ${coverageToneCounts.missing}`, "#fb7185"),
   );
   legend.append(legendItems, helpWrap);
-  appendCoverageSection("High Priority Keywords", buckets.highPriority);
-  appendCoverageSection("Low Priority Keywords", buckets.lowPriority);
+  appendDraggableKeywordMatrix(
+    matrixContainer,
+    payload,
+    badgeKey,
+    technologies,
+    coverageTones,
+  );
 
   summary.append(summaryTitle, summaryMeta, chevron);
-  panel.append(legend, termSections, action);
+  panel.append(legend, matrixContainer, action);
   details.append(summary, panel);
   details.addEventListener("toggle", () => {
     chevron.textContent = details.open ? "^" : "v";
@@ -1897,7 +1934,7 @@ function showEmphasizedTechnologyBadge(
     void rememberDismissedKeywordBadgeKey(dismissalKey);
     hideEmphasizedTechnologyBadge();
   });
-  if (!appendKeywordCoverageDisclosure(groups, payload)) {
+  if (!appendKeywordCoverageDisclosure(groups, payload, badgeKey, technologies)) {
     appendDraggableKeywordMatrix(groups, payload, badgeKey, technologies);
   }
   content.append(eyebrow);

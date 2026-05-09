@@ -13,6 +13,7 @@ import {
   EXTENSION_AUTH_GOOGLE_ENDPOINT,
   EXTENSION_AUTH_SESSION_ENDPOINT,
   EXTENSION_BROWSER_SESSION_ENDPOINT,
+  currentUrlMatchesSavedJobUrl,
   isJobHelperAppUrl,
   LAST_TAILORING_STORAGE_KEY,
   normalizeComparableUrl,
@@ -33,6 +34,8 @@ import {
   type TailoredResumeEmphasizedTechnology,
   type TailorResumeGenerationStepSummary,
   type TailorResumeGenerationStepTiming,
+  readTailorResumePreparationState,
+  type TailorResumePreparationState,
   type PersonalInfoSummary,
   readTailorResumeProfileSummary,
   type TailorResumeRunRecord,
@@ -80,6 +83,12 @@ import {
   readTailorRunRegistryKeyFromTab,
 } from "./tailor-run-registry";
 import {
+  pruneRawTailorStorageRegistry,
+  type ComparablePageIdentity,
+} from "./tailor-storage-registry";
+import {
+  findTailoringRunForKeywordBadgePage,
+  isActiveTailoringRunForKeywords,
   readStoredTailoringRunRecord,
   resolveActiveTailorRunKeywordBadge,
 } from "./tailor-run-keywords";
@@ -668,37 +677,46 @@ async function showLocalActiveTailorRunKeywordBadgeForTab(input: {
   pageIdentity: Awaited<ReturnType<typeof readTailoredResumeBadgePageIdentity>>;
   tabId: number;
 }) {
+  const registry = await readStorageRegistry(TAILORING_RUNS_STORAGE_KEY);
+  const runs = Object.values(registry)
+    .map(readStoredTailoringRunRecord)
+    .filter((run): run is TailorResumeRunRecord => Boolean(run));
   const rememberedBadge = resolveRememberedActiveTailorRunKeywordBadge({
     pageIdentity: input.pageIdentity,
   });
 
   if (rememberedBadge) {
-    await sendEmphasizedTechnologiesBadgeMessage(input.tabId, {
-      payload: {
-        badgeKey: `tailor-run-keywords:${rememberedBadge.pageKey}`,
-        displayName: buildStepOneKeywordBadgeDisplayName({
-          companyName: rememberedBadge.companyName,
-          positionTitle: rememberedBadge.positionTitle,
-        }),
-        emphasizedTechnologies: rememberedBadge.technologies,
-        includeLowPriorityTermsInKeywordCoverage: false,
-        jobUrl: rememberedBadge.jobUrl,
-        keywordCoverage: null,
-        nonTechnologyNames: input.nonTechnologyNames,
-      },
-      type: "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE",
+    const matchingStoredRun = findTailoringRunForKeywordBadgePage({
+      pageIdentity: input.pageIdentity,
+      runs,
     });
 
-    return {
-      matchedActiveRun: true,
-      showed: true,
-    };
+    if (matchingStoredRun && !isActiveTailoringRunForKeywords(matchingStoredRun)) {
+      activeTailorRunKeywordBadgesByPageKey.delete(rememberedBadge.pageKey);
+    } else {
+      await sendEmphasizedTechnologiesBadgeMessage(input.tabId, {
+        payload: {
+          badgeKey: `tailor-run-keywords:${rememberedBadge.pageKey}`,
+          displayName: buildStepOneKeywordBadgeDisplayName({
+            companyName: rememberedBadge.companyName,
+            positionTitle: rememberedBadge.positionTitle,
+          }),
+          emphasizedTechnologies: rememberedBadge.technologies,
+          includeLowPriorityTermsInKeywordCoverage: false,
+          jobUrl: rememberedBadge.jobUrl,
+          keywordCoverage: null,
+          nonTechnologyNames: input.nonTechnologyNames,
+        },
+        type: "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE",
+      });
+
+      return {
+        matchedActiveRun: true,
+        showed: true,
+      };
+    }
   }
 
-  const registry = await readStorageRegistry(TAILORING_RUNS_STORAGE_KEY);
-  const runs = Object.values(registry)
-    .map(readStoredTailoringRunRecord)
-    .filter((run): run is TailorResumeRunRecord => Boolean(run));
   const resolution = resolveActiveTailorRunKeywordBadge({
     pageIdentity: input.pageIdentity,
     runs,
@@ -1264,6 +1282,189 @@ async function clearLegacyTailorRunStorageKeys() {
   ]);
 }
 
+function readTailorPreparationRegistryKey(
+  preparationState: TailorResumePreparationState,
+  rawKey: string,
+) {
+  return (
+    buildTailorRunRegistryKey(preparationState.pageUrl) ??
+    buildTailorRunRegistryKey(rawKey)
+  );
+}
+
+function readTailorRunRecordRegistryKey(
+  run: TailorResumeRunRecord,
+  rawKey: string,
+) {
+  return buildTailorRunRegistryKey(run.pageUrl) ?? buildTailorRunRegistryKey(rawKey);
+}
+
+type StoredExistingTailoringPrompt = {
+  existingTailoring: NonNullable<
+    ReturnType<typeof readTailorResumeExistingTailoringState>
+  >;
+  jobDescription: string;
+  jobUrl: string | null;
+  pageContext: JobPageContext;
+};
+
+function readStoredExistingTailoringPrompt(
+  value: unknown,
+): StoredExistingTailoringPrompt | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const existingTailoring = readTailorResumeExistingTailoringState(
+    value.existingTailoring,
+  );
+  const jobDescription =
+    typeof value.jobDescription === "string" ? value.jobDescription.trim() : "";
+  const jobUrl =
+    typeof value.jobUrl === "string" && value.jobUrl.trim()
+      ? value.jobUrl.trim()
+      : null;
+  const pageContext = isRecord(value.pageContext)
+    ? (value.pageContext as unknown as JobPageContext)
+    : null;
+
+  if (!existingTailoring || !jobDescription || !pageContext) {
+    return null;
+  }
+
+  return {
+    existingTailoring,
+    jobDescription,
+    jobUrl,
+    pageContext,
+  };
+}
+
+function readExistingTailoringPromptRegistryKey(
+  prompt: StoredExistingTailoringPrompt,
+  rawKey: string,
+) {
+  return (
+    buildTailorRunRegistryKey(prompt.jobUrl) ??
+    readTailorRunRegistryKeyFromPageContext(prompt.pageContext) ??
+    buildTailorRunRegistryKey(rawKey)
+  );
+}
+
+function activeKeywordBadgeSnapshotMatches(input: {
+  jobUrl?: string | null;
+  pageIdentity?: ComparablePageIdentity | null;
+  pageKey?: string | null;
+  snapshot: ActiveTailorRunKeywordBadgeSnapshot;
+}) {
+  const candidates = [
+    input.pageKey,
+    input.jobUrl,
+    input.pageIdentity?.jobUrl,
+    input.pageIdentity?.canonicalUrl,
+    input.pageIdentity?.pageUrl,
+  ];
+  const storedValues = [input.snapshot.pageKey, input.snapshot.jobUrl];
+
+  return candidates.some((candidate) =>
+    storedValues.some((storedValue) =>
+      currentUrlMatchesSavedJobUrl({
+        currentUrl: candidate,
+        savedJobUrl: storedValue,
+      }),
+    ),
+  );
+}
+
+function clearActiveTailorRunKeywordBadgesForMatch(input: {
+  jobUrl?: string | null;
+  pageIdentity?: ComparablePageIdentity | null;
+  pageKey?: string | null;
+}) {
+  for (const [snapshotKey, snapshot] of activeTailorRunKeywordBadgesByPageKey) {
+    if (
+      activeKeywordBadgeSnapshotMatches({
+        ...input,
+        snapshot,
+      })
+    ) {
+      activeTailorRunKeywordBadgesByPageKey.delete(snapshotKey);
+    }
+  }
+}
+
+async function clearTailorStateForMatch(input: {
+  jobUrl?: string | null;
+  pageIdentity?: ComparablePageIdentity | null;
+  pageKey?: string | null;
+}) {
+  clearActiveTailorRunKeywordBadgesForMatch(input);
+
+  const result = await chrome.storage.local.get([
+    TAILORING_PREPARATIONS_STORAGE_KEY,
+    TAILORING_PROMPTS_STORAGE_KEY,
+    TAILORING_RUNS_STORAGE_KEY,
+  ]);
+  const nextEntries: Record<string, unknown> = {};
+  const storageKeysToRemove: string[] = [];
+  const pruneRegistry = <T,>(
+    storageKey: string,
+    options: {
+      parse: (candidate: unknown) => T | null;
+      readEntryKey: (entry: T, rawKey: string) => string | null;
+      readEntryUrls: (entry: T) => Array<string | null | undefined>;
+    },
+  ) => {
+    const prunedRegistry = pruneRawTailorStorageRegistry({
+      match: input,
+      parse: options.parse,
+      readEntryKey: options.readEntryKey,
+      readEntryUrls: options.readEntryUrls,
+      value: result[storageKey],
+    });
+
+    if (!prunedRegistry.changed) {
+      return;
+    }
+
+    if (prunedRegistry.value) {
+      nextEntries[storageKey] = prunedRegistry.value;
+    } else {
+      storageKeysToRemove.push(storageKey);
+    }
+  };
+
+  pruneRegistry(TAILORING_RUNS_STORAGE_KEY, {
+    parse: readStoredTailoringRunRecord,
+    readEntryKey: readTailorRunRecordRegistryKey,
+    readEntryUrls: (run) => [run.pageUrl],
+  });
+  pruneRegistry(TAILORING_PREPARATIONS_STORAGE_KEY, {
+    parse: readTailorResumePreparationState,
+    readEntryKey: readTailorPreparationRegistryKey,
+    readEntryUrls: (preparation) => [preparation.pageUrl],
+  });
+  pruneRegistry(TAILORING_PROMPTS_STORAGE_KEY, {
+    parse: readStoredExistingTailoringPrompt,
+    readEntryKey: readExistingTailoringPromptRegistryKey,
+    readEntryUrls: (prompt) => [
+      prompt.jobUrl,
+      prompt.pageContext.canonicalUrl,
+      prompt.pageContext.url,
+    ],
+  });
+
+  if (storageKeysToRemove.length > 0) {
+    await chrome.storage.local.remove(storageKeysToRemove);
+  }
+
+  if (Object.keys(nextEntries).length > 0) {
+    await chrome.storage.local.set(nextEntries);
+  }
+
+  await clearLegacyTailorRunStorageKeys();
+}
+
 async function persistResult(
   pageKey: string,
   record: TailorResumeRunRecord | null,
@@ -1301,12 +1502,7 @@ async function persistExistingTailoringPrompt(
 
 async function clearTailorStateForKey(pageKey: string | null) {
   if (pageKey) {
-    activeTailorRunKeywordBadgesByPageKey.delete(pageKey);
-    await Promise.all([
-      setStorageRegistryEntry(TAILORING_RUNS_STORAGE_KEY, pageKey, null),
-      setStorageRegistryEntry(TAILORING_PREPARATIONS_STORAGE_KEY, pageKey, null),
-      setStorageRegistryEntry(TAILORING_PROMPTS_STORAGE_KEY, pageKey, null),
-    ]);
+    await clearTailorStateForMatch({ pageKey });
   } else {
     activeTailorRunKeywordBadgesByPageKey.clear();
     await chrome.storage.local.remove([
@@ -3030,9 +3226,11 @@ async function runCaptureFlow(input: {
     }
 
     throwIfTailorCaptureAborted(abortController.signal);
-    activeTailorRunKeywordBadgesByPageKey.delete(pageKey);
-    await persistTailorPreparationState(pageKey, null);
-    await persistExistingTailoringPrompt(pageKey, null);
+    await clearTailorStateForMatch({
+      jobUrl,
+      pageIdentity,
+      pageKey,
+    });
     await persistResult(
       pageKey,
       buildRunningTailoringRunRecord({

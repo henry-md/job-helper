@@ -207,3 +207,44 @@ test("prunes raw storage entries only for the exact matching key", () => {
     },
   });
 });
+
+test("prunes all restart entries when page identity includes URL aliases", () => {
+  const legacyKey =
+    "https://apply.careers.microsoft.com/careers/job/123?domain=microsoft.com";
+  const normalizedKey = "https://apply.careers.microsoft.com/careers/job/123";
+  const pruned = pruneRawTailorStorageRegistry({
+    match: {
+      pageIdentity: {
+        canonicalUrl: normalizedKey,
+        jobUrl: legacyKey,
+        pageUrl: legacyKey,
+      },
+      pageKey: normalizedKey,
+    },
+    parse: parseDummyEntry,
+    readEntryKey: readDummyEntryKey,
+    readEntryUrls: readDummyEntryUrls,
+    value: {
+      [legacyKey]: {
+        capturedAt: "2026-04-26T18:00:00.000Z",
+        pageUrl: legacyKey,
+      },
+      [normalizedKey]: {
+        capturedAt: "2026-04-26T18:05:00.000Z",
+        pageUrl: normalizedKey,
+      },
+      "https://example.com/other-job": {
+        capturedAt: "2026-04-26T18:10:00.000Z",
+        pageUrl: "https://example.com/other-job",
+      },
+    },
+  });
+
+  assert.equal(pruned.changed, true);
+  assert.deepEqual(pruned.value, {
+    "https://example.com/other-job": {
+      capturedAt: "2026-04-26T18:10:00.000Z",
+      pageUrl: "https://example.com/other-job",
+    },
+  });
+});

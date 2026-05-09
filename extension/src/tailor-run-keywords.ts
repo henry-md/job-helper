@@ -114,6 +114,20 @@ export function isActiveTailoringRunForKeywords(run: TailorResumeRunRecord) {
   return run.status === "running" || run.status === "needs_input";
 }
 
+export function findTailoringRunForKeywordBadgePage(input: {
+  pageIdentity: TailorOverwritePageIdentity;
+  runs: TailorResumeRunRecord[];
+}) {
+  return (
+    input.runs.find((run) =>
+      matchesTailorOverwritePageIdentity({
+        jobUrl: run.pageUrl,
+        pageIdentity: input.pageIdentity,
+      }),
+    ) ?? null
+  );
+}
+
 export function resolveActiveTailorRunKeywordBadge(input: {
   pageIdentity: TailorOverwritePageIdentity;
   runs: TailorResumeRunRecord[];

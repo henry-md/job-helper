@@ -1,0 +1,4 @@
+- Symptom: an active Tailor Resume card could keep rendering the Step 2 interview/start action while the run had already advanced to Step 3, so the per-step timer showed a third segment but the visible step label still said Step 2.
+- Root cause: the interview action was controlled only by pending/generating interview state. During the Step 2-to-Step 3 transition that state can lag behind the run's active generation step.
+- Fix: hide the interview action once the card's active step is greater than Step 2, letting the normal progress row render the same active step used by the timer.
+- Guardrail: step-specific action affordances should be gated by the active generation step, not just by stale transition state from the previous step.

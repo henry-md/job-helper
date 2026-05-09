@@ -176,11 +176,13 @@ export type TailorRunTimeDisplayMode = "aggregate" | "specific";
 
 export type ExtensionPreferences = {
   compactTailorRun: boolean;
+  supportChatTipDismissed: boolean;
   tailorRunTimeDisplayMode: TailorRunTimeDisplayMode;
 };
 
 export const defaultExtensionPreferences: ExtensionPreferences = {
   compactTailorRun: false,
+  supportChatTipDismissed: false,
   tailorRunTimeDisplayMode: "specific",
 };
 
@@ -412,6 +414,7 @@ export type TailorResumeConversationMessage = {
 export type TailorResumeConversationToolCall = {
   argumentsText: string;
   name: string;
+  outputText?: string;
 };
 
 export type TailorResumeTechnologyContext = {
@@ -1023,6 +1026,9 @@ function readTailorResumeConversationToolCall(
   return {
     argumentsText: value.argumentsText,
     name,
+    ...(typeof value.outputText === "string"
+      ? { outputText: value.outputText }
+      : {}),
   };
 }
 
@@ -1269,6 +1275,7 @@ export function readExtensionPreferences(
 
   return {
     compactTailorRun: value.compactTailorRun === true,
+    supportChatTipDismissed: value.supportChatTipDismissed === true,
     tailorRunTimeDisplayMode:
       rawTimeDisplayMode === "aggregate" || rawTimeDisplayMode === "specific"
         ? rawTimeDisplayMode

@@ -5,6 +5,8 @@ import {
   type TailorResumeRunRecord,
 } from "../extension/src/job-helper.ts";
 import {
+  findTailoringRunForKeywordBadgePage,
+  isActiveTailoringRunForKeywords,
   readTailorRunKeywordTechnologies,
   readStoredTailoringRunRecord,
   resolveActiveTailorRunKeywordBadge,
@@ -245,6 +247,32 @@ test("ignores completed local runs when resolving active keyword badges", () => 
   });
 
   assert.equal(badge, null);
+});
+
+test("findTailoringRunForKeywordBadgePage exposes completed matching runs so stale memory can be cleared", () => {
+  const completedRun = buildRun({
+    status: "success",
+    tailoredResumeId: "tailored-123",
+  });
+  const matchingRun = findTailoringRunForKeywordBadgePage({
+    pageIdentity: {
+      canonicalUrl: "https://jobs.example.com/roles/123?utm_source=extension",
+      jobUrl: null,
+      pageUrl: "https://jobs.example.com/roles/123?utm_source=extension",
+    },
+    runs: [
+      buildRun({
+        pageUrl: "https://jobs.example.com/roles/999",
+      }),
+      completedRun,
+    ],
+  });
+
+  assert.equal(matchingRun?.tailoredResumeId, "tailored-123");
+  assert.equal(
+    matchingRun ? isActiveTailoringRunForKeywords(matchingRun) : true,
+    false,
+  );
 });
 
 test("parses stored run records with streamed keyword timings", () => {
