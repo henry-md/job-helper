@@ -1,9 +1,3 @@
-import type {
-  TailorResumeTechnologyContext,
-  TailorResumeTechnologyExample,
-} from "./tailor-resume-types.ts";
-import { resumeTextIncludesKeyword } from "./tailor-resume-keyword-coverage.ts";
-
 export type InterviewStreamEmittedEvent =
   | {
       field: (typeof interviewTextKeys)[number];
@@ -13,8 +7,7 @@ export type InterviewStreamEmittedEvent =
       delta: string;
       field: (typeof interviewTextKeys)[number];
       kind: "text-delta";
-    }
-  | { card: TailorResumeTechnologyContext; kind: "card" };
+    };
 
 export type TailorResumeInterviewStreamEvent =
   | InterviewStreamEmittedEvent
@@ -22,44 +15,10 @@ export type TailorResumeInterviewStreamEvent =
 
 const interviewTextKeys = ["assistantMessage", "completionMessage"] as const;
 
-function readTailorResumeTechnologyExample(
-  value: unknown,
-): TailorResumeTechnologyExample[] {
-  if (!value || typeof value !== "object") {
-    return [];
-  }
-
-  const text =
-    "text" in value && typeof value.text === "string" ? value.text.trim() : "";
-  const kind =
-    "kind" in value && (value.kind === "existing" || value.kind === "new")
-      ? value.kind
-      : null;
-
-  return text && kind ? [{ kind, text }] : [];
-}
-
-function stripTechnologyExamplePlacementSuffix(text: string) {
-  return text.replace(/\s(?:--|[-–—])\s*[^-–—]+?\s*$/, "").trim();
-}
-
-function technologyExamplesContainTerm(
-  name: string,
-  examples: readonly TailorResumeTechnologyExample[],
-) {
-  return examples.every((example) =>
-    resumeTextIncludesKeyword({
-      term: name,
-      text: stripTechnologyExamplePlacementSuffix(example.text),
-    }),
-  );
-}
-
 export class TailorResumeInterviewArgsStreamer {
   private buffer = "";
   private emittedTextLength = 0;
   private emittedTextKey: (typeof interviewTextKeys)[number] | null = null;
-  private emittedCardCount = 0;
 
   feed(chunk: string): InterviewStreamEmittedEvent[] {
     this.buffer += chunk;
@@ -85,12 +44,6 @@ export class TailorResumeInterviewArgsStreamer {
         kind: "text-delta",
       });
       this.emittedTextLength = streamingText.text.length;
-    }
-
-    const cards = this.extractCompletedCards();
-    while (this.emittedCardCount < cards.length) {
-      events.push({ card: cards[this.emittedCardCount]!, kind: "card" });
-      this.emittedCardCount += 1;
     }
 
     return events;
@@ -199,107 +152,4 @@ export class TailorResumeInterviewArgsStreamer {
     return null;
   }
 
-  private extractCompletedCards(): TailorResumeTechnologyContext[] {
-    const valueStart = this.findKeyValueStart("technologyContexts");
-
-    if (valueStart < 0 || this.buffer[valueStart] !== "[") {
-      return [];
-    }
-
-    let i = valueStart + 1;
-    const cards: TailorResumeTechnologyContext[] = [];
-
-    while (i < this.buffer.length) {
-      while (i < this.buffer.length && /[\s,]/.test(this.buffer[i]!)) {
-        i += 1;
-      }
-
-      if (i >= this.buffer.length) {
-        break;
-      }
-
-      if (this.buffer[i] === "]") {
-        break;
-      }
-
-      if (this.buffer[i] !== "{") {
-        break;
-      }
-
-      const start = i;
-      let depth = 0;
-      let inString = false;
-      let escape = false;
-      let endIdx = -1;
-
-      for (; i < this.buffer.length; i += 1) {
-        const c = this.buffer[i]!;
-
-        if (escape) {
-          escape = false;
-          continue;
-        }
-
-        if (c === "\\") {
-          escape = true;
-          continue;
-        }
-
-        if (inString) {
-          if (c === '"') {
-            inString = false;
-          }
-
-          continue;
-        }
-
-        if (c === '"') {
-          inString = true;
-          continue;
-        }
-
-        if (c === "{") {
-          depth += 1;
-        } else if (c === "}") {
-          depth -= 1;
-
-          if (depth === 0) {
-            endIdx = i;
-            break;
-          }
-        }
-      }
-
-      if (endIdx === -1) {
-        break;
-      }
-
-      const objStr = this.buffer.slice(start, endIdx + 1);
-
-      try {
-        const parsed = JSON.parse(objStr) as Record<string, unknown>;
-        const name = typeof parsed.name === "string" ? parsed.name.trim() : "";
-        const definition =
-          typeof parsed.definition === "string" ? parsed.definition.trim() : "";
-        const examples = Array.isArray(parsed.examples)
-          ? parsed.examples.flatMap(readTailorResumeTechnologyExample)
-          : [];
-
-        if (
-          name &&
-          definition &&
-          examples.length >= 2 &&
-          technologyExamplesContainTerm(name, examples)
-        ) {
-          cards.push({ definition, examples, name });
-        }
-      } catch {
-        // Balanced braces but invalid JSON — skip and resume scanning past it.
-      }
-
-      i = endIdx + 1;
-    }
-
-    return cards;
-  }
 }

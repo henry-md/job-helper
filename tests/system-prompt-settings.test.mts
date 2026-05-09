@@ -128,7 +128,11 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /closest existing category/i);
   assert.match(prompt, /Concrete technologies with dedicated source-resume or USER\.md support may go into Skills/i);
   assert.match(prompt, /capability phrases used to pepper fit/i);
+  assert.equal(prompt.match(/Available tools:/g)?.length, 1);
   assert.match(prompt, /check_planned_resume_keyword_coverage/i);
+  assert.match(prompt, /\{ changes: \[\{ segmentId, desiredPlainText \}\] \}/i);
+  assert.match(prompt, /applies those plaintext replacements to the full resume/i);
+  assert.match(prompt, /Return final JSON only after coverage is acceptable/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 
@@ -147,6 +151,8 @@ test("buildTailorResumePlanningSystemPrompt appends skills keyword coverage to s
     prompt,
     /RESTful, RESTful APIs, cloud infrastructure, data structures/i,
   );
+  assert.match(prompt, /Available tools:/);
+  assert.match(prompt, /check_planned_resume_keyword_coverage/i);
 });
 
 test("buildTailorResumePlanningSystemPrompt does not ask for job identifiers", () => {
@@ -175,7 +181,6 @@ test("buildTailorResumeInterviewSystemPrompt keeps user-facing interview text co
   );
 
   assert.match(prompt, /rendered visibly in the chat UI/i);
-  assert.match(prompt, /never repeat definitions, examples, or technologyContexts content/i);
   assert.match(prompt, /completionMessage/i);
   assert.match(prompt, /tool call is the control-plane output/i);
   assert.match(prompt, /ask all useful missing-technology questions together/i);
@@ -188,39 +193,13 @@ test("buildTailorResumeInterviewSystemPrompt keeps user-facing interview text co
   assert.match(prompt, /case-insensitive deny-list/i);
   assert.match(prompt, /stored alongside USER\.md, not inside USER\.md/i);
   assert.match(prompt, /starts the remaining tailoring steps/i);
-  assert.match(prompt, /sample bullet, example, draft, clarification, or review/i);
+  assert.match(prompt, /sample, draft, clarification, or review/i);
   assert.match(prompt, /deterministic keyword presence/i);
   assert.match(prompt, /cannot cleanly assume the user's experience/i);
   assert.match(prompt, /internet terminology/i);
-  assert.match(prompt, /technologyContexts/i);
-  assert.match(prompt, /definitions or example bullets in assistantMessage/i);
-  assert.match(prompt, /DEFINITELY do not put them in both places/i);
-  assert.match(prompt, /one-sentence explanation/i);
-  assert.match(prompt, /Return exactly two examples by default/i);
-  assert.match(prompt, /If the user asks for more, give more/i);
-  assert.match(prompt, /object with `text` and `kind`/i);
-  assert.match(prompt, /slight modification of an existing resume or USER\.md bullet/i);
-  assert.match(prompt, /entirely new bullet suggestion/i);
-  assert.match(prompt, /deterministically rejects any example/i);
-  assert.match(prompt, /before the `-- <placement>` suffix/i);
-  assert.match(prompt, /concrete actual skill keywords that could go in Skills/i);
-  assert.match(prompt, /provide one existing and one new example/i);
-  assert.match(prompt, /narrative keywords that should not go in Skills/i);
-  assert.match(prompt, /provide only existing examples/i);
-  assert.match(prompt, /technology-specific example bullets/i);
-  assert.match(prompt, /put them in technologyContexts rather than inline assistantMessage text/i);
-  assert.match(prompt, /FAANG-level resume bullet suggestions/i);
-  assert.match(prompt, /positive result in the same sentence/i);
-  assert.match(prompt, /Migrated time-series data from MongoDB to Cassandra/i);
-  assert.match(prompt, /reduce storage costs 40% and improve query tail latency by 2x/i);
-  assert.match(prompt, /Rearchitected distributed import workflow/i);
-  assert.match(prompt, /two-phase commits to cut large import failures/i);
-  assert.match(prompt, /"kind": "existing"/i);
-  assert.match(prompt, /"kind": "new"/i);
-  assert.match(prompt, /specific company or internship already present/i);
-  assert.match(prompt, /Never use job-posting product, team, platform/i);
-  assert.match(prompt, /Never use anything else, like a technical-category/i);
-  assert.match(prompt, /Apache Spark helps you process large amounts of data/i);
+  assert.match(prompt, /one pointed direct question/i);
+  assert.match(prompt, /where did you use them and what was the impact/i);
+  assert.match(prompt, /Do not generate structured examples/i);
   assert.match(prompt, /Step 2 exists only to gather reusable context and update USER\.md/i);
   assert.match(prompt, /about what experience the user has/i);
   assert.match(prompt, /Never ask permission to update USER\.md after the user answers/i);
@@ -308,7 +287,13 @@ test("buildTailorResumeImplementationSystemPrompt injects retry feedback", () =>
   assert.match(prompt, /one or two specific job-emphasized technologies or capabilities/i);
   assert.match(prompt, /Do not bold the entire sentence/i);
   assert.match(prompt, /never add inline bolding inside Skills or Technical Skills sections/i);
+  assert.equal(prompt.match(/Available tools:/g)?.length, 1);
   assert.match(prompt, /check_implemented_resume_keyword_coverage/i);
+  assert.match(prompt, /malformed rendered bullets/i);
+  assert.match(prompt, /\{ changes: \[\{ segmentId, latexCode \}\], lineCountSegmentIds: \[\] \}/i);
+  assert.match(prompt, /reports keyword coverage, rendered page count/i);
+  assert.match(prompt, /Pass lineCountSegmentIds as \[\]/i);
+  assert.match(prompt, /Return final JSON only after coverage and changed-bullet health are acceptable/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 
@@ -323,6 +308,8 @@ test("buildTailorResumeImplementationSystemPrompt appends USER.md bolding guidan
   assert.match(prompt, /Custom implementation prompt\./);
   assert.match(prompt, /USER\.md is Markdown, not LaTeX/i);
   assert.match(prompt, /\\textbf\{\.\.\.\}/);
+  assert.match(prompt, /Available tools:/);
+  assert.match(prompt, /check_implemented_resume_keyword_coverage/i);
 });
 
 test("buildTailorResumeRefinementSystemPrompt injects retry feedback", () => {

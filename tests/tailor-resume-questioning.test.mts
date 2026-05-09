@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  extractTailorResumeExperiencePlacementNames,
   findAskWorthyMissingTailorResumeQuestionTerms,
   isDebugForceConversationInTailorPipelineEnabled,
   latestUserMessageDirectlyConfirmsTechnologyExperience,
   normalizeTailorResumeInterviewResponseForCurrentTurn,
   parseTailorResumeInterviewResponseFromModelOutput,
   tailorResumeAskMessageRequestsUserMarkdownPermission,
-  validateTailorResumeTechnologyContextExampleTerms,
 } from "../lib/tailor-resume-questioning.ts";
 
 test("isDebugForceConversationInTailorPipelineEnabled reads common true values", () => {
@@ -128,23 +126,6 @@ test("findAskWorthyMissingTailorResumeQuestionTerms keeps concrete stack gaps", 
   );
 });
 
-test("extractTailorResumeExperiencePlacementNames reads resume employers and internships", () => {
-  assert.deepEqual(
-    extractTailorResumeExperiencePlacementNames(
-      [
-        "WORK EXPERIENCE",
-        "NewForm AI | Software Engineer I --- Full Time Aug 2025 - Feb 2026",
-        "KnoWhiz | Software Engineering Intern May 2024 - Sep 2024",
-        "HF Engineering | Software Engineering Intern May 2024 - Sep 2024",
-        "Johns Hopkins University | Software Development Intern May 2023 - Aug 2023",
-        "EDUCATION",
-        "Johns Hopkins University | Bachelor of Science",
-      ].join("\n"),
-    ),
-    ["NewForm AI", "KnoWhiz", "HF Engineering", "Johns Hopkins University"],
-  );
-});
-
 test("normalizeTailorResumeInterviewResponseForCurrentTurn does not treat post-start skip as done", () => {
   const response = normalizeTailorResumeInterviewResponseForCurrentTurn({
     previousSummary: {
@@ -242,7 +223,7 @@ test("normalizeTailorResumeInterviewResponseForCurrentTurn finishes placement-co
       {
         id: "assistant-1",
         role: "assistant",
-        text: "Which generated example bullets match your actual experience?",
+        text: "What experience should I record for these technologies?",
         toolCalls: [],
       },
       {
@@ -310,7 +291,7 @@ test("normalizeTailorResumeInterviewResponseForCurrentTurn keeps permission asks
       {
         id: "assistant-1",
         role: "assistant",
-        text: "Which generated example bullets match your actual experience?",
+        text: "What experience should I record for these technologies?",
         toolCalls: [],
       },
       {
@@ -556,283 +537,6 @@ test("parseTailorResumeInterviewResponseFromModelOutput reads probing-question t
   );
   assert.equal(response.response.debugDecision, "not_applicable");
   assert.equal(response.toolCalls[0]?.name, "initiate_tailor_resume_probing_questions");
-});
-
-test("parseTailorResumeInterviewResponseFromModelOutput keeps follow-up technology cards", () => {
-  const response = parseTailorResumeInterviewResponseFromModelOutput({
-    output: [
-      {
-        arguments: JSON.stringify({
-          assistantMessage:
-            "Your answer sounded close to Cassandra work. Which resume project should this map to?",
-          technologyContexts: [
-            {
-              definition:
-                "Cassandra is a distributed NoSQL database used for high-write, large-scale event or time-series data.",
-              examples: [
-                {
-                  kind: "existing",
-                  text: "Designed Cassandra data models for high-volume event writes -- NewForm",
-                },
-                {
-                  kind: "new",
-                  text: "Migrated time-series metrics into Cassandra-backed storage -- KnoWhiz",
-                },
-              ],
-              name: "cassandra",
-            },
-          ],
-        }),
-        call_id: "call-follow-up",
-        name: "initiate_tailor_resume_probing_questions",
-        type: "function_call",
-      },
-    ],
-  });
-
-  assert.equal(response.response.action, "ask");
-  assert.equal(response.response.technologyContexts.length, 1);
-  assert.equal(response.response.technologyContexts[0]?.name, "Cassandra");
-  assert.deepEqual(response.response.technologyContexts[0]?.examples, [
-    {
-      kind: "existing",
-      text: "Designed Cassandra data models for high-volume event writes -- NewForm",
-    },
-    {
-      kind: "new",
-      text: "Migrated time-series metrics into Cassandra-backed storage -- KnoWhiz",
-    },
-  ]);
-});
-
-test("parseTailorResumeInterviewResponseFromModelOutput reads structured example kinds", () => {
-  const response = parseTailorResumeInterviewResponseFromModelOutput({
-    output: [
-      {
-        arguments: JSON.stringify({
-          assistantMessage:
-            "Here are two distributed systems options. Which one matches your experience?",
-          technologyContexts: [
-            {
-              definition:
-                "Distributed systems coordinate work across multiple machines.",
-              examples: [
-                {
-                  kind: "existing",
-                  text: "Reworked distributed systems Java batching with two-phase commits to cut import failures below 4% -- KnoWhiz",
-                },
-                {
-                  kind: "existing",
-                  text: "Refactored distributed systems API endpoints and inference services for platform-agnostic ad workflows -- NewForm AI",
-                },
-              ],
-              name: "distributed systems",
-            },
-          ],
-        }),
-        call_id: "call-structured-examples",
-        name: "initiate_tailor_resume_probing_questions",
-        type: "function_call",
-      },
-    ],
-  });
-
-  assert.equal(response.response.action, "ask");
-  assert.deepEqual(response.response.technologyContexts[0]?.examples, [
-    {
-      kind: "existing",
-      text: "Reworked distributed systems Java batching with two-phase commits to cut import failures below 4% -- KnoWhiz",
-    },
-    {
-      kind: "existing",
-      text: "Refactored distributed systems API endpoints and inference services for platform-agnostic ad workflows -- NewForm AI",
-    },
-  ]);
-});
-
-test("validateTailorResumeTechnologyContextExampleTerms rejects examples missing the card term before placement", () => {
-  const validation = validateTailorResumeTechnologyContextExampleTerms([
-    {
-      definition:
-        "Distributed systems coordinate work across multiple machines.",
-      examples: [
-        {
-          kind: "existing",
-          text: "Designed Spark streaming pipeline to aggregate event streams at 10k msg/sec -- NewForm AI",
-        },
-        {
-          kind: "new",
-          text: "Built a fault-tolerant microservice mesh -- Distributed systems",
-        },
-      ],
-      name: "Distributed systems",
-    },
-  ]);
-
-  assert.equal(validation.valid, false);
-  assert.deepEqual(
-    validation.issues.map((issue) => issue.exampleIndex),
-    [0, 1],
-  );
-  assert.match(validation.issues[0]?.sentence ?? "", /Spark streaming/i);
-  assert.doesNotMatch(
-    validation.issues[1]?.sentence ?? "",
-    /Distributed systems/i,
-  );
-});
-
-test("validateTailorResumeTechnologyContextExampleTerms accepts examples containing the exact card term", () => {
-  const validation = validateTailorResumeTechnologyContextExampleTerms([
-    {
-      definition:
-        "Distributed systems coordinate work across multiple machines.",
-      examples: [
-        {
-          kind: "existing",
-          text: "Reworked distributed systems batching to cut cross-node recovery from minutes to seconds -- NewForm AI",
-        },
-        {
-          kind: "existing",
-          text: "Improved distributed systems request routing to sustain 4x higher throughput during traffic spikes -- Johns Hopkins University",
-        },
-      ],
-      name: "Distributed systems",
-    },
-  ]);
-
-  assert.equal(validation.valid, true);
-  assert.deepEqual(validation.issues, []);
-});
-
-test("parseTailorResumeInterviewResponseFromModelOutput preserves weak example cards", () => {
-  const response = parseTailorResumeInterviewResponseFromModelOutput({
-    output: [
-      {
-        arguments: JSON.stringify({
-          assistantMessage:
-            "Here are a couple of Azure ideas. Which, if any, match your experience?",
-          technologyContexts: [
-            {
-              definition:
-                "Azure is a cloud platform used for deploying and operating production services.",
-              examples: [
-                {
-                  kind: "existing",
-                  text: "Provisioned Azure Kubernetes Service -- Purview Data Platform",
-                },
-                {
-                  kind: "new",
-                  text: "Migrated Azure workloads -- Azure App Services",
-                },
-              ],
-              name: "Azure",
-            },
-          ],
-        }),
-        call_id: "call-weak-examples",
-        name: "initiate_tailor_resume_probing_questions",
-        type: "function_call",
-      },
-    ],
-  });
-
-  assert.equal(response.response.action, "ask");
-  assert.deepEqual(response.response.technologyContexts[0]?.examples, [
-    {
-      kind: "existing",
-      text: "Provisioned Azure Kubernetes Service -- Purview Data Platform",
-    },
-    {
-      kind: "new",
-      text: "Migrated Azure workloads -- Azure App Services",
-    },
-  ]);
-});
-
-test("parseTailorResumeInterviewResponseFromModelOutput allows requested extra technology examples", () => {
-  const response = parseTailorResumeInterviewResponseFromModelOutput({
-    output: [
-      {
-        arguments: JSON.stringify({
-          assistantMessage:
-            "Here are four more realistic Go options. Which ones are closest to your experience?",
-          technologyContexts: [
-            {
-              definition:
-                "Go is a compiled language commonly used for backend services, workers, APIs, and infrastructure tooling.",
-              examples: [
-                {
-                  kind: "existing",
-                  text: "Rewrote Quizlet import worker in Go, increasing throughput 3x and cutting memory usage 50% -- KnoWhiz",
-                },
-                {
-                  kind: "new",
-                  text: "Implemented Go concurrent worker pool and AWS SQS consumers to process onboarding jobs at 200 jobs/sec, reducing backlog 75% -- HF Engineering",
-                },
-                {
-                  kind: "new",
-                  text: "Built Go streaming service to ingest sensor data at 1k msg/sec with sub-250ms latency for near-real-time dashboards -- Johns Hopkins University",
-                },
-                {
-                  kind: "new",
-                  text: "Replaced Java PDF parsing pipeline with a Go service to cut page generation from minutes to under 15s and reduce hosting costs 30% -- Chief of NYC Fire Dept Website",
-                },
-              ],
-              name: "Go",
-            },
-          ],
-        }),
-        call_id: "call-more-examples",
-        name: "initiate_tailor_resume_probing_questions",
-        type: "function_call",
-      },
-    ],
-  });
-
-  assert.equal(response.response.action, "ask");
-  assert.equal(response.response.technologyContexts[0]?.name, "Go");
-  assert.equal(response.response.technologyContexts[0]?.examples.length, 4);
-  assert.match(
-    response.response.assistantMessage,
-    /Which ones are closest to your experience/i,
-  );
-});
-
-test("parseTailorResumeInterviewResponseFromModelOutput preserves duplicated technology card text", () => {
-  const response = parseTailorResumeInterviewResponseFromModelOutput({
-    output: [
-      {
-        arguments: JSON.stringify({
-          assistantMessage:
-            "Two Go bullet suggestions you can use outside NewForm:\n\n- Built a Go microservice for Quizlet imports, replacing a Python ETL and increasing throughput 4x while cutting memory use 60% -- KnoWhiz\n- Implemented a Go-based concurrent worker pool and AWS SQS consumers to process onboarding jobs at 2k jobs/sec, reducing processing lag 80% -- HF Engineering\n\nWhich of these should I add?",
-          technologyContexts: [
-            {
-              definition:
-                "Go is a compiled language designed for building high-performance backend services and concurrent systems.",
-              examples: [
-                {
-                  kind: "existing",
-                  text: "Built a Go microservice for Quizlet imports, replacing a Python ETL and increasing throughput 4x while cutting memory use 60% -- KnoWhiz",
-                },
-                {
-                  kind: "new",
-                  text: "Implemented a Go-based concurrent worker pool and AWS SQS consumers to process onboarding jobs at 2k jobs/sec, reducing processing lag 80% -- HF Engineering",
-                },
-              ],
-              name: "Go",
-            },
-          ],
-        }),
-        call_id: "call-duplicate-card",
-        name: "initiate_tailor_resume_probing_questions",
-        type: "function_call",
-      },
-    ],
-  });
-
-  assert.equal(response.response.action, "ask");
-  assert.equal(response.response.technologyContexts[0]?.name, "Go");
-  assert.match(response.response.assistantMessage, /Two Go bullet suggestions/i);
 });
 
 test("parseTailorResumeInterviewResponseFromModelOutput coerces plain JSON text", () => {

@@ -1013,14 +1013,7 @@ function serializeConversation(messages: TailorResumeConversationMessage[]) {
 
   return messages
     .map((message, index) => {
-      const contextNames =
-        message.technologyContexts && message.technologyContexts.length > 0
-          ? `\n   technologyContexts: ${message.technologyContexts
-              .map((context) => context.name)
-              .join(", ")}`
-          : "";
-
-      return `${index + 1}. ${message.role}: ${message.text}${contextNames}`;
+      return `${index + 1}. ${message.role}: ${message.text}`;
     })
     .join("\n");
 }
@@ -1093,16 +1086,6 @@ function buildTailorResumeInterviewInput(input: {
         {
           type: "input_text" as const,
           text:
-            "Resume company/internship placement options for example suffixes:\n" +
-            serializeResumeExperiencePlacementOptions(
-              extractTailorResumeExperiencePlacementNames(
-                input.planningSnapshot.resumePlainText,
-              ),
-            ),
-        },
-        {
-          type: "input_text" as const,
-          text:
             "Current USER.md memory for this user:\n" +
             (input.userMarkdown.markdown.trim()
               ? input.userMarkdown.markdown
@@ -1156,182 +1139,6 @@ function buildTailorResumeInterviewInput(input: {
   ];
 }
 
-function serializeResumeExperiencePlacementOptions(names: string[]) {
-  if (names.length === 0) {
-    return "[no company/internship options detected]";
-  }
-
-  return names.map((name, index) => `${index + 1}. ${name}`).join("\n");
-}
-
-function buildTailorResumeTechnologyExamplesRetryFeedback(
-  validation: {
-    issues: TailorResumeTechnologyExampleTermValidationIssue[];
-    valid: boolean;
-  },
-  attempt: number,
-  maxAttempts: number,
-) {
-  const issueLines = validation.issues.slice(0, 8).map((issue) => {
-    const sentence = issue.sentence || issue.text || "[empty example]";
-
-    return (
-      `- ${issue.technology} example ${String(issue.exampleIndex + 1)} ` +
-      `is missing the exact term "${issue.technology}" before the placement suffix: ${sentence}`
-    );
-  });
-
-  return [
-    `Previous attempt ${String(attempt)} of ${String(maxAttempts)} failed deterministic validation.`,
-    "Do not mention this validation failure in assistantMessage.",
-    "Every examples[].text sentence before its `-- <placement>` suffix must contain the exact technology name from that same technologyContexts card.",
-    "Related technologies, synonyms, or category words are not enough. For example, a Distributed systems card must say Distributed systems in each example sentence.",
-    "Return the full generate_tailor_resume_technology_examples tool call again.",
-    "Invalid examples:",
-    ...issueLines,
-  ].join("\n");
-}
-
-function appendTailorResumeTechnologyExamplesRetryFeedback(
-  input: TailorResumeTechnologyExamplesResponseInput,
-  feedback: string,
-): TailorResumeTechnologyExamplesResponseInput {
-  const trimmedFeedback = feedback.trim();
-
-  if (!trimmedFeedback) {
-    return input;
-  }
-
-  return [
-    ...input,
-    {
-      role: "user",
-      content: [
-        {
-          type: "input_text",
-          text:
-            "Hidden deterministic retry feedback for the previous Step 2 example-generation attempt:\n" +
-            trimmedFeedback,
-        },
-      ],
-    },
-  ];
-}
-
-function buildTailorResumeTechnologyExamplesInput(input: {
-  jobDescription: string;
-  resumeExperienceNames: string[];
-  resumePlainText: string;
-  technologies: TailoredResumeEmphasizedTechnology[];
-  userMarkdown: string;
-}): TailorResumeTechnologyExamplesResponseInput {
-  return [
-    {
-      role: "user" as const,
-      content: [
-        {
-          type: "input_text" as const,
-          text:
-            "Generate Step 2 resume example cards for these scraped technologies:\n" +
-            serializeEmphasizedTechnologies(input.technologies.slice(0, 8)),
-        },
-        {
-          type: "input_text" as const,
-          text:
-            "Resume company/internship placement options for example suffixes:\n" +
-            serializeResumeExperiencePlacementOptions(input.resumeExperienceNames),
-        },
-        {
-          type: "input_text" as const,
-          text:
-            "Original resume context, used only to choose which company/internship each example is for:\n" +
-            (input.resumePlainText.trim()
-              ? input.resumePlainText.slice(0, 8_000)
-              : "[not available]"),
-        },
-        {
-          type: "input_text" as const,
-          text:
-            "USER.md memory context, also usable as the source for existing-bullet modifications:\n" +
-            (input.userMarkdown.trim()
-              ? input.userMarkdown.slice(0, 8_000)
-              : "[not available]"),
-        },
-        {
-          type: "input_text" as const,
-          text:
-            "Job posting context, used only to keep examples relevant:\n" +
-            input.jobDescription.slice(0, 8_000),
-        },
-      ],
-    },
-  ];
-}
-
-function buildTailorResumeTechnologyExamplesOpeningInput(input: {
-  jobDescription: string;
-  technologies: TailoredResumeEmphasizedTechnology[];
-}) {
-  return [
-    {
-      role: "user" as const,
-      content: [
-        {
-          type: "input_text" as const,
-          text: buildTailorResumeTechnologyExamplesOpeningPromptText(input),
-        },
-      ],
-    },
-  ];
-}
-
-function buildTailorResumeTechnologyExamplesOpeningPromptText(input: {
-  technologies: TailoredResumeEmphasizedTechnology[];
-}) {
-  const names = input.technologies
-    .slice(0, 8)
-    .map((technology) => technology.name.trim())
-    .filter(Boolean);
-
-  return (
-    "Write the one visible Step 2 chat question shown above generated resume example cards.\n" +
-    `Technologies: ${names.join(", ") || "the scraped technologies"}.`
-  );
-}
-
-function buildTailorResumeTechnologyExamplesOpeningInstructions() {
-  return [
-    "Write one concise user-facing Step 2 question in one paragraph of 25-35 words.",
-    "Start with the word Which.",
-    "Mention a few provided technology names naturally.",
-    "Ask which generated example bullets match the user's actual experience.",
-    "Ask for technology names plus one-line specifics about role, ownership, scale, metric, or outcome.",
-    "Do not include definitions, bullet examples, markdown, or a standalone list of technologies.",
-    "Do not say the examples are ready; they are still streaming below.",
-  ].join("\n");
-}
-
-function buildTailorResumeTechnologyExamplesInstructions() {
-  return [
-    "You generate concise Step 2 resume-question examples for a browser extension.",
-    "Call generate_tailor_resume_technology_examples exactly once.",
-    "assistantMessage must be short and ask which examples match the user's actual experience.",
-    "Do not repeat definitions or example bullets in assistantMessage because technologyContexts render them visibly.",
-    "For each technology, return a plain-English definition and exactly two concise FAANG-level resume bullets by default.",
-    "Each examples item must be structured as { text, kind }. Use kind \"existing\" when the text is a slight modification of an existing resume or USER.md bullet, and kind \"new\" when the text is an entirely new bullet suggestion.",
-    "The server deterministically rejects any example whose sentence before the `-- <placement>` suffix does not contain the exact technology name from that card.",
-    "For concrete actual skill keywords that could truthfully go in the Skills section, return one \"existing\" example and one \"new\" example by default.",
-    "For narrative keywords that should not go in the Skills section, such as RESTful, RESTful APIs, API development, distributed systems, system architecture, cloud infrastructure, data structures, algorithms, microservices, AI systems, or geospatial, return only \"existing\" examples that slightly modify existing resume or USER.md bullets.",
-    "Every bullet must include action, technical scope, and a positive result in the same sentence, preferably with a metric.",
-    "For every example bullet text, choose one company/internship from the provided resume placement options and end the bullet with `-- <that exact option>`.",
-    "The suffix says where the hypothetical bullet would go. Never use job-posting product, team, platform, project, technical-category, or technology names as suffixes.",
-    "If relevance is uncertain, choose the closest resume company/internship anyway instead of inventing a product or project suffix.",
-    "Do not invent that the user has this experience; these are examples for the user to accept or reject.",
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
 function buildTailorResumeInterviewInstructions(input: {
   debugForceConversation?: boolean;
   promptSettings?: SystemPromptSettings;
@@ -1374,16 +1181,6 @@ function readLatestUserMessageText(messages: TailorResumeConversationMessage[]) 
   );
 }
 
-function latestUserMessageRequestsTechnologyExamples(
-  messages: TailorResumeConversationMessage[],
-) {
-  const text = readLatestUserMessageText(messages);
-
-  return /\b(?:example|examples|sample|bullet|bullets|suggestion|suggestions|show me|give me|draft)\b/i.test(
-    text,
-  );
-}
-
 function latestUserMessageRequestsInterviewEnd(
   messages: TailorResumeConversationMessage[],
 ) {
@@ -1410,10 +1207,6 @@ function shouldTreatFollowUpAskAsFinish(input: {
   emphasizedTechnologyNames: string[];
   response: TailorResumeInterviewResponse;
 }) {
-  if (latestUserMessageRequestsTechnologyExamples(input.conversation)) {
-    return false;
-  }
-
   if (
     input.response.userMarkdownEditOperations.length > 0 &&
     latestUserMessageRequestsInterviewEnd(input.conversation)
@@ -1556,10 +1349,7 @@ function normalizeTailorResumeInterviewResponse(input: {
   plannedSegmentIds: Set<string>;
   previousSummary: TailoredResumeQuestioningSummary | null;
   response: TailorResumeInterviewResponse;
-  resumeExperienceNames?: string[];
 }) {
-  void input.resumeExperienceNames;
-
   for (const learning of input.response.learnings) {
     const seenSegmentIds = new Set<string>();
     const validTargetSegmentIds: string[] = [];
@@ -1751,9 +1541,6 @@ export async function advanceTailorResumeQuestioning(input: {
     originalResumeText: input.planningSnapshot.resumePlainText,
     userMarkdown: userMarkdown.markdown,
   });
-  const resumeExperienceNames = extractTailorResumeExperiencePlacementNames(
-    input.planningSnapshot.resumePlainText,
-  );
   const askWorthyMissingTerms =
     findAskWorthyMissingTailorResumeQuestionTerms(keywordPresenceContext);
 
@@ -1846,7 +1633,6 @@ export async function advanceTailorResumeQuestioning(input: {
       plannedSegmentIds,
       previousSummary,
       response: parsedResponse,
-      resumeExperienceNames,
     });
 
     if (
@@ -1863,10 +1649,7 @@ export async function advanceTailorResumeQuestioning(input: {
         keywordDecisions: [],
         learnings: [],
         nonTechnologyTerms: [],
-        technologyContexts: buildFallbackTechnologyContexts(
-          askWorthyMissingTerms,
-          resumeExperienceNames,
-        ),
+        technologyContexts: [],
         userMarkdownEditOperations: [],
       };
       parsedToolCalls = [
@@ -1874,7 +1657,7 @@ export async function advanceTailorResumeQuestioning(input: {
           argumentsText: JSON.stringify(
             {
               assistantMessage: parsedResponse.assistantMessage,
-              technologyContexts: parsedResponse.technologyContexts,
+              technologyContexts: [],
             },
             null,
             2,
