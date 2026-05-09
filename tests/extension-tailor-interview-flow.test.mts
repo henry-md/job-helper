@@ -83,22 +83,11 @@ test("preserves streamed interview text across reset and text-start events", () 
   assert.equal(hasTailorInterviewStreamedMessageContent(afterDelta), true);
 });
 
-test("merges streamed interview cards back into the final server conversation", () => {
+test("merges streamed interview text back into the final server conversation", () => {
   const streamedMessage = {
     id: "streaming",
     role: "assistant" as const,
-    technologyContexts: [
-      {
-        definition: "Azure hosts cloud services.",
-        examples: [
-          {
-            kind: "existing",
-            text: "Built Azure deployment -- NewForm",
-          },
-        ],
-        name: "Azure",
-      },
-    ],
+    technologyContexts: [],
     text: "Streamed question text.",
     toolCalls: [],
   };
@@ -138,16 +127,5 @@ test("merges streamed interview cards back into the final server conversation", 
   assert.equal(merged?.conversation.length, 1);
   assert.match(merged?.conversation[0]?.text ?? "", /Streamed question text/);
   assert.match(merged?.conversation[0]?.text ?? "", /Final question text/);
-  assert.deepEqual(merged?.conversation[0]?.technologyContexts, [
-    {
-      definition: "Azure hosts cloud services.",
-      examples: [
-        {
-          kind: "existing",
-          text: "Built Azure deployment -- NewForm",
-        },
-      ],
-      name: "Azure",
-    },
-  ]);
+  assert.deepEqual(merged?.conversation[0]?.technologyContexts, []);
 });

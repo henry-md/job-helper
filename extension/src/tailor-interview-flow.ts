@@ -2,8 +2,6 @@ import type {
   TailorResumeConversationMessage,
   TailorResumeGenerationStepSummary,
   TailorResumePendingInterviewSummary,
-  TailorResumeTechnologyContext,
-  TailorResumeTechnologyExample,
 } from "./job-helper";
 import type { TailorResumeInterviewStreamEvent } from "./tailor-resume-stream";
 
@@ -31,12 +29,9 @@ function cloneTailorInterviewMessage(
 }
 
 export function hasTailorInterviewStreamedMessageContent(
-  message: Pick<TailorResumeConversationMessage, "technologyContexts" | "text">,
+  message: Pick<TailorResumeConversationMessage, "text">,
 ) {
-  return (
-    message.text.length > 0 ||
-    message.technologyContexts.length > 0
-  );
+  return message.text.length > 0;
 }
 
 export function applyTailorInterviewStreamEventToMessage(
@@ -54,129 +49,7 @@ export function applyTailorInterviewStreamEventToMessage(
     };
   }
 
-  return {
-    ...message,
-    technologyContexts: [...message.technologyContexts, event.card],
-  };
-}
-
-function normalizeTechnologyContextName(context: TailorResumeTechnologyContext) {
-  return context.name.trim().toLowerCase();
-}
-
-function readTechnologyExampleText(example: TailorResumeTechnologyExample) {
-  return example.text;
-}
-
-function mergeTechnologyContextExamples(
-  firstExamples: readonly TailorResumeTechnologyExample[],
-  secondExamples: readonly TailorResumeTechnologyExample[],
-) {
-  const seenExamples = new Set<string>();
-  const examples: TailorResumeTechnologyExample[] = [];
-
-  for (const example of [...firstExamples, ...secondExamples]) {
-    const normalizedExample = readTechnologyExampleText(example)
-      .trim()
-      .replace(/\s+/g, " ")
-      .toLowerCase();
-
-    if (!normalizedExample || seenExamples.has(normalizedExample)) {
-      continue;
-    }
-
-    seenExamples.add(normalizedExample);
-    examples.push(example);
-  }
-
-  return examples;
-}
-
-function mergeTechnologyContextDefinition(
-  baseDefinition: string,
-  streamedDefinition: string,
-) {
-  if (!streamedDefinition) {
-    return baseDefinition;
-  }
-
-  if (!baseDefinition) {
-    return streamedDefinition;
-  }
-
-  if (
-    baseDefinition === streamedDefinition ||
-    baseDefinition.includes(streamedDefinition)
-  ) {
-    return baseDefinition;
-  }
-
-  if (streamedDefinition.includes(baseDefinition)) {
-    return streamedDefinition;
-  }
-
-  return `${baseDefinition}\n\n${streamedDefinition}`;
-}
-
-function mergeTechnologyContext(
-  baseContext: TailorResumeTechnologyContext,
-  streamedContext: TailorResumeTechnologyContext,
-): TailorResumeTechnologyContext {
-  return {
-    definition: mergeTechnologyContextDefinition(
-      baseContext.definition,
-      streamedContext.definition,
-    ),
-    examples: mergeTechnologyContextExamples(
-      baseContext.examples,
-      streamedContext.examples,
-    ),
-    name: baseContext.name || streamedContext.name,
-  };
-}
-
-function mergeTechnologyContexts(
-  baseContexts: readonly TailorResumeTechnologyContext[],
-  streamedContexts: readonly TailorResumeTechnologyContext[],
-) {
-  const contexts = baseContexts.map((context) => ({
-    ...context,
-    examples: [...context.examples],
-  }));
-  const indexesByName = new Map<string, number>();
-
-  contexts.forEach((context, index) => {
-    const name = normalizeTechnologyContextName(context);
-
-    if (name && !indexesByName.has(name)) {
-      indexesByName.set(name, index);
-    }
-  });
-
-  for (const streamedContext of streamedContexts) {
-    const name = normalizeTechnologyContextName(streamedContext);
-    const existingIndex = indexesByName.get(name);
-
-    if (!name || existingIndex === undefined) {
-      contexts.push({
-        ...streamedContext,
-        examples: [...streamedContext.examples],
-      });
-
-      if (name) {
-        indexesByName.set(name, contexts.length - 1);
-      }
-
-      continue;
-    }
-
-    contexts[existingIndex] = mergeTechnologyContext(
-      contexts[existingIndex]!,
-      streamedContext,
-    );
-  }
-
-  return contexts;
+  return message;
 }
 
 function mergeStreamedText(baseText: string, streamedText: string) {
@@ -209,10 +82,6 @@ export function mergeTailorInterviewMessageWithStreamedContent(
 
   return {
     ...message,
-    technologyContexts: mergeTechnologyContexts(
-      message.technologyContexts,
-      streamedMessage.technologyContexts,
-    ),
     text: mergeStreamedText(message.text, streamedMessage.text),
   };
 }

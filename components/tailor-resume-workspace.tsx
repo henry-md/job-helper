@@ -2,10 +2,8 @@
 
 import {
   type ChangeEvent,
-  type Dispatch,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
-  type SetStateAction,
   useCallback,
   useEffect,
   useId,
@@ -58,8 +56,6 @@ import type {
   TailorResumeLinkRecord,
   TailorResumeProfile,
   TailorResumeSavedLinkUpdate,
-  TailorResumeTechnologyContext,
-  TailorResumeTechnologyExample,
 } from "@/lib/tailor-resume-types";
 import type { TailorResumeUserMemoryState } from "@/lib/tailor-resume-user-memory";
 
@@ -635,6 +631,14 @@ function ChatThinkingDots({ label = "Assistant is thinking" }: { label?: string 
   );
 }
 
+function formatCompactToolCallText(value: string) {
+  try {
+    return JSON.stringify(JSON.parse(value));
+  } catch {
+    return value.replace(/\s+/g, " ").trim();
+  }
+}
+
 function TailorResumeToolCallDetails({
   toolCalls,
 }: {
@@ -645,133 +649,41 @@ function TailorResumeToolCallDetails({
   }
 
   return (
-    <details className="mt-3 rounded-[0.95rem] border border-white/10 bg-black/20 p-3 text-xs text-zinc-300">
-      <summary className="cursor-pointer list-none text-[11px] uppercase tracking-[0.18em] text-zinc-400">
-        See toolcalls ({toolCalls.length})
+    <details className="mt-2 min-w-0 overflow-hidden rounded-lg border border-white/10 bg-black/20 text-xs text-zinc-300">
+      <summary className="cursor-pointer list-none px-2.5 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-zinc-400">
+        See Toolcalls ({toolCalls.length})
       </summary>
-      <div className="mt-3 space-y-3">
+      <div className="grid gap-1.5 px-2 pb-2">
         {toolCalls.map((toolCall, index) => (
           <div
-            className="rounded-[0.85rem] border border-white/10 bg-black/25 p-3"
+            className="min-w-0 rounded-md border border-white/10 bg-black/25 p-1.5"
             key={`${toolCall.name}:${String(index)}`}
           >
-            <p className="font-mono text-[11px] text-emerald-200">
+            <p className="truncate font-mono text-[10px] leading-4 text-emerald-200">
               {toolCall.name}
             </p>
-            <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-zinc-300">
-              {toolCall.argumentsText}
-            </pre>
+            <div className="mt-1 grid grid-cols-[1.65rem_minmax(0,1fr)] gap-1.5">
+              <span className="text-[9px] font-semibold uppercase leading-4 tracking-[0.08em] text-zinc-500">
+                In
+              </span>
+              <pre className="max-h-24 overflow-auto whitespace-pre font-mono text-[10px] leading-4 text-zinc-300">
+                {formatCompactToolCallText(toolCall.argumentsText)}
+              </pre>
+            </div>
+            {toolCall.outputText ? (
+              <div className="mt-1 grid grid-cols-[1.65rem_minmax(0,1fr)] gap-1.5">
+                <span className="text-[9px] font-semibold uppercase leading-4 tracking-[0.08em] text-zinc-500">
+                  Out
+                </span>
+                <pre className="max-h-24 overflow-auto whitespace-pre font-mono text-[10px] leading-4 text-zinc-300">
+                  {formatCompactToolCallText(toolCall.outputText)}
+                </pre>
+              </div>
+            ) : null}
           </div>
         ))}
       </div>
     </details>
-  );
-}
-
-function readTechnologyExampleText(example: TailorResumeTechnologyExample) {
-  return example.text;
-}
-
-function readTechnologyExampleKind(example: TailorResumeTechnologyExample) {
-  return example.kind;
-}
-
-function readTechnologyExampleKindTooltip(
-  kind: ReturnType<typeof readTechnologyExampleKind>,
-) {
-  if (kind === "new") {
-    return "New bullet suggestion\u00a0\u2014 does not exist in resume or user.md";
-  }
-
-  if (kind === "existing") {
-    return "A slight modification of an existing bullet in resume or user.md";
-  }
-
-  return "";
-}
-
-function TailorResumeTechnologyContexts({
-  contexts,
-  messageId,
-  openContextKey,
-  setOpenContextKey,
-}: {
-  contexts?: TailorResumeConversationMessage["technologyContexts"];
-  messageId: string;
-  openContextKey: string | null;
-  setOpenContextKey: Dispatch<SetStateAction<string | null>>;
-}) {
-  if (!contexts || contexts.length === 0) {
-    return null;
-  }
-
-  return (
-    <div className="mt-3 grid gap-1.5">
-      {contexts.map((context, index) => {
-        const contextKey = `${messageId}:${context.name}:${String(index)}`;
-
-        return (
-          <details
-            className="overflow-hidden rounded-lg border border-slate-500/70 bg-[#181c25] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
-            key={contextKey}
-            onToggle={(event) => {
-              if (event.currentTarget.open) {
-                setOpenContextKey(contextKey);
-                return;
-              }
-
-              setOpenContextKey((currentContextKey) =>
-                currentContextKey === contextKey ? null : currentContextKey,
-              );
-            }}
-            open={openContextKey === contextKey}
-          >
-            <summary className="grid min-h-8 cursor-pointer list-none grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-2.5 py-1.5 text-xs [&::-webkit-details-marker]:hidden">
-              <span className="truncate font-semibold text-zinc-100">
-                {context.name}
-              </span>
-              <span className="text-[10px] font-semibold text-slate-400">
-                {context.examples.length > 0
-                  ? `${context.examples.length} ${
-                      context.examples.length === 1 ? "example" : "examples"
-                    }`
-                  : "Scraped"}
-              </span>
-            </summary>
-            <div className="grid gap-1.5 border-t border-slate-600/80 px-2.5 pb-2 pt-1.5 text-xs leading-5 text-slate-200">
-              <p>{context.definition}</p>
-              {context.examples.length > 0 ? (
-                <ul className="grid list-disc gap-1 pl-4">
-                  {context.examples.map((example, exampleIndex) => {
-                    const text = readTechnologyExampleText(example);
-                    const kind = readTechnologyExampleKind(example);
-                    const tooltip = readTechnologyExampleKindTooltip(kind);
-
-                    return (
-                      <li key={`${context.name}:${String(exampleIndex)}`}>
-                        {text}
-                        {kind ? (
-                          <span
-                            className={`ml-1.5 inline-flex min-h-3 items-center rounded-full border px-1 align-[0.08em] text-[9px] font-extrabold uppercase leading-none ${
-                              kind === "existing"
-                                ? "border-sky-400/35 text-sky-200"
-                                : "border-emerald-400/35 text-emerald-200"
-                            }`}
-                            title={tooltip}
-                          >
-                            {kind}
-                          </span>
-                        ) : null}
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : null}
-            </div>
-          </details>
-        );
-      })}
-    </div>
   );
 }
 
@@ -859,10 +771,6 @@ export default function TailorResumeWorkspace({
   const [isTailorInterviewFinishPromptOpen, setIsTailorInterviewFinishPromptOpen] =
     useState(false);
   const [isTailorResumeProgressOpen, setIsTailorResumeProgressOpen] = useState(false);
-  const [
-    openTailorInterviewTechnologyContextKey,
-    setOpenTailorInterviewTechnologyContextKey,
-  ] = useState<string | null>(null);
   const [isCancellingTailorInterview, setIsCancellingTailorInterview] =
     useState(false);
   const [isSubmittingTailorInterviewAnswer, setIsSubmittingTailorInterviewAnswer] =
@@ -899,7 +807,7 @@ export default function TailorResumeWorkspace({
   const [pendingTailorInterviewAnswerMessage, setPendingTailorInterviewAnswerMessage] =
     useState<TailorResumeConversationMessage | null>(null);
   const [streamingInterviewMessage, setStreamingInterviewMessage] = useState<
-    { cards: TailorResumeTechnologyContext[]; text: string } | null
+    { text: string } | null
   >(null);
 
   const resume = profile.resume;
@@ -1405,17 +1313,13 @@ export default function TailorResumeWorkspace({
       }
 
       setStreamingInterviewMessage((current) => {
-        const base = current ?? { cards: [], text: "" };
+        const base = current ?? { text: "" };
 
         if (event.kind === "text-delta") {
           return { ...base, text: base.text + event.delta };
         }
 
-        if (event.kind === "text-start") {
-          return base;
-        }
-
-        return { ...base, cards: [...base.cards, event.card] };
+        return base;
       });
     },
     [],
@@ -1722,7 +1626,6 @@ export default function TailorResumeWorkspace({
 
   useEffect(() => {
     if (!isTailorInterviewOpen) {
-      setOpenTailorInterviewTechnologyContextKey(null);
       return;
     }
 
@@ -1747,7 +1650,6 @@ export default function TailorResumeWorkspace({
     tailorInterviewMessagesEndRef.current?.scrollIntoView({ block: "end" });
   }, [
     displayedTailoringInterviewMessageCount,
-    draftTailorInterviewAnswer,
     isTailorInterviewOpen,
     lastDisplayedTailoringInterviewMessageId,
     tailoringInterview?.id,
@@ -3583,38 +3485,17 @@ export default function TailorResumeWorkspace({
                         key={message.id}
                       >
                         <p className="whitespace-pre-wrap">{message.text}</p>
-                        <TailorResumeTechnologyContexts
-                          contexts={message.technologyContexts}
-                          messageId={message.id}
-                          openContextKey={openTailorInterviewTechnologyContextKey}
-                          setOpenContextKey={
-                            setOpenTailorInterviewTechnologyContextKey
-                          }
-                        />
                         <TailorResumeToolCallDetails toolCalls={message.toolCalls} />
                       </div>
                     ))}
                     {isTailorInterviewThinking ? (
                       streamingInterviewMessage &&
-                      (streamingInterviewMessage.text.length > 0 ||
-                        streamingInterviewMessage.cards.length > 0) ? (
+                      streamingInterviewMessage.text.length > 0 ? (
                         <div className="max-w-[85%] rounded-[1.15rem] border border-emerald-300/18 bg-emerald-400/10 px-4 py-3 text-sm leading-6 text-emerald-50 shadow-[0_18px_40px_rgba(0,0,0,0.18)]">
                           <p className="whitespace-pre-wrap">
                             {streamingInterviewMessage.text}
                             <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-emerald-300 align-[-1px]" />
                           </p>
-                          {streamingInterviewMessage.cards.length > 0 ? (
-                            <TailorResumeTechnologyContexts
-                              contexts={streamingInterviewMessage.cards}
-                              messageId="tailor-interview-streaming"
-                              openContextKey={
-                                openTailorInterviewTechnologyContextKey
-                              }
-                              setOpenContextKey={
-                                setOpenTailorInterviewTechnologyContextKey
-                              }
-                            />
-                          ) : null}
                         </div>
                       ) : (
                         <div className="max-w-[85%] rounded-[1.15rem] border border-emerald-300/18 bg-emerald-400/10 px-4 py-3 text-sm leading-6 text-emerald-50 shadow-[0_18px_40px_rgba(0,0,0,0.18)]">
@@ -3628,7 +3509,7 @@ export default function TailorResumeWorkspace({
                   <div className="border-t border-white/10 px-5 py-5 sm:px-6">
                     <textarea
                       className="min-h-[8.5rem] w-full rounded-[1.1rem] border border-white/10 bg-black/25 px-3 py-3 text-sm leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-300/35 focus:ring-2 focus:ring-emerald-300/18"
-                      disabled={isTailorInterviewBusy}
+                      disabled={isCancellingTailorInterview}
                       onKeyDown={handleTailorInterviewAnswerKeyDown}
                       onChange={(event) =>
                         setDraftTailorInterviewAnswer(event.target.value)

@@ -9,7 +9,8 @@ Current product slice:
 - Important dashboard verification state is URL-addressable with `?tab=...`; legacy `/dashboard?tab=tailor` and `/dashboard?tab=new` links resolve to Saved so extension dashboard links keep working, and `tailoredResumeId=<id>` opens the saved tailored-resume review modal there.
 - Uploading a resume triggers an OpenAI extraction pass that returns LaTeX directly, then Config lets the user edit that LaTeX side-by-side with the rendered PDF preview.
 - The Chrome extension runs its React UI in Chrome's native Side Panel. Its Tailor Resume flow signs in with Chrome's Google identity API, exchanges that for a database-backed Job Helper session, scrapes the active job page from the side panel button or hotkey, then calls `PATCH /api/tailor-resume` with `action: "tailor"`.
-- The extension side panel also exposes a URL-scoped streamed chat. The extension captures the current page context and renders chunks, while the app API owns chat history persistence, resume/USER.md context loading, prompt construction, and the OpenAI call.
+- The extension side panel also exposes the master chat: the lower-right `Resume Chat` opened from the chat-bubble icon on all extension pages. It posts to `POST /api/tailor-resume/support-chat`, can use optional current-page context, and can create first-class skills-section skills, save reusable resume-bullet support, list resume experiences, and read the current source LaTeX. When a user or agent says "master chat," they mean this lower-right Resume Chat. Its primary model env var is `OPENAI_MASTER_CHAT_MODEL`.
+- The older URL-scoped job-page chat route is `POST /api/tailor-resume/chat`; it also falls back to `OPENAI_MASTER_CHAT_MODEL` for model selection, but it is not the UI meant by "master chat."
 
 Core dependencies:
 - Next.js 16 App Router, React 19, TypeScript.
