@@ -1,7 +1,4 @@
-import {
-  measureTailorResumeLayout,
-  type TailorResumeRenderedLineMeasurement,
-} from "./tailor-resume-layout-measurement.ts";
+import { measureTailorResumeLayout } from "./tailor-resume-layout-measurement.ts";
 import { findTailorResumeReplacementTarget } from "./tailor-resume-replacement-target.ts";
 import {
   extractTailorResumeResumeExperiences,
@@ -10,6 +7,7 @@ import {
 import { applyTailorResumeBlockChanges } from "./tailor-resume-tailoring.ts";
 import {
   isTailorResumeMalformedSpareBulletLine,
+  readTailorResumeLastLineFillRatio,
   type TailorResumeSpareBulletLineMeasurement,
 } from "./tailor-resume-spare-bullet-line-display.ts";
 
@@ -73,23 +71,6 @@ function chooseMeasurementTargetSegmentId(input: {
   return experience?.bulletSegmentIds[0] ?? null;
 }
 
-function readLastLineFillRatio(lines: TailorResumeRenderedLineMeasurement[]) {
-  if (lines.length <= 1) {
-    return null;
-  }
-
-  const lastLine = lines.at(-1);
-  const widestPreviousLine = Math.max(
-    ...lines.slice(0, -1).map((line) => line.width),
-  );
-
-  if (!lastLine || widestPreviousLine <= 0) {
-    return null;
-  }
-
-  return Math.max(0, Math.min(1, lastLine.width / widestPreviousLine));
-}
-
 export async function measureTailorResumeSpareBulletLineCount(input: {
   quote: string;
   replacesQuote?: string | null;
@@ -140,7 +121,9 @@ export async function measureTailorResumeSpareBulletLineCount(input: {
     throw new Error("The measured bullet segment could not be found.");
   }
 
-  const lastLineFillRatio = readLastLineFillRatio(segment.lines);
+  const lastLineFillRatio = readTailorResumeLastLineFillRatio(
+    segment.lines.map((line) => line.width),
+  );
 
   return {
     lastLineFillRatio,

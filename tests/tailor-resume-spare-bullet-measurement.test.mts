@@ -25,3 +25,25 @@ test("measureTailorResumeSpareBulletLineCount measures the rendered PDF bullet",
   assert.equal(measurement.pageCount, 1);
   assert.equal(measurement.targetSegmentId, experience.bulletSegmentIds[0]);
 });
+
+test("measureTailorResumeSpareBulletLineCount matches escaped tilde text", async () => {
+  const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
+  const experience = extractTailorResumeResumeExperiences(
+    normalized.annotatedLatex,
+  ).find((candidate) => candidate.id === "work-experience.entry-3.heading");
+
+  assert.ok(experience, "Expected the fixture to expose the HF experience.");
+
+  const measurement = await measureTailorResumeSpareBulletLineCount({
+    quote:
+      "Used AWS Amplify and CircleCI to build CI/CD pipelines, reducing design-to-dev handoff time by ~30% across 8 teams.",
+    replacesQuote:
+      "Used AWS Amplify to set up CI/CD pipelines, reducing design-to-dev handoff time by an avg. of ~30% across 8 teams",
+    resumeExperienceId: experience.id,
+    sourceAnnotatedLatexCode: normalized.annotatedLatex,
+  });
+
+  assert.equal(measurement.lineCount, 1);
+  assert.equal(measurement.malformed, false);
+  assert.equal(measurement.targetSegmentId, experience.bulletSegmentIds[0]);
+});

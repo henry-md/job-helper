@@ -254,11 +254,17 @@ function isTextItem(item: TextContent["items"][number]): item is TextItem {
   return "str" in item;
 }
 
-function normalizeLayoutText(value: string) {
+function normalizeLayoutSpecialCharacters(value: string) {
   return value
     .normalize("NFKC")
     .replace(/---/g, "—")
     .replace(/--/g, "–")
+    .replace(/[˜∼\u0303]/g, "~")
+    .replace(/ˆ/g, "^");
+}
+
+function normalizeLayoutText(value: string) {
+  return normalizeLayoutSpecialCharacters(value)
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -270,7 +276,9 @@ function appendNormalizedMatchCharacter(input: {
   previousWasWhitespace: boolean;
   rect: TextRect | null;
 }) {
-  const normalizedCharacters = Array.from(input.char.normalize("NFKC"));
+  const normalizedCharacters = Array.from(
+    normalizeLayoutSpecialCharacters(input.char),
+  );
   let previousWasWhitespace = input.previousWasWhitespace;
   const visibleCharacterCount = normalizedCharacters.filter(
     (normalizedCharacter) => !/\s/.test(normalizedCharacter),

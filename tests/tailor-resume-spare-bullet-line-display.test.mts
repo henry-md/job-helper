@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  formatTailorResumeMalformedBulletCheckMessage,
+  formatTailorResumeRenderedLineFillRatio,
   formatTailorResumeSpareBulletLineCount,
   isTailorResumeMalformedSpareBulletLine,
+  readTailorResumeLastLineFillRatio,
   readTailorResumeSpareBulletLineTone,
 } from "../lib/tailor-resume-spare-bullet-line-display.ts";
 
@@ -47,5 +50,32 @@ test("isTailorResumeMalformedSpareBulletLine requires a sparse final rendered li
       lineCount: 2,
     }),
     false,
+  );
+});
+
+test("readTailorResumeLastLineFillRatio compares the final rendered line to previous lines", () => {
+  assert.equal(readTailorResumeLastLineFillRatio([100]), null);
+  assert.equal(readTailorResumeLastLineFillRatio([100, 40]), 0.4);
+  assert.equal(readTailorResumeLastLineFillRatio([70, 100, 60]), 0.6);
+});
+
+test("rendered bullet shape messages are shared by chat tools and health checks", () => {
+  assert.equal(formatTailorResumeRenderedLineFillRatio(null), "unknown");
+  assert.equal(formatTailorResumeRenderedLineFillRatio(0.421), "42%");
+  assert.equal(
+    formatTailorResumeMalformedBulletCheckMessage({
+      lastLineFillRatio: 0.42,
+      lineCount: 2,
+      malformed: true,
+    }),
+    "Malformed. The bullet renders as 2 lines, and the final line is only 42% filled.",
+  );
+  assert.equal(
+    formatTailorResumeMalformedBulletCheckMessage({
+      lastLineFillRatio: null,
+      lineCount: 1,
+      malformed: false,
+    }),
+    "Not malformed. The bullet renders as 1 line.",
   );
 });

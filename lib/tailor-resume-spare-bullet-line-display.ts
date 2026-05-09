@@ -12,8 +12,35 @@ export type TailorResumeSpareBulletLineMeasurement = {
   targetSegmentId: string;
 };
 
+export const tailorResumeMalformedBulletDefinition =
+  "A malformed bullet is any multi-line bullet whose final rendered line is less than 50% filled.";
+
 export function formatTailorResumeSpareBulletLineCount(lineCount: number) {
   return `${lineCount.toLocaleString()} line${lineCount === 1 ? "" : "s"}`;
+}
+
+export function formatTailorResumeRenderedLineFillRatio(
+  value: number | null,
+) {
+  return value === null ? "unknown" : `${Math.round(value * 100)}%`;
+}
+
+export function formatTailorResumeMalformedBulletCheckMessage(input: {
+  lastLineFillRatio: number | null;
+  lineCount: number;
+  malformed: boolean;
+}) {
+  if (!input.malformed) {
+    return `Not malformed. The bullet renders as ${formatTailorResumeSpareBulletLineCount(
+      input.lineCount,
+    )}.`;
+  }
+
+  return `Malformed. The bullet renders as ${formatTailorResumeSpareBulletLineCount(
+    input.lineCount,
+  )}, and the final line is only ${formatTailorResumeRenderedLineFillRatio(
+    input.lastLineFillRatio,
+  )} filled.`;
 }
 
 export function readTailorResumeSpareBulletLineTone(
@@ -34,7 +61,24 @@ export function readTailorResumeSpareBulletLineTone(
   return "danger";
 }
 
-export function isTailorResumeMalformedSpareBulletLine(input: {
+export function readTailorResumeLastLineFillRatio(
+  lineWidths: readonly number[],
+) {
+  if (lineWidths.length <= 1) {
+    return null;
+  }
+
+  const lastLineWidth = lineWidths.at(-1);
+  const widestPreviousLine = Math.max(...lineWidths.slice(0, -1));
+
+  if (typeof lastLineWidth !== "number" || widestPreviousLine <= 0) {
+    return null;
+  }
+
+  return Math.max(0, Math.min(1, lastLineWidth / widestPreviousLine));
+}
+
+export function isTailorResumeMalformedRenderedLineShape(input: {
   lastLineFillRatio: number | null;
   lineCount: number;
 }) {
@@ -43,4 +87,11 @@ export function isTailorResumeMalformedSpareBulletLine(input: {
     input.lastLineFillRatio !== null &&
     input.lastLineFillRatio < 0.5
   );
+}
+
+export function isTailorResumeMalformedSpareBulletLine(input: {
+  lastLineFillRatio: number | null;
+  lineCount: number;
+}) {
+  return isTailorResumeMalformedRenderedLineShape(input);
 }
