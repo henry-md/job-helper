@@ -16,7 +16,6 @@ import type {
   TailorResumeConversationMessage,
   TailorResumeGenerationStepEvent,
   TailorResumeInterviewDebugDecision,
-  TailorResumeTechnologyExample,
   TailorResumeTechnologyContext,
   TailoredResumeEmphasizedTechnology,
   TailoredResumePlanningResult,
@@ -29,7 +28,6 @@ import type {
 } from "./tailor-resume-planning.ts";
 import {
   buildTailorResumeKeywordPresenceContext,
-  resumeTextIncludesKeyword,
   type TailorResumeKeywordPresenceContext,
   type TailorResumeKeywordPresenceContextTerm,
 } from "./tailor-resume-keyword-coverage.ts";
@@ -37,10 +35,7 @@ import {
   formatTailorResumeTermWithCapitalFirst,
   normalizeTailorResumeNonTechnologyTerms,
 } from "./tailor-resume-non-technologies.ts";
-import {
-  isTransientModelError,
-  runWithTransientModelRetries,
-} from "./tailor-resume-transient-retry.ts";
+import { runWithTransientModelRetries } from "./tailor-resume-transient-retry.ts";
 import {
   applyTailorResumeUserMarkdownPatch,
   defaultTailorResumeUserMarkdown,
@@ -96,48 +91,6 @@ const tailorResumeUserMarkdownEditOperationSchema = {
   ],
 } as const;
 
-const tailorResumeTechnologyContextSchema = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    definition: {
-      type: "string",
-      description:
-        "One plain-English sentence explaining what this technology is and what resume activities it most likely maps to.",
-    },
-    examples: {
-      type: "array",
-      description:
-        "Meaningfully different, FAANG-level one-sentence resume bullet suggestions that include the exact technology keyword, stay concise, and include the positive result in the same sentence. Return exactly two by default, but return the number the user explicitly asks for when they request more examples, up to six. Each item must include text plus kind. kind must be existing when the suggestion is a slight modification of a resume or USER.md bullet, and new when it is an entirely new bullet suggestion. Prefer action + technical scope + measurable impact, e.g. reduced cost 40%, improved latency 2x, processed 10k msg/sec. End every example text with a dash suffix for the specific resume company/internship where the bullet could fit, such as `-- NewForm AI` or `-- Johns Hopkins University`. The suffix must come from the user's resume, never from the job posting, product name, team name, platform category, or technology keyword.",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          kind: {
-            type: "string",
-            enum: ["existing", "new"],
-            description:
-              "existing means this is a slight modification of an existing resume or USER.md bullet; new means this is an entirely new bullet suggestion.",
-          },
-          text: {
-            type: "string",
-            description:
-              "The visible one-sentence resume bullet suggestion, ending with the chosen resume placement suffix.",
-          },
-        },
-        required: ["text", "kind"],
-      },
-      minItems: 2,
-      maxItems: 6,
-    },
-    name: {
-      type: "string",
-      description: "The exact technology keyword the user is being asked about.",
-    },
-  },
-  required: ["name", "definition", "examples"],
-} as const;
-
 const tailorResumeKeywordDecisionSchema = {
   type: "object",
   additionalProperties: false,
@@ -173,16 +126,10 @@ const initiateTailorResumeProbingQuestionsToolParameters = {
     assistantMessage: {
       type: "string",
       description:
-        "The compact user-facing chat message. This text is rendered visibly next to technologyContexts. When asking about technology experience, list the relevant skills and ask whether any match the user's experience. Do not include technology definitions or example bullets here; put those only in technologyContexts so the app can render collapsible cards without duplicate text.",
-    },
-    technologyContexts: {
-      type: "array",
-      description:
-        "Structured technology explanations for the first technology experience question or for a user-requested examples turn. These entries are rendered visibly as collapsible UI cards under assistantMessage, so their definitions and examples must not be repeated in assistantMessage. Return an empty array on ordinary follow-up turns that save an answer or ask for one missing detail.",
-      items: tailorResumeTechnologyContextSchema,
+        "The compact user-facing chat message. Ask concise technology-experience questions directly in text.",
     },
   },
-  required: ["assistantMessage", "technologyContexts"],
+  required: ["assistantMessage"],
 } as const;
 
 const finishTailorResumeInterviewToolParameters = {
@@ -233,68 +180,30 @@ const updateTailorResumeNonTechnologiesToolParameters = {
   required: ["completionMessage", "keywordDecisions", "nonTechnologyTerms"],
 } as const;
 
-const generateTailorResumeTechnologyExamplesToolParameters = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    assistantMessage: {
-      type: "string",
-      description:
-        "A compact user-facing message asking which generated examples match the user's actual experience. Do not repeat definitions or example bullets here.",
-    },
-    technologyContexts: {
-      type: "array",
-      description:
-        "Structured technology cards for the requested scraped technologies. Each card needs a concise definition and two concise, FAANG-level resume bullets with positive impact in the same sentence.",
-      items: tailorResumeTechnologyContextSchema,
-    },
-  },
-  required: ["assistantMessage", "technologyContexts"],
-} as const;
-
-const tailorResumeInterviewTools = [
+const tailorResumeInterviewTools: OpenAI.Responses.Tool[] = [
   {
-    type: "function" as const,
     name: "initiate_tailor_resume_probing_questions",
-    description:
-      "Initiate or continue Step 2 probing questions and keep the tailoring interview open. Any turn that asks about technology experience may include structured technologyContexts for collapsible UI cards.",
     parameters: initiateTailorResumeProbingQuestionsToolParameters,
     strict: true,
+    type: "function",
   },
   {
-    type: "function" as const,
     name: "finish_tailor_resume_interview",
-    description:
-      "End an active tailoring interview after the useful learnings are complete so the app can save memory and continue tailoring immediately.",
     parameters: finishTailorResumeInterviewToolParameters,
     strict: true,
+    type: "function",
   },
   {
-    type: "function" as const,
     name: "skip_tailor_resume_interview",
-    description:
-      "Skip the interview before any follow-up question has been asked because no user input is useful.",
     parameters: skipTailorResumeInterviewToolParameters,
     strict: true,
+    type: "function",
   },
   {
-    type: "function" as const,
     name: "update_tailor_resume_non_technologies",
-    description:
-      "Add user-rejected emphasized keyword terms to the saved non-technology list and remove them from this tailoring run.",
     parameters: updateTailorResumeNonTechnologiesToolParameters,
     strict: true,
-  },
-];
-
-const tailorResumeTechnologyExamplesTools = [
-  {
-    type: "function" as const,
-    name: "generate_tailor_resume_technology_examples",
-    description:
-      "Generate concise Step 2 technology explanation cards and example resume bullets, then keep the chat open for the user to confirm which examples match their real experience.",
-    parameters: generateTailorResumeTechnologyExamplesToolParameters,
-    strict: true,
+    type: "function",
   },
 ];
 
@@ -328,12 +237,7 @@ export function normalizeTailorResumeInterviewResponseForCurrentTurn(input: {
     ],
   };
 
-  if (
-    input.previousSummary &&
-    response.action === "ask" &&
-    response.technologyContexts.length > 0 &&
-    !latestUserMessageRequestsTechnologyExamples(conversation)
-  ) {
+  if (response.action === "ask" && response.technologyContexts.length > 0) {
     response.technologyContexts = [];
   }
 
@@ -422,14 +326,6 @@ type TailoredResumeResponse = {
   output_text?: string;
 };
 
-type TailorResumeTechnologyExamplesResponseInput = Array<{
-  content: Array<{
-    text: string;
-    type: "input_text";
-  }>;
-  role: "user";
-}>;
-
 type TailoredResumeFunctionToolCall = {
   arguments: string;
   callId: string | null;
@@ -494,460 +390,6 @@ function buildLowVerbosityTextConfig(model: string) {
     : {};
 }
 
-function resolveTailorResumeTechnologyExamplesOpeningModel() {
-  return (
-    process.env.OPENAI_TAILOR_RESUME_INTERVIEW_OPENING_MODEL ??
-    process.env.OPENAI_TAILOR_RESUME_INTERVIEW_EXAMPLES_OPENING_MODEL ??
-    "gpt-4.1-nano"
-  );
-}
-
-export async function generateTailorResumeTechnologyExamples(input: {
-  jobDescription: string;
-  onStreamEvent?: (
-    event: TailorResumeInterviewStreamEvent,
-  ) => void | Promise<void>;
-  onStepEvent?: (
-    event: TailorResumeGenerationStepEvent,
-  ) => void | Promise<void>;
-  openingMessage?: string;
-  resumePlainText?: string;
-  streamOpening?: boolean;
-  technologies: TailoredResumeEmphasizedTechnology[];
-  userMarkdown?: string;
-}): Promise<{
-  assistantMessage: string;
-  generationDurationMs: number;
-  technologyContexts: TailorResumeTechnologyContext[];
-  toolCalls: TailorResumeConversationToolCall[];
-}> {
-  const startedAt = Date.now();
-  const model =
-    process.env.OPENAI_TAILOR_RESUME_INTERVIEW_EXAMPLES_MODEL ??
-    process.env.OPENAI_TAILOR_RESUME_MODEL ??
-    "gpt-5-mini";
-  const client = getOpenAIClient();
-  const resumeExperienceNames = extractTailorResumeExperiencePlacementNames(
-    input.resumePlainText ?? "",
-  );
-  const examplesInput = buildTailorResumeTechnologyExamplesInput({
-    jobDescription: input.jobDescription,
-    resumeExperienceNames,
-    resumePlainText: input.resumePlainText ?? "",
-    technologies: input.technologies,
-    userMarkdown: input.userMarkdown ?? "",
-  });
-  let openingMessage = input.openingMessage?.trim() ?? "";
-
-  if (input.streamOpening !== false || !openingMessage) {
-    try {
-      openingMessage = await streamTailorResumeTechnologyExamplesOpeningQuestion({
-        client,
-        jobDescription: input.jobDescription,
-        onStreamEvent: input.onStreamEvent,
-        technologies: input.technologies,
-      });
-    } catch (error) {
-      if (isOpenAIRequestError(error)) {
-        const errorMessage =
-          error instanceof Error
-            ? error.message
-            : "Unable to stream the opening technology examples question.";
-        await input.onStepEvent?.({
-          attempt: 1,
-          detail: errorMessage,
-          durationMs: Math.max(0, Date.now() - startedAt),
-          emphasizedTechnologies: input.technologies,
-          retrying: false,
-          status: "failed",
-          stepCount: 5,
-          stepNumber: 2,
-          summary: "Generating technology examples",
-        });
-        throw error;
-      }
-
-      openingMessage = buildFallbackTailorResumeExamplesQuestion();
-    }
-  }
-
-  const instructions = buildTailorResumeTechnologyExamplesInstructions();
-  const maxValidationAttempts = 2;
-  let parsed: ReturnType<
-    typeof parseTailorResumeTechnologyExamplesResponseFromModelOutput
-  > | null = null;
-  let validStreamEvents: TailorResumeInterviewStreamEvent[] = [];
-  let validationFeedback = "";
-
-  for (
-    let validationAttempt = 1;
-    validationAttempt <= maxValidationAttempts;
-    validationAttempt += 1
-  ) {
-    const requestInput = appendTailorResumeTechnologyExamplesRetryFeedback(
-      examplesInput,
-      validationFeedback,
-    );
-    const attemptResult = await runWithTransientModelRetries({
-      onRetry: async (retryEvent) => {
-        await input.onStepEvent?.({
-          attempt: validationAttempt,
-          detail:
-            `The Step 2 examples request hit a transient model error (${retryEvent.message}). ` +
-            `Retrying automatically (${retryEvent.nextAttempt}/${retryEvent.maxAttempts}).`,
-          durationMs: Math.max(0, Date.now() - startedAt),
-          emphasizedTechnologies: input.technologies,
-          retrying: true,
-          status: "failed",
-          stepCount: 5,
-          stepNumber: 2,
-          summary: "Generating technology examples",
-        });
-      },
-      operation: async () => {
-        const streamEvents: TailorResumeInterviewStreamEvent[] = [];
-        const streamer = new TailorResumeInterviewArgsStreamer();
-        const reasoning = resolveTailorResumeInterviewReasoning(model);
-        const stream = client.responses.stream({
-          input: requestInput,
-          instructions,
-          ...(reasoning ? { reasoning } : {}),
-          ...buildLowVerbosityTextConfig(model),
-          model,
-          tool_choice: "required",
-          tools: tailorResumeTechnologyExamplesTools,
-        });
-        const finalResponsePromise = stream.finalResponse();
-
-        for await (const event of stream) {
-          if (
-            event.type === "response.function_call_arguments.delta" &&
-            typeof event.delta === "string" &&
-            event.delta.length > 0
-          ) {
-            streamEvents.push(...streamer.feed(event.delta));
-          }
-        }
-
-        return {
-          response: (await finalResponsePromise) as TailoredResumeResponse,
-          streamEvents,
-        };
-      },
-    });
-    const attemptParsed = parseTailorResumeTechnologyExamplesResponseFromModelOutput(
-      attemptResult.response,
-    );
-    const validation =
-      validateTailorResumeTechnologyContextExampleTerms(
-        attemptParsed.response.technologyContexts,
-      );
-
-    parsed = attemptParsed;
-
-    if (validation.valid) {
-      validStreamEvents = attemptResult.streamEvents;
-      break;
-    }
-
-    validationFeedback = buildTailorResumeTechnologyExamplesRetryFeedback(
-      validation,
-      validationAttempt,
-      maxValidationAttempts,
-    );
-  }
-
-  const technologyContexts =
-    parsed && validateTailorResumeTechnologyContextExampleTerms(
-      parsed.response.technologyContexts,
-    ).valid
-      ? parsed.response.technologyContexts
-      : buildFallbackTechnologyContexts(
-          input.technologies.map((technology) => technology.name),
-          resumeExperienceNames,
-        );
-
-  if (parsed && validStreamEvents.length > 0 && input.onStreamEvent) {
-    for (const event of validStreamEvents) {
-      await input.onStreamEvent(event);
-    }
-  }
-
-  return {
-    assistantMessage:
-      openingMessage ||
-      parsed?.response.assistantMessage ||
-      buildFallbackTailorResumeExamplesQuestion(),
-    generationDurationMs: Math.max(0, Date.now() - startedAt),
-    technologyContexts,
-    toolCalls: parsed?.toolCalls ?? [],
-  };
-}
-
-export async function streamTailorResumeTechnologyExamplesOpeningQuestion(input: {
-  client?: OpenAI;
-  jobDescription?: string;
-  onStreamEvent?: (
-    event: TailorResumeInterviewStreamEvent,
-  ) => void | Promise<void>;
-  technologies?: TailoredResumeEmphasizedTechnology[];
-  technologyNames?: string[];
-}) {
-  await input.onStreamEvent?.({ kind: "reset" });
-
-  const technologies =
-    input.technologies ??
-    buildTailorResumeEmphasizedTechnologiesFromNames(
-      input.technologyNames ?? [],
-    );
-  const result = await streamTailorResumeTechnologyExamplesOpeningMessage({
-    client: input.client ?? getOpenAIClient(),
-    jobDescription: input.jobDescription ?? "",
-    onStreamEvent: input.onStreamEvent,
-    technologies,
-  });
-
-  return result.assistantMessage;
-}
-
-async function streamTailorResumeTechnologyExamplesOpeningMessage(input: {
-  client: OpenAI;
-  jobDescription: string;
-  onStreamEvent?: (
-    event: TailorResumeInterviewStreamEvent,
-  ) => void | Promise<void>;
-  technologies: TailoredResumeEmphasizedTechnology[];
-}) {
-  const model = resolveTailorResumeTechnologyExamplesOpeningModel();
-  const normalizedModel = model.trim().toLowerCase();
-
-  if (!normalizedModel.startsWith("gpt-5")) {
-    return streamTailorResumeTechnologyExamplesOpeningChatCompletion({
-      ...input,
-      model,
-    });
-  }
-
-  const reasoning = resolveTailorResumeInterviewReasoning(model);
-  const chunks: string[] = [];
-  const stream = input.client.responses.stream({
-    input: buildTailorResumeTechnologyExamplesOpeningInput(input),
-    instructions: buildTailorResumeTechnologyExamplesOpeningInstructions(),
-    max_output_tokens: 56,
-    ...(reasoning ? { reasoning } : {}),
-    ...buildLowVerbosityTextConfig(model),
-    model,
-  });
-  const finalResponsePromise = stream.finalResponse();
-  let textStarted = false;
-
-  for await (const event of stream) {
-    if (
-      event.type === "response.output_text.delta" &&
-      typeof event.delta === "string" &&
-      event.delta.length > 0
-    ) {
-      if (!textStarted) {
-        textStarted = true;
-        await input.onStreamEvent?.({
-          field: "assistantMessage",
-          kind: "text-start",
-        });
-      }
-
-      chunks.push(event.delta);
-      await input.onStreamEvent?.({
-        delta: event.delta,
-        field: "assistantMessage",
-        kind: "text-delta",
-      });
-    }
-  }
-
-  const finalResponse = (await finalResponsePromise) as TailoredResumeResponse;
-  const streamedText = chunks.join("").trim();
-  const finalText = readOutputText(finalResponse) || streamedText;
-
-  if (!finalText) {
-    throw new Error("The opening examples question was empty.");
-  }
-
-  return {
-    assistantMessage: finalText,
-  };
-}
-
-async function streamTailorResumeTechnologyExamplesOpeningChatCompletion(input: {
-  client: OpenAI;
-  jobDescription: string;
-  model: string;
-  onStreamEvent?: (
-    event: TailorResumeInterviewStreamEvent,
-  ) => void | Promise<void>;
-  technologies: TailoredResumeEmphasizedTechnology[];
-}) {
-  const leadInText = "Which generated example bullets";
-
-  await input.onStreamEvent?.({
-    field: "assistantMessage",
-    kind: "text-start",
-  });
-  await input.onStreamEvent?.({
-    delta: leadInText,
-    field: "assistantMessage",
-    kind: "text-delta",
-  });
-
-  const continuation = await streamTailorResumeTechnologyExamplesOpeningChatText({
-    client: input.client,
-    maxTokens: 56,
-    messages: [
-      {
-        content:
-          "Continue the visible Step 2 question in 18-28 words. Do not repeat the existing prefix. Ask which bullets match actual experience and request technology names plus one-line specifics. No markdown.",
-        role: "system",
-      },
-      {
-        content:
-          buildTailorResumeTechnologyExamplesOpeningPromptText(input) +
-          `\nVisible prefix already shown: "${leadInText}". Continue after that prefix.`,
-        role: "user",
-      },
-    ],
-    model: input.model,
-    onStreamEvent: input.onStreamEvent,
-    stripLeadingText: leadInText,
-    textStarted: true,
-  });
-  const finalText = `${leadInText} ${continuation.text}`
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (!finalText) {
-    throw new Error("The opening examples question was empty.");
-  }
-
-  return {
-    assistantMessage: finalText,
-  };
-}
-
-async function streamTailorResumeTechnologyExamplesOpeningChatText(input: {
-  client: OpenAI;
-  maxTokens: number;
-  messages: Array<{ content: string; role: "system" | "user" }>;
-  model: string;
-  onStreamEvent?: (
-    event: TailorResumeInterviewStreamEvent,
-  ) => void | Promise<void>;
-  stripLeadingText?: string;
-  textStarted: boolean;
-}) {
-  const chunks: string[] = [];
-  const stream = await input.client.chat.completions.create({
-    max_tokens: input.maxTokens,
-    messages: input.messages,
-    model: input.model,
-    stream: true,
-    temperature: 0,
-  });
-  let textStarted = input.textStarted;
-  let pendingStripText = "";
-  let strippedLeadingText = !input.stripLeadingText;
-
-  for await (const chunk of stream) {
-    let delta = chunk.choices[0]?.delta?.content;
-
-    if (!delta) {
-      continue;
-    }
-
-    if (!strippedLeadingText && input.stripLeadingText) {
-      pendingStripText += delta;
-
-      if (
-        normalizeOpeningPrefix(input.stripLeadingText).startsWith(
-          normalizeOpeningPrefix(pendingStripText),
-        ) &&
-        normalizeOpeningPrefix(pendingStripText).length <
-          normalizeOpeningPrefix(input.stripLeadingText).length
-      ) {
-        continue;
-      }
-
-      delta = stripOpeningPrefix(pendingStripText, input.stripLeadingText);
-      pendingStripText = "";
-      strippedLeadingText = true;
-
-      if (!delta) {
-        continue;
-      }
-    }
-
-    if (!textStarted) {
-      textStarted = true;
-      await input.onStreamEvent?.({
-        field: "assistantMessage",
-        kind: "text-start",
-      });
-    }
-
-    chunks.push(delta);
-    await input.onStreamEvent?.({
-      delta,
-      field: "assistantMessage",
-      kind: "text-delta",
-    });
-  }
-
-  return {
-    text: chunks.join("").trim(),
-    textStarted,
-  };
-}
-
-function normalizeOpeningPrefix(value: string) {
-  return value.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function stripOpeningPrefix(value: string, prefix: string) {
-  const escapedPrefix = prefix
-    .trim()
-    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    .replace(/\s+/g, "\\s+");
-
-  return value.replace(new RegExp(`^\\s*${escapedPrefix}\\s*`, "i"), "");
-}
-
-function buildTailorResumeEmphasizedTechnologiesFromNames(
-  technologyNames: string[],
-): TailoredResumeEmphasizedTechnology[] {
-  const seenTechnologyNames = new Set<string>();
-  const technologies: TailoredResumeEmphasizedTechnology[] = [];
-
-  for (const technologyName of technologyNames) {
-    const name = formatTailorResumeTermWithCapitalFirst(technologyName.trim());
-    const dedupeKey = name.toLowerCase();
-
-    if (!name || seenTechnologyNames.has(dedupeKey)) {
-      continue;
-    }
-
-    seenTechnologyNames.add(dedupeKey);
-    technologies.push({
-      evidence: "Scraped technology",
-      name,
-      priority: "high",
-    });
-
-    if (technologies.length >= 8) {
-      break;
-    }
-  }
-
-  return technologies;
-}
-
 function readOutputText(response: TailoredResumeResponse) {
   if (response.output_text) {
     return response.output_text.trim();
@@ -970,6 +412,40 @@ function readOutputText(response: TailoredResumeResponse) {
   return chunks.join("").trim();
 }
 
+function readFunctionToolCalls(
+  response: TailoredResumeResponse,
+): TailoredResumeFunctionToolCall[] {
+  return (response.output ?? []).flatMap((outputItem) => {
+    if (outputItem.type !== "function_call") {
+      return [];
+    }
+
+    const name = typeof outputItem.name === "string" ? outputItem.name : "";
+    const args =
+      typeof outputItem.arguments === "string" ? outputItem.arguments : "";
+
+    if (!name || !args) {
+      return [];
+    }
+
+    return [{
+      arguments: args,
+      callId: typeof outputItem.call_id === "string" ? outputItem.call_id : null,
+      name,
+    }];
+  });
+}
+
+function serializeTailorResumeConversationToolCall(
+  toolCall: TailoredResumeFunctionToolCall,
+): TailorResumeConversationToolCall {
+  return {
+    argumentsText: toolCall.arguments,
+    name: toolCall.name,
+    outputText: "",
+  };
+}
+
 function readTrimmedString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -980,73 +456,6 @@ function readRecordString(value: unknown, key: string) {
   }
 
   return readTrimmedString(value[key as keyof typeof value]);
-}
-
-function readRecordNumber(value: unknown, key: string) {
-  if (!value || typeof value !== "object" || !(key in value)) {
-    return null;
-  }
-
-  const candidate = value[key as keyof typeof value];
-
-  return typeof candidate === "number" && Number.isFinite(candidate)
-    ? candidate
-    : null;
-}
-
-function readTailorResumeTechnologyExample(
-  value: unknown,
-): TailorResumeTechnologyExample | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const text = "text" in value ? readTrimmedString(value.text) : "";
-  const kind =
-    "kind" in value && (value.kind === "existing" || value.kind === "new")
-      ? value.kind
-      : null;
-
-  if (!text) {
-    return null;
-  }
-
-  return kind ? { kind, text } : null;
-}
-
-function isOpenAIRequestError(error: unknown) {
-  if (isTransientModelError(error)) {
-    return true;
-  }
-
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-
-  if (
-    readRecordNumber(error, "status") !== null ||
-    readRecordNumber(error, "statusCode") !== null ||
-    readRecordString(error, "request_id") ||
-    readRecordString(error, "requestID")
-  ) {
-    return true;
-  }
-
-  const name = readRecordString(error, "name");
-  const type = readRecordString(error, "type");
-
-  return (
-    /\b(?:OpenAI|API|RateLimit|Authentication|Permission|BadRequest|Conflict|InternalServer)\b/i.test(
-      name,
-    ) ||
-    /(?:_error|rate_limit|invalid_request|authentication|permission|server_error)/i.test(
-      type,
-    )
-  );
-}
-
-function buildFallbackTailorResumeExamplesQuestion() {
-  return "Which generated example bullets match your actual experience? Reply with the technology names and any one-line specifics I should preserve.";
 }
 
 export function isDebugForceConversationInTailorPipelineEnabled() {
@@ -1083,233 +492,6 @@ function readTailoredResumeQuestionLearning(
     targetSegmentIds,
     topic,
   };
-}
-
-function parseTailorResumeTechnologyContexts(
-  value: unknown,
-): TailorResumeTechnologyContext[] {
-  if (typeof value === "undefined" || value === null) {
-    return [];
-  }
-
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.flatMap((entry) => {
-    if (!entry || typeof entry !== "object") {
-      return [];
-    }
-
-    const name =
-      "name" in entry
-        ? formatTailorResumeTermWithCapitalFirst(readTrimmedString(entry.name))
-        : "";
-    const definition =
-      "definition" in entry ? readTrimmedString(entry.definition) : "";
-    const examples =
-      "examples" in entry && Array.isArray(entry.examples)
-        ? entry.examples
-            .map((example: unknown) =>
-              readTailorResumeTechnologyExample(example),
-            )
-            .filter(
-              (
-                example: TailorResumeTechnologyExample | null,
-              ): example is TailorResumeTechnologyExample => Boolean(example),
-            )
-        : [];
-
-    if (!name) {
-      return [];
-    }
-
-    return [{
-      definition:
-        definition ||
-        `${name} is one of the job-posting technologies to clarify.`,
-      examples: examples.slice(0, 6),
-      name,
-    }];
-  });
-}
-
-function readTailorResumeTechnologyExampleText(
-  example: TailorResumeTechnologyExample,
-) {
-  return example.text;
-}
-
-function readTailorResumeTechnologyExampleSentence(
-  example: TailorResumeTechnologyExample,
-) {
-  const text = readTailorResumeTechnologyExampleText(example).trim();
-  const suffix = readTechnologyExampleDashSuffix(text);
-
-  if (!suffix) {
-    return text;
-  }
-
-  return text.replace(/\s(?:--|[-–—])\s*[^-–—]+?\s*$/, "").trim();
-}
-
-type TailorResumeTechnologyExampleTermValidationIssue = {
-  exampleIndex: number;
-  sentence: string;
-  technology: string;
-  text: string;
-};
-
-export function validateTailorResumeTechnologyContextExampleTerms(
-  contexts: readonly TailorResumeTechnologyContext[],
-): {
-  issues: TailorResumeTechnologyExampleTermValidationIssue[];
-  valid: boolean;
-} {
-  if (contexts.length === 0) {
-    return {
-      issues: [
-        {
-          exampleIndex: 0,
-          sentence: "",
-          technology: "technologyContexts",
-          text: "No technologyContexts were returned.",
-        },
-      ],
-      valid: false,
-    };
-  }
-
-  const issues: TailorResumeTechnologyExampleTermValidationIssue[] = [];
-
-  for (const context of contexts) {
-    const technology = context.name.trim();
-
-    if (!technology) {
-      continue;
-    }
-
-    if (context.examples.length === 0) {
-      issues.push({
-        exampleIndex: 0,
-        sentence: "",
-        technology,
-        text: "No examples were returned for this technology.",
-      });
-      continue;
-    }
-
-    context.examples.forEach((example, index) => {
-      const text = readTailorResumeTechnologyExampleText(example);
-      const sentence = readTailorResumeTechnologyExampleSentence(example);
-
-      if (
-        !resumeTextIncludesKeyword({
-          term: technology,
-          text: sentence,
-        })
-      ) {
-        issues.push({
-          exampleIndex: index,
-          sentence,
-          technology,
-          text,
-        });
-      }
-    });
-  }
-
-  return {
-    issues,
-    valid: issues.length === 0,
-  };
-}
-
-function normalizeResumeExperiencePlacementName(value: string) {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function normalizeResumeExperiencePlacementKey(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
-
-function readTechnologyExampleDashSuffix(example: string) {
-  const match = /\s(?:--|[-–—])\s*([^-–—]+?)\s*$/.exec(example);
-
-  return match ? match[1]!.trim() : "";
-}
-
-function readResumeExperienceSectionLines(resumePlainText: string) {
-  const lines = resumePlainText
-    .split(/\r?\n/)
-    .map((line) => line.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-  const experienceLines: string[] = [];
-  let insideExperience = false;
-
-  for (const line of lines) {
-    if (/^(?:work\s+experience|professional\s+experience|experience)$/i.test(line)) {
-      insideExperience = true;
-      continue;
-    }
-
-    if (
-      insideExperience &&
-      /^(?:education|software\s+projects?|projects?|technical\s+skills?|skills?|awards?|publications?)$/i.test(
-        line,
-      )
-    ) {
-      break;
-    }
-
-    if (insideExperience) {
-      experienceLines.push(line);
-    }
-  }
-
-  return experienceLines.length > 0 ? experienceLines : lines;
-}
-
-// Extracts company/internship placement names that Step 2 examples can target.
-export function extractTailorResumeExperiencePlacementNames(
-  resumePlainText: string,
-) {
-  const seenNames = new Set<string>();
-  const names: string[] = [];
-
-  for (const line of readResumeExperienceSectionLines(resumePlainText)) {
-    if (!line.includes("|")) {
-      continue;
-    }
-
-    const [rawName] = line.split("|");
-    const name = normalizeResumeExperiencePlacementName(rawName ?? "");
-
-    if (
-      !name ||
-      name.length > 80 ||
-      /^(?:courses?|awards?|languages?|technical|full-stack|other software)$/i.test(
-        name,
-      )
-    ) {
-      continue;
-    }
-
-    const key = normalizeResumeExperiencePlacementKey(name);
-
-    if (!key || seenNames.has(key)) {
-      continue;
-    }
-
-    seenNames.add(key);
-    names.push(name);
-
-    if (names.length >= 12) {
-      break;
-    }
-  }
-
-  return names;
 }
 
 function isNonQuestionAskMessage(message: string) {
@@ -1469,9 +651,6 @@ function parseTailorResumeInterviewResponse(
   const nonTechnologyTerms = parseTailorResumeNonTechnologyTerms(
     "nonTechnologyTerms" in value ? value.nonTechnologyTerms : undefined,
   );
-  const technologyContexts = parseTailorResumeTechnologyContexts(
-    "technologyContexts" in value ? value.technologyContexts : undefined,
-  );
   const userMarkdownEditOperations = parseTailorResumeUserMarkdownEditOperations(
     "userMarkdownEditOperations" in value
       ? value.userMarkdownEditOperations
@@ -1500,7 +679,7 @@ function parseTailorResumeInterviewResponse(
         })
       : [],
     nonTechnologyTerms,
-    technologyContexts: action === "ask" ? technologyContexts : [],
+    technologyContexts: [],
     userMarkdownEditOperations,
   };
 
@@ -1533,83 +712,6 @@ function tryParseJsonObject(value: string) {
   } catch {
     return null;
   }
-}
-
-function parseTailorResumeTechnologyExamplesResponseFromModelOutput(
-  response: TailoredResumeResponse,
-) {
-  const toolCalls = readFunctionToolCalls(response);
-  const outputText = readOutputText(response);
-  const toolCall =
-    toolCalls.find(
-      (candidate) =>
-        candidate.name === "generate_tailor_resume_technology_examples",
-    ) ?? null;
-  const outputJson = tryParseJsonObject(outputText);
-  const value = tryParseToolCallArguments(toolCall) ?? outputJson;
-
-  const assistantMessage =
-    value && typeof value === "object" && "assistantMessage" in value
-      ? readTrimmedString(value.assistantMessage)
-      : "";
-  const technologyContexts = parseTailorResumeTechnologyContexts(
-    value && typeof value === "object" && "technologyContexts" in value
-      ? value.technologyContexts
-      : undefined,
-  );
-
-  return {
-    response: {
-      assistantMessage: assistantMessage || (outputJson ? "" : outputText),
-      technologyContexts,
-    },
-    toolCalls: toolCalls
-      .filter(
-        (candidate) =>
-          candidate.name === "generate_tailor_resume_technology_examples",
-      )
-      .map(serializeTailorResumeConversationToolCall),
-  };
-}
-
-function readFunctionToolCalls(
-  response: TailoredResumeResponse,
-): TailoredResumeFunctionToolCall[] {
-  return (response.output ?? []).flatMap((outputItem) => {
-    if (
-      outputItem.type !== "function_call" ||
-      typeof outputItem.name !== "string" ||
-      typeof outputItem.arguments !== "string"
-    ) {
-      return [];
-    }
-
-    return [
-      {
-        arguments: outputItem.arguments,
-        callId:
-          typeof outputItem.call_id === "string" ? outputItem.call_id : null,
-        name: outputItem.name,
-      },
-    ];
-  });
-}
-
-function serializeTailorResumeConversationToolCall(
-  toolCall: TailoredResumeFunctionToolCall,
-): TailorResumeConversationToolCall {
-  let argumentsText = toolCall.arguments;
-
-  try {
-    argumentsText = JSON.stringify(JSON.parse(toolCall.arguments), null, 2);
-  } catch {
-    // Keep the raw arguments when the model returned non-JSON tool data.
-  }
-
-  return {
-    argumentsText,
-    name: toolCall.name,
-  };
 }
 
 export function parseTailorResumeInterviewResponseFromModelOutput(
@@ -1893,134 +995,6 @@ export function findAskWorthyMissingTailorResumeQuestionTerms(
     .map((term) => term.name);
 }
 
-function getFallbackTechnologyDefinition(term: string) {
-  const normalizedTerm = term.toLowerCase();
-
-  if (normalizedTerm === "go") {
-    return "Go is a programming language often used for backend services, APIs, CLIs, and infrastructure tooling.";
-  }
-
-  if (normalizedTerm === "cassandra") {
-    return "Cassandra is a distributed database for high-write, high-scale systems where data is spread across many machines.";
-  }
-
-  if (normalizedTerm === "spark") {
-    return "Apache Spark helps you process large amounts of data by splitting it across computers in parallel; common for processing tons of logs, training ML models at scale.";
-  }
-
-  if (normalizedTerm === "elasticsearch") {
-    return "Elasticsearch is a search and analytics engine commonly used for fast text search, log exploration, and indexed queries over large datasets.";
-  }
-
-  if (normalizedTerm === "gradle") {
-    return "Gradle is a build tool often used for Java projects to compile code, manage dependencies, run tests, and wire builds into CI.";
-  }
-
-  if (normalizedTerm === "redux") {
-    return "Redux is a state-management library usually used with React when an app has complex shared UI state or multi-step data flows.";
-  }
-
-  return `${term} is a job-relevant technology; look for projects where you used it directly or worked on the adjacent system it supports.`;
-}
-
-function getFallbackTechnologyExamples(term: string) {
-  const normalizedTerm = term.toLowerCase();
-
-  if (normalizedTerm === "go") {
-    return [
-      "Built Go API gateway to validate 20k requests/min and cut downstream service errors 35%.",
-      "Wrote Go deployment tooling to reduce release prep from 45 minutes to 8 minutes across engineering teams.",
-    ];
-  }
-
-  if (normalizedTerm === "cassandra") {
-    return [
-      "Migrated time-series data from MongoDB to Cassandra to reduce storage costs 40% and improve query tail latency by 2x.",
-      "Redesigned Cassandra partition keys for event ingestion to sustain 12k writes/sec while cutting hot-partition retries 35%.",
-    ];
-  }
-
-  if (normalizedTerm === "spark") {
-    return [
-      "Wrote Spark streaming pipeline to aggregate event streams for real-time metrics at 10k msg/sec with exactly-once semantics.",
-      "Optimized Spark ETL jobs with partition pruning to cut nightly feature-generation runtime 45% and unblock morning model refreshes.",
-    ];
-  }
-
-  if (normalizedTerm === "distributed systems") {
-    return [
-      "Reworked distributed systems batching and replication paths to reduce cross-node failure recovery from minutes to seconds.",
-      "Improved distributed systems request routing and backpressure controls to sustain 4x higher throughput during traffic spikes.",
-    ];
-  }
-
-  if (normalizedTerm === "elasticsearch") {
-    return [
-      "Tuned Elasticsearch mappings and shard strategy to cut search p95 latency 48% across customer-facing analytics queries.",
-      "Built Elasticsearch-backed log explorer to reduce incident triage time 30% with indexed filtering and saved queries.",
-    ];
-  }
-
-  if (normalizedTerm === "gradle") {
-    return [
-      "Refactored Gradle build graph to cut Java CI time 38% while preserving test coverage across service modules.",
-      "Wrote Gradle release tasks to standardize packaging and reduce manual deployment steps by 60%.",
-    ];
-  }
-
-  if (normalizedTerm === "redux") {
-    return [
-      "Reworked Redux state slices to cut checkout UI defects 32% and simplify multi-step form recovery.",
-      "Normalized Redux API cache state to reduce redundant network calls 45% and improve dashboard load time.",
-    ];
-  }
-
-  return [
-    `Applied ${term} to a production workflow to improve reliability, latency, or developer throughput with measurable impact.`,
-    `Integrated ${term} into an existing system to reduce manual work and improve operational efficiency for the team.`,
-  ];
-}
-
-function isSoftKeywordForBulletExamples(term: string) {
-  const normalizedTerm = term.trim().toLowerCase();
-
-  return (
-    /\b(?:algorithms?|api development|cloud infrastructure|data structures?|distributed systems?|geospatial|microservices?|restful(?: apis?| services?)?|system architecture)\b/i.test(
-      normalizedTerm,
-    ) ||
-    /(?:^|\s)(?:ai|ml)\s+systems?$/.test(normalizedTerm)
-  );
-}
-
-function buildFallbackTechnologyExampleRecords(input: {
-  firstExample: string;
-  firstPlacement?: string;
-  secondExample: string;
-  secondPlacement?: string;
-  term: string;
-}): TailorResumeTechnologyExample[] {
-  const firstText = appendTechnologyExamplePlacement(
-    input.firstExample,
-    input.firstPlacement,
-  );
-  const secondText = appendTechnologyExamplePlacement(
-    input.secondExample,
-    input.secondPlacement,
-  );
-
-  if (isSoftKeywordForBulletExamples(input.term)) {
-    return [
-      { kind: "existing", text: firstText },
-      { kind: "existing", text: secondText },
-    ];
-  }
-
-  return [
-    { kind: "existing", text: firstText },
-    { kind: "new", text: secondText },
-  ];
-}
-
 function buildFallbackTailorResumeProbeQuestion(terms: string[]) {
   const selectedTerms = terms
     .slice(0, 6)
@@ -2028,54 +1002,8 @@ function buildFallbackTailorResumeProbeQuestion(terms: string[]) {
 
   return [
     `Not mentioned in your resume or USER.md: ${selectedTerms.join(", ")}.`,
-    "Open any keyword below for a quick definition and two possible resume bullets. Do any of these match your experience? If so, which ones and where?",
+    "Do you have direct experience with any of these? If so, reply with the technology names, where you used them, and one concrete impact or scope detail.",
   ].join("\n");
-}
-
-export function buildFallbackTechnologyContexts(
-  terms: string[],
-  resumeExperienceNames: string[] = [],
-): TailorResumeTechnologyContext[] {
-  return terms.slice(0, 6).map((term, index) => {
-    const displayTerm = formatTailorResumeTermWithCapitalFirst(term);
-    const [firstExample, secondExample] =
-      getFallbackTechnologyExamples(displayTerm);
-    const hasResumeExperienceNames = resumeExperienceNames.length > 0;
-    const firstPlacement = hasResumeExperienceNames
-      ? resumeExperienceNames[index % resumeExperienceNames.length]
-      : undefined;
-    const secondPlacement = hasResumeExperienceNames
-      ? resumeExperienceNames[(index + 1) % resumeExperienceNames.length]
-      : firstPlacement;
-
-    return {
-      definition: getFallbackTechnologyDefinition(displayTerm),
-      examples: buildFallbackTechnologyExampleRecords({
-        firstExample,
-        firstPlacement,
-        secondExample,
-        secondPlacement,
-        term: displayTerm,
-      }),
-      name: displayTerm,
-    };
-  });
-}
-
-function appendTechnologyExamplePlacement(example: string, placement?: string) {
-  const trimmedPlacement = placement?.trim();
-
-  if (!trimmedPlacement) {
-    return example;
-  }
-
-  const suffix = readTechnologyExampleDashSuffix(example);
-
-  if (suffix) {
-    return example.replace(/\s[-–—]\s*[^-–—]+$/, ` -- ${trimmedPlacement}`);
-  }
-
-  return `${example} -- ${trimmedPlacement}`;
 }
 
 function serializeConversation(messages: TailorResumeConversationMessage[]) {
