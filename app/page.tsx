@@ -96,10 +96,10 @@ export default async function Home({ searchParams }: HomePageProps) {
             />
             <p className="hidden max-w-xl text-[clamp(0.96rem,1.45vw,1.08rem)] leading-relaxed text-zinc-300 sm:block">
               Job Helper turns a base resume into a job-specific PDF through a
-              staged LaTeX pipeline with keyword scraping, clarifying questions,
-              planning, block-scoped edits, and page-count compaction. Job
-              Tracker keeps every company, stage, and next step in one clean
-              workspace.
+              staged LaTeX pipeline with keyword scraping, a deterministic
+              coverage checkpoint, plaintext planning, Step 4A block edits, and
+              a Step 4B page-count guardrail. Job Tracker keeps every company,
+              stage, and next step in one clean workspace.
             </p>
           </div>
 

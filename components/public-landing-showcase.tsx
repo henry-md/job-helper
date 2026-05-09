@@ -15,7 +15,6 @@ import {
   ChevronDown,
   FileCode2,
   FileText,
-  MessagesSquare,
   Minimize2,
   Search,
   Sparkles,
@@ -26,7 +25,7 @@ const previewModes = [
     id: "helper",
     label: "Resume Tailor",
     description:
-      "See the real staged tailoring system: LaTeX first, then scrape, clarify, plan, implement, and compact if the page grows.",
+      "See the real staged tailoring system: LaTeX first, then scrape, verify coverage, plan, implement, and preserve page count.",
   },
   {
     id: "tracker",
@@ -46,22 +45,24 @@ const tailorBaseStage = {
 const tailorPipelineStages = [
   {
     chip: "deterministic",
-    descriptor: "Extract job technology signals before any rewrite planning starts.",
+    descriptor:
+      "Extract and classify job technology signals before rewrite planning starts.",
     icon: Search,
     step: "1",
     title: "Scrape keywords",
   },
   {
-    chip: "optional",
+    chip: "checkpoint",
     descriptor:
-      "Ask one concise question only when USER.md cannot cover concrete technology gaps.",
-    icon: MessagesSquare,
+      "Wait until high-priority skills-section gaps have source, skill, or spare-bullet support.",
+    icon: BriefcaseBusiness,
     step: "2",
-    title: "Clarify missing details",
+    title: "Review coverage",
   },
   {
     chip: "OpenAI",
-    descriptor: "Draft targeted plaintext edits from resume, job text, and Step 2 learnings.",
+    descriptor:
+      "Draft targeted plaintext edits from resume, job text, and stored support evidence.",
     icon: FileText,
     step: "3",
     title: "Plan edits",
@@ -70,15 +71,16 @@ const tailorPipelineStages = [
     chip: "LaTeX",
     descriptor: "Translate only the approved segments back into scoped replacements.",
     icon: Braces,
-    step: "4",
+    step: "4A",
     title: "Apply block edits",
   },
   {
-    chip: "1-page guardrail",
-    descriptor: "Condense edited blocks only if the tailored preview grows past the source.",
+    chip: "same-page guardrail",
+    descriptor:
+      "Measure the compiled PDF and compact edited blocks only if the tailored preview grows.",
     icon: Minimize2,
-    step: "5",
-    title: "Condense to fit",
+    step: "4B",
+    title: "Keep page count",
   },
 ] as const;
 
@@ -280,7 +282,7 @@ function TailorPipelineNode(input: {
         <div className="public-pipeline-node-content relative flex items-start justify-between gap-3 py-1.5 sm:py-2">
           <div className="min-w-0 flex items-start gap-2.5 sm:gap-3">
             <span
-              className={`public-pipeline-step-badge inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-full border text-[0.56rem] font-semibold sm:h-7 sm:w-7 sm:text-[0.68rem] ${
+              className={`public-pipeline-step-badge inline-flex h-5.5 min-w-5.5 shrink-0 items-center justify-center rounded-full border px-1 text-[0.5rem] font-semibold sm:h-7 sm:min-w-7 sm:px-1.5 sm:text-[0.62rem] ${
                 isBase
                   ? "border-cyan-200/22 bg-cyan-200/10 text-cyan-100"
                   : "border-emerald-200/20 bg-emerald-300/10 text-emerald-100"

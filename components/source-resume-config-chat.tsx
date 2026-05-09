@@ -322,7 +322,7 @@ export default function SourceResumeConfigChat({
                 >
                   <textarea
                     className="min-h-[7.5rem] w-full resize-none rounded-[1.1rem] border border-white/10 bg-black/25 px-3 py-3 text-sm leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-300/35 focus:ring-2 focus:ring-emerald-300/18 disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={isChatDisabled || isSubmitting}
+                    disabled={isChatDisabled}
                     onChange={(event) => setDraftMessage(event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && !event.shiftKey) {

@@ -1256,7 +1256,7 @@ export default function TailoredResumeReviewModal({
     }
 
     element.scrollTop = element.scrollHeight;
-  }, [aiRefinementMessages, draftAiRefinementPrompt, isAiRefinementOpen]);
+  }, [aiRefinementMessages, isAiRefinementOpen, isRefiningTailoredResume]);
 
   async function updateSelectedEditState(nextState: "applied" | "rejected") {
     if (!record || !selectedEdit) {

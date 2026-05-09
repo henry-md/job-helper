@@ -155,8 +155,8 @@ Tailoring generation:
   - Step 1 extracts emphasized job keywords, then sorts them into high/low priority and skills-section/narrative/non-skill classification buckets
   - Step 2 deterministically waits until all high-priority skills-section keywords are covered by the source resume, a skills-section skill, skills-only support, or a spare bullet; once ready, the user presses play to continue
   - Step 3 runs an OpenAI planning pass over whole-resume plaintext, document-ordered blocks, current `USER.md`, and structured skill/spare-bullet evidence
-  - Step 4 sees only the selected blocks and translates the approved plaintext plan plus any compressed user learnings back into block-local LaTeX replacements
-- If the compiled tailored preview exceeds the original resume's page count, the guardrail re-prompts only the existing edited blocks, sends highlighted rendered preview screenshots, and retries until the preview fits within the original page count or the attempt budget is exhausted.
+  - Step 4A sees only the selected blocks and translates the approved plaintext plan plus any compressed user learnings back into block-local LaTeX replacements
+  - Step 4B keeps the tailored PDF within the original page count; when overflow happens, it re-prompts only the existing edited blocks and retries verified line-saving replacements until the preview fits or the attempt budget is exhausted
 - Compile retries stay scoped to the implementation pass so LaTeX escaping and block-boundary fixes do not force the model to rethink the whole editing thesis on every retry.
 - Extension-originated tailoring should pass the captured job URL separately from the job-description text and create/reuse a tracked `JobApplication` for the normalized exact URL before generation starts. The API should store live run state in `TailorResumeRun`; if the same application already has an active run or a linked tailored resume, return a conflict payload so the extension can ask whether to cancel/keep or overwrite.
 

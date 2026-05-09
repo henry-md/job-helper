@@ -70,7 +70,6 @@ type SpareBulletQuoteFieldProps = {
   labelClassName: string;
   onChange: (value: string) => void;
   placeholder?: string;
-  replacesQuote: string;
   resumeExperienceId: string;
   textareaClassName: string;
   value: string;
@@ -125,13 +124,11 @@ async function patchTailorResumeSkillData(
 
 async function measureTailorResumeSpareBulletLineCount(input: {
   quote: string;
-  replacesQuote: string;
   resumeExperienceId: string;
 }) {
   const payload = await patchTailorResumeSkillData({
     action: "measureSpareBullet",
     quote: input.quote,
-    replacesQuote: input.replacesQuote.trim() || null,
     resumeExperienceId: input.resumeExperienceId,
   });
 
@@ -303,7 +300,6 @@ type SpareBulletLineMeasurementState =
 
 function buildSpareBulletMeasurementKey(input: {
   quote: string;
-  replacesQuote: string;
   resumeExperienceId: string;
 }) {
   const quote = input.quote.trim();
@@ -313,27 +309,21 @@ function buildSpareBulletMeasurementKey(input: {
     return "";
   }
 
-  return JSON.stringify([
-    quote,
-    input.replacesQuote.trim(),
-    resumeExperienceId,
-  ]);
+  return JSON.stringify([quote, resumeExperienceId]);
 }
 
 function useSpareBulletLineMeasurement(input: {
   quote: string;
-  replacesQuote: string;
   resumeExperienceId: string;
 }) {
-  const { quote, replacesQuote, resumeExperienceId } = input;
+  const { quote, resumeExperienceId } = input;
   const key = useMemo(
     () =>
       buildSpareBulletMeasurementKey({
         quote,
-        replacesQuote,
         resumeExperienceId,
       }),
-    [quote, replacesQuote, resumeExperienceId],
+    [quote, resumeExperienceId],
   );
   const [state, setState] = useState<SpareBulletLineMeasurementState>({
     key: "",
@@ -351,7 +341,6 @@ function useSpareBulletLineMeasurement(input: {
 
       void measureTailorResumeSpareBulletLineCount({
         quote,
-        replacesQuote,
         resumeExperienceId,
       })
         .then((measurement) => {
@@ -377,7 +366,7 @@ function useSpareBulletLineMeasurement(input: {
       isCancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [key, quote, replacesQuote, resumeExperienceId]);
+  }, [key, quote, resumeExperienceId]);
 
   return state.key === key ? state : { key, status: "idle" as const };
 }
@@ -448,14 +437,12 @@ function SpareBulletQuoteField({
   labelClassName,
   onChange,
   placeholder,
-  replacesQuote,
   resumeExperienceId,
   textareaClassName,
   value,
 }: SpareBulletQuoteFieldProps) {
   const lineMeasurement = useSpareBulletLineMeasurement({
     quote: value,
-    replacesQuote,
     resumeExperienceId,
   });
 
@@ -840,7 +827,6 @@ export function SpareBulletsCard({
           labelClassName="grid gap-1.5 text-sm text-zinc-300"
           onChange={setQuote}
           placeholder="Built ..."
-          replacesQuote={replacesQuote}
           resumeExperienceId={resumeExperienceId}
           textareaClassName="min-h-24 w-full min-w-0 rounded-[0.9rem] border border-white/10 bg-zinc-950/75 px-3 py-3 text-sm leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-300/45"
           value={quote}
@@ -1044,7 +1030,6 @@ export function SpareBulletsCard({
                             quote: value,
                           })
                         }
-                        replacesQuote={editDraft.replacesQuote}
                         resumeExperienceId={editDraft.resumeExperienceId}
                         textareaClassName="min-h-20 w-full min-w-0 rounded-[0.8rem] border border-white/10 bg-zinc-950/75 px-3 py-2 text-sm leading-6 text-zinc-100 outline-none transition focus:border-emerald-300/45"
                         value={editDraft.quote}
@@ -1070,9 +1055,14 @@ export function SpareBulletsCard({
                         {spareBullet.quote}
                       </p>
                       {spareBullet.replacesQuote ? (
-                        <blockquote className="border-l border-white/10 pl-3 text-sm leading-6 text-zinc-500">
+                        <details className="border-l border-white/10 pl-3">
+                          <summary className="cursor-pointer list-none text-[10px] font-bold uppercase leading-4 tracking-[0.14em] text-zinc-500 marker:hidden">
+                            Replaces quote
+                          </summary>
+                          <blockquote className="mt-1 text-sm leading-6 text-zinc-200">
                           {spareBullet.replacesQuote}
-                        </blockquote>
+                          </blockquote>
+                        </details>
                       ) : null}
                     </>
                   )}
