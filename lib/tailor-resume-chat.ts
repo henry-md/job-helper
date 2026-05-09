@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { Prisma } from "@/generated/prisma/client";
 import OpenAI from "openai";
 import { getPrismaClient } from "./prisma.ts";
 import { buildTailorResumePlanningSnapshot } from "./tailor-resume-planning.ts";
@@ -24,6 +25,7 @@ export type TailorResumeChatMessageRecord = {
   id: string;
   model: string | null;
   role: TailorResumeChatRole;
+  toolCalls: TailorResumeChatToolCallRecord[];
 };
 
 export type TailorResumeChatPageContext = {
@@ -55,12 +57,19 @@ export type TailorResumeChatPageContext = {
   url: string;
 };
 
+export type TailorResumeChatToolCallRecord = {
+  argumentsText: string;
+  name: string;
+  outputText?: string;
+};
+
 type StoredChatMessage = {
   content: string;
   createdAt: Date;
   id: string;
   model: string | null;
   role: "ASSISTANT" | "USER";
+  toolCalls: Prisma.JsonValue;
 };
 
 function getOpenAIClient() {
@@ -104,6 +113,52 @@ function readStringArray(value: unknown, limit: number, maxEntryLength = 400) {
     .map((entry) => readString(entry, maxEntryLength))
     .filter(Boolean)
     .slice(0, limit);
+}
+
+function readTailorResumeChatToolCallRecord(
+  value: unknown,
+): TailorResumeChatToolCallRecord | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const name = readString(value.name, 200);
+  const argumentsText = readString(value.argumentsText, 20_000);
+  const outputText = readString(value.outputText, 40_000);
+
+  if (!name || !argumentsText) {
+    return null;
+  }
+
+  return {
+    argumentsText,
+    name,
+    ...(outputText ? { outputText } : {}),
+  };
+}
+
+function readTailorResumeChatToolCalls(
+  value: unknown,
+): TailorResumeChatToolCallRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map(readTailorResumeChatToolCallRecord)
+    .filter((toolCall): toolCall is TailorResumeChatToolCallRecord =>
+      Boolean(toolCall),
+    );
+}
+
+function serializeTailorResumeChatToolCalls(
+  value: readonly TailorResumeChatToolCallRecord[] | undefined,
+): Prisma.InputJsonValue {
+  return (value ?? []).map((toolCall) => ({
+    argumentsText: toolCall.argumentsText,
+    name: toolCall.name,
+    ...(toolCall.outputText ? { outputText: toolCall.outputText } : {}),
+  }));
 }
 
 function readStructuredJobPostings(value: unknown) {
@@ -199,6 +254,7 @@ export function serializeTailorResumeChatMessage(
     id: message.id,
     model: message.model,
     role: message.role === "ASSISTANT" ? "assistant" : "user",
+    toolCalls: readTailorResumeChatToolCalls(message.toolCalls),
   };
 }
 
@@ -510,6 +566,55 @@ export async function deleteTailorResumeChatForUrl(input: {
   };
 }
 
+export async function compactTailorResumeChatForUrl(input: {
+  keepMessageCount?: number;
+  url: string;
+  userId: string;
+}) {
+  const normalizedUrl = normalizeTailorResumeChatUrl(input.url);
+  const keepMessageCount = Math.max(0, input.keepMessageCount ?? 10);
+  const prisma = getPrismaClient();
+  const thread = await prisma.tailorResumeChatThread.findUnique({
+    select: { id: true },
+    where: {
+      userId_urlHash: {
+        urlHash: hashTailorResumeChatUrl(normalizedUrl),
+        userId: input.userId,
+      },
+    },
+  });
+
+  if (!thread) {
+    return {
+      messages: [],
+      pageTitle: null,
+      url: normalizedUrl,
+    };
+  }
+
+  const keptMessages = await prisma.tailorResumeChatMessage.findMany({
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { id: true },
+    take: keepMessageCount,
+    where: { threadId: thread.id },
+  });
+  const keptMessageIds = new Set(keptMessages.map((message) => message.id));
+
+  await prisma.tailorResumeChatMessage.deleteMany({
+    where: {
+      id: {
+        notIn: [...keptMessageIds],
+      },
+      threadId: thread.id,
+    },
+  });
+
+  return readTailorResumeChatForUrl({
+    url: normalizedUrl,
+    userId: input.userId,
+  });
+}
+
 export async function createTailorResumeChatUserTurn(input: {
   content: string;
   pageTitle: string | null;
@@ -560,11 +665,24 @@ export async function createTailorResumeChatUserTurn(input: {
   };
 }
 
+export async function deleteTailorResumeChatMessage(input: {
+  id: string;
+  userId: string;
+}) {
+  await getPrismaClient().tailorResumeChatMessage.deleteMany({
+    where: {
+      id: input.id,
+      userId: input.userId,
+    },
+  });
+}
+
 export async function createTailorResumeChatAssistantMessage(input: {
   content: string;
   model: string | null;
   pageTitle: string | null;
   threadId: string;
+  toolCalls?: readonly TailorResumeChatToolCallRecord[];
   url: string;
   userId: string;
 }) {
@@ -575,6 +693,7 @@ export async function createTailorResumeChatAssistantMessage(input: {
       model: input.model,
       role: "ASSISTANT",
       threadId: input.threadId,
+      toolCalls: serializeTailorResumeChatToolCalls(input.toolCalls),
       userId: input.userId,
     },
   });
@@ -603,7 +722,8 @@ export async function generateTailorResumeChatResponse(input: {
     buildUserMarkdownContext(input.userId),
   ]);
   const client = getOpenAIClient();
-  const model = process.env.OPENAI_TAILOR_RESUME_CHAT_MODEL ??
+  const model = process.env.OPENAI_MASTER_CHAT_MODEL ??
+    process.env.OPENAI_TAILOR_RESUME_CHAT_MODEL ??
     process.env.OPENAI_TAILOR_RESUME_MODEL ??
     "gpt-5-mini";
   const stream = client.responses.stream(

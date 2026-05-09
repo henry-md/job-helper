@@ -4,6 +4,7 @@ import {
   maxTailorResumeChatMessageLength,
   type TailorResumeChatMessageRecord,
   type TailorResumeChatPageContext,
+  type TailorResumeChatToolCallRecord,
 } from "./tailor-resume-chat.ts";
 import { buildTailorResumePlanningSnapshot } from "./tailor-resume-planning.ts";
 import { renderTailoredResumeLatexToPlainText } from "./tailor-resume-preview-focus.ts";
@@ -12,6 +13,7 @@ import { buildTailorResumeRunStepUpdate } from "./tailor-resume-run-step.ts";
 import {
   buildTailorResumeSkillsSectionKeywordCoverage,
   classifyTailorResumeEmphasizedTechnologies,
+  deleteTailorResumeSpareBullet,
   readTailorResumeStoredSkillData,
   saveTailorResumeSkill,
   saveTailorResumeSpareBullet,
@@ -21,6 +23,8 @@ import {
   readAnnotatedTailorResumeBlocks,
   stripTailorResumeSegmentIds,
 } from "./tailor-resume-segmentation.ts";
+import { formatTailorResumeMalformedBulletCheckMessage } from "./tailor-resume-spare-bullet-line-display.ts";
+import { measureTailorResumeSpareBulletLineCount } from "./tailor-resume-spare-bullet-measurement.ts";
 import {
   defaultTailorResumeUserMarkdown,
   readTailorResumeUserMarkdown,
@@ -47,7 +51,8 @@ import type {
 export const tailorResumeSupportChatUrl = "job-helper://resume-support-chat";
 export const tailorResumeSupportChatPageTitle = "Resume support";
 
-const maxSupportChatToolRounds = 8;
+const maxSupportChatToolRounds = 20;
+const maxSupportChatBulkResumeBulletCount = 10;
 const maxSupportChatUserMarkdownLength = 14_000;
 const maxSupportChatPageContextLength = 14_000;
 const maxSupportChatSkillSummaryLength = 16_000;
@@ -56,7 +61,15 @@ const listSkillSupportToolName = "list_resume_skill_support";
 const listResumeExperiencesToolName = "list_resume_experiences";
 const getCurrentLatexResumeToolName = "get_current_latex_resume";
 const createSkillsSectionSkillToolName = "create_skills_section_skill";
+const measureResumeBulletLineCountToolName = "measure_resume_bullet_line_count";
+const checkResumeBulletMalformedToolName = "check_resume_bullet_malformed";
+const listMalformedResumeBulletSupportToolName =
+  "list_malformed_resume_bullet_support";
 const createResumeBulletSupportToolName = "create_resume_bullet_support";
+const updateResumeBulletSupportToolName = "update_resume_bullet_support";
+const deleteResumeBulletSupportToolName = "delete_resume_bullet_support";
+const createResumeBulletSupportBatchToolName =
+  "create_resume_bullet_support_batch";
 
 type SupportChatResponseInput = Array<
   | {
@@ -95,14 +108,28 @@ type SupportChatToolCall = {
   name: string;
 };
 
-export type TailorResumeSupportChatToolCallRecord = {
-  argumentsText: string;
-  name: string;
-};
-
 type SupportChatToolResult = {
   output: unknown;
   skillData?: TailorResumeStoredSkillData | null;
+};
+
+type SupportChatResumeBulletSupportInput = {
+  quote: string;
+  replacesQuote: string | null;
+  resumeExperienceId: string;
+  skillNames: string[];
+};
+
+type SupportChatResumeBulletBatchResult = {
+  error?: string;
+  index: number;
+  measurement?: Awaited<
+    ReturnType<typeof measureTailorResumeSpareBulletLineCount>
+  >;
+  ok: boolean;
+  quote?: string;
+  skillNames?: string[];
+  spareBullet?: Awaited<ReturnType<typeof saveTailorResumeSpareBullet>>;
 };
 
 function getOpenAIClient() {
@@ -233,7 +260,7 @@ function formatSkillSupportSummary(skillData: TailorResumeStoredSkillData) {
                 ? ` replaces "${spareBullet.replacesQuote}"`
                 : " new bullet";
 
-              return `- ${spareBullet.resumeExperienceId}; ${skills};${replacement}: "${spareBullet.quote}"`;
+              return `- id=${spareBullet.id}; ${spareBullet.resumeExperienceId}; ${skills};${replacement}: "${spareBullet.quote}"`;
             })
             .join("\n")
         : "[None saved.]"
@@ -298,11 +325,19 @@ function buildTailorResumeSupportChatInstructions() {
     "Most important taxonomy rule: `skills_section` means the exact keyword is something that could reasonably appear in the Skills, Technical Skills, Tools, Certifications, or similar skills portion of the resume. Examples include languages, frameworks, libraries, databases, cloud platforms, infrastructure tools, developer tools, certifications, spoken languages, and named technical methods.",
     "`narrative` means a job-relevant phrase that belongs in experience bullets or story framing but usually would not stand alone in the Skills section. `non_skill` means it is not a resume skill keyword.",
     "When the user asks you to save, add, remember, create, or install skills-section support, use the function tools. Do not merely explain that the user can use Settings. The tool calls are how you create persistent user skills and resume-bullet support.",
-    "Use `create_skills_section_skill` for a concrete skills-section keyword that the user says can be listed in Skills without needing a new experience bullet. Set `listInSkillsOnly` to true when it is intended to clear a skills-section blocker by allowing a Skills-section entry on its own.",
-    "Use `create_resume_bullet_support` when the keyword needs a new or modified resume bullet. A valid bullet support record needs the bullet text, one or more skills-section keywords, and an allowed `resumeExperienceId`.",
-    "Call `list_resume_experiences` before creating resume bullet support unless the correct resumeExperienceId is already present in the conversation. If the user names an employer, role, or project instead of an id, fetch the categories and map it to the closest unambiguous id; ask a short clarification if there are multiple plausible matches.",
-    "For modified-bullet support, `replacesQuote` must be the current source bullet being replaced or a close quote from it. Use `list_resume_experiences` or `get_current_latex_resume` when you need to inspect current source bullets.",
-    "Use `get_current_latex_resume` when the user asks to inspect the full current LaTeX resume, when exact source wording matters, or when you need source context that is not in the short summaries.",
+    "Tool guide: `list_resume_skill_support` fetches current skills-section keywords, saved resume-bullet support, keyword classifications, and allowed resume experience categories. Use it when you need to inspect what is already saved or avoid duplicates.",
+    "`list_resume_experiences` fetches allowed `resumeExperienceId` values plus current bullet text under each experience. Call it before creating resume bullet support unless the correct resumeExperienceId is already present in the conversation. If the user names an employer, role, or project instead of an id, map it to the closest unambiguous id; ask a short clarification if multiple experiences fit.",
+    "`get_current_latex_resume` fetches the full source resume. Use it when the user asks to inspect the resume, exact source wording matters, source bullets are missing from the short experience list, or you need segment ids for debugging. Set `includeSegmentIds` only when segment ids are useful.",
+    "`create_skills_section_skill` creates or updates one durable skills-section keyword. Use it for a concrete keyword that can be listed in Skills without a new experience bullet. Set `listInSkillsOnly` to true when the skill is allowed as skills-section-only support for clearing a blocker.",
+    "`measure_resume_bullet_line_count` measures one proposed bullet's rendered PDF line count in the chosen resume experience. It takes only `quote` and `resumeExperienceId`; do not include a reason or current/source bullet text. It does not save anything.",
+    "`check_resume_bullet_malformed` checks one proposed bullet for malformed shape in the chosen resume experience. It takes only `quote` and `resumeExperienceId`; do not include a reason or current/source bullet text. It does not save anything. If it returns `malformed: true`, revise the bullet and check again before saving unless the user explicitly insists on exact wording.",
+    "`list_malformed_resume_bullet_support` scans saved durable resume-bullet support records and returns malformed or three-plus-line extra bullets in one call. It does not scan the base resume. Use it when the user asks whether any saved extra resume bullets are malformed or asks for all malformed resume-bullet support; do not call the per-bullet malformed tool repeatedly for that audit.",
+    "`create_resume_bullet_support` saves one durable resume-bullet support record. Use it only after the proposed bullet has been measured or checked, unless the user explicitly approved exact wording and accepts the risk. Required fields are `quote`, `replacesQuote` (or null), `resumeExperienceId`, and `skillNames`.",
+    "`update_resume_bullet_support` updates one existing durable resume-bullet support record by `id`. Use `list_resume_skill_support` first when you need the id. Measure or check changed bullet text before updating unless the user explicitly approved exact wording and accepts the risk.",
+    "`delete_resume_bullet_support` deletes one existing durable resume-bullet support record by `id`. Use it when the user asks to remove, delete, dedupe, or keep one saved bullet and remove another. Use `list_resume_skill_support` first when you need the id.",
+    `\`create_resume_bullet_support_batch\` saves up to ${maxSupportChatBulkResumeBulletCount} resume-bullet support records in one call. Use it for multi-bullet requests such as "all technologies" or "make these into resume bullets." Each item needs \`quote\`, \`replacesQuote\` (or null), \`resumeExperienceId\`, and \`skillNames\`. The server measures every item first, saves valid bullets, skips bullets that render as three or more lines or malformed, and returns per-item results. Do not spend separate measure/check calls before the batch tool; revise skipped bullets in a later batch if needed. Split larger jobs into batches of ${maxSupportChatBulkResumeBulletCount} or fewer.`,
+    "When adding or removing a skill from an existing saved resume bullet, match the user's requested bullet by exact id or exact/closest quoted bullet text, not merely by a shared skill like Go. If multiple saved bullets plausibly match and the user did not provide enough wording to disambiguate, ask a short clarification instead of updating one lookalike. When verifying, name the exact id and quote you checked.",
+    "For modified-bullet support, `replacesQuote` must be the current source bullet being replaced or a close quote from it. Use `list_resume_experiences` or `get_current_latex_resume` when you need source wording.",
     "Never invent user experience. If the user has not provided enough factual evidence for a bullet, ask for the missing facts instead of saving a fabricated bullet.",
     "After a tool succeeds, briefly summarize exactly what changed. If a tool returns an error, explain the blocker and the next piece of information needed.",
     "Keep responses concise and practical.",
@@ -381,8 +416,10 @@ function readSupportChatToolCall(response: SupportChatResponse) {
 
 function serializeSupportChatToolCall(
   toolCall: SupportChatToolCall,
-): TailorResumeSupportChatToolCallRecord {
+  output?: unknown,
+): TailorResumeChatToolCallRecord {
   let argumentsText = toolCall.arguments;
+  let outputText = "";
 
   try {
     argumentsText = JSON.stringify(JSON.parse(toolCall.arguments), null, 2);
@@ -390,9 +427,18 @@ function serializeSupportChatToolCall(
     // Keep the raw arguments when the model returned non-JSON tool data.
   }
 
+  if (output !== undefined) {
+    try {
+      outputText = JSON.stringify(output, null, 2);
+    } catch {
+      outputText = String(output);
+    }
+  }
+
   return {
     argumentsText,
     name: toolCall.name,
+    ...(outputText ? { outputText } : {}),
   };
 }
 
@@ -582,6 +628,257 @@ async function readFreshSkillData(userId: string) {
   });
 }
 
+async function measureSupportChatResumeBullet(input: {
+  args: Record<string, unknown>;
+  userId: string;
+}) {
+  const quote = readString(input.args.quote);
+  const resumeExperienceId = readString(input.args.resumeExperienceId);
+  const { annotatedLatexCode } = await readCurrentResumeContext(input.userId);
+
+  return measureTailorResumeSpareBulletLineCount({
+    quote,
+    resumeExperienceId,
+    sourceAnnotatedLatexCode: annotatedLatexCode,
+  });
+}
+
+async function listSupportChatMalformedResumeBulletSupport(input: {
+  userId: string;
+}) {
+  const { annotatedLatexCode } = await readCurrentResumeContext(input.userId);
+  const skillData = await readTailorResumeStoredSkillData({
+    sourceAnnotatedLatexCode: annotatedLatexCode,
+    userId: input.userId,
+  });
+  const malformedBullets = [];
+  const longBullets = [];
+  const errors = [];
+
+  for (const spareBullet of skillData.spareBullets) {
+    const skillNames = spareBullet.skills.map((skill) => skill.name);
+
+    try {
+      const measurement = await measureTailorResumeSpareBulletLineCount({
+        quote: spareBullet.quote,
+        replacesQuote: spareBullet.replacesQuote,
+        resumeExperienceId: spareBullet.resumeExperienceId,
+        sourceAnnotatedLatexCode: annotatedLatexCode,
+      });
+      const result = {
+        id: spareBullet.id,
+        measurement,
+        message: formatTailorResumeMalformedBulletCheckMessage(measurement),
+        quote: spareBullet.quote,
+        resumeExperienceId: spareBullet.resumeExperienceId,
+        skillNames,
+      };
+
+      if (measurement.malformed) {
+        malformedBullets.push(result);
+      }
+
+      if (measurement.lineCount >= 3) {
+        longBullets.push(result);
+      }
+    } catch (error) {
+      errors.push({
+        error:
+          error instanceof Error
+            ? error.message
+            : "The resume bullet support measurement failed.",
+        id: spareBullet.id,
+        quote: spareBullet.quote,
+        resumeExperienceId: spareBullet.resumeExperienceId,
+        skillNames,
+      });
+    }
+  }
+
+  return {
+    checkedCount: skillData.spareBullets.length - errors.length,
+    errors,
+    longBullets,
+    longCount: longBullets.length,
+    malformedBullets,
+    malformedCount: malformedBullets.length,
+    totalCount: skillData.spareBullets.length,
+  };
+}
+
+function readSupportChatResumeBulletSupportInput(
+  value: Record<string, unknown>,
+): SupportChatResumeBulletSupportInput {
+  return {
+    quote: readString(value.quote),
+    replacesQuote: readString(value.replacesQuote) || null,
+    resumeExperienceId: readString(value.resumeExperienceId),
+    skillNames: readStringArray(value.skillNames),
+  };
+}
+
+async function saveSupportChatResumeBulletSupport(input: {
+  args: Record<string, unknown>;
+  id?: string | null;
+  userId: string;
+}): Promise<SupportChatToolResult> {
+  const quote = readString(input.args.quote);
+  const replacesQuote = readString(input.args.replacesQuote) || null;
+  const resumeExperienceId = readString(input.args.resumeExperienceId);
+  const skillNames = readStringArray(input.args.skillNames);
+  const { annotatedLatexCode } = await readCurrentResumeContext(input.userId);
+
+  const spareBullet = await saveTailorResumeSpareBullet({
+    id: input.id,
+    quote,
+    replacesQuote,
+    resumeExperienceId,
+    skillNames,
+    sourceAnnotatedLatexCode: annotatedLatexCode,
+    userId: input.userId,
+  });
+
+  await reevaluateTailorResumeSkillSupportCheckpoints(input.userId);
+  const skillData = await readFreshSkillData(input.userId);
+
+  return {
+    output: {
+      ok: true,
+      skillData,
+      spareBullet,
+    },
+    skillData,
+  };
+}
+
+// Saves a bounded batch of model-drafted bullet support after rendered-line checks.
+async function createSupportChatResumeBulletSupportBatch(input: {
+  args: Record<string, unknown>;
+  userId: string;
+}): Promise<SupportChatToolResult> {
+  const rawBullets = Array.isArray(input.args.bullets)
+    ? input.args.bullets
+    : [];
+
+  if (rawBullets.length === 0) {
+    return {
+      output: {
+        error: "Provide at least one bullet support record.",
+        ok: false,
+      },
+    };
+  }
+
+  if (rawBullets.length > maxSupportChatBulkResumeBulletCount) {
+    return {
+      output: {
+        error: `Create at most ${maxSupportChatBulkResumeBulletCount.toLocaleString()} bullet support records per batch.`,
+        maxBatchSize: maxSupportChatBulkResumeBulletCount,
+        ok: false,
+        requestedCount: rawBullets.length,
+      },
+    };
+  }
+
+  const { annotatedLatexCode } = await readCurrentResumeContext(input.userId);
+  const results: SupportChatResumeBulletBatchResult[] = [];
+
+  for (const [index, rawBullet] of rawBullets.entries()) {
+    if (!isRecord(rawBullet)) {
+      results.push({
+        error: "Provide each bullet support record as an object.",
+        index,
+        ok: false,
+      });
+      continue;
+    }
+
+    const bullet = readSupportChatResumeBulletSupportInput(rawBullet);
+
+    try {
+      const measurement = await measureTailorResumeSpareBulletLineCount({
+        quote: bullet.quote,
+        replacesQuote: bullet.replacesQuote,
+        resumeExperienceId: bullet.resumeExperienceId,
+        sourceAnnotatedLatexCode: annotatedLatexCode,
+      });
+
+      if (measurement.lineCount >= 3) {
+        results.push({
+          error:
+            "Skipped because the proposed bullet renders as three or more lines. Revise it shorter before saving.",
+          index,
+          measurement,
+          ok: false,
+          quote: bullet.quote,
+          skillNames: bullet.skillNames,
+        });
+        continue;
+      }
+
+      if (measurement.malformed) {
+        results.push({
+          error: formatTailorResumeMalformedBulletCheckMessage(measurement),
+          index,
+          measurement,
+          ok: false,
+          quote: bullet.quote,
+          skillNames: bullet.skillNames,
+        });
+        continue;
+      }
+
+      const spareBullet = await saveTailorResumeSpareBullet({
+        quote: bullet.quote,
+        replacesQuote: bullet.replacesQuote,
+        resumeExperienceId: bullet.resumeExperienceId,
+        skillNames: bullet.skillNames,
+        sourceAnnotatedLatexCode: annotatedLatexCode,
+        userId: input.userId,
+      });
+
+      results.push({
+        index,
+        measurement,
+        ok: true,
+        spareBullet,
+      });
+    } catch (error) {
+      results.push({
+        error:
+          error instanceof Error
+            ? error.message
+            : "The resume support tool failed.",
+        index,
+        ok: false,
+        quote: bullet.quote,
+        skillNames: bullet.skillNames,
+      });
+    }
+  }
+
+  const savedCount = results.filter((result) => result.ok).length;
+  const skippedCount = results.length - savedCount;
+  let skillData: TailorResumeStoredSkillData | null = null;
+
+  if (savedCount > 0) {
+    await reevaluateTailorResumeSkillSupportCheckpoints(input.userId);
+    skillData = await readFreshSkillData(input.userId);
+  }
+
+  return {
+    output: {
+      allSaved: skippedCount === 0,
+      maxBatchSize: maxSupportChatBulkResumeBulletCount,
+      ok: true,
+      results,
+      savedCount,
+      skippedCount,
+    },
+    skillData,
+  };
+}
+
 async function executeSupportChatToolCall(input: {
   toolCall: SupportChatToolCall;
   userId: string;
@@ -597,6 +894,7 @@ async function executeSupportChatToolCall(input: {
           ok: true,
           skillData,
         },
+        skillData,
       };
     }
 
@@ -688,33 +986,110 @@ async function executeSupportChatToolCall(input: {
       };
     }
 
-    if (input.toolCall.name === createResumeBulletSupportToolName) {
-      const quote = readString(args.quote);
-      const replacesQuote = readString(args.replacesQuote) || null;
-      const resumeExperienceId = readString(args.resumeExperienceId);
-      const skillNames = readStringArray(args.skillNames);
-      const { annotatedLatexCode } = await readCurrentResumeContext(input.userId);
-
-      const spareBullet = await saveTailorResumeSpareBullet({
-        quote,
-        replacesQuote,
-        resumeExperienceId,
-        skillNames,
-        sourceAnnotatedLatexCode: annotatedLatexCode,
+    if (input.toolCall.name === measureResumeBulletLineCountToolName) {
+      const measurement = await measureSupportChatResumeBullet({
+        args,
         userId: input.userId,
       });
 
+      return {
+        output: {
+          measurement,
+          ok: true,
+        },
+      };
+    }
+
+    if (input.toolCall.name === checkResumeBulletMalformedToolName) {
+      const measurement = await measureSupportChatResumeBullet({
+        args,
+        userId: input.userId,
+      });
+
+      return {
+        output: {
+          malformed: measurement.malformed,
+          measurement,
+          message: formatTailorResumeMalformedBulletCheckMessage(measurement),
+          ok: true,
+        },
+      };
+    }
+
+    if (input.toolCall.name === listMalformedResumeBulletSupportToolName) {
+      const malformedBulletScan =
+        await listSupportChatMalformedResumeBulletSupport({
+          userId: input.userId,
+        });
+
+      return {
+        output: {
+          ...malformedBulletScan,
+          ok: true,
+        },
+      };
+    }
+
+    if (input.toolCall.name === createResumeBulletSupportToolName) {
+      return saveSupportChatResumeBulletSupport({
+        args,
+        userId: input.userId,
+      });
+    }
+
+    if (input.toolCall.name === updateResumeBulletSupportToolName) {
+      const id = readString(args.id);
+
+      if (!id) {
+        return {
+          output: {
+            error: "Provide the saved resume-bullet support id to update.",
+            ok: false,
+          },
+        };
+      }
+
+      return saveSupportChatResumeBulletSupport({
+        args,
+        id,
+        userId: input.userId,
+      });
+    }
+
+    if (input.toolCall.name === deleteResumeBulletSupportToolName) {
+      const id = readString(args.id);
+
+      if (!id) {
+        return {
+          output: {
+            error: "Provide the saved resume-bullet support id to delete.",
+            ok: false,
+          },
+        };
+      }
+
+      await deleteTailorResumeSpareBullet({
+        id,
+        userId: input.userId,
+      });
       await reevaluateTailorResumeSkillSupportCheckpoints(input.userId);
       const skillData = await readFreshSkillData(input.userId);
 
       return {
         output: {
+          deletedId: id,
           ok: true,
           skillData,
-          spareBullet,
         },
         skillData,
       };
+    }
+
+    if (input.toolCall.name === createResumeBulletSupportBatchToolName) {
+      return createSupportChatResumeBulletSupportBatch({
+        args,
+        userId: input.userId,
+      });
     }
 
     return {
@@ -734,6 +1109,27 @@ async function executeSupportChatToolCall(input: {
       },
     };
   }
+}
+
+function buildResumeBulletMeasurementToolParameters(input: {
+  quoteDescription: string;
+}) {
+  return {
+    additionalProperties: false,
+    properties: {
+      quote: {
+        description: input.quoteDescription,
+        type: "string",
+      },
+      resumeExperienceId: {
+        description:
+          "The allowed resumeExperienceId returned by list_resume_experiences.",
+        type: "string",
+      },
+    },
+    required: ["quote", "resumeExperienceId"],
+    type: "object",
+  };
 }
 
 const supportChatTools = [
@@ -817,7 +1213,42 @@ const supportChatTools = [
   },
   {
     description:
-      "Create or update durable resume bullet support for one or more skills-section keywords. Use this when the keyword needs a new bullet or a modified source bullet.",
+      "Measure the exact rendered PDF line count for a proposed resume bullet support record in the current source resume context. Use before saving newly drafted resume bullet support.",
+    name: measureResumeBulletLineCountToolName,
+    parameters: buildResumeBulletMeasurementToolParameters({
+      quoteDescription:
+        "The proposed resume bullet text to measure as a rendered bullet.",
+    }),
+    strict: true,
+    type: "function",
+  },
+  {
+    description:
+      "Check whether a proposed resume bullet support record would render as a malformed bullet in the current source resume context. Malformed means a multi-line bullet whose final rendered line is less than half filled.",
+    name: checkResumeBulletMalformedToolName,
+    parameters: buildResumeBulletMeasurementToolParameters({
+      quoteDescription:
+        "The proposed resume bullet text to check as a rendered bullet.",
+    }),
+    strict: true,
+    type: "function",
+  },
+  {
+    description:
+      "Scan saved durable resume-bullet support records and return every malformed or three-plus-line extra bullet in one call. This does not scan the base resume.",
+    name: listMalformedResumeBulletSupportToolName,
+    parameters: {
+      additionalProperties: false,
+      properties: {},
+      required: [],
+      type: "object",
+    },
+    strict: true,
+    type: "function",
+  },
+  {
+    description:
+      "Create durable resume bullet support for one or more skills-section keywords. Use this when the keyword needs a new bullet or a modified source bullet and there is no existing saved support id to update.",
     name: createResumeBulletSupportToolName,
     parameters: {
       additionalProperties: false,
@@ -863,6 +1294,145 @@ const supportChatTools = [
     strict: true,
     type: "function",
   },
+  {
+    description:
+      "Update one existing durable resume bullet support record by id. Use list_resume_skill_support first if you need to find the saved support id.",
+    name: updateResumeBulletSupportToolName,
+    parameters: {
+      additionalProperties: false,
+      properties: {
+        id: {
+          description:
+            "The saved resume-bullet support id returned by list_resume_skill_support.",
+          type: "string",
+        },
+        quote: {
+          description:
+            "The updated resume bullet text Tailor Resume may use or adapt.",
+          type: "string",
+        },
+        reason: {
+          description:
+            "Why this update should replace the existing saved support record.",
+          type: "string",
+        },
+        replacesQuote: {
+          description:
+            "The current source resume bullet this should replace, or null for a new spare bullet.",
+          type: ["string", "null"],
+        },
+        resumeExperienceId: {
+          description:
+            "The allowed resumeExperienceId returned by list_resume_experiences.",
+          type: "string",
+        },
+        skillNames: {
+          description:
+            "One or more exact skills-section keywords supported by this bullet.",
+          items: {
+            type: "string",
+          },
+          type: "array",
+        },
+      },
+      required: [
+        "id",
+        "quote",
+        "replacesQuote",
+        "resumeExperienceId",
+        "skillNames",
+        "reason",
+      ],
+      type: "object",
+    },
+    strict: true,
+    type: "function",
+  },
+  {
+    description:
+      "Delete one existing durable resume bullet support record by id. Use this for dedupe/removal requests after identifying the saved support id.",
+    name: deleteResumeBulletSupportToolName,
+    parameters: {
+      additionalProperties: false,
+      properties: {
+        id: {
+          description:
+            "The saved resume-bullet support id returned by list_resume_skill_support.",
+          type: "string",
+        },
+        reason: {
+          description: "Why this saved resume-bullet support should be deleted.",
+          type: "string",
+        },
+      },
+      required: ["id", "reason"],
+      type: "object",
+    },
+    strict: true,
+    type: "function",
+  },
+  {
+    description:
+      "Create up to 10 durable resume bullet support records in one call. Each candidate is measured first; bullets that render as three or more lines or malformed are skipped and returned with per-item errors.",
+    name: createResumeBulletSupportBatchToolName,
+    parameters: {
+      additionalProperties: false,
+      properties: {
+        bullets: {
+          description:
+            "A batch of resume bullet support records to validate and save.",
+          items: {
+            additionalProperties: false,
+            properties: {
+              quote: {
+                description:
+                  "The user-approved resume bullet text Tailor Resume may use or adapt.",
+                type: "string",
+              },
+              reason: {
+                description:
+                  "Why this bullet supports the selected skills-section keyword(s).",
+                type: "string",
+              },
+              replacesQuote: {
+                description:
+                  "The current source resume bullet this should replace, or null for a new spare bullet.",
+                type: ["string", "null"],
+              },
+              resumeExperienceId: {
+                description:
+                  "The allowed resumeExperienceId returned by list_resume_experiences.",
+                type: "string",
+              },
+              skillNames: {
+                description:
+                  "One or more exact skills-section keywords supported by this bullet.",
+                items: {
+                  type: "string",
+                },
+                type: "array",
+              },
+            },
+            required: [
+              "quote",
+              "replacesQuote",
+              "resumeExperienceId",
+              "skillNames",
+              "reason",
+            ],
+            type: "object",
+          },
+          maxItems: maxSupportChatBulkResumeBulletCount,
+          minItems: 1,
+          type: "array",
+        },
+      },
+      required: ["bullets"],
+      type: "object",
+    },
+    strict: true,
+    type: "function",
+  },
 ] as const;
 
 export async function generateTailorResumeSupportChatResponse(input: {
@@ -889,6 +1459,7 @@ export async function generateTailorResumeSupportChatResponse(input: {
   const client = getOpenAIClient();
   const model =
     process.env.OPENAI_TAILOR_RESUME_SUPPORT_CHAT_MODEL ??
+    process.env.OPENAI_MASTER_CHAT_MODEL ??
     process.env.OPENAI_TAILOR_RESUME_CHAT_MODEL ??
     process.env.OPENAI_TAILOR_RESUME_MODEL ??
     "gpt-5-mini";
@@ -903,7 +1474,8 @@ export async function generateTailorResumeSupportChatResponse(input: {
   let finalAssistantText = "";
   let latestModel = model;
   let latestSkillData: TailorResumeStoredSkillData | null = null;
-  const toolCalls: TailorResumeSupportChatToolCallRecord[] = [];
+  let needsFinalSummaryPass = false;
+  const toolCalls: TailorResumeChatToolCallRecord[] = [];
 
   for (let round = 1; round <= maxSupportChatToolRounds; round += 1) {
     const response = (await client.responses.create(
@@ -931,15 +1503,15 @@ export async function generateTailorResumeSupportChatResponse(input: {
 
     if (!toolCall) {
       finalAssistantText = readOutputText(response);
+      needsFinalSummaryPass = false;
       break;
     }
-
-    toolCalls.push(serializeSupportChatToolCall(toolCall));
 
     const toolResult = await executeSupportChatToolCall({
       toolCall,
       userId: input.userId,
     });
+    toolCalls.push(serializeSupportChatToolCall(toolCall, toolResult.output));
 
     if (toolResult.skillData) {
       latestSkillData = toolResult.skillData;
@@ -952,6 +1524,29 @@ export async function generateTailorResumeSupportChatResponse(input: {
         type: "function_call_output",
       },
     ];
+    needsFinalSummaryPass = true;
+  }
+
+  if (!finalAssistantText && toolCalls.length > 0 && needsFinalSummaryPass) {
+    const response = (await client.responses.create(
+      {
+        input: responseInput,
+        instructions: `${buildTailorResumeSupportChatInstructions()}\n\nReturn a concise final summary of the tool results. Do not call any tools.`,
+        model,
+        previous_response_id: previousResponseId,
+        reasoning: {
+          effort: "low",
+        },
+        text: {
+          verbosity: "low",
+        },
+        tools: [],
+      },
+      input.signal ? { signal: input.signal } : undefined,
+    )) as SupportChatResponse;
+
+    latestModel = response.model ?? latestModel;
+    finalAssistantText = readOutputText(response);
   }
 
   if (!finalAssistantText && toolCalls.length > 0) {

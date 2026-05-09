@@ -166,6 +166,7 @@ model TailorResumeChatMessage {
   role      TailorResumeChatRole
   content   String                @db.Text
   model     String?
+  toolCalls Json                  @default("[]")
   createdAt DateTime              @default(now())
   thread    TailorResumeChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
   user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)

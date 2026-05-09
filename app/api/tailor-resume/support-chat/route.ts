@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { getApiSession } from "@/lib/api-auth";
 import {
+  compactTailorResumeChatForUrl,
   createTailorResumeChatAssistantMessage,
   createTailorResumeChatUserTurn,
+  deleteTailorResumeChatMessage,
   deleteTailorResumeChatForUrl,
   maxTailorResumeChatMessageLength,
   readTailorResumeChatForUrl,
@@ -86,6 +88,22 @@ export async function DELETE(request: Request) {
   );
 }
 
+export async function PATCH(request: Request) {
+  const session = await getApiSession(request);
+
+  if (!session?.user?.id) {
+    return unauthorizedResponse();
+  }
+
+  return NextResponse.json(
+    await compactTailorResumeChatForUrl({
+      keepMessageCount: 10,
+      url: tailorResumeSupportChatUrl,
+      userId: session.user.id,
+    }),
+  );
+}
+
 export async function POST(request: Request) {
   const session = await getApiSession(request);
 
@@ -136,34 +154,43 @@ export async function POST(request: Request) {
       userId: session.user.id,
     });
 
-    sendEvent({
-      message: userTurn.userMessage,
-      type: "user-message",
-    });
+    try {
+      sendEvent({
+        message: userTurn.userMessage,
+        type: "user-message",
+      });
 
-    const assistantResponse = await generateTailorResumeSupportChatResponse({
-      currentUserMessage: content,
-      pageContext,
-      previousMessages: userTurn.previousMessages,
-      signal: request.signal,
-      userId: session.user.id,
-    });
-    const assistantMessage = await createTailorResumeChatAssistantMessage({
-      content: assistantResponse.content,
-      model: assistantResponse.model,
-      pageTitle: tailorResumeSupportChatPageTitle,
-      threadId: userTurn.threadId,
-      url: tailorResumeSupportChatUrl,
-      userId: session.user.id,
-    });
-
-    sendEvent({
-      message: {
-        ...assistantMessage,
+      const assistantResponse = await generateTailorResumeSupportChatResponse({
+        currentUserMessage: content,
+        pageContext,
+        previousMessages: userTurn.previousMessages,
+        signal: request.signal,
+        userId: session.user.id,
+      });
+      const assistantMessage = await createTailorResumeChatAssistantMessage({
+        content: assistantResponse.content,
+        model: assistantResponse.model,
+        pageTitle: tailorResumeSupportChatPageTitle,
+        threadId: userTurn.threadId,
         toolCalls: assistantResponse.toolCalls,
-      },
-      skillData: assistantResponse.skillData,
-      type: "done",
-    });
+        url: tailorResumeSupportChatUrl,
+        userId: session.user.id,
+      });
+
+      sendEvent({
+        message: {
+          ...assistantMessage,
+          toolCalls: assistantResponse.toolCalls,
+        },
+        skillData: assistantResponse.skillData,
+        type: "done",
+      });
+    } catch (error) {
+      await deleteTailorResumeChatMessage({
+        id: userTurn.userMessage.id,
+        userId: session.user.id,
+      });
+      throw error;
+    }
   });
 }
