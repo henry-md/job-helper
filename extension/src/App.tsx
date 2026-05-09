@@ -7853,7 +7853,7 @@ function App() {
     }
 
     chatMessagesEndRef.current?.scrollIntoView({ block: "end" });
-  }, [chatInput, chatMessages, chatSendStatus, isChatOpen]);
+  }, [chatMessages, chatSendStatus, isChatOpen]);
 
   async function handleTailorCurrentPage() {
     if (authState.status !== "signedIn") {
@@ -8267,9 +8267,6 @@ function App() {
         hasTailorInterviewStreamedMessageContent(streamedAssistantMessage)
           ? {
               ...streamedAssistantMessage,
-              technologyContexts: [
-                ...streamedAssistantMessage.technologyContexts,
-              ],
               toolCalls: [...streamedAssistantMessage.toolCalls],
             }
           : null,
@@ -8696,6 +8693,47 @@ function App() {
     } catch (error) {
       setChatError(
         error instanceof Error ? error.message : "Could not delete chat.",
+      );
+      setChatStatus("error");
+    }
+  }
+
+  async function handleCompactChat() {
+    if (
+      authState.status !== "signedIn" ||
+      chatSendStatus === "streaming" ||
+      chatMessages.length <= 10
+    ) {
+      return;
+    }
+
+    setChatStatus("loading");
+    setChatError(null);
+
+    try {
+      const response = await fetch(buildSupportChatHistoryUrl(), {
+        credentials: "include",
+        headers: {
+          Authorization: `Bearer ${authState.session.sessionToken}`,
+        },
+        method: "PATCH",
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (response.status === 401) {
+        await invalidateAuthSession();
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(readErrorMessage(payload, "Could not compact chat."));
+      }
+
+      setChatMessages(readChatMessages(payload));
+      setChatStatus("ready");
+    } catch (error) {
+      setChatError(
+        error instanceof Error ? error.message : "Could not compact chat.",
       );
       setChatStatus("error");
     }
@@ -10246,13 +10284,10 @@ function App() {
     };
 
     const readOptimisticConversation = () =>
-      streamedQuestionMessage.text || streamedQuestionMessage.technologyContexts.length > 0
+      streamedQuestionMessage.text
         ? [
             {
               ...streamedQuestionMessage,
-              technologyContexts: [
-                ...streamedQuestionMessage.technologyContexts,
-              ],
               toolCalls: [...streamedQuestionMessage.toolCalls],
             },
           ]
@@ -10439,8 +10474,12 @@ function App() {
       !canOpenInterviewChat &&
       (card.interviewStatus === "deciding" ||
         generatingTailorQuestionCardIds.has(card.id));
-    const shouldShowInterviewAction =
-      canOpenInterviewChat || isQuestionStartPending || isQuestionGenerating;
+    const shouldShowInterviewAction = shouldShowTailorRunInterviewAction({
+      canOpenInterviewChat,
+      interviewStatus: card.interviewStatus,
+      isQuestionGenerating,
+      stepNumber: card.step.stepNumber,
+    });
     const interviewActionState = canOpenInterviewChat
       ? "ready"
       : isQuestionStartPending
@@ -10907,6 +10946,19 @@ function App() {
                             {quickReviewButtonLabel}
                           </button>
                         ) : null}
+                        {showDebugTailorRunAction ? (
+                          <button
+                            className="tailor-run-menu-item"
+                            disabled={tailorRunMenuActionState !== "idle"}
+                            type="button"
+                            onClick={() => {
+                              openTailorRunDetailView("debug");
+                              setIsTailorRunMenuOpen(false);
+                            }}
+                          >
+                            {debugButtonLabel}
+                          </button>
+                        ) : null}
                         {displayedTailorRunUrl ? (
                           <button
                             className="tailor-run-menu-item"
@@ -11190,7 +11242,11 @@ function App() {
                 <div className="tailor-run-detail-nav-row">
                   <div
                     aria-label="Tailored resume actions"
-                    className="tailor-run-detail-actions-group tailor-run-detail-actions-group-two-up"
+                    className={`tailor-run-detail-actions-group ${
+                      showDebugTailorRunAction
+                        ? "tailor-run-detail-actions-group-three-up"
+                        : "tailor-run-detail-actions-group-two-up"
+                    }`.trim()}
                     role="group"
                   >
                     <button
@@ -11207,6 +11263,15 @@ function App() {
                     >
                       {quickReviewButtonLabel}
                     </button>
+                    {showDebugTailorRunAction ? (
+                      <button
+                        className="tailor-run-detail-toggle tailor-run-detail-action"
+                        type="button"
+                        onClick={() => openTailorRunDetailView("debug")}
+                      >
+                        {debugButtonLabel}
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -12209,8 +12274,7 @@ function App() {
       action === "tailor" ||
       action === "advanceTailorResumeInterview" ||
       action === "completeTailorResumeInterview" ||
-      action === "startTailorResumeInterview" ||
-      action === "generateTailorResumeInterviewExamples";
+      action === "startTailorResumeInterview";
     const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
       body: JSON.stringify(body),
       credentials: "include",
@@ -12314,6 +12378,10 @@ function App() {
     authState.status === "signedIn" &&
     chatSendStatus !== "streaming" &&
     chatMessages.length > 0;
+  const canCompactChat =
+    authState.status === "signedIn" &&
+    chatSendStatus !== "streaming" &&
+    chatMessages.length > 10;
 
   const focusTailoredPreviewEdit = useCallback(
     (editId: string) => {
@@ -12461,6 +12529,79 @@ function App() {
     }
 
     return null;
+  }
+
+  function renderTailorRunDebugSurface() {
+    if (
+      tailoredResumeReviewState.status === "loading" &&
+      !activeTailoredResumeReviewRecord
+    ) {
+      return (
+        <div className="tailor-run-detail-page-body tailor-run-detail-page-body-debug">
+          <p className="quick-review-placeholder">Loading debug trace...</p>
+        </div>
+      );
+    }
+
+    if (tailoredResumeReviewState.status === "error") {
+      return (
+        <div className="tailor-run-detail-page-body tailor-run-detail-page-body-debug">
+          <p className="quick-review-error">{tailoredResumeReviewError}</p>
+        </div>
+      );
+    }
+
+    if (!activeTailoredResumeReviewRecord) {
+      return (
+        <div className="tailor-run-detail-page-body tailor-run-detail-page-body-debug">
+          <p className="quick-review-placeholder">
+            Open a tailored resume to inspect its debug trace.
+          </p>
+        </div>
+      );
+    }
+
+    const debugTrace = activeTailoredResumeReviewRecord.openAiDebug;
+    const debugSteps: TailorRunDebugStep[] = [
+      {
+        emptyState: "No saved Step 1 keyword extraction trace is available.",
+        label: "Scrape keywords",
+        responseLabel: "Model response",
+        stage: debugTrace.keywordExtraction,
+        stepNumber: 1,
+      },
+      {
+        emptyState: "No saved Step 2 keyword review trace is available.",
+        label: "Review skills-section blockers",
+        responseLabel: "Step response",
+        stage: debugTrace.keywordReview,
+        stepNumber: 2,
+      },
+      {
+        emptyState: "No saved Step 3 planning trace is available.",
+        label: "Generate plaintext targeted edit plan",
+        responseLabel: "Model response",
+        stage: debugTrace.planning,
+        stepNumber: 3,
+      },
+      {
+        emptyState: "No saved Step 4 implementation trace is available.",
+        label: "Generate block-scoped edits",
+        responseLabel: "Model response",
+        stage: debugTrace.implementation,
+        stepNumber: 4,
+      },
+    ];
+
+    return (
+      <div className="tailor-run-detail-page-body tailor-run-detail-page-body-debug">
+        <section className="tailor-debug-page" aria-label="Tailor Resume debug trace">
+          {debugSteps.map((step) => (
+            <TailorRunDebugStepCard key={step.stepNumber} step={step} />
+          ))}
+        </section>
+      </div>
+    );
   }
 
   function renderSettingsSurface() {
@@ -13087,7 +13228,6 @@ function App() {
                   measureLineCount={measureSettingsSpareBulletLineCount}
                   onChange={setDraftSettingsSpareBulletQuote}
                   placeholder="Built ..."
-                  replacesQuote={draftSettingsSpareBulletReplacesQuote}
                   resumeExperienceId={draftSettingsSpareBulletExperienceId}
                   value={draftSettingsSpareBulletQuote}
                 />
@@ -13250,6 +13390,22 @@ function App() {
                                     ) : (
                                       <span>No skills</span>
                                     )}
+                                    <SettingsSpareBulletSavedLineCountBadge
+                                      cachedMeasurement={readSettingsSpareBulletCachedLineMeasurement(
+                                        {
+                                          quote: spareBullet.quote,
+                                          resumeExperienceId:
+                                            spareBullet.resumeExperienceId,
+                                        },
+                                      )}
+                                      measureLineCount={
+                                        measureSettingsSpareBulletLineCount
+                                      }
+                                      quote={spareBullet.quote}
+                                      resumeExperienceId={
+                                        spareBullet.resumeExperienceId
+                                      }
+                                    />
                                   </div>
                                   <p className="settings-spare-bullet-experience">
                                     {experience?.label ??
@@ -13316,7 +13472,6 @@ function App() {
                                     quote: value,
                                   })
                                 }
-                                replacesQuote={editDraft.replacesQuote}
                                 resumeExperienceId={
                                   editDraft.resumeExperienceId
                                 }
@@ -13342,12 +13497,12 @@ function App() {
                                 {spareBullet.quote}
                               </p>
                               {spareBullet.replacesQuote ? (
-                                <div className="settings-spare-bullet-replaces">
-                                  <p>Replaces quote</p>
+                                <details className="settings-spare-bullet-replaces">
+                                  <summary>Replaces quote</summary>
                                   <blockquote>
                                     {spareBullet.replacesQuote}
                                   </blockquote>
-                                </div>
+                                </details>
                               ) : null}
                             </>
                           )}
@@ -13427,42 +13582,14 @@ function App() {
           </header>
 
           <div className="interview-thread tailor-interview-page-thread" aria-live="polite">
-            {displayedTailorInterviewConversation.map((message, index) => (
+            {displayedTailorInterviewConversation.map((message) => (
               <div
                 className={`interview-message interview-message-${message.role}`}
                 key={message.id}
               >
                 <TailorInterviewMessageContent
                   message={message}
-                  nonTechnologies={
-                    personalInfo?.userMarkdown.nonTechnologies ??
-                    savedSettingsUserMarkdown.nonTechnologies
-                  }
-                  onToggleNonTechnologyTerm={(term) =>
-                    void toggleInterviewNonTechnologyTerm(term)
-                  }
-                  pendingNonTechnologyTerms={pendingInterviewNonTechnologyTerms}
                 />
-                {tailorInterview &&
-                isTailorInterviewScrapedTechnologiesMessage(message, index) &&
-                !hasTailorInterviewGeneratedTechnologyExamples(
-                  displayedTailorInterviewConversation,
-                ) &&
-                !tailorInterview.completionRequestedAt ? (
-                  <button
-                    className="interview-message-generate-examples"
-                    disabled={isTailorInterviewBusy}
-                    type="button"
-                    onClick={() => void generateTailorInterviewExamples()}
-                  >
-                    <GenerateExamplesIcon />
-                    <span>
-                      {isGeneratingTailorInterviewExamples
-                        ? "Generating"
-                        : "Generate"}
-                    </span>
-                  </button>
-                ) : null}
               </div>
             ))}
             {shouldShowTailorInterviewThinkingIndicator ? (
@@ -13479,7 +13606,7 @@ function App() {
 
           <textarea
             className="interview-input tailor-interview-page-input"
-            disabled={isTailorInterviewBusy}
+            disabled={isStoppingCurrentTailoring}
             onChange={(event) =>
               setDraftTailorInterviewAnswer(event.target.value)
             }
@@ -13607,39 +13734,77 @@ function App() {
           <div className="panel-detail-meta-actions">
             {renderTailoredPreviewHighlightToggle()}
           </div>
-          {!isTailorRunDetailWideLayout ? (
+          {!isTailorRunDetailWideLayout || EXTENSION_DEBUG_UI_ENABLED ? (
             <div
               className="panel-detail-toggle-group"
               aria-label="Tailored resume detail"
             >
-              <button
-                aria-pressed={activeTailorRunDetailView === "quickReview"}
-                className={`panel-detail-toggle ${
-                  activeTailorRunDetailView === "quickReview"
-                    ? "panel-detail-toggle-active"
-                    : ""
-                }`.trim()}
-                type="button"
-                onClick={() =>
-                  openTailorRunDetailView("quickReview", focusedTailoredResumeId)
-                }
-              >
-                Review edits
-              </button>
-              <button
-                aria-pressed={activeTailorRunDetailView === "preview"}
-                className={`panel-detail-toggle ${
-                  activeTailorRunDetailView === "preview"
-                    ? "panel-detail-toggle-active"
-                    : ""
-                }`.trim()}
-                type="button"
-                onClick={() =>
-                  openTailorRunDetailView("preview", focusedTailoredResumeId)
-                }
-              >
-                Preview
-              </button>
+              {isTailorRunDetailWideLayout ? (
+                <button
+                  aria-pressed={activeTailorRunDetailView !== "debug"}
+                  className={`panel-detail-toggle ${
+                    activeTailorRunDetailView !== "debug"
+                      ? "panel-detail-toggle-active"
+                      : ""
+                  }`.trim()}
+                  type="button"
+                  onClick={() =>
+                    openTailorRunDetailView("quickReview", focusedTailoredResumeId)
+                  }
+                >
+                  Review + Preview
+                </button>
+              ) : (
+                <>
+                  <button
+                    aria-pressed={activeTailorRunDetailView === "quickReview"}
+                    className={`panel-detail-toggle ${
+                      activeTailorRunDetailView === "quickReview"
+                        ? "panel-detail-toggle-active"
+                        : ""
+                    }`.trim()}
+                    type="button"
+                    onClick={() =>
+                      openTailorRunDetailView(
+                        "quickReview",
+                        focusedTailoredResumeId,
+                      )
+                    }
+                  >
+                    Review edits
+                  </button>
+                  <button
+                    aria-pressed={activeTailorRunDetailView === "preview"}
+                    className={`panel-detail-toggle ${
+                      activeTailorRunDetailView === "preview"
+                        ? "panel-detail-toggle-active"
+                        : ""
+                    }`.trim()}
+                    type="button"
+                    onClick={() =>
+                      openTailorRunDetailView("preview", focusedTailoredResumeId)
+                    }
+                  >
+                    Preview
+                  </button>
+                </>
+              )}
+              {EXTENSION_DEBUG_UI_ENABLED ? (
+                <button
+                  aria-pressed={activeTailorRunDetailView === "debug"}
+                  className={`panel-detail-toggle ${
+                    activeTailorRunDetailView === "debug"
+                      ? "panel-detail-toggle-active"
+                      : ""
+                  }`.trim()}
+                  type="button"
+                  onClick={() =>
+                    openTailorRunDetailView("debug", focusedTailoredResumeId)
+                  }
+                >
+                  {debugButtonLabel}
+                </button>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -13649,7 +13814,9 @@ function App() {
             isTailorRunDetailWideLayout ? "tailor-run-detail-page-split" : ""
           }`.trim()}
         >
-          {isTailorRunDetailWideLayout ? (
+          {activeTailorRunDetailView === "debug" ? (
+            renderTailorRunDebugSurface()
+          ) : isTailorRunDetailWideLayout ? (
             <ResizablePanelGroup
               className="tailor-run-detail-resizable"
               orientation="horizontal"
@@ -13808,42 +13975,14 @@ function App() {
               ) : null}
 
               <div className="interview-thread" aria-live="polite">
-                {displayedTailorInterviewConversation.map((message, index) => (
+                {displayedTailorInterviewConversation.map((message) => (
                   <div
                     className={`interview-message interview-message-${message.role}`}
                     key={message.id}
                   >
                     <TailorInterviewMessageContent
                       message={message}
-                      nonTechnologies={
-                        personalInfo?.userMarkdown.nonTechnologies ??
-                        savedSettingsUserMarkdown.nonTechnologies
-                      }
-                      onToggleNonTechnologyTerm={(term) =>
-                        void toggleInterviewNonTechnologyTerm(term)
-                      }
-                      pendingNonTechnologyTerms={pendingInterviewNonTechnologyTerms}
                     />
-                    {tailorInterview &&
-                    isTailorInterviewScrapedTechnologiesMessage(message, index) &&
-                    !hasTailorInterviewGeneratedTechnologyExamples(
-                      displayedTailorInterviewConversation,
-                    ) &&
-                    !tailorInterview.completionRequestedAt ? (
-                      <button
-                        className="interview-message-generate-examples"
-                        disabled={isTailorInterviewBusy}
-                        type="button"
-                        onClick={() => void generateTailorInterviewExamples()}
-                      >
-                        <GenerateExamplesIcon />
-                        <span>
-                          {isGeneratingTailorInterviewExamples
-                            ? "Generating"
-                            : "Generate"}
-                        </span>
-                      </button>
-                    ) : null}
                   </div>
                 ))}
                 {shouldShowTailorInterviewThinkingIndicator ? (
@@ -13860,7 +13999,7 @@ function App() {
 
               <textarea
                 className="interview-input"
-                disabled={isTailorInterviewBusy}
+                disabled={isStoppingCurrentTailoring}
                 onChange={(event) =>
                   setDraftTailorInterviewAnswer(event.target.value)
                 }
@@ -14105,6 +14244,16 @@ function App() {
                     <TrashIcon />
                   </button>
                   <button
+                    aria-label="Compact resume chat"
+                    className="icon-action"
+                    disabled={!canCompactChat}
+                    title="Keep the 10 most recent chat messages"
+                    type="button"
+                    onClick={() => void handleCompactChat()}
+                  >
+                    <CompactChatIcon />
+                  </button>
+                  <button
                     aria-label="Close chat"
                     className="icon-action"
                     type="button"
@@ -14115,9 +14264,24 @@ function App() {
                 </div>
               </header>
 
-              <div className="chat-tip">
-                This chat can save skills-section support, fetch resume
-                experiences, and read your current LaTeX resume.
+              <div className="chat-tip-slot">
+                {!extensionPreferences.supportChatTipDismissed ? (
+                  <div className="chat-tip">
+                    <span>
+                      This chat can save skills-section support, fetch resume
+                      experiences, and read your current LaTeX resume.
+                    </span>
+                    <button
+                      aria-label="Dismiss resume chat tip"
+                      className="chat-tip-dismiss"
+                      title="Dismiss tip"
+                      type="button"
+                      onClick={() => void dismissSupportChatTip()}
+                    >
+                      <CloseIcon />
+                    </button>
+                  </div>
+                ) : null}
               </div>
 
               <div className="chat-messages" aria-live="polite">
@@ -14138,7 +14302,14 @@ function App() {
                   chatMessages.map((message, index) => (
                     <article
                       key={message.id}
-                      className={`chat-message chat-message-${message.role}`}
+                      className={`chat-message chat-message-${message.role} ${
+                        chatSendStatus === "streaming" &&
+                        message.role === "assistant" &&
+                        message.content.length === 0 &&
+                        index === chatMessages.length - 1
+                          ? "chat-message-thinking"
+                          : ""
+                      }`.trim()}
                     >
                       <div className="chat-message-role">
                         {message.role === "assistant" ? "Job Helper" : "You"}
@@ -14165,10 +14336,7 @@ function App() {
               <form className="chat-form" onSubmit={handleChatFormSubmit}>
                 <textarea
                   aria-label="Message Job Helper"
-                  disabled={
-                    authState.status !== "signedIn" ||
-                    chatSendStatus === "streaming"
-                  }
+                  disabled={authState.status !== "signedIn"}
                   placeholder="Ask about your resume support"
                   rows={2}
                   value={chatInput}
@@ -14191,7 +14359,7 @@ function App() {
               className="chat-launcher"
               title="Open resume chat"
               type="button"
-              onClick={() => setIsChatOpen(true)}
+              onClick={handleOpenChat}
             >
               <ChatBubbleIcon />
             </button>
