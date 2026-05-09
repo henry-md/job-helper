@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import OpenAI, { toFile } from "openai";
 import { hashTailorResumeChatUrl, maxTailorResumeChatMessageLength } from "./tailor-resume-chat.ts";
+import { buildTailorResumeConfigChatInstructions } from "./system-prompt-settings.ts";
 import { renderTailoredResumeLatexToPlainText } from "./tailor-resume-preview-focus.ts";
 import { readTailorResumeProfileState } from "./tailor-resume-profile-state.ts";
 import {
@@ -317,20 +318,6 @@ function buildConfigChatBlockCatalog(annotatedLatexCode: string) {
     .join("\n\n");
 }
 
-function buildTailorResumeConfigChatInstructions() {
-  return [
-    "You are Job Helper's config chat for editing the user's original source resume inside the web dashboard.",
-    "The saved source resume is the baseline reference. The current working draft is what your tools should edit.",
-    `Use ${applySourceResumeBlockEditsToolName} for every resume change. Do not describe hypothetical edits without making them when the user asked for a concrete change.`,
-    "Keep changes block-scoped, minimal, and pdflatex-safe.",
-    "Formatting/layout requests should prefer adjustments to spacing, margins, font sizing, line breaks, list spacing, section spacing, and similar source-level presentation controls before rewriting substantive content.",
-    `Use ${inspectRenderedResumePdfToolName} before your final answer whenever you make or review layout-affecting changes, when the user asks about spacing or fit, or when page count / visual balance matters.`,
-    `Do not claim you visually checked the rendered document unless you actually called ${inspectRenderedResumePdfToolName} during this turn.`,
-    "If no change is needed, say so clearly and leave the working draft untouched.",
-    "Keep the final user-facing answer concise and action-oriented.",
-  ].join("\n");
-}
-
 function buildTailorResumeConfigChatInput(input: {
   currentDraftLatexCode: string;
   currentUserMessage: string;
@@ -636,7 +623,10 @@ export async function submitTailorResumeConfigChat(input: {
   for (let toolRound = 1; toolRound <= maxConfigChatToolRounds; toolRound += 1) {
     const response = (await client.responses.create({
       input: responseInput,
-      instructions: buildTailorResumeConfigChatInstructions(),
+      instructions: buildTailorResumeConfigChatInstructions({
+        applySourceResumeBlockEditsToolName,
+        inspectRenderedResumePdfToolName,
+      }),
       model,
       parallel_tool_calls: false,
       previous_response_id: previousResponseId,

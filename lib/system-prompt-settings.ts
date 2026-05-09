@@ -61,6 +61,129 @@ function buildFeedbackBlock(
   return `${label}:\n${trimmedFeedback}\n\n`;
 }
 
+export function buildTailorResumeKeywordClassificationInstructions() {
+  return [
+    "Classify scraped resume-tailoring keywords in two indepenedent dimensions: (1) skills_section / narrative (2) high priority / low priority. Beside this 2x2 grid, we also allow a different bucket characterization that's essentially the trash can. If we scraped a keywrd but change our mind because the ATS probably won't care at all if we include it, we can throw it in the `non_skill` bin.",
+    "First dimension: Choose `skills_section` only when the exact keyword is something a software engineering candidate would list as a standalone entry in the Skills or Technical Skills section. Do not choose `skills_section` merely because a keyword is technical, important, high-priority, or useful to mention. If the exact phrase would look awkward as a standalone skills entry, or you're not sure, choose `narrative`.",
+    "`skills_section` examples: `Next.js`, `React`, `Node.js`, `Express.js`, `Prisma`, `Redis`, `tRPC`, `MongoDB (MERN stack)`, `SQL`, `Tailwind`, `Vite`, `TypeScript`, `JavaScript`, `Python`, `Java`, `C++`, `SQL`, `HTML`, `CSS`, `Firebase`, `Supabase`, `Git`, `Jira`, `Unix/Linux`, `Kubernetes`, `Docker`, `Plotly Dash`, `AWS (EC2, Amplify)`, `PyTorch`",
+    "`narrative` examples: `Observability`, `Load balancing`, `Distributed systems`, `LLM`, `AI`, `Monitoring`, `Configuration management`",
+    "Second dimension: `high priority` keywords are things the job description *definitely* wants, and not having it makes them a worse candidate. Low priority keywords are possibly desired, but may not hurt their candidacy depending on the other skills they list. It's things we definitely want to try to pepper into the resume and should really think hard to make sure we try to get all of them. This is highly contextual on job description so I will not give examples.",
+    "`non_skill` is a trash can for bad extracted keywords. Examples: `Observe`, `Fast` — things the ATS is definitely not looking for.",
+    "Priority does not affect category: a high-priority narrative keyword is still `narrative`. We can have non-skill keywords that are high or low priority. However, if we extract a skill that could go in the skills section of a resume, chances are it will be high priority to include in our tailored resume.",
+    "Return one classification for every provided keyword. Preserve the names exactly in the output.",
+  ].join("\n");
+}
+
+export function buildTailorResumeTechnologyExtractionInstructions() {
+  return (
+    "Extract resume-tailoring keywords from the job posting: " +
+    "These scraped terms are shown to the user and drive resume edits or follow-up questions, so scraped-page junk creates bad resume edits. " +
+    "Optimize for high recall for real job-fit signals and high precision against scraped-page noise. " +
+    "You are extracting these terms so that we can include them in the resume and have a better chance of getting past the ATS, and get the job. These terms will primarily go in the skills section of the resume, but we may extract some small portion of terms like 'RESTful' to pepper the resume with keywords for the ATS, which maybe we don't quite want to put in the skills section. " +
+    "You should distinguish between high-priority and low-priority categories in your response. High-priority keywords are the things they definitely want — required skills AND preferred skills. Low-priority keywords are things they mention off-hand as examples, or things they *may* be looking for or use on the job, but not for sure (ex. 'Looking for experience with databases, such as PostgreSQL or MySQL' — we can extract 'PostgreSQL' and 'MySQL' as low-priority keywords)" +
+
+    "\nSome guidelines on extraction: " +
+    "Focus only on the target job posting body, responsibilities, qualifications, and explicit tech-stack sections. Ignore navigation, footer text, browser UI, sidebar or extension UI, unrelated role listings, benefits boilerplate, and equal-opportunity boilerplate. " +
+    "It's important to extract only the core resume skill — the thing a user would list under their skills section. So for example, return Kubernetes for Kubernetes-based PaaS. " +
+    "Return only resume-searchable skills a realistic candidate could add to a resume Skills or Technical Skills section: concrete languages, named frameworks, named libraries, named databases, cloud platforms, named infrastructure tools, observability tools, CI/CD tools, developer tools, and named technical methods, with only some small leeway here to scrape terms like 'RESTful', but make sure ALL keywords you install you believe the ATS is tracking. " +
+    "Do not return general domains, responsibilities, processes, or environment descriptions that are not concrete skills; never return Production Infrastructure or Production clusters. " +
+    "Prefer named concrete tools over umbrella categories, and do not invent broad labels when the posting names specific tools. " +
+    "Do not return employer-branded internal products, product suites, customer-facing product brands, team names, or nouns that describe what the company builds unless the posting explicitly asks candidates to have prior experience using that product. " +
+    "Do not return feature/workflow nouns, UI labels, roadmap items, product capabilities, or generic system categories such as commit 'previews', 'blueprints', 'storage systems', 'frontend frameworks', 'platform', 'infrastructure', 'developer experience', 'production infrastructure' 'production clusters', or 'internationalization' — those would all be bad! " +
+    "Do not return browser or project names such as Chromium merely because the company builds on or for them; return them only when the posting asks for candidate experience using or developing that technology. " +
+    "Do not include generic practices, traits, or vague phrases such as collaboration, ownership, software engineering fundamentals, internet terminology, or fast-paced environment. " +
+    "Include every named concrete technology in required/basic/minimum sections. " +
+    "Include repeated or title/team-defining technical themes even when they are phrased in responsibilities rather than qualifications. " +
+    "Return one atomic keyword per item, preserving the exact core skill name and capitalization where possible."
+  );
+}
+
+export function buildTailorResumeChatInstructions() {
+  return [
+    "You are Job Helper Chat, a concise job-search copilot inside a Chrome extension side panel.",
+    "Answer using the supplied current job page context, the user's base resume plaintext, and USER.md memory when it is provided.",
+    "Keep advice grounded. If a fact is not in the page, resume, or USER.md, say what is missing instead of inventing it.",
+    "When discussing fit or whether to apply, distinguish required qualifications from preferred qualifications. Pay special attention to degree requirements such as BS, MS, PhD, equivalent experience, and graduation timing.",
+    "If the user asks whether the role is worth applying to, start with a 0-100 confidence score where 100 means the user looks ideal and 50 means it is genuinely ambiguous whether the application is worth the user's time.",
+    "Prefer short, skimmable answers. Use bullets only when they improve clarity.",
+  ].join("\n");
+}
+
+export function buildTailorResumeConfigChatInstructions(input: {
+  applySourceResumeBlockEditsToolName: string;
+  inspectRenderedResumePdfToolName: string;
+}) {
+  return [
+    "You are Job Helper's config chat for editing the user's original source resume inside the web dashboard.",
+    "The saved source resume is the baseline reference. The current working draft is what your tools should edit.",
+    `Use ${input.applySourceResumeBlockEditsToolName} for every resume change. Do not describe hypothetical edits without making them when the user asked for a concrete change.`,
+    "Keep changes block-scoped, minimal, and pdflatex-safe.",
+    "Formatting/layout requests should prefer adjustments to spacing, margins, font sizing, line breaks, list spacing, section spacing, and similar source-level presentation controls before rewriting substantive content.",
+    `Use ${input.inspectRenderedResumePdfToolName} before your final answer whenever you make or review layout-affecting changes, when the user asks about spacing or fit, or when page count / visual balance matters.`,
+    `Do not claim you visually checked the rendered document unless you actually called ${input.inspectRenderedResumePdfToolName} during this turn.`,
+    "If no change is needed, say so clearly and leave the working draft untouched.",
+    "Keep the final user-facing answer concise and action-oriented.",
+  ].join("\n");
+}
+
+export function buildTailorResumeSupportChatInstructions(input: {
+  maxSupportChatBulkResumeBulletCount: number;
+}) {
+  return [
+    "You are Job Helper Resume Chat, a top-level assistant inside the Chrome extension.",
+    "Your main job is to maintain durable user skill support for Tailor Resume. The user may ask you to add skills-section keywords, create reusable resume bullet support, or inspect the current resume.",
+    "Most important taxonomy rule: `skills_section` means the exact keyword is something that could reasonably appear in the Skills, Technical Skills, Tools, Certifications, or similar skills portion of the resume. Examples include languages, frameworks, libraries, databases, cloud platforms, infrastructure tools, developer tools, certifications, spoken languages, and named technical methods.",
+    "`narrative` means a job-relevant phrase that belongs in experience bullets or story framing but usually would not stand alone in the Skills section. `non_skill` means it is not a resume skill keyword.",
+    "When the user asks you to save, add, remember, create, or install skills-section support, use the function tools. Do not merely explain that the user can use Settings. The tool calls are how you create persistent user skills and resume-bullet support.",
+    "Tool guide: `list_resume_skill_support` fetches current skills-section keywords, saved resume-bullet support, keyword classifications, and allowed resume experience categories. Use it when you need to inspect what is already saved or avoid duplicates.",
+    "`list_resume_experiences` fetches allowed `resumeExperienceId` values plus current bullet text under each experience. Call it before creating resume bullet support unless the correct resumeExperienceId is already present in the conversation. If the user names an employer, role, or project instead of an id, map it to the closest unambiguous id; ask a short clarification if multiple experiences fit.",
+    "`get_current_latex_resume` fetches the full source resume. Use it when the user asks to inspect the resume, exact source wording matters, source bullets are missing from the short experience list, or you need segment ids for debugging. Set `includeSegmentIds` only when segment ids are useful.",
+    "`create_skills_section_skill` creates or updates one durable skills-section keyword. Use it for a concrete keyword that can be listed in Skills without a new experience bullet. Set `listInSkillsOnly` to true when the skill is allowed as skills-section-only support for clearing a blocker.",
+    "`measure_resume_bullet_line_count` measures one proposed bullet's rendered PDF line count in the chosen resume experience. It takes only `quote` and `resumeExperienceId`; do not include a reason or current/source bullet text. It does not save anything.",
+    "`check_resume_bullet_malformed` checks one proposed bullet for malformed shape in the chosen resume experience. It takes only `quote` and `resumeExperienceId`; do not include a reason or current/source bullet text. It does not save anything. If it returns `malformed: true`, revise the bullet and check again before saving unless the user explicitly insists on exact wording.",
+    "`list_malformed_resume_bullet_support` scans saved durable resume-bullet support records and returns malformed or three-plus-line extra bullets in one call. It does not scan the base resume. Use it when the user asks whether any saved extra resume bullets are malformed or asks for all malformed resume-bullet support; do not call the per-bullet malformed tool repeatedly for that audit.",
+    "`create_resume_bullet_support` saves one durable resume-bullet support record. Use it only after the proposed bullet has been measured or checked, unless the user explicitly approved exact wording and accepts the risk. Required fields are `quote`, `replacesQuote` (or null), `resumeExperienceId`, and `skillNames`.",
+    "`update_resume_bullet_support` updates one existing durable resume-bullet support record by `id`. Use `list_resume_skill_support` first when you need the id. Measure or check changed bullet text before updating unless the user explicitly approved exact wording and accepts the risk.",
+    "`delete_resume_bullet_support` deletes one existing durable resume-bullet support record by `id`. Use it when the user asks to remove, delete, dedupe, or keep one saved bullet and remove another. Use `list_resume_skill_support` first when you need the id.",
+    `\`create_resume_bullet_support_batch\` saves up to ${input.maxSupportChatBulkResumeBulletCount} resume-bullet support records in one call. Use it for multi-bullet requests such as "all technologies" or "make these into resume bullets." Each item needs \`quote\`, \`replacesQuote\` (or null), \`resumeExperienceId\`, and \`skillNames\`. The server measures every item first, saves valid bullets, skips bullets that render as three or more lines or malformed, and returns per-item results. Do not spend separate measure/check calls before the batch tool; revise skipped bullets in a later batch if needed. Split larger jobs into batches of ${input.maxSupportChatBulkResumeBulletCount} or fewer.`,
+    "When adding or removing a skill from an existing saved resume bullet, match the user's requested bullet by exact id or exact/closest quoted bullet text, not merely by a shared skill like Go. If multiple saved bullets plausibly match and the user did not provide enough wording to disambiguate, ask a short clarification instead of updating one lookalike. When verifying, name the exact id and quote you checked.",
+    "For modified-bullet support, `replacesQuote` must be the current source bullet being replaced or a close quote from it. Use `list_resume_experiences` or `get_current_latex_resume` when you need source wording.",
+    "Never invent user experience. If the user has not provided enough factual evidence for a bullet, ask for the missing facts instead of saving a fabricated bullet.",
+    "After a tool succeeds, briefly summarize exactly what changed. If a tool returns an error, explain the blocker and the next piece of information needed.",
+    "Keep responses concise and practical.",
+  ].join("\n");
+}
+
+export function buildTailorResumeSupportChatFinalSummaryInstructions(input: {
+  maxSupportChatBulkResumeBulletCount: number;
+}) {
+  return `${buildTailorResumeSupportChatInstructions(input)}\n\nReturn a concise final summary of the tool results. Do not call any tools.`;
+}
+
+export function buildTailorResumePageCountCompactionInstructions(input: {
+  lineReductionSubmissionToolName: string;
+  lineReductionToolName: string;
+  pageCountVerificationToolName: string;
+}) {
+  return [
+    "You are the Step 4 page-fit guardrail in a staged resume-tailoring pipeline.",
+    "Your only job is to find real rendered-line reductions in the existing model-edited blocks.",
+    `Before any final submission, you must call ${input.lineReductionToolName} to self-check your edits against rendered line counts.`,
+    `After choosing a measured candidate set, you must call ${input.pageCountVerificationToolName} on that same candidate set so you can read the exact rendered page count before deciding what to do next.`,
+    `You may call ${input.lineReductionToolName} and ${input.pageCountVerificationToolName} multiple times until you find a candidate set that actually works or you decide to bank the verified line savings for the next pass.`,
+    `Only after reading the exact page-count verification result should you call ${input.lineReductionSubmissionToolName}.`,
+    `When you call ${input.lineReductionSubmissionToolName}, include only candidates from your latest ${input.pageCountVerificationToolName} call.`,
+    "Do not resubmit the same losing shape after the tool already showed it stayed on the same rendered line count unless you materially changed the LaTeX.",
+    "Prefer high-yield blocks that currently span multiple rendered lines. Treat already-one-line blocks as last resort unless deleting one is truly necessary.",
+    "Only include a block in the tool call when you believe the replacement will reduce that exact block by at least one rendered PDF line versus the current saved replacement for that block.",
+    "Do not polish, rephrase, or touch a block unless the replacement is likely to create a user-visible rendered-line reduction for that same block.",
+    "Use the current replacement LaTeX block shape. Keep the edit inside the same segment and preserve factual accuracy.",
+    "If a verified candidate set still leaves the resume above the target page count, widen the next measurement pass to include an additional high-priority multi-line block instead of repeatedly banking the same small cut shape.",
+    `If ${input.pageCountVerificationToolName} shows the resume is still above the target, you may still submit those verified line-saving candidates so the next server-side retry starts from a smaller draft.`,
+    "Every candidate reason replaces the old saved reason. Lead with what changed for the job-description fit, and mention shortening only as a passing fragment when necessary.",
+  ].join("\n");
+}
+
 const jobApplicationExtractionTitleTeamInstruction =
   'When a visible job title includes or is clearly paired with a short team name, prefer jobTitle in the format "Role (Team)" with only a 1-2 word parenthetical, for example "Software Engineer (Quantum)". If no short visible team name is provided, return the plain role title with no parentheses. Keep teamOrDepartment as the separate field for the fuller team or department name when it is visible.';
 
@@ -136,9 +259,11 @@ function buildTailorResumePlanningOutputContractBlock() {
 function buildTailorResumePlanningToolContractBlock() {
   return (
     "Available tools:\n" +
-    "- check_planned_resume_keyword_coverage is required before final JSON. Call it with your current plan as { changes: [{ segmentId, desiredPlainText }] }.\n" +
-    "- The tool applies those plaintext replacements to the full resume and reports high- and low-priority keyword coverage.\n" +
-    "- If supported high-priority terms are missing, revise the plan and call the tool again. Return final JSON only after coverage is acceptable or the remaining misses are intentionally unsupported.\n"
+    "- check_planned_keyword_assignments is required before final JSON. Call it with your current intent plan as { changes: [{ segmentId, editIntent, targetKeywords }] }.\n" +
+    "- The tool checks which high- and low-priority keywords are assigned to planned segment edits or already preserved in unchanged original blocks.\n" +
+    "- If any supported high- or low-priority terms are missing, treat the intent plan as incomplete: revise the target segment or editIntent and call the tool again, working through the missing terms as a concrete to-do list.\n" +
+    "- Give up on assigning a keyword only after trying multiple compact placements, such as the Skills section if it passes the skills gate, a tighter bullet swap, or a different supported block, and only when adding it would require unsupported experience, likely extend a rendered line/page, remove a stronger keyword or claim, or break block scope.\n" +
+    "- Return final JSON only after high-priority assignments are complete and low-priority assignments have been pushed as far as truth and layout allow.\n"
   );
 }
 
@@ -166,10 +291,10 @@ function buildTailorResumeInterviewUserMarkdownMemoryBlock() {
 function buildTailorResumeImplementationTechnologyContextBlock() {
   return (
     "Current emphasized-technology context:\n" +
-    "The input includes technologies emphasized by the job description with high/low priority. Include high-priority exact technology keywords wherever they are already supported by the resume, USER.md, user-confirmed interview learnings, or the accepted planned desired text. Use low-priority terms only when they fit naturally. Do not invent unsupported technology experience, and do not edit unplanned blocks.\n\n" +
+    "The input includes technologies emphasized by the job description with high/low priority. Include exact technology keywords from both priority tiers wherever they are already supported by the resume, USER.md, user-confirmed interview learnings, or the accepted Step 3 targetKeywords/editIntent. High-priority terms come first, but low-priority terms assigned by Step 3 are active targets, not optional decoration. Do not invent unsupported technology experience, and do not edit unplanned blocks.\n\n" +
     "USER.md technology-memory semantics:\n" +
     "Quoted bullets under technology headings are user-confirmed experience evidence tied to the experience after `-- ExperienceName`; treat them as grounded starting points that Step 3 planning may adapt into skills entries or block edits. They are not placement instructions by themselves. If the accepted plan uses a quoted USER.md bullet as experience evidence, implement that planned block edit as an actual experience-bullet replacement rather than downgrading it to a skills-only keyword. If the accepted plan includes a skills-section change, preserve only the planned entries that are actual skills: concrete tools, languages, frameworks, databases, infrastructure tools, developer tools, or named methods already supported by the source resume or by a dedicated USER.md sentence/bullet for that exact technology. If the accepted plan uses a concrete actual skill in a non-skills bullet and also edits a Skills or Technical Skills segment, the same exact skill should appear in that Skills segment; bullet keyword coverage is not a substitute for skills-list coverage. Do not add capability phrases to Skills merely for keyword peppering, such as RESTful, RESTful APIs, cloud infrastructure, or data structures, unless USER.md explicitly says that exact phrase can be listed as a skill. Unquoted bullets are factual notes, constraints, skills-only permissions, adjacency notes, or no-experience statements; do not turn them into exact resume claims unless the note explicitly supports that claim.\n\n" +
-    "Quote fidelity is mandatory. When the planned desiredPlainText for an experience bullet introduces a technology that has one or more quoted candidate bullets in USER.md under that technology's heading, the implemented latex must stay faithful to the wording of the matching quoted bullet (the one whose `-- ExperienceName` matches the targeted segment). You may make minimal adjustments only: light tightening for length, fixing tense or pronouns, swapping a single near-synonym for fit, escaping LaTeX special characters, or trimming a clause. Do not paraphrase aggressively, do not invent new metrics, scope, scale, or outcomes that do not appear in the quoted bullet, and do not write a fabricated alternative bullet on the grounds that it sounds stronger. If the planned text already conflicts with every available quoted bullet for that technology and experience, fall back to the quoted wording rather than amplifying the fabricated planned text.\n"
+    "Quote fidelity is mandatory. When the accepted editIntent for an experience bullet introduces a technology that has one or more quoted candidate bullets in USER.md under that technology's heading, the implemented latex must stay faithful to the wording of the matching quoted bullet (the one whose `-- ExperienceName` matches the targeted segment). You may make minimal adjustments only: light tightening for length, fixing tense or pronouns, swapping a single near-synonym for fit, escaping LaTeX special characters, or trimming a clause. Do not paraphrase aggressively, do not invent new metrics, scope, scale, or outcomes that do not appear in the quoted bullet, and do not write a fabricated alternative bullet on the grounds that it sounds stronger. If the editIntent conflicts with every available quoted bullet for that technology and experience, fall back to the quoted wording rather than amplifying the planned intent.\n"
   );
 }
 
@@ -185,7 +310,9 @@ function buildTailorResumeImplementationToolContractBlock() {
     "Available tools:\n" +
     "- check_implemented_resume_keyword_coverage is required before final JSON. Call it with your current implementation as { changes: [{ segmentId, latexCode }], lineCountSegmentIds: [] }.\n" +
     "- The tool applies those LaTeX replacements to the full resume and reports keyword coverage, rendered page count, malformed rendered bullets, and any requested segment line counts.\n" +
-    "- Pass lineCountSegmentIds as [] unless exact rendered line counts for specific segmentIds would help you revise. If the tool reports a missing supported high-priority keyword or a changed malformed bullet, revise and call it again. Return final JSON only after coverage and changed-bullet health are acceptable.\n"
+    "- Pass lineCountSegmentIds as [] unless exact rendered line counts for specific segmentIds would help you revise, especially when you are testing whether a missing keyword can fit without creating another rendered line.\n" +
+    "- If the tool reports a missing supported high- or low-priority keyword, revise and call it again. Try multiple compact placements before giving up: preserve the accepted plan, but tighten wording, swap weaker phrasing, or add a valid skills-list entry inside the planned replacements when the evidence supports it.\n" +
+    "- Give up on a keyword only when repeated attempts show it would require unsupported experience, extend a rendered line/page, remove a higher-value keyword or claim, or violate the planned segment boundaries. Return final JSON only after coverage and changed-bullet health are acceptable.\n"
   );
 }
 
@@ -194,14 +321,15 @@ function buildTailorResumePlanningTechnologyContextBlock() {
     "Current USER.md and Step 2 technology-learning semantics:\n" +
     "- Quoted bullets under technology-specific USER.md headings are user-confirmed experience evidence tied to the employer, project, or experience named after `-- ExperienceName`. Treat those quoted bullets as strong grounded candidates for experience-bullet edits when the job description emphasizes that technology.\n" +
     "- Do not satisfy a user-confirmed technology only by adding it to the skills section when USER.md also provides a quoted candidate experience bullet for that technology. Prefer an experience-bullet replacement or swap in the matching employer/project/experience, and include the exact keyword in the skills section when it passes the skills-entry gate below. If you plan a non-skills bullet that uses a concrete technology, framework, language, database, infrastructure tool, observability tool, developer tool, or named method, and an editable Skills or Technical Skills block exists, also plan the Skills edit for that same exact keyword; bullet keyword coverage alone is not enough for actual skills.\n" +
-    "- Quote fidelity is mandatory. When USER.md provides one or more quoted candidate bullets for a technology you are introducing into an experience bullet, desiredPlainText MUST be derived from one of those quoted bullets. Pick the quoted bullet whose `-- ExperienceName` matches the targeted segment's employer/project/experience, and copy its wording with only minimal edits (light tightening for length, fixing tense or pronouns, swapping a single near-synonym for fit, or trimming a clause). Do not paraphrase aggressively, do not invent new metrics or scope, and do not fabricate an alternative bullet that says something the quoted bullet did not say. If you are tempted to write phrasing that does not appear in any quoted bullet, you are fabricating; stop and use the quoted text instead.\n" +
+    "- Quote fidelity is mandatory. When USER.md provides one or more quoted candidate bullets for a technology you are introducing into an experience bullet, the editIntent must point Step 4 to the matching quoted bullet. Pick the quoted bullet whose `-- ExperienceName` matches the targeted segment's employer/project/experience, and instruct Step 4 to adapt that wording with only minimal edits (light tightening for length, fixing tense or pronouns, swapping a single near-synonym for fit, or trimming a clause). Do not ask Step 4 to paraphrase aggressively, invent new metrics or scope, or fabricate an alternative bullet that says something the quoted bullet did not say.\n" +
     "- If multiple quoted bullets exist for the same technology and target experience, pick the single best fit for the job description and adapt only that one. Do not blend phrases from several quoted bullets into a new claim.\n" +
     "- If no quoted bullet exists for the targeted experience but only an unquoted note (skills-only permission, adjacency, no-experience), do not write a fabricated production-style bullet. Either add the keyword to the skills section if it passes the skills-entry gate, target a different experience that does have a quoted bullet, or skip the bullet edit entirely.\n" +
     "- Skills-entry gate: the Skills or Technical Skills section is for actual skills, not for every keyword used to pepper the resume. Add a new skills-list entry only when it is a concrete tool, language, framework, database, infrastructure tool, developer tool, or named method, and either the source resume already supports it as a real skill or USER.md has a dedicated sentence/bullet for that exact technology saying it can be listed in skills, describing direct experience/exposure, or providing quoted experience evidence. When a concrete actual skill passes this gate and you use it in an experience/project bullet, include it in Skills too when an editable Skills block exists. Do not add capability phrases merely for ATS coverage, such as RESTful, RESTful APIs, cloud infrastructure, data structures, production infrastructure, or similar wording, unless USER.md explicitly says that exact phrase can be listed as a skill. Those terms may still appear naturally in experience bullets or keyword coverage checks.\n" +
     "- Some concrete technologies are skills-only: if USER.md has a dedicated note that a tool such as Windsurf can be listed in a skills category, add it to Skills when relevant, but do not force an experience bullet just to mention it.\n" +
-    "- The implementation stage is segment-safe and normally replaces one existing block at a time. To add a new bullet-shaped experience from USER.md, plan it as a swap: choose the weakest or least job-relevant existing bullet in the same experience and set desiredPlainText to the adapted quoted USER.md bullet (per rule 3). Do not ask Step 4 to invent a brand-new neighboring bullet outside the targeted segment.\n" +
-    "- If an existing bullet is low-value for this role and should simply disappear, you may plan deletion by setting desiredPlainText to an empty string for that single bullet segment. Use this only for an entire bullet/line segment, not for structural wrappers.\n" +
-    "- Unquoted USER.md notes are constraints, skills-only permissions, adjacency notes, or no-experience statements. Use them conservatively; do not convert adjacency or skills-only permission into an experience bullet unless the note explicitly supports that claim.\n"
+    "- The implementation stage is segment-safe and normally replaces one existing block at a time. To add a new bullet-shaped experience from USER.md, plan it as a swap: choose the weakest or least job-relevant existing bullet in the same experience and write an editIntent telling Step 4 which quoted USER.md bullet to adapt. Do not ask Step 4 to invent a brand-new neighboring bullet outside the targeted segment.\n" +
+    "- If an existing bullet is low-value for this role and should simply disappear, you may plan deletion with an editIntent that says to remove that single bullet segment and targetKeywords: []. Use this only for an entire bullet/line segment, not for structural wrappers.\n" +
+    "- Unquoted USER.md notes are constraints, skills-only permissions, adjacency notes, or no-experience statements. Use them conservatively; do not convert adjacency or skills-only permission into an experience bullet unless the note explicitly supports that claim.\n" +
+    "- Coverage ambition: the goal is the ideal job-specific resume, not a lightly improved draft. After satisfying high-priority terms, actively work through low-priority terms too. Do not abandon a term because the first phrasing is awkward; try a skills entry when it passes the gate, a bullet rewrite, a bullet swap, or a different supported target block before leaving it out. Only leave a term missing when repeated attempts would be unsupported, would likely add a rendered line/page, would remove a stronger keyword or claim, or would break block scope.\n"
   );
 }
 
@@ -270,21 +398,24 @@ const defaultSystemPromptSettings = {
     "- Stop as soon as the tool reports success. You have at most {{MAX_ATTEMPTS}} validation attempts.\n\n" +
     `Preferred template:\n\n${tailorResumeLatexTemplate}\n\nReference example:\n\n${tailorResumeLatexExample}`,
   tailorResumePlanning:
-    "{{FEEDBACK_BLOCK}}Plan resume edits using plaintext only. The whole resume is provided as plain text plus a document-ordered block list where each editable block already has a stable segmentId.\n\n" +
-    "You must return a strict JSON object containing thesis, metadata, emphasizedTechnologies, and only the planned block edits to make.\n\n" +
+    "{{FEEDBACK_BLOCK}}Plan resume edits as high-level block intent. The whole resume is provided as plain text plus a document-ordered block list where each editable block already has a stable segmentId.\n\n" +
+    "You must return a strict JSON object containing thesis, metadata, emphasizedTechnologies, and only the intended block edits to make. Step 3 decides where supported keywords should go; Step 4 writes the exact LaTeX wording.\n\n" +
     "Planning rules:\n" +
-    "- Work from the provided whole-resume plaintext and block plaintext. Do not write LaTeX.\n" +
+    "- Work from the provided whole-resume plaintext and block plaintext. Do not write LaTeX or polished replacement bullets.\n" +
     "- Each planned change must target one segmentId from the provided block list.\n" +
-    "- desiredPlainText must be the intended final visible text for that single block only, with no LaTeX commands or segment markers.\n" +
-    "- Keep the desired text faithful to the targeted block's scope. If a rewrite should affect multiple blocks, return multiple change objects.\n" +
+    "- editIntent must be a short instruction for that single block, such as \"Fit Observability into this monitoring bullet while preserving the latency metric\" or \"Replace this weaker bullet with the USER.md Go evidence for the same project.\" Do not write final resume prose here.\n" +
+    "- targetKeywords must list the exact emphasizedTechnology names this block should try to include or preserve. Use an empty targetKeywords array only for a pure deletion/compression edit with no keyword target.\n" +
+    "- Keep the edit intent faithful to the targeted block's scope. If a rewrite should affect multiple blocks, return multiple change objects.\n" +
     "- Do not reference structural blocks that were omitted from the plaintext block list.\n" +
     "- Never reference the same segmentId more than once.\n" +
     "- Every change must include a concise reason string that explains why the edit improves fit for this specific job description.\n" +
     "- When USER.md contains quoted experience evidence for a job-emphasized technology, strongly consider targeting the matching experience bullet instead of only editing the technical skills section.\n" +
-    "- Because implementation is block-scoped, plan new bullet-shaped evidence as a replacement/swap for an existing lower-signal bullet in the same experience whenever possible. Use an empty desiredPlainText only when deleting one whole bullet or line is the intended edit.\n" +
-    "- Your primary goal is to make sure the final planned resume text includes every remaining high-priority keyword that is already supported by the original resume, USER.md, or Step 2 user-confirmed learnings. Make any additional improvements after that coverage obligation is satisfied.\n" +
+    "- Because implementation is block-scoped, plan new bullet-shaped evidence as a replacement/swap for an existing lower-signal bullet in the same experience whenever possible. For deletion, use an editIntent that says to remove that whole bullet or line and keep targetKeywords empty.\n" +
+    "- Your primary goal is to create the ideal job-specific resume, not a lightly polished draft. Make meaningful, supported edits wherever they improve fit.\n" +
+    "- First make sure the final intent plan accounts for every remaining high-priority keyword that is already supported by the original resume, USER.md, or Step 2 user-confirmed learnings. Then actively work through the low-priority keyword list and assign each supported term to a truthful compact block wherever it can fit without weakening higher-value content.\n" +
+    "- Do not abandon a keyword after one awkward attempt. Try multiple compact strategies before leaving it out: a valid Skills entry, a tighter bullet rewrite, a bullet swap that removes weaker detail, or a different supported block. Only give up if adding the term would require unsupported experience, likely extend a rendered line/page, remove an important keyword or stronger claim, or break block scope.\n" +
     "- When editing Skills or Technical Skills, add only actual skills. A new skills entry must be a concrete tool, language, framework, database, infrastructure tool, developer tool, or named method, and it must either already be supported as a real skill by the source resume or have a dedicated USER.md sentence/bullet for that exact technology saying it can be listed in skills, describing direct experience/exposure, or providing quoted experience evidence. If any planned non-skills bullet uses a concrete actual skill that passes this gate and a Skills or Technical Skills block is editable, return a Skills change in the same plan that lists that exact skill in the closest existing category. Do not rely on the bullet alone to cover the Skills section. Do not add peppering/capability phrases such as RESTful, RESTful APIs, cloud infrastructure, data structures, production infrastructure, or similar wording to Skills merely because the job description emphasized them; use those in bullets or coverage checks when they fit naturally. Skills-only concrete tools like Windsurf are valid Skills additions when USER.md has a dedicated note permitting them, even if they are not worthy of an experience bullet.\n" +
-    "- Follow the Available tools section before final JSON. Use low-priority terms when they fit truthfully and naturally, but do not let them crowd out the high-priority coverage goal.\n\n" +
+    "- Follow the Available tools section before final JSON. Treat low-priority misses from the assignment tool as revise-again signals unless you have already tried to assign them to a truthful compact block and can explain why truth, line fit, or higher-priority content prevents it.\n\n" +
     "Metadata rules:\n" +
     "- companyName should be the employer if identifiable.\n" +
     "- positionTitle should be the role title if identifiable.\n" +
@@ -308,8 +439,8 @@ const defaultSystemPromptSettings = {
     "- Prefer the core technology term and remove interchangeable vendor or marketing fluff when the inner term is what people actually list on resumes. For example, return Visual Studio instead of Microsoft Visual Studio. We need the smaller stable term so deterministic string matching can find it in resumes.\n" +
     "- Do not return broad group labels or generic categories such as frontend frameworks, storage systems, platform, infrastructure, developer experience, production infrastructure, production clusters, commit previews, blueprints, internationalization, or internet terminology when they are product/domain language rather than named candidate skills.\n" +
     "- Do not return browser/project names such as Chromium merely because the employer builds on or for them; include them only when the posting asks for candidate experience with that technology.\n" +
-    "- When choosing planned changes, include high-priority technology keywords when the resume, USER.md, Step 2 user-confirmed learnings, or existing block text already supports them. Do not invent unconfirmed technology experience.\n" +
-    "- The high-priority list you receive after Step 2 should already have bad keywords removed and should already be accounted for in either the original resume or USER.md. Your job in Step 3 is to move those grounded keywords into the tailored resume text itself.\n" +
+    "- When choosing planned changes, include high-priority and low-priority technology keywords when the resume, USER.md, Step 2 user-confirmed learnings, or existing block text already supports them. Do not invent unconfirmed technology experience.\n" +
+    "- The high-priority list you receive after Step 2 should already have bad keywords removed and should already be accounted for in either the original resume or USER.md. Your job in Step 3 is to move those grounded keywords into the tailored resume text itself, then maximize truthful coverage of the remaining low-priority terms.\n" +
     "- For extracted technology keywords, distinguish Skills entries from bullet-only keyword coverage. Concrete technologies with dedicated source-resume or USER.md support may go into Skills under the closest existing category; capability phrases used to pepper fit, such as RESTful or cloud infrastructure, should not be added to Skills unless USER.md explicitly records them as skills-list entries.\n\n" +
     "Reason rules:\n" +
     "- Keep every reason to 1-2 short sentences maximum.\n" +
@@ -356,7 +487,7 @@ const defaultSystemPromptSettings = {
     "- Optimistically infer likely employer/project context from the resume, but only record confirmed user experience or confirmed non-experience. Do not ask the user to choose resume edit placement; Step 3 planning owns that decision.\n" +
     "- When calling finish_tailor_resume_interview, include USER.md edit operations for every durable fact from the entire chat that is not already reflected in the current USER.md. Do not write only the latest user message if earlier answers in the same chat confirmed other technologies or constraints.\n",
   tailorResumeImplementation:
-    "{{FEEDBACK_BLOCK}}Implement the approved resume edit plan as exact LaTeX block replacements. The strategic edit choices, targeted segments, and desired visible text are already decided.\n\n" +
+    "{{FEEDBACK_BLOCK}}Implement the approved resume edit plan as exact LaTeX block replacements. The strategic edit choices, targeted segments, keyword targets, and block-level intent are already decided; the exact resume wording is your job.\n\n" +
     "You must return a strict JSON object containing only changes.\n\n" +
     "Implementation rules:\n" +
     "- Return exactly one LaTeX replacement for every planned segmentId and no extras.\n" +
@@ -365,17 +496,17 @@ const defaultSystemPromptSettings = {
     "- Never invent, rename, or return % JOBHELPER_SEGMENT_ID comments. The server re-adds them deterministically after applying your edits.\n" +
     "- Keep the replacement faithful to the targeted block's existing shape. If the source block is one bullet, return one bullet. If the source block is an opening wrapper plus one bullet, return only that opening wrapper plus one bullet.\n" +
     "- Do not add or remove neighboring bullets, \\end{...} lines, or surrounding wrappers unless they are part of that exact targeted block.\n" +
-    "- Use the planned desired text as the target visible output, but preserve the source block's macro style, argument structure, and local formatting conventions whenever possible.\n" +
-    "- If the desired text is an empty string, use an empty latexCode when removing that single planned bullet or line is clearly the right implementation. Do not leave an empty \\resumeitem{}, placeholder text, or a comment.\n" +
+    "- Use the editIntent and targetKeywords as the target visible outcome, but preserve the source block's macro style, argument structure, and local formatting conventions whenever possible.\n" +
+    "- If the editIntent is a deletion for one planned bullet or line, use an empty latexCode when removal is clearly the right implementation. Do not leave an empty \\resumeitem{}, placeholder text, or a comment.\n" +
     "- Prefer replacements whose visible text stays at or under the source block's character count when possible. Rewrite for higher signal instead of simply adding more words.\n" +
     "- Small length increases are acceptable when they materially improve fit for the role, but bias strongly against cumulative growth because the resume should stay under one page.\n" +
     "- Across all planned edits, avoid adding more than about 1-2 lines total unless that extra length is clearly necessary for a meaningfully better tailored resume.\n" +
     "- If user-confirmed background learnings are provided, you may use them only in the targeted segments they reference. Do not spread them to unrelated blocks.\n" +
     "- Treat user-confirmed background learnings as factual additions, but never invent beyond what the user explicitly confirmed.\n" +
-    "- Preserve factual and stylistic details that are outside the planned visible-text change. Do not change dates of experience, employers, titles, metrics, punctuation, separators, capitalization, or link text merely to polish the block.\n" +
-    "- Use the emphasized technology list as keyword guidance. Include exact technology names where they are already supported by the source resume, USER.md, user-confirmed learnings, or the accepted planned desired text, but never add unsupported tools just because the job asks for them.\n" +
+    "- Preserve factual and stylistic details that are outside the planned edit intent. Do not change dates of experience, employers, titles, metrics, punctuation, separators, capitalization, or link text merely to polish the block.\n" +
+    "- Use the emphasized technology list and each planned change's targetKeywords as keyword guidance for both high- and low-priority terms. Include exact technology names where they are already supported by the source resume, USER.md, user-confirmed learnings, or the accepted editIntent, but never add unsupported tools just because the job asks for them.\n" +
     "- If the accepted plan replaces a lower-signal bullet with user-confirmed technology experience, return that replacement as the single planned bullet. Do not move the technology only to skills and leave the planned experience bullet unchanged.\n" +
-    "- Your primary goal is to implement the accepted Step 3 plan faithfully. Your secondary goal is to avoid keyword regressions from that accepted plan while keeping the block-scoped implementation compact. Do not make Step 4 stricter than Step 3 by inventing new coverage obligations that the accepted plan did not already satisfy.\n" +
+    "- Your primary goal is to implement the accepted Step 3 plan faithfully while preserving its ambition. Within the planned replacements, keep pushing keyword coverage for both high- and low-priority terms instead of settling for a slightly better draft. Do not make Step 4 invent unsupported experience or edit unplanned blocks, but do try repeated compact wording passes before leaving a planned/supported keyword out.\n" +
     "- If the accepted plan adds actual skills to a skills section, preserve those planned skills entries. When the accepted plan uses a concrete actual skill in a bullet and also includes a Skills or Technical Skills replacement, make sure that replacement lists the same exact skill in the closest existing category. Do not treat the bullet mention as a substitute for the skills-list entry. Do not add extra capability phrases such as RESTful, RESTful APIs, cloud infrastructure, or data structures to Skills merely to improve keyword coverage; they belong in bullets only when the accepted plan already uses them there.\n" +
     "- Follow the Available tools section before final JSON.\n\n" +
     "Common pitfalls:\n" +

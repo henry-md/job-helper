@@ -16,7 +16,7 @@ import {
   readRequiredTailorResumeQuestioningKeywords,
   validateTailoredResumeImplementationIncludesQuestioningLearnings,
   validateTailoredResumeImplementationKeywordCoverage,
-  validateTailoredResumePlanningKeywordCoverage,
+  validateTailoredResumePlanningKeywordAssignments,
 } from "../lib/tailor-resume-tailoring.ts";
 import {
   hasValidTailorResumeSegmentIds,
@@ -440,9 +440,10 @@ test("parseTailoredResumePlanResponse keeps the structured thesis payload", () =
   const parsed = parseTailoredResumePlanResponse({
     changes: [
       {
-        desiredPlainText: "Tailored bullet one",
+        editIntent: "Fit CI/CD into this delivery bullet.",
         reason: 'Highlights CI/CD work. Required qualifications mention "CI/CD".',
         segmentId: "experience.entry-1.bullet-1",
+        targetKeywords: ["CI/CD"],
       },
     ],
     companyName: "OpenAI",
@@ -727,9 +728,10 @@ test("readRequiredTailorResumeQuestioningKeywords keeps confirmed tech and skips
   const requirements = readRequiredTailorResumeQuestioningKeywords({
     changes: [
       {
-        desiredPlainText: "Skills with confirmed tools",
+        editIntent: "Add confirmed Go to the skills line.",
         reason: "Adds confirmed tools.",
         segmentId: "technical-skills.section-1",
+        targetKeywords: ["Go"],
       },
     ],
     emphasizedTechnologies: [
@@ -776,9 +778,10 @@ test("validateTailoredResumeImplementationIncludesQuestioningLearnings rejects i
   const plan = {
     changes: [
       {
-        desiredPlainText: "Skills with confirmed tools",
+        editIntent: "Add confirmed Go and Cassandra to the skills line.",
         reason: "Adds confirmed tools.",
         segmentId: "technical-skills.section-1",
+        targetKeywords: ["Go", "Cassandra"],
       },
     ],
     emphasizedTechnologies: [
@@ -840,23 +843,43 @@ test("validateTailoredResumeImplementationIncludesQuestioningLearnings rejects i
   );
 });
 
-test("validateTailoredResumePlanningKeywordCoverage rejects missing high-priority keywords", () => {
+test("validateTailoredResumePlanningKeywordAssignments rejects missing high-priority keywords", () => {
   assert.throws(
     () =>
-      validateTailoredResumePlanningKeywordCoverage({
-        keywordCheckResult: {
+      validateTailoredResumePlanningKeywordAssignments({
+        keywordAssignmentCheckResult: {
           missingHighPriority: ["Cassandra"],
           missingLowPriority: ["Redux"],
-          presentHighPriority: ["Go"],
-          presentLowPriority: [],
+          nextAction: "Revise Step 3.",
+          satisfiedHighPriority: ["Go"],
+          satisfiedLowPriority: [],
           terms: [
-            { name: "Go", present: true, priority: "high" },
-            { name: "Cassandra", present: false, priority: "high" },
-            { name: "Redux", present: false, priority: "low" },
+            {
+              assigned: true,
+              assignedSegmentIds: ["technical-skills.section-1"],
+              name: "Go",
+              preservedOriginalSegmentIds: [],
+              priority: "high",
+            },
+            {
+              assigned: false,
+              assignedSegmentIds: [],
+              name: "Cassandra",
+              preservedOriginalSegmentIds: [],
+              priority: "high",
+            },
+            {
+              assigned: false,
+              assignedSegmentIds: [],
+              name: "Redux",
+              preservedOriginalSegmentIds: [],
+              priority: "low",
+            },
           ],
+          unrecognizedTargetKeywords: [],
         },
       }),
-    /missing high-priority keywords/i,
+    /high-priority keyword assignments/i,
   );
 });
 

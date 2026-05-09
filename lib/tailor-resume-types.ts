@@ -280,9 +280,11 @@ export type TailorResumeGenerationStepEvent = {
 };
 
 export type TailoredResumePlanningChange = {
-  desiredPlainText: string;
+  desiredPlainText?: string;
+  editIntent: string;
   reason: string;
   segmentId: string;
+  targetKeywords: string[];
 };
 
 export type TailoredResumePlanningResult = {
@@ -849,10 +851,16 @@ function parseTailoredResumePlanningChange(
 
   const segmentId = readNullableString(value.segmentId);
   const reason = readNullableString(value.reason);
+  const editIntent = readNullableString(value.editIntent)?.trim() ?? "";
   const desiredPlainText =
     typeof value.desiredPlainText === "string" ? value.desiredPlainText : null;
+  const targetKeywords = Array.isArray(value.targetKeywords)
+    ? value.targetKeywords
+        .map((keyword) => readNullableString(keyword)?.trim() ?? "")
+        .filter(Boolean)
+    : [];
 
-  if (!segmentId || desiredPlainText === null) {
+  if (!segmentId || (!editIntent && desiredPlainText === null)) {
     return null;
   }
 
@@ -860,10 +868,19 @@ function parseTailoredResumePlanningChange(
     return null;
   }
 
+  const legacyEditIntent =
+    desiredPlainText === null
+      ? ""
+      : desiredPlainText.trim()
+        ? `Implement this saved plaintext replacement for the block: ${desiredPlainText.trim()}`
+        : "Remove this saved block if the implementation stage still targets it.";
+
   return {
-    desiredPlainText,
+    ...(desiredPlainText === null ? {} : { desiredPlainText }),
+    editIntent: editIntent || legacyEditIntent,
     reason,
     segmentId,
+    targetKeywords,
   };
 }
 

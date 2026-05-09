@@ -1,12 +1,12 @@
 import OpenAI from "openai";
 import { getPrismaClient } from "./prisma.ts";
+import { buildTailorResumeKeywordClassificationInstructions } from "./system-prompt-settings.ts";
 import { resumeTextIncludesKeyword } from "./tailor-resume-keyword-coverage.ts";
 import { formatTailorResumeTermWithCapitalFirst } from "./tailor-resume-non-technologies.ts";
 import {
   extractTailorResumeResumeExperiences,
   findTailorResumeResumeExperience,
 } from "./tailor-resume-resume-experiences.ts";
-import { buildTailorResumeKeywordClassificationInstructions } from "./tailor-resume-keyword-classification-prompt.ts";
 import {
   findTailorResumeReplacementTarget,
   type TailorResumeReplacementTarget,

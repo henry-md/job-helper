@@ -96,7 +96,7 @@ test("step failure debug payloads are structured and parseable", () => {
       status: "failed",
       stepCount: 5,
       stepNumber: 3,
-      summary: "Generating plaintext edit outline",
+      summary: "Generating edit intent outline",
     },
     jobDescription: "We need TypeScript.",
     jobUrl: "https://example.com/job",

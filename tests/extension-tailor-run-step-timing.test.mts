@@ -29,7 +29,7 @@ test("preserves previous step timings when a server refresh only has the current
         status: "succeeded",
         stepCount: 5,
         stepNumber: 2,
-        summary: "Generating plaintext edit outline",
+        summary: "Generating edit intent outline",
       },
       {
         attempt: 1,

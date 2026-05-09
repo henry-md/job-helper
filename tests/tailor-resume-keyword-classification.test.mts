@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildTailorResumeKeywordClassificationInstructions } from "../lib/tailor-resume-keyword-classification-prompt.ts";
+import { buildTailorResumeKeywordClassificationInstructions } from "../lib/system-prompt-settings.ts";
 
 test("keyword classification prompt makes Skills-section placement the top rule", () => {
   const prompt = buildTailorResumeKeywordClassificationInstructions();
 
-  assert.match(prompt, /by resume placement/i);
+  assert.match(prompt, /two indepenedent dimensions/i);
   assert.match(
     prompt,
-    /Above all else, choose `skills_section` only when the exact keyword is something a realistic candidate could list as a standalone entry in the Skills or Technical Skills section/i,
+    /First dimension: Choose `skills_section` only when the exact keyword is something a software engineering candidate would list as a standalone entry in the Skills or Technical Skills section/i,
   );
   assert.match(
     prompt,

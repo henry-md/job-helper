@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import {
+  buildTailorResumePageCountCompactionInstructions,
   buildTailorResumePageCountCompactionPrompt,
   createDefaultSystemPromptSettings,
   type SystemPromptSettings,
@@ -926,26 +927,6 @@ function serializeCompactionAttemptHistory(
   ].join("\n\n");
 }
 
-function buildCompactionInstructions() {
-  return [
-    "You are the Step 4 page-fit guardrail in a staged resume-tailoring pipeline.",
-    "Your only job is to find real rendered-line reductions in the existing model-edited blocks.",
-    `Before any final submission, you must call ${tailorResumeLineReductionToolName} to self-check your edits against rendered line counts.`,
-    `After choosing a measured candidate set, you must call ${tailorResumePageCountVerificationToolName} on that same candidate set so you can read the exact rendered page count before deciding what to do next.`,
-    `You may call ${tailorResumeLineReductionToolName} and ${tailorResumePageCountVerificationToolName} multiple times until you find a candidate set that actually works or you decide to bank the verified line savings for the next pass.`,
-    `Only after reading the exact page-count verification result should you call ${tailorResumeLineReductionSubmissionToolName}.`,
-    `When you call ${tailorResumeLineReductionSubmissionToolName}, include only candidates from your latest ${tailorResumePageCountVerificationToolName} call.`,
-    "Do not resubmit the same losing shape after the tool already showed it stayed on the same rendered line count unless you materially changed the LaTeX.",
-    "Prefer high-yield blocks that currently span multiple rendered lines. Treat already-one-line blocks as last resort unless deleting one is truly necessary.",
-    "Only include a block in the tool call when you believe the replacement will reduce that exact block by at least one rendered PDF line versus the current saved replacement for that block.",
-    "Do not polish, rephrase, or touch a block unless the replacement is likely to create a user-visible rendered-line reduction for that same block.",
-    "Use the current replacement LaTeX block shape. Keep the edit inside the same segment and preserve factual accuracy.",
-    "If a verified candidate set still leaves the resume above the target page count, widen the next measurement pass to include an additional high-priority multi-line block instead of repeatedly banking the same small cut shape.",
-    `If ${tailorResumePageCountVerificationToolName} shows the resume is still above the target, you may still submit those verified line-saving candidates so the next server-side retry starts from a smaller draft.`,
-    "Every candidate reason replaces the old saved reason. Lead with what changed for the job-description fit, and mention shortening only as a passing fragment when necessary.",
-  ].join("\n");
-}
-
 function buildCompactionInput(input: {
   attemptHistory: TailorResumeCompactionAttemptHistoryEntry[];
   currentLayout: TailorResumeLayoutMeasurement;
@@ -1055,7 +1036,13 @@ async function collectVerifiedCompactionCandidates(input: {
         operation: () =>
           input.client.responses.create({
             input: responseInput,
-            instructions: buildCompactionInstructions(),
+            instructions: buildTailorResumePageCountCompactionInstructions({
+              lineReductionSubmissionToolName:
+                tailorResumeLineReductionSubmissionToolName,
+              lineReductionToolName: tailorResumeLineReductionToolName,
+              pageCountVerificationToolName:
+                tailorResumePageCountVerificationToolName,
+            }),
             model: input.model,
             parallel_tool_calls: false,
             previous_response_id: previousResponseId,

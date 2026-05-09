@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Prisma } from "@/generated/prisma/client";
 import OpenAI from "openai";
 import { getPrismaClient } from "./prisma.ts";
+import { buildTailorResumeChatInstructions } from "./system-prompt-settings.ts";
 import { buildTailorResumePlanningSnapshot } from "./tailor-resume-planning.ts";
 import { readTailorResumeProfileState } from "./tailor-resume-profile-state.ts";
 import {
@@ -470,17 +471,6 @@ function buildConversationTranscript(input: {
       return `${speaker}: ${message.content.trim()}`;
     })
     .join("\n\n");
-}
-
-function buildTailorResumeChatInstructions() {
-  return [
-    "You are Job Helper Chat, a concise job-search copilot inside a Chrome extension side panel.",
-    "Answer using the supplied current job page context, the user's base resume plaintext, and USER.md memory when it is provided.",
-    "Keep advice grounded. If a fact is not in the page, resume, or USER.md, say what is missing instead of inventing it.",
-    "When discussing fit or whether to apply, distinguish required qualifications from preferred qualifications. Pay special attention to degree requirements such as BS, MS, PhD, equivalent experience, and graduation timing.",
-    "If the user asks whether the role is worth applying to, start with a 0-100 confidence score where 100 means the user looks ideal and 50 means it is genuinely ambiguous whether the application is worth the user's time.",
-    "Prefer short, skimmable answers. Use bullets only when they improve clarity.",
-  ].join("\n");
 }
 
 function buildTailorResumeChatInput(input: {

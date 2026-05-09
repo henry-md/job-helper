@@ -3,6 +3,7 @@ import {
   buildTailorResumeInterviewSystemPrompt,
   buildTailorResumeImplementationSystemPrompt,
   buildTailorResumePlanningSystemPrompt,
+  buildTailorResumeTechnologyExtractionInstructions,
   createDefaultSystemPromptSettings,
   type SystemPromptSettings,
 } from "./system-prompt-settings.ts";
@@ -78,11 +79,15 @@ const tailorResumePlanSchema = {
         type: "object",
         additionalProperties: false,
         properties: {
-          desiredPlainText: { type: "string" },
+          editIntent: { type: "string" },
           reason: { type: "string" },
           segmentId: { type: "string" },
+          targetKeywords: {
+            type: "array",
+            items: { type: "string" },
+          },
         },
-        required: ["segmentId", "desiredPlainText", "reason"],
+        required: ["segmentId", "editIntent", "targetKeywords", "reason"],
       },
     },
     companyName: { type: "string" },
@@ -172,7 +177,7 @@ const tailorResumeImplementationSchema = {
 } as const;
 
 const tailorResumePlanningKeywordCheckToolName =
-  "check_planned_resume_keyword_coverage";
+  "check_planned_keyword_assignments";
 const tailorResumeImplementationKeywordCheckToolName =
   "check_implemented_resume_keyword_coverage";
 const maxKeywordCheckToolRoundsPerAttempt = 4;
@@ -181,7 +186,7 @@ const tailorResumePlanningKeywordCheckTool = {
   type: "function",
   name: tailorResumePlanningKeywordCheckToolName,
   description:
-    "Check keyword coverage for the current Step 3 plaintext plan by applying the proposed desiredPlainText replacements to the full resume and reporting which high- and low-priority terms are present in the resulting visible resume text.",
+    "Check the current Step 3 intent plan by verifying which high- and low-priority keywords are assigned to planned segment edits or already preserved in unchanged resume blocks.",
   strict: true,
   parameters: {
     type: "object",
@@ -193,10 +198,14 @@ const tailorResumePlanningKeywordCheckTool = {
           type: "object",
           additionalProperties: false,
           properties: {
-            desiredPlainText: { type: "string" },
+            editIntent: { type: "string" },
             segmentId: { type: "string" },
+            targetKeywords: {
+              type: "array",
+              items: { type: "string" },
+            },
           },
-          required: ["segmentId", "desiredPlainText"],
+          required: ["segmentId", "editIntent", "targetKeywords"],
         },
       },
     },
@@ -559,9 +568,19 @@ function readTrimmedString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function readTrimmedStringArray(value: unknown) {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  return [...new Set(value.map(readTrimmedString).filter(Boolean))];
+}
+
 function parseKeywordCheckPlanningChanges(
   value: unknown,
-): Array<Pick<TailoredResumePlanningChange, "desiredPlainText" | "segmentId">> {
+): Array<
+  Pick<TailoredResumePlanningChange, "editIntent" | "segmentId" | "targetKeywords">
+> {
   if (!value || typeof value !== "object" || !("changes" in value)) {
     throw new Error(
       "The keyword-check tool call did not include a changes array.",
@@ -583,10 +602,12 @@ function parseKeywordCheckPlanningChanges(
 
     const segmentId =
       "segmentId" in change ? readTrimmedString(change.segmentId) : "";
-    const desiredPlainText =
-      "desiredPlainText" in change && typeof change.desiredPlainText === "string"
-        ? change.desiredPlainText
-        : "";
+    const editIntent =
+      "editIntent" in change ? readTrimmedString(change.editIntent) : "";
+    const targetKeywords =
+      "targetKeywords" in change
+        ? readTrimmedStringArray(change.targetKeywords)
+        : null;
 
     if (!segmentId) {
       throw new Error(
@@ -594,9 +615,22 @@ function parseKeywordCheckPlanningChanges(
       );
     }
 
+    if (!editIntent) {
+      throw new Error(
+        "The keyword-check tool call included a change without an editIntent.",
+      );
+    }
+
+    if (!targetKeywords) {
+      throw new Error(
+        "The keyword-check tool call included a change without a targetKeywords array.",
+      );
+    }
+
     return {
-      desiredPlainText,
+      editIntent,
       segmentId,
+      targetKeywords,
     };
   });
 }
@@ -727,14 +761,20 @@ function parseTailoredResumePlanChange(
 
   const segmentId =
     "segmentId" in value ? readTrimmedString(value.segmentId) : "";
+  const editIntent =
+    "editIntent" in value ? readTrimmedString(value.editIntent) : "";
   const desiredPlainText =
     "desiredPlainText" in value && typeof value.desiredPlainText === "string"
       ? value.desiredPlainText.trim()
-      : "";
+      : null;
   const reason =
     "reason" in value && typeof value.reason === "string"
       ? value.reason
       : "";
+  const targetKeywords =
+    "targetKeywords" in value
+      ? readTrimmedStringArray(value.targetKeywords)
+      : null;
 
   if (!segmentId) {
     throw new Error(
@@ -742,14 +782,35 @@ function parseTailoredResumePlanChange(
     );
   }
 
+  if (!editIntent && desiredPlainText === null) {
+    throw new Error(
+      "The model returned a planned block change without an editIntent.",
+    );
+  }
+
+  if (!targetKeywords && desiredPlainText === null) {
+    throw new Error(
+      "The model returned a planned block change without a targetKeywords array.",
+    );
+  }
+
   if (!readTrimmedString(reason)) {
     throw new Error("The model returned a planned block change without a reason.");
   }
 
+  const legacyEditIntent =
+    desiredPlainText === null
+      ? ""
+      : desiredPlainText.trim()
+        ? `Implement this saved plaintext replacement for the block: ${desiredPlainText.trim()}`
+        : "Remove this saved block if the implementation stage still targets it.";
+
   return {
-    desiredPlainText,
+    ...(desiredPlainText === null ? {} : { desiredPlainText }),
+    editIntent: editIntent || legacyEditIntent,
     reason,
     segmentId,
+    targetKeywords: targetKeywords ?? [],
   };
 }
 
@@ -1355,10 +1416,120 @@ function buildPlannedResumePlainText(input: {
   return input.planningSnapshot.blocks
     .map((block) => {
       const change = changesById.get(block.segmentId);
-      return change ? change.desiredPlainText.trim() : block.plainText;
+      return change && change.desiredPlainText !== undefined
+        ? change.desiredPlainText.trim()
+        : block.plainText;
     })
     .filter(Boolean)
     .join("\n");
+}
+
+export type TailorResumePlanningKeywordAssignmentCheckResult = {
+  missingHighPriority: string[];
+  missingLowPriority: string[];
+  nextAction: string;
+  satisfiedHighPriority: string[];
+  satisfiedLowPriority: string[];
+  terms: Array<{
+    assigned: boolean;
+    assignedSegmentIds: string[];
+    name: string;
+    preservedOriginalSegmentIds: string[];
+    priority: TailoredResumeEmphasizedTechnology["priority"];
+  }>;
+  unrecognizedTargetKeywords: string[];
+};
+
+function buildTailorResumePlanningKeywordAssignmentCheckResult(input: {
+  changes: Array<
+    Pick<TailoredResumePlanningChange, "segmentId" | "targetKeywords">
+  >;
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+  planningSnapshot: TailorResumePlanningSnapshot;
+}): TailorResumePlanningKeywordAssignmentCheckResult {
+  const technologiesByName = new Map(
+    input.emphasizedTechnologies.map((technology) => [
+      normalizeTechnologyName(technology.name),
+      technology,
+    ]),
+  );
+  const changedSegmentIds = new Set(
+    input.changes.map((change) => change.segmentId),
+  );
+  const assignedSegmentIdsByKeyword = new Map<string, string[]>();
+  const unrecognizedTargetKeywords = new Set<string>();
+
+  for (const change of input.changes) {
+    for (const targetKeyword of change.targetKeywords) {
+      const normalizedKeyword = normalizeTechnologyName(targetKeyword);
+
+      if (!normalizedKeyword) {
+        continue;
+      }
+
+      if (!technologiesByName.has(normalizedKeyword)) {
+        unrecognizedTargetKeywords.add(targetKeyword);
+        continue;
+      }
+
+      assignedSegmentIdsByKeyword.set(normalizedKeyword, [
+        ...new Set([
+          ...(assignedSegmentIdsByKeyword.get(normalizedKeyword) ?? []),
+          change.segmentId,
+        ]),
+      ]);
+    }
+  }
+
+  const terms = input.emphasizedTechnologies.map((technology) => {
+    const normalizedKeyword = normalizeTechnologyName(technology.name);
+    const assignedSegmentIds =
+      assignedSegmentIdsByKeyword.get(normalizedKeyword) ?? [];
+    const preservedOriginalSegmentIds = input.planningSnapshot.blocks
+      .filter(
+        (block) =>
+          !changedSegmentIds.has(block.segmentId) &&
+          resumeTextIncludesKeyword({
+            term: technology.name,
+            text: block.plainText,
+          }),
+      )
+      .map((block) => block.segmentId);
+
+    return {
+      assigned: assignedSegmentIds.length > 0,
+      assignedSegmentIds,
+      name: technology.name,
+      preservedOriginalSegmentIds,
+      priority: technology.priority,
+    };
+  });
+  const isSatisfied = (term: (typeof terms)[number]) =>
+    term.assigned || term.preservedOriginalSegmentIds.length > 0;
+
+  const missingHighPriority = terms
+    .filter((term) => term.priority === "high" && !isSatisfied(term))
+    .map((term) => term.name);
+  const missingLowPriority = terms
+    .filter((term) => term.priority === "low" && !isSatisfied(term))
+    .map((term) => term.name);
+
+  return {
+    missingHighPriority,
+    missingLowPriority,
+    nextAction:
+      missingHighPriority.length > 0 || missingLowPriority.length > 0
+        ? "Revise Step 3 by assigning missing keywords to specific segmentIds with compact editIntent instructions, or leave them preserved in unchanged original blocks."
+        : "Assignments are complete enough for final Step 3 JSON; Step 4 will write the LaTeX replacements.",
+    satisfiedHighPriority: terms
+      .filter((term) => term.priority === "high" && isSatisfied(term))
+      .map((term) => term.name),
+    satisfiedLowPriority: terms
+      .filter((term) => term.priority === "low" && isSatisfied(term))
+      .map((term) => term.name),
+    terms,
+    unrecognizedTargetKeywords: [...unrecognizedTargetKeywords],
+  };
 }
 
 function buildTailoredResumeBlockChanges(input: {
@@ -1403,7 +1574,9 @@ function buildTailoredResumeBlockChanges(input: {
   });
 }
 
-function buildKeywordCheckToolOutput(result: TailorResumeKeywordCheckResult) {
+function buildKeywordCheckToolOutput(
+  result: TailorResumeKeywordCheckResult | TailorResumePlanningKeywordAssignmentCheckResult,
+) {
   return JSON.stringify(result, null, 2);
 }
 
@@ -1478,7 +1651,19 @@ function serializeTailorResumeImplementationBlocks(input: {
         `${index + 1}. segmentId: ${change.segmentId}`,
         `   command: ${block?.command ?? "unknown"}`,
         `   current text: ${block?.plainText ?? "[missing block]"}`,
-        `   desired text: ${change.desiredPlainText || "[remove this block]"}`,
+        `   edit intent: ${change.editIntent.trim()}`,
+        `   target keywords: ${
+          change.targetKeywords.length > 0
+            ? change.targetKeywords.join(", ")
+            : "[none]"
+        }`,
+        ...(change.desiredPlainText === undefined
+          ? []
+          : [
+              `   legacy desired text: ${
+                change.desiredPlainText || "[remove this block]"
+              }`,
+            ]),
         `   reason: ${change.reason.trim()}`,
         "   original latex block:",
         block?.latexCode ?? "[missing block]",
@@ -2161,6 +2346,30 @@ export function validateTailoredResumePlanningKeywordCoverage(input: {
   }
 }
 
+export function validateTailoredResumePlanningKeywordAssignments(input: {
+  keywordAssignmentCheckResult: TailorResumePlanningKeywordAssignmentCheckResult;
+}) {
+  if (input.keywordAssignmentCheckResult.unrecognizedTargetKeywords.length > 0) {
+    throw new Error(
+      [
+        "The Step 3 plan targeted keywords that are not in the supported emphasized-technology list.",
+        `Unrecognized target keywords: ${input.keywordAssignmentCheckResult.unrecognizedTargetKeywords.join(", ")}`,
+        "Use exact keyword names from emphasizedTechnologies, or remove unsupported targets from the plan.",
+      ].join("\n"),
+    );
+  }
+
+  if (input.keywordAssignmentCheckResult.missingHighPriority.length > 0) {
+    throw new Error(
+      [
+        "The Step 3 plan still misses required high-priority keyword assignments.",
+        `Missing high-priority keywords: ${input.keywordAssignmentCheckResult.missingHighPriority.join(", ")}`,
+        "Assign each supported high-priority keyword to a concrete segment edit, or leave it preserved in an unchanged original block.",
+      ].join("\n"),
+    );
+  }
+}
+
 export function validateTailoredResumeImplementationKeywordCoverage(input: {
   keywordCheckResult: TailorResumeKeywordCheckResult;
 }) {
@@ -2258,27 +2467,7 @@ function buildTechnologyExtractionInput(input: {
 }
 
 export function buildTechnologyExtractionInstructions() {
-  return (
-    "Extract resume-tailoring keywords from the job posting: " +
-    "These scraped terms are shown to the user and drive resume edits or follow-up questions, so scraped-page junk creates bad resume edits. " +
-    "Optimize for high recall for real job-fit signals and high precision against scraped-page noise. " +
-    "You are extracting these terms so that we can include them in the resume and have a better chance of getting past the ATS, and get the job. These terms will primarily go in the skills section of the resume, but we may extract some small portion of terms like 'RESTful' to pepper the resume with keywords for the ATS, which maybe we don't quite want to put in the skills section. " +
-    "You should distinguish between high-priority and low-priority categories in your response. High-priority keywords are the things they definitely want — required skills AND preferred skills. Low-priority keywords are things they mention off-hand as examples, or things they *may* be looking for or use on the job, but not for sure (ex. 'Looking for experience with databases, such as PostgreSQL or MySQL' — we can extract 'PostgreSQL' and 'MySQL' as low-priority keywords)" +
-    
-    "\nSome guidelines on extraction: " +
-    "Focus only on the target job posting body, responsibilities, qualifications, and explicit tech-stack sections. Ignore navigation, footer text, browser UI, sidebar or extension UI, unrelated role listings, benefits boilerplate, and equal-opportunity boilerplate. " +
-    "It's important to extract only the core resume skill — the thing a user would list under their skills section. So for example, return Kubernetes for Kubernetes-based PaaS. " +
-    "Return only resume-searchable skills a realistic candidate could add to a resume Skills or Technical Skills section: concrete languages, named frameworks, named libraries, named databases, cloud platforms, named infrastructure tools, observability tools, CI/CD tools, developer tools, and named technical methods, with only some small leeway here to scrape terms like 'RESTful', but make sure ALL keywords you install you believe the ATS is tracking. " +
-    "Do not return general domains, responsibilities, processes, or environment descriptions that are not concrete skills; never return Production Infrastructure or Production clusters. " +
-    "Prefer named concrete tools over umbrella categories, and do not invent broad labels when the posting names specific tools. " +
-    "Do not return employer-branded internal products, product suites, customer-facing product brands, team names, or nouns that describe what the company builds unless the posting explicitly asks candidates to have prior experience using that product. " +
-    "Do not return feature/workflow nouns, UI labels, roadmap items, product capabilities, or generic system categories such as commit 'previews', 'blueprints', 'storage systems', 'frontend frameworks', 'platform', 'infrastructure', 'developer experience', 'production infrastructure' 'production clusters', or 'internationalization' — those would all be bad! " +
-    "Do not return browser or project names such as Chromium merely because the company builds on or for them; return them only when the posting asks for candidate experience using or developing that technology. " +
-    "Do not include generic practices, traits, or vague phrases such as collaboration, ownership, software engineering fundamentals, internet terminology, or fast-paced environment. " +
-    "Include every named concrete technology in required/basic/minimum sections. " +
-    "Include repeated or title/team-defining technical themes even when they are phrased in responsibilities rather than qualifications. " +
-    "Return one atomic keyword per item, preserving the exact core skill name and capitalization where possible."
-  );
+  return buildTailorResumeTechnologyExtractionInstructions();
 }
 
 export function buildTechnologyExtractionReasoning() {
@@ -2615,14 +2804,26 @@ function buildTailoringPlanInput(input: {
 
 function buildImplementationRequiredTechnologies(input: {
   emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
-  plannedResumePlainText: string;
+  planningResult: TailoredResumePlanningResult;
+  planningSnapshot: TailorResumePlanningSnapshot;
 }) {
+  const targetedKeywordNames = new Set(
+    input.planningResult.changes.flatMap((change) =>
+      change.targetKeywords.map(normalizeTechnologyName),
+    ),
+  );
+  const legacyPlannedResumePlainText = buildPlannedResumePlainText({
+    changes: input.planningResult.changes,
+    planningSnapshot: input.planningSnapshot,
+  });
+
   return input.emphasizedTechnologies.filter(
     (technology) =>
       technology.priority === "high" ||
+      targetedKeywordNames.has(normalizeTechnologyName(technology.name)) ||
       resumeTextIncludesKeyword({
         term: technology.name,
-        text: input.plannedResumePlainText,
+        text: legacyPlannedResumePlainText,
       }),
   );
 }
@@ -2858,7 +3059,7 @@ export function buildPrePlanningTailoredResumePlanningResult(input: {
       jobDescriptionFocus:
         "Step 3 planning has not run yet; Step 2 is reviewing skills-section keyword coverage first.",
       resumeChanges:
-        "The plaintext edit plan will be generated after Step 2 keyword review is complete.",
+        "The edit-intent plan will be generated after Step 2 keyword review is complete.",
     },
   } satisfies TailoredResumePlanningResult;
 }
@@ -3097,11 +3298,6 @@ export async function planTailoredResume(input: {
       resumePlainText: planningSnapshot.resumePlainText,
       userMarkdown: input.userMarkdown,
     });
-  const supportedTechnologyNamesForPlanning = new Set(
-    emphasizedTechnologiesForPlanning.map((technology) =>
-      normalizeTechnologyName(technology.name),
-    ),
-  );
 
   for (let attempt = 1; attempt <= maxPlanningAttempts; attempt += 1) {
     const planInput = buildTailoringPlanInput({
@@ -3129,7 +3325,7 @@ export async function planTailoredResume(input: {
       retrying: attempt > 1,
       status: "running",
       stepNumber: 3,
-      summary: "Generating plaintext edit outline",
+      summary: "Generating edit intent outline",
     });
     let response: TailoredResumeResponse;
 
@@ -3167,7 +3363,7 @@ export async function planTailoredResume(input: {
             }),
           readDurationMs: () => Math.max(0, Date.now() - startedAt),
           stepNumber: 3,
-          summary: "Generating plaintext edit outline",
+          summary: "Generating edit intent outline",
         })) as TailoredResumeResponse;
 
         previousResponseId = roundResponse.id;
@@ -3201,15 +3397,15 @@ export async function planTailoredResume(input: {
             })),
             planningBlocks: planningSnapshot.blocks,
           });
-          const candidatePlainText = buildPlannedResumePlainText({
-            changes: candidateChanges,
-            planningSnapshot,
-          });
-          const keywordCheckResult = buildTailorResumeKeywordCheckResult({
-            emphasizedTechnologies: emphasizedTechnologiesForPlanning,
-            text: candidatePlainText,
-          });
-          keywordCheckToolOutput = buildKeywordCheckToolOutput(keywordCheckResult);
+          const keywordAssignmentCheckResult =
+            buildTailorResumePlanningKeywordAssignmentCheckResult({
+              changes: candidateChanges,
+              emphasizedTechnologies: emphasizedTechnologiesForPlanning,
+              planningSnapshot,
+            });
+          keywordCheckToolOutput = buildKeywordCheckToolOutput(
+            keywordAssignmentCheckResult,
+          );
           responseInput = [
             {
               call_id: keywordCheckToolCall.call_id,
@@ -3255,7 +3451,7 @@ export async function planTailoredResume(input: {
         retrying: attempt < maxPlanningAttempts,
         status: "failed",
         stepNumber: 3,
-        summary: "Generating plaintext edit outline",
+        summary: "Generating edit intent outline",
       });
       lastPlanningDebug = {
         outputJson: null,
@@ -3267,7 +3463,7 @@ export async function planTailoredResume(input: {
           : {}),
       };
       planningFeedback =
-        `The previous planning attempt failed before producing a valid final plan.\n\nExact issue:\n${lastError}\n\nCall ${tailorResumePlanningKeywordCheckToolName} before returning the final structured response, and then return the full structured response with thesis, metadata, and plaintext block changes.`;
+        `The previous planning attempt failed before producing a valid final plan.\n\nExact issue:\n${lastError}\n\nCall ${tailorResumePlanningKeywordCheckToolName} before returning the final structured response, and then return the full structured response with thesis, metadata, and intent block changes.`;
 
       if (attempt < maxPlanningAttempts) {
         continue;
@@ -3288,10 +3484,10 @@ export async function planTailoredResume(input: {
         retrying: attempt < maxPlanningAttempts,
         status: "failed",
         stepNumber: 3,
-        summary: "Generating plaintext edit outline",
+        summary: "Generating edit intent outline",
       });
       planningFeedback =
-        "The previous response was empty. Return the full structured response with thesis, metadata, and plaintext block changes.";
+        "The previous response was empty. Return the full structured response with thesis, metadata, and intent block changes.";
       lastPlanningDebug = {
         outputJson: null,
         prompt: planningPrompt,
@@ -3320,42 +3516,18 @@ export async function planTailoredResume(input: {
           userMarkdown: input.userMarkdown,
         }),
       };
-      const plannedResumePlainText = buildPlannedResumePlainText({
-        changes: nextPlanWithJobTechnologies.changes,
-        planningSnapshot,
-      });
-      const unsupportedPlannedTechnologies =
-        emphasizedTechnologiesAfterNonTechnologyFilter.filter(
-          (technology) =>
-            !supportedTechnologyNamesForPlanning.has(
-              normalizeTechnologyName(technology.name),
-            ) &&
-            resumeTextIncludesKeyword({
-              term: technology.name,
-              text: plannedResumePlainText,
-            }),
-        );
-
-      if (unsupportedPlannedTechnologies.length > 0) {
-        throw new Error(
-          [
-            "The Step 3 plan added technologies the user did not support in Step 2.",
-            `Unsupported keywords in planned text: ${unsupportedPlannedTechnologies
-              .map((technology) => technology.name)
-              .join(", ")}`,
-            "Remove those keywords from the planned resume text unless USER.md explicitly says they can be listed in skills or used as experience evidence.",
-          ].join("\n"),
-        );
-      }
       validateTailoredResumePlanChanges({
         changes: nextPlanWithJobTechnologies.changes,
         planningBlocks: planningSnapshot.blocks,
       });
-      validateTailoredResumePlanningKeywordCoverage({
-        keywordCheckResult: buildTailorResumeKeywordCheckResult({
-          emphasizedTechnologies: nextPlanWithJobTechnologies.emphasizedTechnologies,
-          text: plannedResumePlainText,
-        }),
+      validateTailoredResumePlanningKeywordAssignments({
+        keywordAssignmentCheckResult:
+          buildTailorResumePlanningKeywordAssignmentCheckResult({
+            changes: nextPlanWithJobTechnologies.changes,
+            emphasizedTechnologies:
+              nextPlanWithJobTechnologies.emphasizedTechnologies,
+            planningSnapshot,
+          }),
       });
       lastPlanningResult = nextPlanWithJobTechnologies;
       lastPlanningDebug = {
@@ -3378,7 +3550,7 @@ export async function planTailoredResume(input: {
         retrying: false,
         status: "succeeded",
         stepNumber: 3,
-        summary: "Generating plaintext edit outline",
+        summary: "Generating edit intent outline",
       });
 
       return {
@@ -3403,10 +3575,10 @@ export async function planTailoredResume(input: {
         retrying: attempt < maxPlanningAttempts,
         status: "failed",
         stepNumber: 3,
-        summary: "Generating plaintext edit outline",
+        summary: "Generating edit intent outline",
       });
       planningFeedback =
-        `The previous response could not be parsed or validated.\n\nExact issue:\n${lastError}\n\nReturn the full structured response with thesis, metadata, and plaintext block changes.`;
+        `The previous response could not be parsed or validated.\n\nExact issue:\n${lastError}\n\nReturn the full structured response with thesis, metadata, and intent block changes.`;
       lastPlanningDebug = {
         outputJson: outputText,
         prompt: planningPrompt,
@@ -3462,13 +3634,10 @@ export async function implementTailoredResumePlan(input: {
   const planningSnapshot =
     input.planningSnapshot ??
     buildTailorResumePlanningSnapshot(normalizedInput.annotatedLatex);
-  const plannedResumePlainText = buildPlannedResumePlainText({
-    changes: input.planningResult.changes,
-    planningSnapshot,
-  });
   const implementationRequiredTechnologies = buildImplementationRequiredTechnologies({
     emphasizedTechnologies: input.planningResult.emphasizedTechnologies,
-    plannedResumePlainText,
+    planningResult: input.planningResult,
+    planningSnapshot,
   });
   const planningBlocksById = new Map(
     planningSnapshot.blocks.map((block) => [block.segmentId, block]),

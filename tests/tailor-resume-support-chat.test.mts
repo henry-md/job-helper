@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import {
+  buildTailorResumeSupportChatFinalSummaryInstructions,
+  buildTailorResumeSupportChatInstructions,
+} from "../lib/system-prompt-settings.ts";
+
+const supportChatPromptInput = {
+  maxSupportChatBulkResumeBulletCount: 10,
+};
+
+function buildSupportChatTestInstructions() {
+  return buildTailorResumeSupportChatInstructions(supportChatPromptInput);
+}
 
 test("support chat exposes simple rendered line-count and malformed tools before saving bullet support", () => {
   const source = readFileSync(
@@ -32,10 +44,7 @@ test("support chat exposes simple rendered line-count and malformed tools before
 });
 
 test("support chat instructions tell the model to measure drafted bullets before saving", () => {
-  const instructions = readFileSync(
-    new URL("../lib/tailor-resume-support-chat.ts", import.meta.url),
-    "utf8",
-  );
+  const instructions = buildSupportChatTestInstructions();
 
   assert.match(instructions, /measure_resume_bullet_line_count/);
   assert.match(instructions, /check_resume_bullet_malformed/);
@@ -48,10 +57,7 @@ test("support chat instructions tell the model to measure drafted bullets before
 });
 
 test("support chat instructions explain every tool available to the model", () => {
-  const instructions = readFileSync(
-    new URL("../lib/tailor-resume-support-chat.ts", import.meta.url),
-    "utf8",
-  );
+  const instructions = buildSupportChatTestInstructions();
 
   assert.match(instructions, /Tool guide:/);
   assert.match(instructions, /list_resume_skill_support/);
@@ -69,10 +75,7 @@ test("support chat instructions explain every tool available to the model", () =
 });
 
 test("support chat instructions avoid false success on ambiguous similar bullets", () => {
-  const instructions = readFileSync(
-    new URL("../lib/tailor-resume-support-chat.ts", import.meta.url),
-    "utf8",
-  );
+  const instructions = buildSupportChatTestInstructions();
 
   assert.match(instructions, /not merely by a shared skill like Go/);
   assert.match(instructions, /multiple saved bullets plausibly match/);
@@ -127,7 +130,12 @@ test("support chat exposes a bounded bulk bullet support workflow", () => {
   assert.match(source, /maxSupportChatBulkResumeBulletCount = 10/);
   assert.match(source, /create_resume_bullet_support_batch/);
   assert.match(source, /maxItems: maxSupportChatBulkResumeBulletCount/);
-  assert.match(source, /three or more lines/);
-  assert.match(source, /results/);
-  assert.match(source, /Do not call any tools/);
+
+  const instructions = buildSupportChatTestInstructions();
+  const finalSummaryInstructions =
+    buildTailorResumeSupportChatFinalSummaryInstructions(supportChatPromptInput);
+
+  assert.match(instructions, /three or more lines/);
+  assert.match(instructions, /results/);
+  assert.match(finalSummaryInstructions, /Do not call any tools/);
 });

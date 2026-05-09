@@ -25,11 +25,12 @@ Step 2. Review skills-section blockers
 - Even when no blockers remain, Step 2 remains a review gate. The UI shows a play action so the user can inspect the keyword matrix and optionally reclassify a term before Step 3 begins.
 - The master chat is the lower-right `Resume Chat` in the extension, backed by `POST /api/tailor-resume/support-chat` and `OPENAI_MASTER_CHAT_MODEL`. It can create first-class skills-section support. When it drafts spare bullet support, expose the same rendered PDF line-count and malformed-bullet checks used by Settings so it can avoid three-line or malformed bullets before saving.
 
-Step 3. Generate plaintext targeted edit plan
+Step 3. Generate targeted edit intent
 - The OpenAI planning stage runs only after Step 2 is unblocked and the user presses play.
 - It sees whole-resume plaintext, document-ordered plaintext blocks keyed by `segmentId`, the job description, emphasized technologies from Step 1, current `USER.md`, and structured skills-section support evidence from the first-class skill/spare-bullet tables.
-- It returns a tailoring thesis plus generalized plaintext edits for targeted blocks.
-- This stage decides what should change, but it does not write final LaTeX yet.
+- It returns a tailoring thesis plus block-level edit intent: target `segmentId`, exact `targetKeywords`, concise `editIntent`, and reason.
+- This stage decides which block is the best place to try each supported high- and low-priority keyword, but it does not write final prose or LaTeX yet.
+- Before final JSON, Step 3 calls `check_planned_keyword_assignments`, which verifies keywords are either assigned to planned segment edits or already preserved in unchanged original blocks.
 - When a spare bullet has `replacesQuote`, the server fuzzily searches the chosen resume experience's current bullet segments and passes the top replacement candidate, confidence, and current text as deterministic evidence. The durable source of truth is the quoted text plus required resume experience, not a long-lived source segment id.
 - When a skills/technical-skills block is editable, Step 3 should add only skills-section keywords or skills-only support. Narrative keywords may influence phrasing in experience bullets but should not be forced into Skills.
 

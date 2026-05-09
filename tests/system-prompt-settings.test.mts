@@ -114,9 +114,16 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /experience-bullet replacement or swap/i);
   assert.match(prompt, /plan it as a swap/i);
   assert.match(prompt, /weakest or least job-relevant existing bullet/i);
-  assert.match(prompt, /desiredPlainText to an empty string/i);
-  assert.match(prompt, /deleting one whole bullet or line/i);
-  assert.match(prompt, /primary goal is to make sure the final planned resume text includes every remaining high-priority keyword/i);
+  assert.match(prompt, /editIntent that says to remove/i);
+  assert.match(prompt, /entire bullet\/line segment/i);
+  assert.match(prompt, /Step 3 decides where supported keywords should go/i);
+  assert.match(prompt, /Step 4 writes the exact LaTeX wording/i);
+  assert.match(prompt, /editIntent must be a short instruction/i);
+  assert.match(prompt, /targetKeywords must list the exact emphasizedTechnology names/i);
+  assert.match(prompt, /Do not write final resume prose here/i);
+  assert.match(prompt, /ideal job-specific resume/i);
+  assert.match(prompt, /low-priority keyword list/i);
+  assert.match(prompt, /Do not abandon a keyword after one awkward attempt/i);
   assert.match(prompt, /When editing Skills or Technical Skills, add only actual skills/i);
   assert.match(prompt, /dedicated USER\.md sentence\/bullet for that exact technology/i);
   assert.match(prompt, /Do not add peppering\/capability phrases such as RESTful/i);
@@ -129,10 +136,10 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /Concrete technologies with dedicated source-resume or USER\.md support may go into Skills/i);
   assert.match(prompt, /capability phrases used to pepper fit/i);
   assert.equal(prompt.match(/Available tools:/g)?.length, 1);
-  assert.match(prompt, /check_planned_resume_keyword_coverage/i);
-  assert.match(prompt, /\{ changes: \[\{ segmentId, desiredPlainText \}\] \}/i);
-  assert.match(prompt, /applies those plaintext replacements to the full resume/i);
-  assert.match(prompt, /Return final JSON only after coverage is acceptable/i);
+  assert.match(prompt, /check_planned_keyword_assignments/i);
+  assert.match(prompt, /\{ changes: \[\{ segmentId, editIntent, targetKeywords \}\] \}/i);
+  assert.match(prompt, /assigned to planned segment edits/i);
+  assert.match(prompt, /Return final JSON only after high-priority assignments are complete/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 
@@ -152,7 +159,9 @@ test("buildTailorResumePlanningSystemPrompt appends skills keyword coverage to s
     /RESTful, RESTful APIs, cloud infrastructure, data structures/i,
   );
   assert.match(prompt, /Available tools:/);
-  assert.match(prompt, /check_planned_resume_keyword_coverage/i);
+  assert.match(prompt, /check_planned_keyword_assignments/i);
+  assert.match(prompt, /Coverage ambition/i);
+  assert.match(prompt, /actively work through low-priority terms/i);
 });
 
 test("buildTailorResumePlanningSystemPrompt does not ask for job identifiers", () => {
@@ -264,18 +273,20 @@ test("buildTailorResumeImplementationSystemPrompt injects retry feedback", () =>
   assert.match(prompt, /Unknown segment returned/);
   assert.match(prompt, /Do not change dates of experience/i);
   assert.match(prompt, /punctuation, separators, capitalization, or link text/i);
-  assert.match(prompt, /high-priority exact technology keywords/i);
-  assert.match(prompt, /Use low-priority terms only when they fit naturally/i);
+  assert.match(prompt, /both high- and low-priority terms/i);
+  assert.match(prompt, /low-priority terms assigned by Step 3 are active targets/i);
+  assert.match(prompt, /targetKeywords as keyword guidance/i);
+  assert.match(prompt, /editIntent and targetKeywords as the target visible outcome/i);
   assert.match(prompt, /Quoted bullets under technology headings are user-confirmed experience evidence/i);
   assert.match(prompt, /actual experience-bullet replacement/i);
   assert.match(prompt, /rather than downgrading it to a skills-only keyword/i);
   assert.match(prompt, /not placement instructions/i);
   assert.match(prompt, /Unquoted bullets are factual notes/i);
-  assert.match(prompt, /use an empty latexCode when removing that single planned bullet or line/i);
+  assert.match(prompt, /use an empty latexCode when removal is clearly the right implementation/i);
   assert.match(prompt, /Do not leave an empty \\resumeitem\{\}/i);
   assert.match(prompt, /replaces a lower-signal bullet with user-confirmed technology experience/i);
   assert.match(prompt, /Do not move the technology only to skills/i);
-  assert.match(prompt, /secondary goal is to avoid keyword regressions from that accepted plan/i);
+  assert.match(prompt, /keep pushing keyword coverage for both high- and low-priority terms/i);
   assert.match(prompt, /preserve only the planned entries that are actual skills/i);
   assert.match(prompt, /dedicated USER\.md sentence\/bullet for that exact technology/i);
   assert.match(prompt, /Do not add capability phrases to Skills merely for keyword peppering/i);
@@ -293,6 +304,8 @@ test("buildTailorResumeImplementationSystemPrompt injects retry feedback", () =>
   assert.match(prompt, /\{ changes: \[\{ segmentId, latexCode \}\], lineCountSegmentIds: \[\] \}/i);
   assert.match(prompt, /reports keyword coverage, rendered page count/i);
   assert.match(prompt, /Pass lineCountSegmentIds as \[\]/i);
+  assert.match(prompt, /testing whether a missing keyword can fit without creating another rendered line/i);
+  assert.match(prompt, /missing supported high- or low-priority keyword/i);
   assert.match(prompt, /Return final JSON only after coverage and changed-bullet health are acceptable/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
@@ -310,6 +323,7 @@ test("buildTailorResumeImplementationSystemPrompt appends USER.md bolding guidan
   assert.match(prompt, /\\textbf\{\.\.\.\}/);
   assert.match(prompt, /Available tools:/);
   assert.match(prompt, /check_implemented_resume_keyword_coverage/i);
+  assert.match(prompt, /missing supported high- or low-priority keyword/i);
 });
 
 test("buildTailorResumeRefinementSystemPrompt injects retry feedback", () => {

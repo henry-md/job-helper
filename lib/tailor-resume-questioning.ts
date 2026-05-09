@@ -847,7 +847,19 @@ function serializePlannedBlocks(input: {
         `${index + 1}. segmentId: ${change.segmentId}`,
         `   current text: ${block?.plainText ?? "[missing block]"}`,
         `   current latex: ${block?.latexCode ?? "[missing block]"}`,
-        `   desired text: ${change.desiredPlainText || "[remove this block]"}`,
+        `   edit intent: ${change.editIntent.trim()}`,
+        `   target keywords: ${
+          change.targetKeywords.length > 0
+            ? change.targetKeywords.join(", ")
+            : "[none]"
+        }`,
+        ...(change.desiredPlainText === undefined
+          ? []
+          : [
+              `   legacy desired text: ${
+                change.desiredPlainText || "[remove this block]"
+              }`,
+            ]),
         `   reason: ${change.reason.trim()}`,
       ].join("\n");
     })

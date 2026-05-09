@@ -54,14 +54,15 @@ Tailor Resume object model:
     - `afterLatexCode`: the OpenAI-tailored suggestion for that same block
     - `customLatexCode`: an optional user-authored override for the same block
   - the review timeline should stay keyed to the model edit record, not create separate timeline rows for custom user overrides
-  - the saved plaintext planning payload from the first tailoring pass, including:
+  - the saved Step 3 planning payload from the first tailoring pass, including:
     - planned `segmentId` edits
-    - desired plaintext rewrites per block
+    - exact `targetKeywords` and concise `editIntent` per block
+    - optional legacy `desiredPlainText` from older runs
     - the planner thesis + metadata
     - `jobIdentifier`, which should prefer a visible job/requisition/posting id and fall back to the usual short disambiguator when no job number is available
   - `jobUrl`, when the run came from a captured job page or a description with a URL header; query-sensitive URL matching lets the API return an existing tailored resume for the same exact posting URL without collapsing jobs whose identity lives in query params
   - the saved OpenAI debug trace for developer inspection, including:
-    - the full prompt for the Step 3 plaintext planning call
+    - the full prompt for the Step 3 intent-planning call
     - the full JSON output returned by the Step 3 call
     - the full prompt for the Step 4 LaTeX implementation call
     - the full JSON output returned by the Step 4 call
@@ -154,8 +155,8 @@ Tailoring generation:
 - The tailoring flow now runs in four required stages plus an always-on page-count guardrail:
   - Step 1 extracts emphasized job keywords, then sorts them into high/low priority and skills-section/narrative/non-skill classification buckets
   - Step 2 deterministically waits until all high-priority skills-section keywords are covered by the source resume, a skills-section skill, skills-only support, or a spare bullet; once ready, the user presses play to continue
-  - Step 3 runs an OpenAI planning pass over whole-resume plaintext, document-ordered blocks, current `USER.md`, and structured skill/spare-bullet evidence
-  - Step 4A sees only the selected blocks and translates the approved plaintext plan plus any compressed user learnings back into block-local LaTeX replacements
+  - Step 3 runs an OpenAI planning pass over whole-resume plaintext, document-ordered blocks, current `USER.md`, and structured skill/spare-bullet evidence, returning block-level keyword intent rather than final wording
+  - Step 4A sees only the selected blocks and translates the approved edit intent plus any compressed user learnings back into block-local LaTeX replacements
   - Step 4B keeps the tailored PDF within the original page count; when overflow happens, it re-prompts only the existing edited blocks and retries verified line-saving replacements until the preview fits or the attempt budget is exhausted
 - Compile retries stay scoped to the implementation pass so LaTeX escaping and block-boundary fixes do not force the model to rethink the whole editing thesis on every retry.
 - Extension-originated tailoring should pass the captured job URL separately from the job-description text and create/reuse a tracked `JobApplication` for the normalized exact URL before generation starts. The API should store live run state in `TailorResumeRun`; if the same application already has an active run or a linked tailored resume, return a conflict payload so the extension can ask whether to cancel/keep or overwrite.

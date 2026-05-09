@@ -376,7 +376,7 @@ function createMockTailoredResumes() {
         },
         planning: {
           outputJson:
-            '{\n  "changes": [\n    {\n      "segmentId": "work-experience.entry-1.bullet-1",\n      "desiredPlainText": "Shipped Kubernetes deployment automation for production services.",\n      "reason": "Highlights required infrastructure experience."\n    }\n  ]\n}',
+            '{\n  "changes": [\n    {\n      "segmentId": "work-experience.entry-1.bullet-1",\n      "editIntent": "Fit Kubernetes deployment automation into this production services bullet.",\n      "targetKeywords": ["Kubernetes"],\n      "reason": "Highlights required infrastructure experience."\n    }\n  ]\n}',
           prompt: "Debug Step 3 planning prompt.",
           skippedReason: null,
           systemPrompt: "Debug Step 3 planning system prompt.",
@@ -384,10 +384,10 @@ function createMockTailoredResumes() {
             {
               id: "debug-step-3-tool-1",
               input:
-                '{\n  "changes": [\n    {\n      "segmentId": "work-experience.entry-1.bullet-1",\n      "desiredPlainText": "Shipped Kubernetes deployment automation for production services."\n    }\n  ]\n}',
+                '{\n  "changes": [\n    {\n      "segmentId": "work-experience.entry-1.bullet-1",\n      "editIntent": "Fit Kubernetes deployment automation into this production services bullet.",\n      "targetKeywords": ["Kubernetes"]\n    }\n  ]\n}',
               output:
-                '{\n  "missingHighPriority": [],\n  "presentHighPriority": ["Kubernetes"]\n}',
-              toolName: "check_planned_resume_keyword_coverage",
+                '{\n  "missingHighPriority": [],\n  "satisfiedHighPriority": ["Kubernetes"]\n}',
+              toolName: "check_planned_keyword_assignments",
             },
           ],
         },
