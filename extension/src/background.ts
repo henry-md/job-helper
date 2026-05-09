@@ -411,7 +411,7 @@ async function sendTailoredResumeBadgeMessage(
           }[];
           includeLowPriorityTermsInKeywordCoverage: boolean;
           jobUrl: string | null;
-          keywordCoverage: unknown;
+          keywordCoverage: unknown | null;
           nonTechnologyNames?: string[];
           tailoredResumeId: string;
         };
@@ -424,6 +424,15 @@ async function sendTailoredResumeBadgeMessage(
   } catch {
     // Some pages do not allow content scripts or have not finished injecting.
   }
+}
+
+function readContentScriptLoaderFiles() {
+  return (
+    chrome.runtime
+      .getManifest()
+      .content_scripts?.flatMap((script) => script.js ?? [])
+      .filter((file): file is string => Boolean(file?.trim())) ?? []
+  );
 }
 
 async function hideTailoredResumeBadgesForMatchingTabs(input: {
@@ -485,8 +494,9 @@ async function sendEmphasizedTechnologiesBadgeMessage(
       >;
       includeLowPriorityTermsInKeywordCoverage: boolean;
       jobUrl: string | null;
-      keywordCoverage: null;
+      keywordCoverage: unknown | null;
       nonTechnologyNames?: string[];
+      tailoredResumeId?: string;
     };
     type: "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE";
   },
@@ -499,8 +509,14 @@ async function sendEmphasizedTechnologiesBadgeMessage(
   }
 
   try {
+    const contentScriptFiles = readContentScriptLoaderFiles();
+
+    if (contentScriptFiles.length === 0) {
+      return;
+    }
+
     await chrome.scripting.executeScript({
-      files: ["src/content.ts-loader.js"],
+      files: contentScriptFiles,
       target: { tabId },
     });
     await chrome.tabs.sendMessage(tabId, message);
@@ -865,16 +881,25 @@ async function revealDismissedKeywordBadge(input: {
   tailoredResumeId: string | null;
 }) {
   let resolvedJobUrl = input.jobUrl;
+  let matchingResume: PersonalInfoSummary["tailoredResumes"][number] | null =
+    null;
   let resolvedPersonalInfo: PersonalInfoSummary | null = null;
 
-  if (!resolvedJobUrl && input.tailoredResumeId) {
+  if (input.tailoredResumeId || !resolvedJobUrl) {
     try {
       const { personalInfo } = await getPersonalInfoSummary();
       resolvedPersonalInfo = personalInfo;
-      const matchingResume = personalInfo.tailoredResumes.find(
-        (resume) => resume.id === input.tailoredResumeId,
-      );
-      resolvedJobUrl = matchingResume?.jobUrl ?? null;
+      matchingResume =
+        personalInfo.tailoredResumes.find(
+          (resume) => resume.id === input.tailoredResumeId,
+        ) ??
+        personalInfo.tailoredResumes.find(
+          (resume) =>
+            normalizeComparableUrl(resume.jobUrl) ===
+            normalizeComparableUrl(resolvedJobUrl),
+        ) ??
+        null;
+      resolvedJobUrl = matchingResume?.jobUrl ?? resolvedJobUrl;
     } catch {
       // If personal info fails to load, fall through and try with whatever we have.
     }
@@ -920,7 +945,13 @@ async function revealDismissedKeywordBadge(input: {
     const emphasizedTechnologies =
       input.emphasizedTechnologies?.filter((technology) =>
         Boolean(technology.name.trim()),
-      ) ?? [];
+      ) ??
+      matchingResume?.emphasizedTechnologies.filter((technology) =>
+        Boolean(technology.name.trim()),
+      ) ??
+      [];
+    const keywordCoverage =
+      input.keywordCoverage ?? matchingResume?.keywordCoverage ?? null;
     const nonTechnologyNames =
       input.nonTechnologyNames && input.nonTechnologyNames.length > 0
         ? input.nonTechnologyNames
@@ -949,8 +980,10 @@ async function revealDismissedKeywordBadge(input: {
               includeLowPriorityTermsInKeywordCoverage:
                 input.includeLowPriorityTermsInKeywordCoverage === true,
               jobUrl: resolvedJobUrl,
-              keywordCoverage: null,
+              keywordCoverage,
               nonTechnologyNames,
+              tailoredResumeId:
+                matchingResume?.id ?? input.tailoredResumeId ?? undefined,
             },
             type: "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE",
           });
@@ -971,7 +1004,9 @@ async function refreshKeywordBadgeForMatchingTabs(input: {
   emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
   includeLowPriorityTermsInKeywordCoverage?: boolean;
   jobUrl: string | null;
+  keywordCoverage?: unknown;
   nonTechnologyNames?: string[];
+  tailoredResumeId?: string | null;
 }) {
   const normalizedTargetUrl = normalizeComparableUrl(input.jobUrl);
 
@@ -1015,8 +1050,9 @@ async function refreshKeywordBadgeForMatchingTabs(input: {
             includeLowPriorityTermsInKeywordCoverage:
               input.includeLowPriorityTermsInKeywordCoverage === true,
             jobUrl: input.jobUrl,
-            keywordCoverage: null,
+            keywordCoverage: input.keywordCoverage ?? null,
             nonTechnologyNames: input.nonTechnologyNames ?? [],
+            tailoredResumeId: input.tailoredResumeId ?? undefined,
           },
           type: "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE",
         });
@@ -3604,10 +3640,17 @@ chrome.runtime.onMessage.addListener((
           "includeLowPriorityTermsInKeywordCoverage",
         ),
         jobUrl: readPayloadString(typedMessage.payload, "jobUrl"),
+        keywordCoverage: isRecord(typedMessage.payload)
+          ? typedMessage.payload.keywordCoverage
+          : null,
         nonTechnologyNames: [
           ...readPayloadStringArray(typedMessage.payload, "nonTechnologyNames"),
           ...readPayloadStringArray(typedMessage.payload, "nonTechnologies"),
         ],
+        tailoredResumeId: readPayloadString(
+          typedMessage.payload,
+          "tailoredResumeId",
+        ),
       });
 
       return {};

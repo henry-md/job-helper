@@ -4,6 +4,7 @@ import { buildCompanyResumeDownloadName } from "../lib/tailored-resume-download-
 import { resolveTailoredResumeTabBadge } from "../extension/src/tailored-resume-tab-badge.ts";
 import type {
   TailorResumeExistingTailoringState,
+  TailoredResumeKeywordCoverage,
   TailoredResumeSummary,
 } from "../extension/src/job-helper.ts";
 
@@ -51,6 +52,50 @@ function buildTailoredResumeSummary(
   };
 }
 
+function buildKeywordCoverage(): TailoredResumeKeywordCoverage {
+  const terms = [
+    {
+      name: "TypeScript",
+      presentInOriginal: true,
+      presentInTailored: true,
+      priority: "high" as const,
+    },
+    {
+      name: "Kubernetes",
+      presentInOriginal: false,
+      presentInTailored: true,
+      priority: "high" as const,
+    },
+  ];
+
+  return {
+    allPriorities: {
+      addedTerms: ["Kubernetes"],
+      matchedOriginalTerms: ["TypeScript"],
+      matchedTailoredTerms: ["TypeScript", "Kubernetes"],
+      originalHitCount: 1,
+      originalHitPercentage: 50,
+      tailoredHitCount: 2,
+      tailoredHitPercentage: 100,
+      terms,
+      totalTermCount: 2,
+    },
+    highPriority: {
+      addedTerms: ["Kubernetes"],
+      matchedOriginalTerms: ["TypeScript"],
+      matchedTailoredTerms: ["TypeScript", "Kubernetes"],
+      originalHitCount: 1,
+      originalHitPercentage: 50,
+      tailoredHitCount: 2,
+      tailoredHitPercentage: 100,
+      terms,
+      totalTermCount: 2,
+    },
+    matcherVersion: 1,
+    updatedAt: "2026-05-09T16:00:00.000Z",
+  };
+}
+
 function buildActiveTailoring(
   overrides: Partial<
     Extract<TailorResumeExistingTailoringState, { kind: "active_generation" }>
@@ -73,10 +118,11 @@ function buildActiveTailoring(
 }
 
 test("returns a tab badge for a completed tailored resume matching the page URL", () => {
+  const keywordCoverage = buildKeywordCoverage();
   const badge = resolveTailoredResumeTabBadge({
     activeTailorings: [],
     pageIdentity: buildPageIdentity(),
-    tailoredResumes: [buildTailoredResumeSummary()],
+    tailoredResumes: [buildTailoredResumeSummary({ keywordCoverage })],
   });
 
   assert.deepEqual(badge, {
@@ -92,7 +138,7 @@ test("returns a tab badge for a completed tailored resume matching the page URL"
       },
     ],
     jobUrl: matchingJobUrl,
-    keywordCoverage: null,
+    keywordCoverage,
     tailoredResumeId: "tailored-123",
   });
 });

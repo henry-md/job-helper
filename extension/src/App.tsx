@@ -9222,21 +9222,22 @@ function App() {
     setTailoredResumeMenuErrorResumeId(input.tailoredResumeId);
   }
 
-  async function handleRevealKeywordBadge(input: {
-    jobUrl: string | null;
-    tailoredResumeId: string;
-  }) {
+  async function handleRevealKeywordBadge(tailoredResume: TailoredResumeSummary) {
     setTailoredResumeMenuError(null);
     setTailoredResumeMenuErrorResumeId(null);
 
     try {
       await chrome.runtime.sendMessage({
         payload: {
-          jobUrl: input.jobUrl,
+          displayName: tailoredResume.displayName,
+          emphasizedTechnologies: tailoredResume.emphasizedTechnologies,
+          includeLowPriorityTermsInKeywordCoverage,
+          jobUrl: tailoredResume.jobUrl ?? null,
+          keywordCoverage: tailoredResume.keywordCoverage,
           nonTechnologyNames:
             personalInfo?.userMarkdown.nonTechnologies ??
             savedSettingsUserMarkdown.nonTechnologies,
-          tailoredResumeId: input.tailoredResumeId,
+          tailoredResumeId: tailoredResume.id,
         },
         type: "JOB_HELPER_REVEAL_KEYWORD_BADGE",
       });
@@ -9248,7 +9249,7 @@ function App() {
           ? error.message
           : "Could not show the keywords popup.",
       );
-      setTailoredResumeMenuErrorResumeId(input.tailoredResumeId);
+      setTailoredResumeMenuErrorResumeId(tailoredResume.id);
     }
   }
 
@@ -11549,6 +11550,7 @@ function App() {
               : false;
             const canShowKeywordBadge =
               tailoredResume.emphasizedTechnologies.length > 0 ||
+              Boolean(tailoredResume.keywordCoverage) ||
               isKeywordBadgeDismissed;
 
             return (
@@ -11662,10 +11664,7 @@ function App() {
                                   disabled={isMenuBusy}
                                   type="button"
                                   onClick={() =>
-                                    void handleRevealKeywordBadge({
-                                      jobUrl: tailoredResume.jobUrl ?? null,
-                                      tailoredResumeId: tailoredResume.id,
-                                    })
+                                    void handleRevealKeywordBadge(tailoredResume)
                                   }
                                 >
                                   Show keywords

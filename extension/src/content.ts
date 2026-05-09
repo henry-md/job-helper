@@ -77,7 +77,7 @@ type NormalizedKeywordCoverageBucket = {
   totalTermCount: number;
 };
 
-type KeywordCoverageTone = "added" | "missing" | "shared";
+type KeywordCoverageTone = "missing" | "new" | "original";
 
 type KeywordClassificationOverride = {
   kind: KeywordClassificationKind;
@@ -573,11 +573,11 @@ function readKeywordCoverageBuckets(payload: TailoredResumeBadgePayload) {
 function resolveKeywordCoverageTone(
   term: NormalizedKeywordCoverageTerm,
 ): KeywordCoverageTone {
-  if (!term.presentInTailored) {
-    return "missing";
+  if (term.presentInOriginal) {
+    return "original";
   }
 
-  return term.presentInOriginal ? "shared" : "added";
+  return term.presentInTailored ? "new" : "missing";
 }
 
 function buildKeywordCoverageToneMap(bucket: NormalizedKeywordCoverageBucket) {
@@ -603,9 +603,9 @@ function buildKeywordCoverageToneMap(bucket: NormalizedKeywordCoverageBucket) {
 
 function countKeywordCoverageTones(bucket: NormalizedKeywordCoverageBucket) {
   const counts = {
-    added: 0,
     missing: 0,
-    shared: 0,
+    new: 0,
+    original: 0,
   };
 
   for (const term of bucket.terms) {
@@ -1357,20 +1357,20 @@ function appendDraggableKeywordMatrix(
       coverageTones,
     );
     const coverageStatus =
-      coverageTone === "shared"
-        ? "Present before and after tailoring"
-        : coverageTone === "added"
-          ? "Added by tailoring"
+      coverageTone === "original"
+        ? "In Base"
+        : coverageTone === "new"
+          ? "In New"
           : coverageTone === "missing"
-            ? "Missing after tailoring"
+            ? "In Neither"
             : "";
     const titleParts: string[] = [];
     const chipBackground =
-      coverageTone === "added"
+      coverageTone === "new"
         ? "rgba(16, 185, 129, 0.18)"
         : coverageTone === "missing"
           ? "rgba(244, 63, 94, 0.13)"
-          : coverageTone === "shared"
+          : coverageTone === "original"
             ? "rgba(14, 165, 233, 0.13)"
             : technology.classification === "non_skill"
               ? "rgba(113, 113, 122, 0.16)"
@@ -1378,11 +1378,11 @@ function appendDraggableKeywordMatrix(
                 ? "rgba(16, 185, 129, 0.14)"
                 : "rgba(244, 244, 245, 0.07)";
     const chipBorder =
-      coverageTone === "added"
+      coverageTone === "new"
         ? "1px solid rgba(52, 211, 153, 0.34)"
         : coverageTone === "missing"
           ? "1px solid rgba(251, 113, 133, 0.34)"
-          : coverageTone === "shared"
+          : coverageTone === "original"
             ? "1px solid rgba(56, 189, 248, 0.32)"
             : technology.classification === "non_skill"
               ? "1px solid rgba(161, 161, 170, 0.22)"
@@ -1390,11 +1390,11 @@ function appendDraggableKeywordMatrix(
                 ? "1px solid rgba(52, 211, 153, 0.28)"
                 : "1px solid rgba(244, 244, 245, 0.12)";
     const chipColor =
-      coverageTone === "added"
+      coverageTone === "new"
         ? "#d1fae5"
         : coverageTone === "missing"
           ? "#ffe4e6"
-          : coverageTone === "shared"
+          : coverageTone === "original"
             ? "#e0f2fe"
             : technology.classification === "non_skill"
               ? "#a1a1aa"
@@ -1410,6 +1410,9 @@ function appendDraggableKeywordMatrix(
     chip.type = "button";
     chip.draggable = true;
     chip.dataset.keywordName = technology.name;
+    if (coverageTone) {
+      chip.dataset.keywordCoverageTone = coverageTone;
+    }
     chip.title = titleParts.join(" - ") || "Drag to change classification";
     styleElement(chip, {
       alignItems: "center",
@@ -1595,14 +1598,14 @@ function appendKeywordCoverageDisclosure(
   const panel = document.createElement("div");
   const legend = document.createElement("div");
   const legendItems = document.createElement("div");
-  const helpWrap = document.createElement("span");
-  const helpButton = document.createElement("button");
-  const helpTooltip = document.createElement("span");
+  const legendTooltip = document.createElement("span");
   const matrixContainer = document.createElement("div");
   const action = document.createElement("button");
   const scopeLabel = formatKeywordCoverageScope(payload);
   const coverageToneCounts = countKeywordCoverageTones(buckets.allPriorities);
   const coverageTones = buildKeywordCoverageToneMap(buckets.allPriorities);
+
+  legendTooltip.dataset.keywordCoverageLegendTooltip = "true";
 
   styleElement(details, {
     background: "transparent",
@@ -1674,24 +1677,7 @@ function appendKeywordCoverageDisclosure(
     gap: "6px",
     minWidth: "0",
   });
-  styleElement(helpWrap, {
-    display: "inline-flex",
-    flex: "0 0 auto",
-  });
-  styleElement(helpButton, {
-    appearance: "none",
-    background: "rgba(244, 244, 245, 0.06)",
-    border: "1px solid rgba(244, 244, 245, 0.16)",
-    borderRadius: "999px",
-    color: "rgba(244, 244, 245, 0.78)",
-    cursor: "help",
-    font: "800 10px/1 Inter, ui-sans-serif, system-ui, sans-serif",
-    height: "18px",
-    padding: "0",
-    textAlign: "center",
-    width: "18px",
-  });
-  styleElement(helpTooltip, {
+  styleElement(legendTooltip, {
     background: "rgba(18, 18, 22, 0.96)",
     border: "1px solid rgba(244, 244, 245, 0.16)",
     borderRadius: "10px",
@@ -1767,16 +1753,73 @@ function appendKeywordCoverageDisclosure(
     );
   });
 
-  function createLegendItem(label: string, color: string) {
+  const positionLegendTooltip = (trigger: HTMLElement) => {
+    const triggerRect = trigger.getBoundingClientRect();
+    const tooltipRect = legendTooltip.getBoundingClientRect();
+    const tooltipWidth = tooltipRect.width || 260;
+    const tooltipHeight = tooltipRect.height || 48;
+    const gap = 8;
+    const inset = 10;
+    const minimumClearanceAbove = tooltipHeight + gap + 36;
+    const top =
+      triggerRect.top >= minimumClearanceAbove
+        ? triggerRect.top - tooltipHeight - gap
+        : triggerRect.bottom + gap;
+    const left = Math.min(
+      Math.max(inset, triggerRect.left),
+      Math.max(inset, window.innerWidth - tooltipWidth - inset),
+    );
+
+    legendTooltip.style.left = `${left}px`;
+    legendTooltip.style.top = `${Math.min(
+      Math.max(inset, top),
+      Math.max(inset, window.innerHeight - tooltipHeight - inset),
+    )}px`;
+  };
+  const showLegendTooltip = (trigger: HTMLElement, description: string) => {
+    legendTooltip.textContent = description;
+    if (!legendTooltip.isConnected) {
+      document.documentElement.append(legendTooltip);
+    }
+    positionLegendTooltip(trigger);
+    legendTooltip.style.opacity = "1";
+    legendTooltip.style.visibility = "visible";
+  };
+  const hideLegendTooltip = () => {
+    legendTooltip.style.opacity = "0";
+    legendTooltip.style.visibility = "hidden";
+  };
+  const repositionVisibleLegendTooltip = () => {
+    const activeLegendItem = document.querySelector<HTMLElement>(
+      `#${emphasizedTechnologyBadgeRootId} [data-keyword-coverage-legend-active="true"]`,
+    );
+
+    if (legendTooltip.style.visibility === "visible" && activeLegendItem) {
+      positionLegendTooltip(activeLegendItem);
+    }
+  };
+
+  function createLegendItem(
+    tone: KeywordCoverageTone,
+    label: string,
+    color: string,
+    description: string,
+  ) {
     const item = document.createElement("span");
     const dot = document.createElement("span");
 
+    item.tabIndex = 0;
+    item.dataset.keywordCoverageLegendTone = tone;
+    item.setAttribute("aria-label", `${label}: ${description}`);
+    item.setAttribute("role", "button");
     styleElement(item, {
       alignItems: "center",
+      cursor: "help",
       display: "inline-flex",
       gap: "4px",
       whiteSpace: "nowrap",
     });
+    dot.dataset.keywordCoverageColor = tone;
     styleElement(dot, {
       background: color,
       borderRadius: "999px",
@@ -1784,73 +1827,50 @@ function appendKeywordCoverageDisclosure(
       height: "7px",
       width: "7px",
     });
+    item.addEventListener("mouseenter", () => {
+      item.dataset.keywordCoverageLegendActive = "true";
+      showLegendTooltip(item, description);
+    });
+    item.addEventListener("mouseleave", () => {
+      delete item.dataset.keywordCoverageLegendActive;
+      hideLegendTooltip();
+    });
+    item.addEventListener("focus", () => {
+      item.dataset.keywordCoverageLegendActive = "true";
+      showLegendTooltip(item, description);
+    });
+    item.addEventListener("blur", () => {
+      delete item.dataset.keywordCoverageLegendActive;
+      hideLegendTooltip();
+    });
     item.append(dot, document.createTextNode(label));
     return item;
   }
 
-  helpButton.type = "button";
-  helpButton.textContent = "?";
-  helpButton.setAttribute(
-    "aria-label",
-    "Explain resume keyword change colors",
-  );
-  helpTooltip.textContent =
-    "Both = present before and after. New = added by tailoring. Missing = absent after tailoring.";
-
-  const positionHelpTooltip = () => {
-    const triggerRect = helpButton.getBoundingClientRect();
-    const tooltipRect = helpTooltip.getBoundingClientRect();
-    const tooltipWidth = tooltipRect.width || 260;
-    const tooltipHeight = tooltipRect.height || 48;
-    const gap = 8;
-    const inset = 10;
-    const top =
-      triggerRect.top - inset >= tooltipHeight + gap
-        ? triggerRect.top - tooltipHeight - gap
-        : triggerRect.bottom + gap;
-    const left = Math.min(
-      Math.max(inset, triggerRect.right - tooltipWidth),
-      Math.max(inset, window.innerWidth - tooltipWidth - inset),
-    );
-
-    helpTooltip.style.left = `${left}px`;
-    helpTooltip.style.top = `${Math.min(
-      Math.max(inset, top),
-      Math.max(inset, window.innerHeight - tooltipHeight - inset),
-    )}px`;
-  };
-  const showHelpTooltip = () => {
-    if (!helpTooltip.isConnected) {
-      document.documentElement.append(helpTooltip);
-    }
-    positionHelpTooltip();
-    helpTooltip.style.opacity = "1";
-    helpTooltip.style.visibility = "visible";
-  };
-  const hideHelpTooltip = () => {
-    helpTooltip.style.opacity = "0";
-    helpTooltip.style.visibility = "hidden";
-  };
-  const repositionVisibleHelpTooltip = () => {
-    if (helpTooltip.style.visibility === "visible") {
-      positionHelpTooltip();
-    }
-  };
-
-  helpWrap.addEventListener("mouseenter", showHelpTooltip);
-  helpWrap.addEventListener("mouseleave", hideHelpTooltip);
-  helpButton.addEventListener("focus", showHelpTooltip);
-  helpButton.addEventListener("blur", hideHelpTooltip);
-  window.addEventListener("resize", repositionVisibleHelpTooltip);
-  window.addEventListener("scroll", repositionVisibleHelpTooltip, true);
-  helpWrap.append(helpButton);
+  window.addEventListener("resize", repositionVisibleLegendTooltip);
+  window.addEventListener("scroll", repositionVisibleLegendTooltip, true);
 
   legendItems.append(
-    createLegendItem(`Both ${coverageToneCounts.shared}`, "#38bdf8"),
-    createLegendItem(`New ${coverageToneCounts.added}`, "#34d399"),
-    createLegendItem(`Missing ${coverageToneCounts.missing}`, "#fb7185"),
+    createLegendItem(
+      "original",
+      `In Base ${coverageToneCounts.original}`,
+      "#38bdf8",
+      "In Base: this job keyword is present in the original base resume.",
+    ),
+    createLegendItem(
+      "new",
+      `In New ${coverageToneCounts.new}`,
+      "#34d399",
+      "In New: this job keyword is present in the new tailored resume, but not in the original base resume.",
+    ),
+    createLegendItem(
+      "missing",
+      `In Neither ${coverageToneCounts.missing}`,
+      "#fb7185",
+      "In Neither: this job keyword is not present in the original base resume or the new tailored resume.",
+    ),
   );
-  legend.append(legendItems, helpWrap);
+  legend.append(legendItems);
   appendDraggableKeywordMatrix(
     matrixContainer,
     payload,
@@ -1864,7 +1884,7 @@ function appendKeywordCoverageDisclosure(
   details.append(summary, panel);
   details.addEventListener("toggle", () => {
     chevron.textContent = details.open ? "^" : "v";
-    hideHelpTooltip();
+    hideLegendTooltip();
     window.requestAnimationFrame(reflowPagePromptStack);
   });
   container.append(details);
