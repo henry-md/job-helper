@@ -924,6 +924,7 @@ async function completeTailorResumeInterviewAndFinalize(input: {
     planningResult,
     planningSnapshot: planningStage.planningSnapshot,
     promptSettings: input.rawProfile.promptSettings.values,
+    skillData,
     userMarkdown: userMarkdownForModel,
   });
   const tailoringResultWithScrapedKeywords = {
@@ -2752,10 +2753,16 @@ async function finalizeTailorResumeGeneration(input: {
         pageCountStepHandled = true;
 
         try {
+          const skillData = await readTailorResumeStoredSkillData({
+            userId: input.userId,
+          });
           const compactionResult = await compactTailoredResumePageCount({
             annotatedLatexCode: tailoringResult.annotatedLatexCode,
             edits: tailoringResult.edits,
+            emphasizedTechnologies:
+              tailoringResult.planningResult.emphasizedTechnologies,
             initialPageCount: generatedPageCount,
+            jobDescription: input.jobDescription,
             latexCode: tailoringResult.latexCode,
             onStepEvent: (event) =>
               input.onStepEvent?.({

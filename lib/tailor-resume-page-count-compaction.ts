@@ -6,6 +6,7 @@ import {
   type SystemPromptSettings,
 } from "./system-prompt-settings.ts";
 import { validateTailorResumeLatexDocument } from "./tailor-resume-link-validation.ts";
+import { buildTailorResumeKeywordCheckResult } from "./tailor-resume-keyword-coverage.ts";
 import {
   countPdfPages,
   estimateTailorResumeOverflowLines,
@@ -23,16 +24,26 @@ import {
   getRetryAttemptsToGeneratePageCountCompaction,
 } from "./tailor-resume-retry-config.ts";
 import { runWithTransientModelRetries } from "./tailor-resume-transient-retry.ts";
+import { renderTailoredResumeLatexToPlainText } from "./tailor-resume-preview-focus.ts";
+import {
+  buildTailorResumeRenderedBulletHealthCheck,
+} from "./tailor-resume-rendered-bullet-health.ts";
 import { buildTailoredResumeBlockEdits } from "./tailor-resume-review.ts";
 import { stripTailorResumeSegmentIds } from "./tailor-resume-segmentation.ts";
 import { applyTailorResumeBlockChanges } from "./tailor-resume-tailoring.ts";
 import {
   resolveTailoredResumeCurrentEditLatexCode,
 } from "./tailor-resume-edit-history.ts";
+import {
+  filterTailorResumeSpareBulletsForSearch,
+  type TailorResumeSpareBulletSearchMode,
+} from "./tailor-resume-spare-bullet-search.ts";
 import type {
   TailorResumeGenerationStepEvent,
+  TailoredResumeEmphasizedTechnology,
   TailoredResumeBlockEditRecord,
   TailoredResumeThesis,
+  TailorResumeStoredSkillData,
 } from "./tailor-resume-types.ts";
 
 export type TailorResumePageCountCompactionResult = {
@@ -123,7 +134,11 @@ type TailorResumePageCountVerificationToolResult = {
 
 const tailorResumeLineReductionToolName = "measure_resume_line_reductions";
 const tailorResumePageCountVerificationToolName = "verify_resume_page_count";
-const maxCompactionSelfCheckRounds = 6;
+const tailorResumeKeywordUsageToolName = "list_current_resume_keyword_usage";
+const tailorResumeMalformedBulletsToolName = "list_malformed_resume_bullets";
+const tailorResumeSingleSkillQueryToolName = "query_single_resume_skill";
+const tailorResumeBatchSkillQueryToolName = "batch_query_resume_skills";
+const maxCompactionSelfCheckRounds = 30;
 const maxCompactionHistoryAttemptsForPrompt = 3;
 const maxCompactionMeasurementsPerAttemptForPrompt = 6;
 
@@ -187,6 +202,110 @@ const tailorResumePageCountVerificationTool = {
   },
 } as const;
 
+const tailorResumeKeywordUsageTool = {
+  type: "function",
+  name: tailorResumeKeywordUsageToolName,
+  description:
+    "List which job keywords are present or missing in the most updated full resume draft after applying the candidate page-fit replacements supplied in this tool call. Use candidates: [] to inspect the current compacted draft with no extra replacements.",
+  strict: true,
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      candidates: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            latexCode: { type: "string" },
+            reason: { type: "string" },
+            segmentId: { type: "string" },
+          },
+          required: ["segmentId", "latexCode", "reason"],
+        },
+      },
+    },
+    required: ["candidates"],
+  },
+} as const;
+
+const tailorResumeMalformedBulletsTool = {
+  type: "function",
+  name: tailorResumeMalformedBulletsToolName,
+  description:
+    "Return every malformed rendered bullet in the most updated full resume draft after applying the candidate page-fit replacements supplied in this tool call. Use candidates: [] to inspect the current compacted draft with no extra replacements.",
+  strict: true,
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      candidates: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            latexCode: { type: "string" },
+            reason: { type: "string" },
+            segmentId: { type: "string" },
+          },
+          required: ["segmentId", "latexCode", "reason"],
+        },
+      },
+    },
+    required: ["candidates"],
+  },
+} as const;
+
+const tailorResumeSkillQueryParameters = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    mode: {
+      type: "string",
+      enum: ["skills", "body", "both"],
+      description:
+        "Where to search saved resume-bullet support: skills searches attached skill names, body searches quote/replacesQuote text, both searches both.",
+    },
+    query: {
+      type: "string",
+      description: "Keyword or short phrase to search for in saved resume-bullet support.",
+    },
+  },
+  required: ["query", "mode"],
+} as const;
+
+const tailorResumeSingleSkillQueryTool = {
+  type: "function",
+  name: tailorResumeSingleSkillQueryToolName,
+  description:
+    "Query saved resume-bullet support once and return only the top matching saved bullet, or null if no saved bullet matches.",
+  strict: true,
+  parameters: tailorResumeSkillQueryParameters,
+} as const;
+
+const tailorResumeBatchSkillQueryTool = {
+  type: "function",
+  name: tailorResumeBatchSkillQueryToolName,
+  description:
+    "Query saved resume-bullet support for many keywords in one call. Each query has its own skills/body/both mode, and each result is the top matching saved bullet or null.",
+  strict: true,
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      queries: {
+        type: "array",
+        minItems: 1,
+        maxItems: 30,
+        items: tailorResumeSkillQueryParameters,
+      },
+    },
+    required: ["queries"],
+  },
+} as const;
+
 const tailorResumeLineReductionSubmissionTool = {
   type: "function",
   name: tailorResumeLineReductionSubmissionToolName,
@@ -221,6 +340,10 @@ const knownCompactionToolNames = new Set([
   tailorResumeLineReductionToolName,
   tailorResumePageCountVerificationToolName,
   tailorResumeLineReductionSubmissionToolName,
+  tailorResumeKeywordUsageToolName,
+  tailorResumeMalformedBulletsToolName,
+  tailorResumeSingleSkillQueryToolName,
+  tailorResumeBatchSkillQueryToolName,
 ]);
 
 function mapCompactionResponse(response: {
@@ -414,6 +537,139 @@ function buildLineReductionToolOutput(input: {
   );
 }
 
+function buildAnnotatedLatexWithInspectionCandidates(input: {
+  candidates: TailorResumeLineReductionCandidate[];
+  sourceAnnotatedLatexCode: string;
+  workingEdits: TailoredResumeBlockEditRecord[];
+}) {
+  if (input.candidates.length === 0) {
+    return buildAnnotatedLatexFromEdits({
+      edits: input.workingEdits,
+      sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode,
+    });
+  }
+
+  return buildAnnotatedLatexFromEdits({
+    edits: updateWorkingEdits({
+      acceptedCandidates: input.candidates,
+      workingEdits: input.workingEdits,
+    }),
+    sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode,
+  });
+}
+
+function buildCompactionKeywordUsageToolOutput(input: {
+  annotatedLatexCode: string;
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+}) {
+  return JSON.stringify(
+    {
+      keywordUsage: buildTailorResumeKeywordCheckResult({
+        emphasizedTechnologies: input.emphasizedTechnologies,
+        text: renderTailoredResumeLatexToPlainText(input.annotatedLatexCode),
+      }),
+      nextAction:
+        "Use this as the current keyword ledger for the compacted draft. If you revise candidates, call this tool again to verify the keyword list changed as intended.",
+    },
+    null,
+    2,
+  );
+}
+
+function buildTailorResumeSkillQueryResult(input: {
+  mode: TailorResumeSpareBulletSearchMode;
+  query: string;
+  skillData?: TailorResumeStoredSkillData | null;
+}) {
+  const topMatch = filterTailorResumeSpareBulletsForSearch({
+    mode: input.mode,
+    query: input.query,
+    spareBullets: input.skillData?.spareBullets ?? [],
+  })[0];
+
+  if (!topMatch) {
+    return null;
+  }
+
+  return {
+    id: topMatch.id,
+    quote: topMatch.quote,
+    replacesQuote: topMatch.replacesQuote,
+    resumeExperienceId: topMatch.resumeExperienceId,
+    skills: topMatch.skills.map((skill) => skill.name),
+  };
+}
+
+function buildTailorResumeSingleSkillQueryToolOutput(input: {
+  mode: TailorResumeSpareBulletSearchMode;
+  query: string;
+  skillData?: TailorResumeStoredSkillData | null;
+}) {
+  return JSON.stringify(
+    {
+      query: input.query,
+      mode: input.mode,
+      result: buildTailorResumeSkillQueryResult(input),
+      nextAction:
+        "Use this single top saved resume-bullet support result as evidence if it is relevant. If result is null, do not invent support for that query.",
+    },
+    null,
+    2,
+  );
+}
+
+function buildTailorResumeBatchSkillQueryToolOutput(input: {
+  queries: Array<{
+    mode: TailorResumeSpareBulletSearchMode;
+    query: string;
+  }>;
+  skillData?: TailorResumeStoredSkillData | null;
+}) {
+  return JSON.stringify(
+    {
+      results: input.queries.map((query) => ({
+        query: query.query,
+        mode: query.mode,
+        result: buildTailorResumeSkillQueryResult({
+          ...query,
+          skillData: input.skillData,
+        }),
+      })),
+      nextAction:
+        "Use each top saved resume-bullet support result only when it is relevant. Null means no saved resume-bullet support matched that query.",
+    },
+    null,
+    2,
+  );
+}
+
+async function buildCompactionMalformedBulletsToolOutput(input: {
+  annotatedLatexCode: string;
+  changedSegmentIds: ReadonlySet<string>;
+}) {
+  const layout = await measureTailorResumeLayout({
+    annotatedLatexCode: input.annotatedLatexCode,
+  });
+  const renderedBulletHealth = buildTailorResumeRenderedBulletHealthCheck({
+    changedSegmentIds: input.changedSegmentIds,
+    layout,
+  });
+
+  return JSON.stringify(
+    {
+      malformedBullets: renderedBulletHealth.malformedBullets,
+      pageCount: renderedBulletHealth.pageCount,
+      warnings: renderedBulletHealth.warnings,
+      nextAction:
+        renderedBulletHealth.malformedBullets.length > 0
+          ? "Revise any changed malformed bullets and call this tool again. Pre-existing malformed bullets elsewhere should be surfaced as warnings."
+          : "No malformed rendered bullets were found in the inspected compacted draft.",
+    },
+    null,
+    2,
+  );
+}
+
 function buildPageCountVerificationToolOutput(
   result: TailorResumePageCountVerificationToolResult,
 ) {
@@ -478,6 +734,46 @@ function readOutputText(response: TailorResumeCompactionResponse) {
 
 function readTrimmedString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function parseTailorResumeSkillQueryMode(value: unknown) {
+  if (value === "skills" || value === "body" || value === "both") {
+    return value satisfies TailorResumeSpareBulletSearchMode;
+  }
+
+  throw new Error("Skill query mode must be one of skills, body, or both.");
+}
+
+function parseTailorResumeSingleSkillQuery(value: unknown): {
+  mode: TailorResumeSpareBulletSearchMode;
+  query: string;
+} {
+  if (!value || typeof value !== "object") {
+    throw new Error("The resume skill query tool call must be an object.");
+  }
+
+  const query = "query" in value ? readTrimmedString(value.query) : "";
+
+  if (!query) {
+    throw new Error("The resume skill query tool call must include a query.");
+  }
+
+  return {
+    mode: parseTailorResumeSkillQueryMode("mode" in value ? value.mode : null),
+    query,
+  };
+}
+
+function parseTailorResumeBatchSkillQuery(value: unknown) {
+  if (!value || typeof value !== "object" || !("queries" in value)) {
+    throw new Error("The batch resume skill query tool call must include queries.");
+  }
+
+  if (!Array.isArray(value.queries)) {
+    throw new Error("The batch resume skill query tool call must include queries.");
+  }
+
+  return value.queries.map(parseTailorResumeSingleSkillQuery);
 }
 
 function parseLineReductionCandidates(
@@ -927,11 +1223,31 @@ function serializeCompactionAttemptHistory(
   ].join("\n\n");
 }
 
+function serializeCompactionEmphasizedTechnologies(
+  technologies: TailoredResumeEmphasizedTechnology[],
+) {
+  if (technologies.length === 0) {
+    return "[none identified]";
+  }
+
+  return technologies
+    .map((technology, index) =>
+      [
+        `${index + 1}. ${technology.name}`,
+        `   priority: ${technology.priority}`,
+        `   evidence: ${technology.evidence || "[not provided]"}`,
+      ].join("\n"),
+    )
+    .join("\n\n");
+}
+
 function buildCompactionInput(input: {
   attemptHistory: TailorResumeCompactionAttemptHistoryEntry[];
   currentLayout: TailorResumeLayoutMeasurement;
   currentPageCount: number;
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
   estimatedLinesToRecover: number;
+  jobDescription: string;
   promptSettings: SystemPromptSettings;
   sourceLayout: TailorResumeLayoutMeasurement;
   targetPageCount: number;
@@ -961,6 +1277,18 @@ function buildCompactionInput(input: {
         {
           type: "input_text" as const,
           text: thesisText,
+        },
+        {
+          type: "input_text" as const,
+          text:
+            "Job description context for preserving fit while compacting:\n" +
+            input.jobDescription,
+        },
+        {
+          type: "input_text" as const,
+          text:
+            "Step 1 technologies emphasized by the job description. Preserve these exact keywords where they are already present or can remain truthfully compact:\n" +
+            serializeCompactionEmphasizedTechnologies(input.emphasizedTechnologies),
         },
         {
           type: "input_text" as const,
@@ -1003,9 +1331,13 @@ async function collectVerifiedCompactionCandidates(input: {
   currentLayout: TailorResumeLayoutMeasurement;
   currentPageCount: number;
   editableSegmentIds: Set<string>;
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
   estimatedLinesToRecover: number;
+  jobDescription: string;
   model: string;
   promptSettings: SystemPromptSettings;
+  skillData?: TailorResumeStoredSkillData | null;
+  sourceAnnotatedLatexCode: string;
   sourceLayout: TailorResumeLayoutMeasurement;
   targetPageCount: number;
   thesis: TailoredResumeThesis | null;
@@ -1020,10 +1352,12 @@ async function collectVerifiedCompactionCandidates(input: {
   let previousResponseId: string | undefined;
   let responseInput: TailorResumeCompactionResponseInput = buildCompactionInput({
     attemptHistory: input.attemptHistory,
-    currentLayout: input.currentLayout,
-    currentPageCount: input.currentPageCount,
-    estimatedLinesToRecover: input.estimatedLinesToRecover,
-    promptSettings: input.promptSettings,
+  currentLayout: input.currentLayout,
+  currentPageCount: input.currentPageCount,
+  emphasizedTechnologies: input.emphasizedTechnologies,
+  estimatedLinesToRecover: input.estimatedLinesToRecover,
+  jobDescription: input.jobDescription,
+  promptSettings: input.promptSettings,
     sourceLayout: input.sourceLayout,
     targetPageCount: input.targetPageCount,
     thesis: input.thesis,
@@ -1050,6 +1384,10 @@ async function collectVerifiedCompactionCandidates(input: {
             tools: [
               tailorResumeLineReductionTool,
               tailorResumePageCountVerificationTool,
+              tailorResumeKeywordUsageTool,
+              tailorResumeMalformedBulletsTool,
+              tailorResumeSingleSkillQueryTool,
+              tailorResumeBatchSkillQueryTool,
               tailorResumeLineReductionSubmissionTool,
             ],
           }),
@@ -1175,6 +1513,97 @@ async function collectVerifiedCompactionCandidates(input: {
       };
     }
 
+    if (
+      toolCall.name === tailorResumeSingleSkillQueryToolName ||
+      toolCall.name === tailorResumeBatchSkillQueryToolName
+    ) {
+      let toolOutput: string;
+
+      try {
+        const toolArguments = JSON.parse(toolCall.arguments);
+        toolOutput =
+          toolCall.name === tailorResumeSingleSkillQueryToolName
+            ? buildTailorResumeSingleSkillQueryToolOutput({
+                ...parseTailorResumeSingleSkillQuery(toolArguments),
+                skillData: input.skillData,
+              })
+            : buildTailorResumeBatchSkillQueryToolOutput({
+                queries: parseTailorResumeBatchSkillQuery(toolArguments),
+                skillData: input.skillData,
+              });
+      } catch (error) {
+        return {
+          error:
+            error instanceof Error
+              ? error.message
+              : "The model returned an invalid resume skill query tool call.",
+          measurementResult: latestMeasurementResult,
+          pageCountVerification: latestPageCountVerification,
+          model: latestModel,
+          ok: false,
+        };
+      }
+
+      responseInput = [
+        {
+          call_id: toolCall.call_id,
+          output: toolOutput,
+          type: "function_call_output",
+        },
+      ];
+      continue;
+    }
+
+    if (
+      toolCall.name === tailorResumeKeywordUsageToolName ||
+      toolCall.name === tailorResumeMalformedBulletsToolName
+    ) {
+      let candidates: TailorResumeLineReductionCandidate[];
+
+      try {
+        candidates = parseLineReductionCandidates(JSON.parse(toolCall.arguments));
+      } catch (error) {
+        return {
+          error:
+            error instanceof Error
+              ? error.message
+              : "The model returned an invalid resume inspection tool call.",
+          measurementResult: latestMeasurementResult,
+          pageCountVerification: latestPageCountVerification,
+          model: latestModel,
+          ok: false,
+        };
+      }
+
+      const candidateAnnotatedLatex =
+        buildAnnotatedLatexWithInspectionCandidates({
+          candidates,
+          sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode,
+          workingEdits: input.workingEdits,
+        });
+      const toolOutput =
+        toolCall.name === tailorResumeKeywordUsageToolName
+          ? buildCompactionKeywordUsageToolOutput({
+              annotatedLatexCode: candidateAnnotatedLatex,
+              emphasizedTechnologies: input.emphasizedTechnologies,
+            })
+          : await buildCompactionMalformedBulletsToolOutput({
+              annotatedLatexCode: candidateAnnotatedLatex,
+              changedSegmentIds: new Set(
+                candidates.map((candidate) => candidate.segmentId),
+              ),
+            });
+
+      responseInput = [
+        {
+          call_id: toolCall.call_id,
+          output: toolOutput,
+          type: "function_call_output",
+        },
+      ];
+      continue;
+    }
+
     let candidates: TailorResumeLineReductionCandidate[];
 
     if (toolCall.name === tailorResumePageCountVerificationToolName) {
@@ -1291,7 +1720,9 @@ export async function compactTailoredResumePageCount(input: {
   annotatedLatexCode: string;
   client?: OpenAI;
   edits: TailoredResumeBlockEditRecord[];
+  emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
   initialPageCount: number;
+  jobDescription?: string;
   latexCode: string;
   model?: string;
   onStepEvent?: (
@@ -1299,6 +1730,7 @@ export async function compactTailoredResumePageCount(input: {
   ) => void | Promise<void>;
   previewPdf: Buffer;
   promptSettings?: SystemPromptSettings;
+  skillData?: TailorResumeStoredSkillData | null;
   sourceAnnotatedLatexCode: string;
   targetPageCount: number;
   thesis: TailoredResumeThesis | null;
@@ -1439,9 +1871,13 @@ export async function compactTailoredResumePageCount(input: {
       currentLayout,
       currentPageCount,
       editableSegmentIds,
+      emphasizedTechnologies: input.emphasizedTechnologies ?? [],
       estimatedLinesToRecover,
+      jobDescription: input.jobDescription ?? "[not available]",
       model,
       promptSettings,
+      skillData: input.skillData,
+      sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode,
       sourceLayout,
       targetPageCount,
       thesis: input.thesis,

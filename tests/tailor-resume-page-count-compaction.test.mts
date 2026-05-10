@@ -324,16 +324,28 @@ test("page-count compaction keeps verified line-saving edits even when the exact
         [
           "measure_resume_line_reductions",
           "verify_resume_page_count",
+          "list_current_resume_keyword_usage",
+          "list_malformed_resume_bullets",
+          "query_single_resume_skill",
+          "batch_query_resume_skills",
           "submit_verified_line_reductions",
         ],
         [
           "measure_resume_line_reductions",
           "verify_resume_page_count",
+          "list_current_resume_keyword_usage",
+          "list_malformed_resume_bullets",
+          "query_single_resume_skill",
+          "batch_query_resume_skills",
           "submit_verified_line_reductions",
         ],
         [
           "measure_resume_line_reductions",
           "verify_resume_page_count",
+          "list_current_resume_keyword_usage",
+          "list_malformed_resume_bullets",
+          "query_single_resume_skill",
+          "batch_query_resume_skills",
           "submit_verified_line_reductions",
         ],
       ],
@@ -514,6 +526,10 @@ test("page-count compaction retries from kept reductions and can finish on a lat
       assert.deepEqual(toolNames, [
         "measure_resume_line_reductions",
         "verify_resume_page_count",
+        "list_current_resume_keyword_usage",
+        "list_malformed_resume_bullets",
+        "query_single_resume_skill",
+        "batch_query_resume_skills",
         "submit_verified_line_reductions",
       ]);
     }
