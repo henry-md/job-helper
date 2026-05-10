@@ -554,6 +554,7 @@ export type TailorResumeExistingTailoringState =
       emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
       jobIdentifier: string | null;
       jobUrl: string | null;
+      keywordCoverage: TailoredResumeKeywordCoverage | null;
       kind: "completed";
       positionTitle: string | null;
       status: string;
@@ -1497,6 +1498,9 @@ export function readTailorResumeExistingTailoringState(
       id,
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
       jobUrl: readNullableString(existingTailoring.jobUrl),
+      keywordCoverage: readTailoredResumeKeywordCoverage(
+        existingTailoring.keywordCoverage,
+      ),
       kind,
       positionTitle: readNullableString(existingTailoring.positionTitle),
       status: readString(existingTailoring.status) || "ready",

@@ -145,9 +145,14 @@ const mockStep2BlockingTechnologies = mockStep2EmphasizedTechnologies.filter(
 
 function createMockTailoringRun(
   status: TailorResumeRunRecord["status"],
-  variant: "default" | "step2-blocked" | "step5-error" | "step5-running" =
-    "default",
+  variant:
+    | "default"
+    | "step2-blocked"
+    | "step3-retry-running"
+    | "step5-error"
+    | "step5-running" = "default",
 ) {
+  const isStep3Retry = variant === "step3-retry-running";
   const isStep5Error = variant === "step5-error";
   const isStep5Retry = isStep5Error || variant === "step5-running";
   const isStep2Blocked = variant === "step2-blocked";
@@ -176,6 +181,8 @@ function createMockTailoringRun(
         ? "Review keywords in the side panel, then press play."
         : status === "success"
         ? "Tailored resume saved to Job Helper."
+      : isStep3Retry
+        ? "Step 3/4: Planning targeted edits - Retrying (attempt 2)"
         : isStep5Retry
             ? "Step 4/4: Keeping the tailored resume within the original page count - Retrying (attempt 2)"
         : status === "running"
@@ -194,6 +201,17 @@ function createMockTailoringRun(
           stepCount: 5,
           stepNumber: 2,
           summary: "Waiting for skills-section support",
+        }
+      : isStep3Retry
+      ? {
+          attempt: 2,
+          detail: "Retrying the planning pass after validation failed.",
+          durationMs: 0,
+          retrying: true,
+          status: "running",
+          stepCount: 5,
+          stepNumber: 3,
+          summary: "Plan targeted edits",
         }
       : isStep5Retry
       ? {
@@ -237,6 +255,60 @@ function createMockTailoringRun(
             stepCount: 5,
             stepNumber: 2,
             summary: "Waiting for skills-section support",
+          },
+        ]
+      : isStep3Retry
+      ? [
+          {
+            attempt: 1,
+            detail: "Prepared job keywords for clarification and planning.",
+            durationMs: step1DurationMs,
+            observedAt: new Date(capturedAtTime + step1DurationMs).toISOString(),
+            retrying: false,
+            status: "succeeded",
+            stepCount: 5,
+            stepNumber: 1,
+            summary: "Scrape keywords",
+          },
+          {
+            attempt: 1,
+            detail: "No follow-up questions were needed.",
+            durationMs: step2DurationMs,
+            observedAt: new Date(
+              capturedAtTime + step1DurationMs + step2DurationMs,
+            ).toISOString(),
+            retrying: false,
+            status: "succeeded",
+            stepCount: 5,
+            stepNumber: 2,
+            summary: "Clarify missing details",
+          },
+          {
+            attempt: 1,
+            detail: "The Step 3 plan still misses required keyword assignments.",
+            durationMs: step3DurationMs,
+            observedAt: new Date(
+              capturedAtTime +
+                step1DurationMs +
+                step2DurationMs +
+                step3DurationMs,
+            ).toISOString(),
+            retrying: false,
+            status: "failed",
+            stepCount: 5,
+            stepNumber: 3,
+            summary: "Plan targeted edits",
+          },
+          {
+            attempt: 2,
+            detail: "Retrying the planning pass after validation failed.",
+            durationMs: 0,
+            observedAt: new Date(runningStartedAtTime).toISOString(),
+            retrying: true,
+            status: "running",
+            stepCount: 5,
+            stepNumber: 3,
+            summary: "Plan targeted edits",
           },
         ]
       : isStep5Retry
@@ -489,6 +561,10 @@ function readInitialTailoringRun(searchParams: URLSearchParams) {
 
   if (runState === "step2-blocked") {
     return createMockTailoringRun("needs_input", "step2-blocked");
+  }
+
+  if (runState === "step3-retry") {
+    return createMockTailoringRun("running", "step3-retry-running");
   }
 
   if (runState === "step4-error" || runState === "step5-error") {

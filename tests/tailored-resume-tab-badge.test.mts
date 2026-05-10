@@ -135,6 +135,7 @@ function buildCompletedTailoring(
     id: "db-tailored-123",
     jobIdentifier: "Software Engineer",
     jobUrl: matchingJobUrl,
+    keywordCoverage: null,
     kind: "completed",
     positionTitle: "Software Engineer",
     status: "ready",
@@ -222,6 +223,52 @@ test("uses the saved resume keywords and coverage for completed tailoring badges
       priority: "high",
     },
   ]);
+});
+
+test("falls back to completed tailoring keyword coverage before the saved resume list catches up", () => {
+  const keywordCoverage = buildKeywordCoverage();
+  const badge = resolveTailoredResumeTabBadge({
+    activeTailorings: [
+      buildCompletedTailoring({
+        emphasizedTechnologies: [
+          {
+            evidence: "Required section lists TypeScript.",
+            name: "TypeScript",
+            priority: "high",
+          },
+        ],
+        keywordCoverage,
+      }),
+    ],
+    pageIdentity: buildPageIdentity(),
+    tailoredResumes: [],
+  });
+
+  assert.equal(badge?.tailoredResumeId, "tailored-123");
+  assert.equal(badge?.keywordCoverage, keywordCoverage);
+  assert.deepEqual(badge?.emphasizedTechnologies, [
+    {
+      evidence: "Required section lists TypeScript.",
+      name: "TypeScript",
+      priority: "high",
+    },
+  ]);
+});
+
+test("matches saved resume coverage by job URL when the completed id is stale", () => {
+  const keywordCoverage = buildKeywordCoverage();
+  const badge = resolveTailoredResumeTabBadge({
+    activeTailorings: [
+      buildCompletedTailoring({
+        tailoredResumeId: "stale-tailored-id",
+      }),
+    ],
+    pageIdentity: buildPageIdentity(),
+    tailoredResumes: [buildTailoredResumeSummary({ keywordCoverage })],
+  });
+
+  assert.equal(badge?.tailoredResumeId, "stale-tailored-id");
+  assert.equal(badge?.keywordCoverage, keywordCoverage);
 });
 
 test("builds company resume download names from company or display name", () => {

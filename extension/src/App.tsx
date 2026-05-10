@@ -903,6 +903,8 @@ function buildTailoringRunRecord(input: {
   jobIdentifier?: string | null;
   message: string;
   pageContext: JobPageContext | null;
+  pageTitle?: string | null;
+  pageUrl?: string | null;
   positionTitle: string | null;
   status: TailorResumeRunRecord["status"];
   suppressedTailoredResumeId?: string | null;
@@ -927,8 +929,8 @@ function buildTailoringRunRecord(input: {
     generationStepTimings: input.generationStepTimings ?? [],
     jobIdentifier: input.jobIdentifier || null,
     message: input.message,
-    pageTitle: input.pageContext?.title || null,
-    pageUrl: input.pageContext?.url || null,
+    pageTitle: input.pageContext?.title || input.pageTitle?.trim() || null,
+    pageUrl: input.pageContext?.url || input.pageUrl?.trim() || null,
     positionTitle,
     status: input.status,
     suppressedTailoredResumeId: input.suppressedTailoredResumeId?.trim() || null,
@@ -1116,6 +1118,49 @@ async function requestHideTailoredResumeBadgesForUrls(
   } catch (error) {
     console.error("Could not hide the Tailor Resume page popup.", error);
   }
+}
+
+function buildRetryTailorRunRecord(input: {
+  applicationId?: string | null;
+  companyName?: string | null;
+  jobIdentifier?: string | null;
+  pageContext?: JobPageContext | null;
+  pageTitle?: string | null;
+  pageUrl: string;
+  positionTitle?: string | null;
+  suppressedTailoredResumeId?: string | null;
+}) {
+  const capturedAt = new Date().toISOString();
+
+  return buildTailoringRunRecord({
+    applicationId: input.applicationId,
+    capturedAt,
+    companyName: input.companyName ?? null,
+    generationStep: {
+      attempt: 1,
+      blockingTechnologies: [],
+      detail: "Reloading the job page and starting a fresh tailoring run.",
+      durationMs: 0,
+      emphasizedTechnologies: [],
+      retrying: false,
+      status: "running",
+      stepCount: 5,
+      stepNumber: 1,
+      summary: "Reload job keywords",
+    },
+    generationStepTimings: [],
+    jobIdentifier: input.jobIdentifier,
+    message: buildLiveTailorResumeStatusMessage(
+      null,
+      "Reloading keywords and restarting tailoring...",
+    ),
+    pageContext: input.pageContext ?? null,
+    pageTitle: input.pageTitle,
+    pageUrl: input.pageUrl,
+    positionTitle: input.positionTitle ?? null,
+    status: "running",
+    suppressedTailoredResumeId: input.suppressedTailoredResumeId,
+  });
 }
 
 function findLinkedApplicationForTailoredResume(
@@ -1852,6 +1897,7 @@ function buildTailorRunStepTimingDisplayInputs(
   timings: TailorResumeGenerationStepTiming[],
 ) {
   return timings.map((timing) => ({
+    attempt: timing.attempt,
     durationMs: timing.durationMs,
     observedAtTime: readActiveTailorRunSortTime(timing.observedAt),
     retrying: timing.retrying,
@@ -9121,6 +9167,7 @@ function App() {
         type: "JOB_HELPER_GO_TO_TAB",
       });
       assertRuntimeResponseOk(response, "Could not open that job tab.");
+      await revealTailoredResumeKeywordsOnPage(tailoredResume);
       setTailoredResumeMenuId(null);
     } catch (error) {
       setTailoredResumeMenuError(
@@ -9181,6 +9228,69 @@ function App() {
     setTailoredResumeMenuActionResumeId(tailoredResume.id);
     setTailoredResumeMenuError(null);
     setTailoredResumeMenuErrorResumeId(null);
+    void requestHideTailoredResumeBadgesForUrls([targetUrl]);
+
+    const registryPageKey = buildTailorRunRegistryKey(targetUrl);
+    const optimisticRun = buildRetryTailorRunRecord({
+      applicationId: tailoredResume.applicationId,
+      companyName: tailoredResume.companyName,
+      jobIdentifier: tailoredResume.jobIdentifier,
+      pageTitle: tailoredResume.displayName,
+      pageUrl: targetUrl,
+      positionTitle: tailoredResume.positionTitle,
+      suppressedTailoredResumeId: tailoredResume.id,
+    });
+    const optimisticActiveTailoring = {
+      applicationId: tailoredResume.applicationId,
+      blockingTechnologies: [],
+      companyName: tailoredResume.companyName,
+      createdAt: optimisticRun.capturedAt,
+      error: null,
+      emphasizedTechnologies: [],
+      id: `retry:${tailoredResume.id}`,
+      jobDescription: "",
+      jobIdentifier: tailoredResume.jobIdentifier,
+      jobUrl: targetUrl,
+      kind: "active_generation" as const,
+      lastStep: optimisticRun.generationStep,
+      positionTitle: tailoredResume.positionTitle,
+      status: "RUNNING" as const,
+      updatedAt: optimisticRun.capturedAt,
+    } satisfies TailorResumeExistingTailoringState;
+
+    setTailoringRunsByKey((currentRegistry) =>
+      registryPageKey
+        ? {
+            ...currentRegistry,
+            [registryPageKey]: optimisticRun,
+          }
+        : currentRegistry,
+    );
+    setPersonalInfoState((currentState) => {
+      if (currentState.status !== "ready") {
+        return currentState;
+      }
+
+      const nextPersonalInfo = {
+        ...currentState.personalInfo,
+        activeTailoring: optimisticActiveTailoring,
+        activeTailorings: [
+          optimisticActiveTailoring,
+          ...currentState.personalInfo.activeTailorings.filter(
+            (activeTailoring) =>
+              !sameTailoringJobUrl(activeTailoring.jobUrl, targetUrl),
+          ),
+        ],
+      } satisfies PersonalInfoSummary;
+
+      lastReadyPersonalInfoRef.current = nextPersonalInfo;
+      publishPersonalInfoToSharedCache(nextPersonalInfo);
+
+      return {
+        personalInfo: nextPersonalInfo,
+        status: "ready",
+      };
+    });
 
     try {
       await sendRetryTailoringRequest({
@@ -9241,20 +9351,7 @@ function App() {
     setTailoredResumeMenuErrorResumeId(null);
 
     try {
-      await chrome.runtime.sendMessage({
-        payload: {
-          displayName: tailoredResume.displayName,
-          emphasizedTechnologies: tailoredResume.emphasizedTechnologies,
-          includeLowPriorityTermsInKeywordCoverage,
-          jobUrl: tailoredResume.jobUrl ?? null,
-          keywordCoverage: tailoredResume.keywordCoverage,
-          nonTechnologyNames:
-            personalInfo?.userMarkdown.nonTechnologies ??
-            savedSettingsUserMarkdown.nonTechnologies,
-          tailoredResumeId: tailoredResume.id,
-        },
-        type: "JOB_HELPER_REVEAL_KEYWORD_BADGE",
-      });
+      await revealTailoredResumeKeywordsOnPage(tailoredResume);
       setTailoredResumeMenuId(null);
       setTailoredResumeMenuPosition(null);
     } catch (error) {
@@ -9265,6 +9362,51 @@ function App() {
       );
       setTailoredResumeMenuErrorResumeId(tailoredResume.id);
     }
+  }
+
+  async function revealTailoredResumeKeywordsOnPage(
+    tailoredResume: TailoredResumeSummary,
+  ) {
+    await chrome.runtime.sendMessage({
+      payload: {
+        displayName: tailoredResume.displayName,
+        emphasizedTechnologies: tailoredResume.emphasizedTechnologies,
+        includeLowPriorityTermsInKeywordCoverage,
+        jobUrl: tailoredResume.jobUrl ?? null,
+        keywordCoverage: tailoredResume.keywordCoverage,
+        nonTechnologyNames:
+          personalInfo?.userMarkdown.nonTechnologies ??
+          savedSettingsUserMarkdown.nonTechnologies,
+        tailoredResumeId: tailoredResume.id,
+      },
+      type: "JOB_HELPER_REVEAL_KEYWORD_BADGE",
+    });
+  }
+
+  async function revealActiveTailorRunKeywordsOnPage(card: ActiveTailorRunCard) {
+    const emphasizedTechnologies = card.emphasizedTechnologies.filter(
+      (technology) => technology.name.trim(),
+    );
+
+    if (emphasizedTechnologies.length === 0) {
+      return;
+    }
+
+    const response = await chrome.runtime.sendMessage({
+      payload: {
+        badgeKey: buildActiveTailorRunKeywordBadgeKey(card),
+        displayName: card.title,
+        emphasizedTechnologies,
+        includeLowPriorityTermsInKeywordCoverage: false,
+        jobUrl: card.url,
+        keywordCoverage: null,
+        nonTechnologyNames:
+          personalInfo?.userMarkdown.nonTechnologies ??
+          savedSettingsUserMarkdown.nonTechnologies,
+      },
+      type: "JOB_HELPER_REVEAL_KEYWORD_BADGE",
+    });
+    assertRuntimeResponseOk(response, "Could not show the keywords popup.");
   }
 
   async function handleRevealActiveTailorRunKeywords(card: ActiveTailorRunCard) {
@@ -9300,21 +9442,7 @@ function App() {
     }
 
     try {
-      const response = await chrome.runtime.sendMessage({
-        payload: {
-          badgeKey: buildActiveTailorRunKeywordBadgeKey(card),
-          displayName: card.title,
-          emphasizedTechnologies,
-          includeLowPriorityTermsInKeywordCoverage: false,
-          jobUrl: card.url,
-          keywordCoverage: null,
-          nonTechnologyNames:
-            personalInfo?.userMarkdown.nonTechnologies ??
-            savedSettingsUserMarkdown.nonTechnologies,
-        },
-        type: "JOB_HELPER_REVEAL_KEYWORD_BADGE",
-      });
-      assertRuntimeResponseOk(response, "Could not show the keywords popup.");
+      await revealActiveTailorRunKeywordsOnPage(card);
 
       if (isCurrentCard) {
         setIsTailorRunMenuOpen(false);
@@ -9500,6 +9628,11 @@ function App() {
         type: "JOB_HELPER_GO_TO_TAB",
       });
       assertRuntimeResponseOk(response, "Could not open that job tab.");
+      if (currentActiveTailorRunCard) {
+        await revealActiveTailorRunKeywordsOnPage(currentActiveTailorRunCard);
+      } else if (currentPageCompletedTailoredResume) {
+        await revealTailoredResumeKeywordsOnPage(currentPageCompletedTailoredResume);
+      }
       setIsTailorRunMenuOpen(false);
     } catch (error) {
       setTailorRunMenuError(
@@ -9618,6 +9751,53 @@ function App() {
     setTailorRunMenuActionState("retrying");
     setTailorRunMenuError(null);
     setIsTailorRunMenuOpen(false);
+    void requestHideTailoredResumeBadgesForUrls([targetUrl, registryPageKey]);
+
+    const optimisticRun = buildRetryTailorRunRecord({
+      applicationId: retryApplicationId,
+      companyName:
+        currentPageCompletedTailoring?.companyName ??
+        currentPageCompletedTailoredResume?.companyName ??
+        currentPagePersonalInfoTailoring?.companyName ??
+        existingTailoringPrompt?.existingTailoring.companyName ??
+        activeTailoring?.companyName ??
+        lastTailoringRun?.companyName ??
+        currentActiveTailorRunCard?.title ??
+        null,
+      jobIdentifier:
+        currentPageCompletedTailoring?.jobIdentifier ??
+        currentPageCompletedTailoredResume?.jobIdentifier ??
+        currentPagePersonalInfoTailoring?.jobIdentifier ??
+        existingTailoringPrompt?.existingTailoring.jobIdentifier ??
+        activeTailoring?.jobIdentifier ??
+        lastTailoringRun?.jobIdentifier ??
+        null,
+      pageContext: currentPageContext,
+      pageTitle: lastTailoringRun?.pageTitle ?? currentPageContext?.title ?? null,
+      pageUrl: targetUrl,
+      positionTitle:
+        currentPageCompletedTailoring?.positionTitle ??
+        currentPageCompletedTailoredResume?.positionTitle ??
+        currentPagePersonalInfoTailoring?.positionTitle ??
+        existingTailoringPrompt?.existingTailoring.positionTitle ??
+        activeTailoring?.positionTitle ??
+        lastTailoringRun?.positionTitle ??
+        null,
+      suppressedTailoredResumeId: retryTailoredResumeId,
+    });
+
+    setTailorGenerationStep(optimisticRun.generationStep);
+    setTailorGenerationStepTimings([]);
+    setLastTailoringRun(optimisticRun);
+    setCaptureState("running");
+    setTailoringRunsByKey((currentRegistry) =>
+      registryPageKey
+        ? {
+            ...currentRegistry,
+            [registryPageKey]: optimisticRun,
+          }
+        : currentRegistry,
+    );
 
     if (shouldCancelCurrentTailoring) {
       activeTailorRequestAbortControllerRef.current?.abort();
@@ -9633,10 +9813,6 @@ function App() {
       setPendingTailorInterviewAnswerMessage(null);
       setIsTailorInterviewFinishPromptOpen(false);
       setTailorInterviewError(null);
-      setTailorGenerationStep(null);
-      setTailorGenerationStepTimings([]);
-      setLastTailoringRun(null);
-      setCaptureState("idle");
       setPersonalInfoState((currentState) => {
         if (currentState.status !== "ready") {
           return currentState;
@@ -9670,6 +9846,14 @@ function App() {
         }).catch((error) => {
           console.error("Could not clear the retried tailoring run.", error);
         });
+        setTailoringRunsByKey((currentRegistry) =>
+          registryPageKey
+            ? {
+                ...currentRegistry,
+                [registryPageKey]: optimisticRun,
+              }
+            : currentRegistry,
+        );
         await cancelTailoringBeforeRetry({
           existingTailoringId,
           fallbackMessage: "Unable to stop the current tailoring run before retrying.",
@@ -9953,6 +10137,7 @@ function App() {
         type: "JOB_HELPER_GO_TO_TAB",
       });
       assertRuntimeResponseOk(response, "Could not open that job tab.");
+      await revealActiveTailorRunKeywordsOnPage(card);
       setBackgroundTailorRunMenuId(null);
     } catch (error) {
       setBackgroundTailorRunMenuErrorCardId(card.id);
@@ -10075,6 +10260,27 @@ function App() {
     setBackgroundTailorRunMenuError(null);
     setBackgroundTailorRunMenuErrorCardId(null);
     setBackgroundTailorRunMenuId(null);
+    void requestHideTailoredResumeBadgesForUrls([targetUrl, card.pageKey]);
+
+    const registryPageKey = card.pageKey ?? buildTailorRunRegistryKey(targetUrl);
+    const optimisticRun = buildRetryTailorRunRecord({
+      applicationId: card.applicationId,
+      companyName: card.title,
+      pageTitle: card.title,
+      pageUrl: targetUrl,
+      suppressedTailoredResumeId:
+        card.deleteTarget?.tailoredResumeId ?? card.suppressedTailoredResumeId,
+    });
+
+    setTailoringRunsByKey((currentRegistry) =>
+      registryPageKey
+        ? {
+            ...currentRegistry,
+            [registryPageKey]: optimisticRun,
+          }
+        : currentRegistry,
+    );
+
     let previousPersonalInfo: PersonalInfoSummary | null = null;
     let nextPersonalInfo: PersonalInfoSummary | null = null;
     let cancelSettled = !shouldCancelExistingRun;
@@ -10110,6 +10316,14 @@ function App() {
     }).catch((error) => {
       console.error("Could not clear the retried tailoring run.", error);
     });
+    setTailoringRunsByKey((currentRegistry) =>
+      registryPageKey
+        ? {
+            ...currentRegistry,
+            [registryPageKey]: optimisticRun,
+          }
+        : currentRegistry,
+    );
 
     try {
       if (shouldCancelExistingRun) {

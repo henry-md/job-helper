@@ -1896,10 +1896,20 @@ function showEmphasizedTechnologyBadge(
   badgeKey: string,
 ) {
   applyKeywordClassificationOverrides(payload, badgeKey);
-  const technologies = normalizeEmphasizedTechnologies(
+  const normalizedTechnologies = normalizeEmphasizedTechnologies(
     payload.emphasizedTechnologies,
     readNonTechnologyTermSet(payload),
   );
+  const coverageBuckets = readKeywordCoverageBuckets(payload);
+  const technologies =
+    normalizedTechnologies.length > 0
+      ? normalizedTechnologies
+      : coverageBuckets?.allPriorities.terms.map((term) => ({
+          classification: "skills_section" as const,
+          evidence: "",
+          name: term.name,
+          priority: term.priority,
+        })) ?? [];
   const technologyBadgeKey = `emphasized-technologies:${badgeKey}`;
   const dismissalKey = resolveKeywordBadgeDismissalKey(payload, badgeKey);
   lastShownKeywordBadgePayload = { badgeKey, payload };

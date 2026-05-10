@@ -994,7 +994,10 @@ async function revealDismissedKeywordBadge(input: {
           return;
         }
 
-        if (typeof tab.id === "number" && emphasizedTechnologies.length > 0) {
+        if (
+          typeof tab.id === "number" &&
+          (emphasizedTechnologies.length > 0 || keywordCoverage)
+        ) {
           await sendEmphasizedTechnologiesBadgeMessage(tab.id, {
             payload: {
               badgeKey:
@@ -2325,6 +2328,10 @@ async function triggerTailorResumeRegeneration(input: {
   url: string;
 }) {
   const result = await focusOrCreateBrowserTab(input.url);
+  await hideTailoredResumeBadgesForMatchingTabs({
+    fallbackTab: result.tab,
+    targetUrls: [input.url],
+  });
   void runCaptureFlow({
     openSidePanel: true,
     overwriteTargetApplicationId: input.overwriteTargetApplicationId,

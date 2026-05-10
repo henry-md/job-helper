@@ -73,6 +73,10 @@ function readObservedDurationMs(input: {
     : 0;
 }
 
+function buildStepTimingKey(timing: TailorResumeGenerationStepTiming) {
+  return `${String(timing.stepNumber)}:${String(timing.attempt ?? 1)}`;
+}
+
 function readPreviousDurationAtNextObservation(
   previousTiming: TailorResumeGenerationStepTiming,
   nextTiming: TailorResumeGenerationStepTiming,
@@ -233,24 +237,26 @@ function mergeStepTiming(
   return nextTimingWithPreservedKeywords;
 }
 
-function freezeAdvancedRunningTimings(
-  timingsByStepNumber: Map<number, TailorResumeGenerationStepTiming>,
+function freezeAdvancedRunningTimingEntries(
+  timingEntries: TailorResumeGenerationStepTiming[],
   activeStepNumber: number | null,
 ) {
   if (!activeStepNumber) {
-    return;
+    return timingEntries;
   }
 
-  const sortedTimings = [...timingsByStepNumber.values()].sort(
-    (left, right) => left.stepNumber - right.stepNumber,
+  const sortedTimings = [...timingEntries].sort(
+    (left, right) =>
+      left.stepNumber - right.stepNumber ||
+      (left.attempt ?? 1) - (right.attempt ?? 1),
   );
 
-  for (const timing of sortedTimings) {
+  return sortedTimings.map((timing) => {
     if (
       timing.stepNumber >= activeStepNumber ||
       (timing.status !== "running" && timing.retrying !== true)
     ) {
-      continue;
+      return timing;
     }
 
     const nextTiming = sortedTimings.find(
@@ -261,13 +267,13 @@ function freezeAdvancedRunningTimings(
       startedAt: timing.observedAt,
     });
 
-    timingsByStepNumber.set(timing.stepNumber, {
+    return {
       ...timing,
       durationMs: Math.max(timing.durationMs, observedDurationMs),
       retrying: false,
-      status: "succeeded",
-    });
-  }
+      status: "succeeded" as const,
+    };
+  });
 }
 
 export function mergeTailorResumeGenerationStepTimingHistory(input: {
@@ -276,31 +282,25 @@ export function mergeTailorResumeGenerationStepTimingHistory(input: {
   step: TailorResumeGenerationStepSummary | null;
   timings: TailorResumeGenerationStepTiming[];
 }) {
-  const timingsByStepNumber = new Map<number, TailorResumeGenerationStepTiming>();
+  const timingsByKey = new Map<string, TailorResumeGenerationStepTiming>();
 
   for (const timing of input.previousTimings) {
-    timingsByStepNumber.set(timing.stepNumber, timing);
+    timingsByKey.set(buildStepTimingKey(timing), timing);
   }
 
   for (const timing of input.timings) {
-    const previousTiming = timingsByStepNumber.get(timing.stepNumber) ?? null;
-    timingsByStepNumber.set(timing.stepNumber, mergeStepTiming(previousTiming, timing));
+    const timingKey = buildStepTimingKey(timing);
+    const previousTiming = timingsByKey.get(timingKey) ?? null;
+    timingsByKey.set(timingKey, mergeStepTiming(previousTiming, timing));
   }
 
   if (input.step) {
     const nextTiming = normalizeStepTiming(input.step, input.observedAt);
-    const previousTiming = timingsByStepNumber.get(nextTiming.stepNumber) ?? null;
+    const timingKey = buildStepTimingKey(nextTiming);
+    const previousTiming = timingsByKey.get(timingKey) ?? null;
 
-    timingsByStepNumber.set(
-      nextTiming.stepNumber,
-      mergeStepTiming(previousTiming, nextTiming),
-    );
+    timingsByKey.set(timingKey, mergeStepTiming(previousTiming, nextTiming));
   }
-
-  freezeAdvancedRunningTimings(
-    timingsByStepNumber,
-    input.step?.stepNumber ?? input.timings.at(-1)?.stepNumber ?? null,
-  );
 
   const stepCount = Math.max(
     1,
@@ -310,8 +310,15 @@ export function mergeTailorResumeGenerationStepTimingHistory(input: {
       1,
   );
 
-  return [...timingsByStepNumber.values()]
-    .sort((left, right) => left.stepNumber - right.stepNumber)
+  return freezeAdvancedRunningTimingEntries(
+    [...timingsByKey.values()],
+    input.step?.stepNumber ?? input.timings.at(-1)?.stepNumber ?? null,
+  )
+    .sort(
+      (left, right) =>
+        left.stepNumber - right.stepNumber ||
+        (left.attempt ?? 1) - (right.attempt ?? 1),
+    )
     .filter((timing) => timing.stepNumber <= stepCount)
-    .slice(0, stepCount);
+    .slice(0, stepCount * 3);
 }

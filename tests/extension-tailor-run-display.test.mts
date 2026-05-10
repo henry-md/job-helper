@@ -123,7 +123,71 @@ test("formats specific tailor run timing as one value per elapsed step", () => {
         },
       ],
     }),
-    "0:44/-/2:12/-/0:17",
+    "0:44/-/2:12/0:17",
+  );
+});
+
+test("separates retry attempt timings with dots inside the same step", () => {
+  const runStartedAtTime = Date.parse("2026-04-29T19:52:18.000Z");
+
+  assert.equal(
+    formatTailorRunStepTimeDisplay({
+      activeStepNumber: 3,
+      mode: "specific",
+      nowTime: runStartedAtTime + 50_000,
+      runStartedAtTime,
+      timings: [
+        {
+          attempt: 1,
+          durationMs: 31_000,
+          observedAtTime: runStartedAtTime + 31_000,
+          retrying: false,
+          status: "failed",
+          stepNumber: 3,
+        },
+        {
+          attempt: 2,
+          durationMs: 0,
+          observedAtTime: runStartedAtTime + 38_000,
+          retrying: true,
+          status: "running",
+          stepNumber: 3,
+        },
+      ],
+    }),
+    "0:31/-/0:31.0:12",
+  );
+});
+
+test("separates Step 4a and Step 4b timings with a dot", () => {
+  const runStartedAtTime = Date.parse("2026-04-29T19:52:18.000Z");
+
+  assert.equal(
+    formatTailorRunStepTimeDisplay({
+      activeStepNumber: 5,
+      mode: "specific",
+      nowTime: runStartedAtTime + 90_000,
+      runStartedAtTime,
+      timings: [
+        {
+          attempt: 1,
+          durationMs: 44_000,
+          observedAtTime: runStartedAtTime + 44_000,
+          retrying: false,
+          status: "succeeded",
+          stepNumber: 4,
+        },
+        {
+          attempt: 1,
+          durationMs: 0,
+          observedAtTime: runStartedAtTime + 72_000,
+          retrying: false,
+          status: "running",
+          stepNumber: 5,
+        },
+      ],
+    }),
+    "0:44/-/-/0:44.0:18",
   );
 });
 
