@@ -1,6 +1,9 @@
 - Symptom: the extension could keep counting an earlier Tailor Resume step while a later step was active, producing displays such as Step 1 still increasing during Step 3.
 - Root cause: refresh/local timing merges could preserve a stale earlier `running` timing after the active step advanced, and the specific-time display ticked any `running` timing instead of only the current step.
 - Fix: freeze older running timings when a later step is observed, and only animate the currently active step in the elapsed-time formatter.
+- Symptom: when Step 3 retried, the visible Step 3 clock could restart at zero even though the same Step 3 stage was still running.
+- Root cause: active-run refreshes rebuild `lastStep` from the DB run row, which stores step/attempt/status but not `durationMs`; the extension treated the new retry attempt as a replacement timing and discarded the previous same-step elapsed time.
+- Fix: when merging timing updates for the same step, carry forward the elapsed duration across retry/attempt/status transitions, including zero-duration refreshes and final retry failures.
 - Symptom: high/low job keywords did not appear on the job page until the completed tailored resume was ready.
 - Root cause: Step 1 already returns `emphasizedTechnologies`, but the extension only surfaced those through the completed tailored-resume badge path.
 - Fix: include Step 1 emphasized technologies in the generation stream success event and send a keyword-only page prompt immediately after that event.

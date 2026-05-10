@@ -40,6 +40,10 @@ function shouldPreserveObservedRunningTiming(
   );
 }
 
+function isActiveTiming(timing: TailorResumeGenerationStepTiming) {
+  return timing.status === "running" || timing.retrying === true;
+}
+
 function areSameStepAttempt(
   previousTiming: TailorResumeGenerationStepTiming | null,
   nextTiming: TailorResumeGenerationStepTiming,
@@ -69,6 +73,24 @@ function readObservedDurationMs(input: {
     : 0;
 }
 
+function readPreviousDurationAtNextObservation(
+  previousTiming: TailorResumeGenerationStepTiming,
+  nextTiming: TailorResumeGenerationStepTiming,
+) {
+  if (!isActiveTiming(previousTiming)) {
+    return previousTiming.durationMs;
+  }
+
+  return Math.max(
+    previousTiming.durationMs,
+    previousTiming.durationMs +
+      readObservedDurationMs({
+        endedAt: nextTiming.observedAt,
+        startedAt: previousTiming.observedAt,
+      }),
+  );
+}
+
 function mergeStepTiming(
   previousTiming: TailorResumeGenerationStepTiming | null,
   nextTiming: TailorResumeGenerationStepTiming,
@@ -83,6 +105,71 @@ function mergeStepTiming(
           emphasizedTechnologies: previousTiming.emphasizedTechnologies,
         }
       : nextTiming;
+
+  if (previousTiming?.stepNumber === nextTimingWithPreservedKeywords.stepNumber) {
+    const previousDurationAtNextObservation =
+      readPreviousDurationAtNextObservation(
+        previousTiming,
+        nextTimingWithPreservedKeywords,
+      );
+
+    if (
+      shouldPreserveObservedRunningTiming(
+        previousTiming,
+        nextTimingWithPreservedKeywords,
+      )
+    ) {
+      return {
+        ...nextTimingWithPreservedKeywords,
+        durationMs: previousTiming.durationMs,
+        observedAt:
+          previousTiming?.observedAt ?? nextTimingWithPreservedKeywords.observedAt,
+      };
+    }
+
+    const nextTimingWithContinuousDuration = {
+      ...nextTimingWithPreservedKeywords,
+      durationMs: Math.max(
+        nextTimingWithPreservedKeywords.durationMs,
+        previousDurationAtNextObservation,
+      ),
+    };
+
+    if (!areSameStepAttempt(previousTiming, nextTimingWithPreservedKeywords)) {
+      return nextTimingWithContinuousDuration;
+    }
+
+    if (
+      previousTiming.status === "running" &&
+      nextTimingWithPreservedKeywords.status !== "running" &&
+      nextTimingWithPreservedKeywords.retrying !== true
+    ) {
+      return nextTimingWithContinuousDuration;
+    }
+
+    if (
+      previousTiming.status !== "running" &&
+      nextTimingWithPreservedKeywords.status !== "running" &&
+      previousTiming.retrying !== true &&
+      nextTimingWithPreservedKeywords.retrying !== true
+    ) {
+      const nextDurationMs = Math.max(
+        previousTiming.durationMs,
+        nextTimingWithPreservedKeywords.durationMs,
+      );
+
+      return {
+        ...nextTimingWithPreservedKeywords,
+        durationMs: nextDurationMs,
+        observedAt:
+          nextTimingWithPreservedKeywords.durationMs > previousTiming.durationMs
+            ? nextTimingWithPreservedKeywords.observedAt
+            : previousTiming.observedAt ?? nextTimingWithPreservedKeywords.observedAt,
+      };
+    }
+
+    return nextTimingWithContinuousDuration;
+  }
 
   if (
     shouldPreserveObservedRunningTiming(

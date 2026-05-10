@@ -513,15 +513,19 @@ export type TailorResumeGenerationStepTiming =
 export type TailorResumeExistingTailoringState =
   | {
       applicationId: string | null;
+      blockingTechnologies: TailoredResumeEmphasizedTechnology[];
       companyName: string | null;
       createdAt: string;
+      error: string | null;
       id: string;
       jobDescription: string;
       jobIdentifier: string | null;
       jobUrl: string | null;
+      emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
       kind: "active_generation";
       lastStep: TailorResumeGenerationStepSummary | null;
       positionTitle: string | null;
+      status: "CANCELLED" | "FAILED" | "NEEDS_INPUT" | "RUNNING" | "SUCCEEDED";
       updatedAt: string;
     }
   | {
@@ -1373,6 +1377,17 @@ function readExistingTailoringInterviewStatus(value: unknown) {
     : "ready";
 }
 
+function readTailorResumeExistingTailoringRunStatus(value: unknown) {
+  const status = readString(value).trim().toUpperCase();
+
+  return status === "FAILED" ||
+    status === "NEEDS_INPUT" ||
+    status === "SUCCEEDED" ||
+    status === "CANCELLED"
+    ? status
+    : "RUNNING";
+}
+
 export function readTailorResumeExistingTailoringState(
   value: unknown,
 ): TailorResumeExistingTailoringState | null {
@@ -1403,8 +1418,15 @@ export function readTailorResumeExistingTailoringState(
 
     return {
       applicationId: readNullableString(existingTailoring.applicationId),
+      blockingTechnologies: readTailoredResumeEmphasizedTechnologies(
+        existingTailoring.blockingTechnologies,
+      ),
       companyName: readNullableString(existingTailoring.companyName),
       createdAt,
+      emphasizedTechnologies: readTailoredResumeEmphasizedTechnologies(
+        existingTailoring.emphasizedTechnologies,
+      ),
+      error: readNullableString(existingTailoring.error),
       id,
       jobDescription,
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
@@ -1414,6 +1436,9 @@ export function readTailorResumeExistingTailoringState(
         existingTailoring.lastStep,
       ),
       positionTitle: readNullableString(existingTailoring.positionTitle),
+      status: readTailorResumeExistingTailoringRunStatus(
+        existingTailoring.status,
+      ),
       updatedAt,
     };
   }

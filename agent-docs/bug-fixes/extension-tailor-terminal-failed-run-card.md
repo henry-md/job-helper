@@ -1,0 +1,4 @@
+- Symptom: when a Tailor Resume stage exhausted its retries and the backend marked the run `FAILED`, the side panel could lose the active run card on the next poll, leaving no visible failed step or direct retry affordance.
+- Root cause: the response state only exposed `RUNNING`/`NEEDS_INPUT` runs as active tailorings. The extension already knew how to render failed steps, but terminal failed rows disappeared before the failed-step UI could remain on screen.
+- Fix: include failed runs with a persisted failed step in the active-tailoring feed, carry run status/error through the shared and extension state types, render terminal failed runs as error cards, and show a visible `Retry` button on those cards.
+- Guardrail: a terminal failed run is still user-visible workflow state until the user retries or deletes it. Do not prune it from the active-tailoring surface just because the run lifecycle is no longer `RUNNING`.

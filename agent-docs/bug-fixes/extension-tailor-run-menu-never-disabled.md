@@ -1,0 +1,4 @@
+- Symptom: a loading Tailor Resume run could make the run card's three-dot actions button look or behave disabled, leaving Stop run visible while secondary actions were unreachable.
+- Root cause: run-card overflow triggers reused the same busy state that disables menu items, and the legacy loading overlay could obscure the whole shell body during preparation.
+- Fix: keep overflow triggers clickable in all run states, leave individual menu items guarded by their existing busy/action checks, and only apply the legacy body-obscuring overlay for the overwrite prompt rather than passive loading.
+- Guardrail: overflow/menu triggers are escape hatches for active run management; disable risky menu items when an action is busy, but do not disable the trigger itself.

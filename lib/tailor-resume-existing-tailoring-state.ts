@@ -17,13 +17,16 @@ export type TailorResumeExistingTailoringState =
       blockingTechnologies: TailoredResumeEmphasizedTechnology[];
       companyName: string | null;
       createdAt: string;
+      error: string | null;
       id: string;
       jobDescription: string;
       jobIdentifier: string | null;
       jobUrl: string | null;
+      emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
       kind: "active_generation";
       lastStep: TailorResumeGenerationStepEvent | null;
       positionTitle: string | null;
+      status: TailorResumeDbRunRecord["status"];
       updatedAt: string;
     }
   | {
@@ -143,7 +146,7 @@ function readExistingTailoringPriority(value: TailorResumeExistingTailoringState
   }
 
   if (value.kind === "active_generation") {
-    return 2;
+    return value.status === "FAILED" ? 0 : 2;
   }
 
   return 1;
@@ -263,12 +266,19 @@ export function buildTailorResumeRunStepEvent(
 
 export function buildActiveRunExistingTailoringState(
   run: TailorResumeDbRunRecord,
+  options: {
+    emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
+  } = {},
 ): TailorResumeExistingTailoringState {
   return {
     applicationId: run.applicationId,
     blockingTechnologies: [],
     companyName: run.application.company.name,
     createdAt: run.createdAt.toISOString(),
+    ...(options.emphasizedTechnologies
+      ? { emphasizedTechnologies: options.emphasizedTechnologies }
+      : {}),
+    error: run.error,
     id: run.id,
     jobDescription: run.jobDescription,
     jobIdentifier: null,
@@ -276,6 +286,7 @@ export function buildActiveRunExistingTailoringState(
     kind: "active_generation",
     lastStep: buildTailorResumeRunStepEvent(run),
     positionTitle: run.application.title,
+    status: run.status,
     updatedAt: run.updatedAt.toISOString(),
   };
 }
@@ -337,7 +348,10 @@ export function buildActiveTailoringStates(input: {
         isTailorResumeInterviewPendingQuestionStart(tailoringInterview)
         ? buildPendingInterviewExistingTailoringState(tailoringInterview, run)
         : run
-          ? buildActiveRunExistingTailoringState(run)
+          ? buildActiveRunExistingTailoringState(run, {
+              emphasizedTechnologies:
+                tailoringInterview.planningResult.emphasizedTechnologies,
+            })
           : buildPendingInterviewExistingTailoringState(tailoringInterview, run),
     );
   }
@@ -465,6 +479,10 @@ export function readTailorResumeExistingTailoringState(
       ),
       companyName: readNullableString(existingTailoring.companyName),
       createdAt,
+      emphasizedTechnologies: readEmphasizedTechnologies(
+        existingTailoring.emphasizedTechnologies,
+      ),
+      error: readNullableString(existingTailoring.error),
       id,
       jobDescription,
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
@@ -472,6 +490,16 @@ export function readTailorResumeExistingTailoringState(
       kind,
       lastStep: readTailorResumeGenerationStepEvent(existingTailoring.lastStep),
       positionTitle: readNullableString(existingTailoring.positionTitle),
+      status:
+        readString(existingTailoring.status) === "FAILED"
+          ? "FAILED"
+          : readString(existingTailoring.status) === "NEEDS_INPUT"
+            ? "NEEDS_INPUT"
+            : readString(existingTailoring.status) === "SUCCEEDED"
+              ? "SUCCEEDED"
+              : readString(existingTailoring.status) === "CANCELLED"
+                ? "CANCELLED"
+                : "RUNNING",
       updatedAt,
     };
   }

@@ -184,9 +184,17 @@ export async function findActiveTailorResumeRunsForUser(input: {
       updatedAt: true,
     },
     where: {
-      status: {
-        in: ["RUNNING", "NEEDS_INPUT"],
-      },
+      OR: [
+        {
+          status: {
+            in: ["RUNNING", "NEEDS_INPUT"],
+          },
+        },
+        {
+          status: "FAILED",
+          stepStatus: "failed",
+        },
+      ],
       userId: input.userId,
     },
   });

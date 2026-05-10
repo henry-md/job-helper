@@ -158,6 +158,50 @@ test("buildPendingInterviewExistingTailoringState exposes all scraped keywords",
     existingTailoring.blockingTechnologies.map((technology) => technology.name),
     ["Kubernetes", "Terraform"],
   );
+
+  const activeRun = {
+    application: {
+      company: {
+        name: "Example Corp",
+      },
+      title: "Software Engineer",
+    },
+    applicationId: "app-123",
+    createdAt: new Date("2026-05-05T14:00:00.000Z"),
+    error: null,
+    id: "run-123",
+    jobDescription: "Role text",
+    jobUrl: "https://jobs.example.com/roles/123",
+    status: "RUNNING",
+    stepAttempt: 1,
+    stepCount: 5,
+    stepDetail: "Starting the planning pass.",
+    stepNumber: 3,
+    stepRetrying: false,
+    stepStatus: "running",
+    stepSummary: "Generating edit intent outline",
+    updatedAt: new Date("2026-05-05T14:01:00.000Z"),
+  } satisfies TailorResumeDbRunRecord;
+  const [activeGeneration] = buildActiveTailoringStates({
+    activeRuns: [activeRun],
+    tailoringInterviews: [{ ...interview, status: "deciding" }],
+  });
+
+  assert.equal(activeGeneration?.kind, "active_generation");
+  assert.deepEqual(
+    activeGeneration?.kind === "active_generation"
+      ? activeGeneration.emphasizedTechnologies?.map((technology) => [
+          technology.name,
+          technology.classification,
+        ])
+      : [],
+    [
+      ["TypeScript", "skills_section"],
+      ["Kubernetes", "skills_section"],
+      ["Load balancing", "narrative"],
+      ["Terraform", "skills_section"],
+    ],
+  );
 });
 
 test("buildActiveTailoringStates ignores interviews whose run is no longer active", () => {

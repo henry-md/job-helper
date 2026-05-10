@@ -1547,6 +1547,7 @@ function buildTailoringRunRecordFromExistingTailoring(input: {
     step: generationStep,
     timings: [],
   });
+  const isFailedGeneration = input.existingTailoring.status === "FAILED";
 
   return {
     applicationId: input.existingTailoring.applicationId,
@@ -1558,18 +1559,20 @@ function buildTailoringRunRecordFromExistingTailoring(input: {
     generationStep,
     generationStepTimings,
     jobIdentifier,
-    message: buildLiveTailorResumeStatusMessage(
-      generationStep,
-      "Tailoring your resume for this job...",
-    ),
+    message: isFailedGeneration
+      ? "Failed generation"
+      : buildLiveTailorResumeStatusMessage(
+          generationStep,
+          "Tailoring your resume for this job...",
+        ),
     pageTitle,
     pageUrl,
     positionTitle:
       input.existingTailoring.positionTitle ??
       (reusePreviousPageMetadata ? input.previousRun?.positionTitle ?? null : null),
-    status: "running",
+    status: isFailedGeneration ? "error" : "running",
     suppressedTailoredResumeId: null,
-    tailoredResumeError: null,
+    tailoredResumeError: isFailedGeneration ? input.existingTailoring.error : null,
     tailoredResumeId: null,
   } satisfies TailorResumeRunRecord;
 }
@@ -2157,12 +2160,15 @@ function buildActiveTailorRunCardFromExistingTailoring(input: {
     interviewStatus,
     sortTime: startedAtTime,
     statusDisplayState:
-      shouldUsePendingInterviewStep &&
-      (interviewStatus === "pending" || interviewStatus === "ready")
-        ? "ready"
-        : shouldUsePendingInterviewStep && interviewStatus === "deciding"
-          ? "loading"
-          : input.statusDisplayState ?? nextCard.statusDisplayState,
+      input.existingTailoring.kind === "active_generation" &&
+      input.existingTailoring.status === "FAILED"
+        ? "error"
+        : shouldUsePendingInterviewStep &&
+            (interviewStatus === "pending" || interviewStatus === "ready")
+          ? "ready"
+          : shouldUsePendingInterviewStep && interviewStatus === "deciding"
+            ? "loading"
+            : input.statusDisplayState ?? nextCard.statusDisplayState,
     startedAtTime,
     step: pendingInterviewStep ?? nextCard.step,
     suppressedTailoredResumeId: null,
@@ -5592,6 +5598,7 @@ function App() {
     EXTENSION_DEBUG_UI_ENABLED && Boolean(focusedTailoredResumeId);
   const isTailorRunShellOverlayActive =
     Boolean(existingTailoringPrompt) || isTailorPreparationPending;
+  const shouldObscureTailorRunBody = Boolean(existingTailoringPrompt);
   const shouldRenderLegacyTailorRunShell =
     !matchingTailorInterviewActiveRunCard &&
     resolveShouldRenderLegacyTailorRunShell({
@@ -7566,6 +7573,7 @@ function App() {
   }, [
     focusedTailoredResumeId,
     invalidateAuthSession,
+    shouldRequestHighlightedTailoredResumePreview,
     tailoredResumePreviewPdfUpdatedAt,
     tailoredResumePreviewSessionToken,
   ]);
@@ -9722,20 +9730,26 @@ function App() {
 
   async function handleDeleteTailorRun() {
     const deleteTarget = tailorRunDeleteTarget;
+    const isFailedTailorRunDelete =
+      currentActiveTailorRunCard?.statusDisplayState === "error" ||
+      (currentPagePersonalInfoTailoring?.kind === "active_generation" &&
+        currentPagePersonalInfoTailoring.status === "FAILED") ||
+      lastTailoringRun?.status === "error";
     const shouldCancelCurrentTailoring = Boolean(
-      isTailorPreparationPending ||
-        (existingTailoringPrompt
-          ? existingTailoringPrompt.existingTailoring.kind !== "completed"
-          : false) ||
-        captureState === "running" ||
-        captureState === "finishing" ||
-        captureState === "needs_input" ||
-        Boolean(tailorInterview) ||
-        Boolean(
-          currentPagePersonalInfoTailoring &&
-            currentPagePersonalInfoTailoring.kind !== "completed",
-        ) ||
-        isTransientTailoringRun(lastTailoringRun),
+      !isFailedTailorRunDelete &&
+        (isTailorPreparationPending ||
+          (existingTailoringPrompt
+            ? existingTailoringPrompt.existingTailoring.kind !== "completed"
+            : false) ||
+          captureState === "running" ||
+          captureState === "finishing" ||
+          captureState === "needs_input" ||
+          Boolean(tailorInterview) ||
+          Boolean(
+            currentPagePersonalInfoTailoring &&
+              currentPagePersonalInfoTailoring.kind !== "completed",
+          ) ||
+          isTransientTailoringRun(lastTailoringRun)),
     );
 
     if ((!deleteTarget && !canDeleteTailorRun) || tailorRunMenuActionState !== "idle") {
@@ -10143,6 +10157,7 @@ function App() {
     const tailoredResumeId = deleteTarget?.tailoredResumeId?.trim() ?? "";
     const tailorRunId = deleteTarget?.tailorRunId?.trim() ?? "";
     const shouldRemoveSavedArtifacts = Boolean(tailoredResumeId);
+    const shouldCancelBeforeDelete = card.statusDisplayState !== "error";
     const fallbackMessage = "Unable to delete the tailored resume.";
 
     if (
@@ -10201,7 +10216,7 @@ function App() {
     });
 
     try {
-      if (jobUrl || existingTailoringId) {
+      if (shouldCancelBeforeDelete && (jobUrl || existingTailoringId)) {
         const cancelResponse = await chrome.runtime.sendMessage({
           payload: {
             existingTailoringId: existingTailoringId || null,
@@ -10575,6 +10590,7 @@ function App() {
           ? `Step timings: ${elapsedTimeLabel}`
         : `Reached this waiting state after ${elapsedTimeLabel}`;
     const canStopCard = card.statusDisplayState !== "error";
+    const canRetryCard = card.statusDisplayState === "error" && Boolean(card.url);
     const shouldShowCardProgressCopy =
       card.statusDisplayState === "error" && Boolean(card.message || card.detail);
     const showKeywordAction =
@@ -10626,6 +10642,20 @@ function App() {
                   {isStopBusy ? "Stopping..." : "Stop run"}
                 </button>
               ) : null}
+              {canRetryCard ? (
+                <button
+                  className="secondary-action compact-action"
+                  disabled={isMenuBusy}
+                  type="button"
+                  onClick={() =>
+                    isCurrentCard
+                      ? void handleRetryTailorRun()
+                      : void handleRetryBackgroundTailorRun(card)
+                  }
+                >
+                  {menuActionStateLabel === "retrying" ? "Retrying..." : "Retry"}
+                </button>
+              ) : null}
               <div
                 className="tailor-run-menu-shell"
                 ref={isCurrentCard && isMenuOpen
@@ -10638,7 +10668,6 @@ function App() {
                   aria-expanded={isMenuOpen}
                   aria-label="More tailor run actions"
                   className="secondary-action compact-action tailor-run-menu-trigger"
-                  disabled={isMenuBusy}
                   type="button"
                   onClick={() => {
                     if (isCurrentCard) {
