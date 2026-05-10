@@ -1,6 +1,7 @@
 Job Helper is a small Next.js App Router app for tracking job applications from screenshots.
 
 Current product slice:
+- Default product surface is the Chrome extension. If a request is ambiguous and could apply to either the web app or the extension, assume the extension is the primary target and verify it there first. The web app is usually supporting/admin surface unless the user explicitly names it.
 - Public `/` page handles Google sign-in.
 - Protected `/dashboard` has Config, Saved, and Settings tabs.
 - `/dashboard?tab=config` lets each signed-in user upload/edit the source resume, review the rendered LaTeX PDF preview, and edit `USER.md` from a collapsed memory card.

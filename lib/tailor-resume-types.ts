@@ -1037,7 +1037,7 @@ function parseTailoredResumeKeywordCoverageBucket(
   };
 }
 
-function parseTailoredResumeKeywordCoverage(
+export function parseTailoredResumeKeywordCoverage(
   value: unknown,
 ): TailoredResumeKeywordCoverage | null {
   if (!isRecord(value)) {

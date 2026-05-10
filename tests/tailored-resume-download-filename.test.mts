@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildTailoredResumeDownloadFilename } from "../lib/tailored-resume-download-filename.ts";
+import {
+  buildTailoredResumeDownloadFilename,
+  buildUniqueTailoredResumeDownloadFilename,
+} from "../lib/tailored-resume-download-filename.ts";
 
 test("buildTailoredResumeDownloadFilename uses only the company name", () => {
   assert.equal(
@@ -43,5 +46,31 @@ test("buildTailoredResumeDownloadFilename never includes job identifiers", () =>
       displayName: "Research Engineer - REQ-12345",
     }),
     "OpenAI.pdf",
+  );
+});
+
+test("buildUniqueTailoredResumeDownloadFilename increments company pdf collisions", () => {
+  assert.equal(
+    buildUniqueTailoredResumeDownloadFilename({
+      existingDisplayNames: ["Palantir.pdf", "Palantir 1.pdf", "Other.pdf"],
+      record: {
+        companyName: "Palantir",
+        displayName: "Backend Software Engineer",
+      },
+    }),
+    "Palantir 2.pdf",
+  );
+});
+
+test("buildUniqueTailoredResumeDownloadFilename compares names case-insensitively", () => {
+  assert.equal(
+    buildUniqueTailoredResumeDownloadFilename({
+      existingDisplayNames: ["palantir.pdf"],
+      record: {
+        companyName: "Palantir",
+        displayName: "Palantir - Forward Deployed Engineer",
+      },
+    }),
+    "Palantir 1.pdf",
   );
 });

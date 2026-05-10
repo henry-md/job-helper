@@ -59,5 +59,34 @@ export function buildTailoredResumeDownloadFilename(
   return `${companyName}.pdf`;
 }
 
+export function buildUniqueTailoredResumeDownloadFilename(input: {
+  existingDisplayNames: Array<string | null | undefined>;
+  record: TailoredResumeDownloadFilenameRecord;
+}) {
+  const filename = buildTailoredResumeDownloadFilename(input.record);
+  const extensionMatch = filename.match(/^(.*?)(\.pdf)$/i);
+  const baseName = extensionMatch?.[1] ?? filename.replace(/\.pdf$/i, "");
+  const extension = extensionMatch?.[2] ?? ".pdf";
+  const existingNames = new Set(
+    input.existingDisplayNames
+      .map((value) => collapseWhitespace(value).toLowerCase())
+      .filter(Boolean),
+  );
+
+  if (!existingNames.has(filename.toLowerCase())) {
+    return filename;
+  }
+
+  for (let index = 1; index < 10_000; index += 1) {
+    const candidate = `${baseName} ${index}${extension}`;
+
+    if (!existingNames.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+  }
+
+  return `${baseName} ${Date.now()}${extension}`;
+}
+
 export const buildCompanyResumeDownloadName =
   buildTailoredResumeDownloadFilename;

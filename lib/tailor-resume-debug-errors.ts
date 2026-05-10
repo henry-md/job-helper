@@ -132,11 +132,24 @@ export type ParsedTailorResumeInvalidReplacementPayload = {
 export type TailorResumeStepFailureLogPayload = {
   action: string | null;
   applicationId: string | null;
+  failureHistory: Array<{
+    attempt: number | null;
+    detail: string | null;
+    loggedAtLocal: string;
+    loggedAtTimeZone: string;
+    loggedAtUtc: string;
+    retrying: boolean;
+    stepNumber: number;
+    summary: string;
+  }>;
   interviewId: string | null;
   jobDescription: string | null;
   jobUrl: string | null;
   kind: "tailor_resume_step_failure";
   loggedAt: string;
+  loggedAtLocal: string;
+  loggedAtTimeZone: string;
+  loggedAtUtc: string;
   logKind: "step-event" | "terminal-run-status";
   runId: string | null;
   step: {
@@ -213,22 +226,41 @@ export function buildTailorResumeStepFailureLogPayload(input: {
   action?: string | null;
   applicationId?: string | null;
   event: TailorResumeGenerationStepEvent;
+  failureHistory?: TailorResumeStepFailureLogPayload["failureHistory"];
   interviewId?: string | null;
   jobDescription?: string | null;
   jobUrl?: string | null;
   loggedAt?: string;
+  loggedAtLocal?: string;
+  loggedAtTimeZone?: string;
   logKind: TailorResumeStepFailureLogPayload["logKind"];
   runId?: string | null;
   tailoredResumeId?: string | null;
 }) {
+  const loggedAtUtc = input.loggedAt ?? new Date().toISOString();
+  const loggedAtTimeZone =
+    input.loggedAtTimeZone ??
+    Intl.DateTimeFormat().resolvedOptions().timeZone ??
+    "UTC";
+  const loggedAtLocal =
+    input.loggedAtLocal ??
+    new Intl.DateTimeFormat("en-US", {
+      dateStyle: "medium",
+      timeStyle: "long",
+      timeZone: loggedAtTimeZone,
+    }).format(new Date(loggedAtUtc));
   const payload: TailorResumeStepFailureLogPayload = {
     action: input.action?.trim() || null,
     applicationId: input.applicationId?.trim() || null,
+    failureHistory: input.failureHistory ?? [],
     interviewId: input.interviewId?.trim() || null,
     jobDescription: trimLongDebugText(input.jobDescription),
     jobUrl: input.jobUrl?.trim() || null,
     kind: "tailor_resume_step_failure",
-    loggedAt: input.loggedAt ?? new Date().toISOString(),
+    loggedAt: loggedAtUtc,
+    loggedAtLocal,
+    loggedAtTimeZone,
+    loggedAtUtc,
     logKind: input.logKind,
     runId: input.runId?.trim() || null,
     step: {
@@ -287,12 +319,48 @@ export function parseTailorResumeStepFailureLogPayload(
   return {
     action: readOptionalString(parsed.action),
     applicationId: readOptionalString(parsed.applicationId),
+    failureHistory: Array.isArray(parsed.failureHistory)
+      ? parsed.failureHistory.flatMap((entry) => {
+          if (!isRecord(entry)) {
+            return [];
+          }
+
+          const historyStepNumber = readNumber(entry.stepNumber);
+          const historySummary = readOptionalString(entry.summary);
+
+          if (!historyStepNumber || !historySummary) {
+            return [];
+          }
+
+          return [
+            {
+              attempt: readNumber(entry.attempt),
+              detail: readOptionalString(entry.detail),
+              loggedAtLocal: readOptionalString(entry.loggedAtLocal) ?? "",
+              loggedAtTimeZone:
+                readOptionalString(entry.loggedAtTimeZone) ?? "UTC",
+              loggedAtUtc:
+                readOptionalString(entry.loggedAtUtc) ??
+                new Date(0).toISOString(),
+              retrying: readBoolean(entry.retrying) ?? false,
+              stepNumber: historyStepNumber,
+              summary: historySummary,
+            },
+          ];
+        })
+      : [],
     interviewId: readOptionalString(parsed.interviewId),
     jobDescription: readOptionalString(parsed.jobDescription),
     jobUrl: readOptionalString(parsed.jobUrl),
     kind: "tailor_resume_step_failure",
     loggedAt:
       readOptionalString(parsed.loggedAt) ?? new Date(0).toISOString(),
+    loggedAtLocal: readOptionalString(parsed.loggedAtLocal) ?? "",
+    loggedAtTimeZone: readOptionalString(parsed.loggedAtTimeZone) ?? "UTC",
+    loggedAtUtc:
+      readOptionalString(parsed.loggedAtUtc) ??
+      readOptionalString(parsed.loggedAt) ??
+      new Date(0).toISOString(),
     logKind:
       parsed.logKind === "terminal-run-status"
         ? "terminal-run-status"

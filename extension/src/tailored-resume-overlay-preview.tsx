@@ -19,7 +19,10 @@ import type {
   TailoredResumePreviewFocusQuery,
   TailoredResumePreviewHighlightTone,
 } from "../../lib/tailor-resume-preview-focus.ts";
-import { resolveTailoredResumePreviewFocusRanges } from "../../lib/tailor-resume-preview-focus.ts";
+import {
+  dedupeTailoredResumePreviewHighlightRanges,
+  resolveTailoredResumePreviewFocusRanges,
+} from "../../lib/tailor-resume-preview-focus.ts";
 
 type PdfJsModule = typeof import("pdfjs-dist/webpack.mjs");
 type PdfPageViewport = ReturnType<PDFPageProxy["getViewport"]>;
@@ -581,13 +584,20 @@ function buildPageHighlightMatches(input: {
   pageMatchIndex: PageMatchIndex;
   queries: TailoredResumeInteractivePreviewQuery[];
 }) {
-  return input.queries.flatMap((entry) => {
+  const resolvedRanges = input.queries.flatMap((entry) => {
     const resolvedRanges = resolveTailoredResumePreviewFocusRanges({
       pageText: input.pageMatchIndex.normalizedText,
       query: entry.query,
     });
 
-    return resolvedRanges.flatMap((range, index) => {
+    return resolvedRanges.map((range, index) => ({
+      ...range,
+      key: `${entry.key}:${index}`,
+    }));
+  });
+
+  return dedupeTailoredResumePreviewHighlightRanges(resolvedRanges).flatMap(
+    (range) => {
       const rects = buildHighlightRectsForNormalizedSlice({
         end: range.end,
         pageMatchIndex: input.pageMatchIndex,
@@ -600,13 +610,13 @@ function buildPageHighlightMatches(input: {
 
       return [
         {
-          key: `${entry.key}:${index}`,
+          key: range.key,
           rects,
           tone: range.tone,
         } satisfies PageHighlightMatch,
       ];
-    });
-  });
+    },
+  );
 }
 
 function buildFocusRectsFromPageHighlightMatches(input: {

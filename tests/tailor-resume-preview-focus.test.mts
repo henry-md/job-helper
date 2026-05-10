@@ -19,6 +19,24 @@ function findSegmentIdBySnippet(annotatedLatexCode: string, snippet: string) {
   return block.id;
 }
 
+function replaceSegmentLatex(input: {
+  annotatedLatexCode: string;
+  replacementLatexCode: string;
+  segmentId: string;
+}) {
+  const block = readAnnotatedTailorResumeBlocks(input.annotatedLatexCode).find(
+    (candidate) => candidate.id === input.segmentId,
+  );
+
+  assert.ok(block, `Expected to find segment: ${input.segmentId}`);
+
+  return (
+    input.annotatedLatexCode.slice(0, block.contentStart) +
+    input.replacementLatexCode +
+    input.annotatedLatexCode.slice(block.contentEnd)
+  );
+}
+
 test("renderTailoredResumeLatexToPlainText unwraps common inline resume formatting", () => {
   assert.equal(
     renderTailoredResumeLatexToPlainText(
@@ -216,8 +234,13 @@ test("buildTailoredResumeInteractivePreviewQueries keeps one steady highlight pe
     normalized.annotatedLatex,
     "Created full-stack dashboard for project management",
   );
-  const previewQueries = buildTailoredResumeInteractivePreviewQueries({
+  const finalAnnotatedLatex = replaceSegmentLatex({
     annotatedLatexCode: normalized.annotatedLatex,
+    replacementLatexCode: afterUserLatexCode,
+    segmentId,
+  });
+  const previewQueries = buildTailoredResumeInteractivePreviewQueries({
+    annotatedLatexCode: finalAnnotatedLatex,
     edits: [
       {
         afterLatexCode: afterModelLatexCode,
@@ -244,6 +267,57 @@ test("buildTailoredResumeInteractivePreviewQueries keeps one steady highlight pe
   assert.deepEqual(
     previewQueries.focusQueryByEditId.get(`${segmentId}:model`),
     expectedCombinedQuery,
+  );
+});
+
+test("buildTailoredResumeInteractivePreviewQueries ignores overlapping edit timeline for steady highlights", () => {
+  const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
+  const beforeLatexCode =
+    String.raw`\resumeitem{Created full-stack dashboard for project management with \textbf{React (Next.js) and JavaScript}, with user authentication}`;
+  const finalLatexCode =
+    String.raw`\resumeitem{Built Elasticsearch ad-similarity search for 359K ads across 20 clients with sharding/replication and sub-second queries}`;
+  const segmentId = findSegmentIdBySnippet(
+    normalized.annotatedLatex,
+    "Created full-stack dashboard for project management",
+  );
+  const finalAnnotatedLatex = replaceSegmentLatex({
+    annotatedLatexCode: normalized.annotatedLatex,
+    replacementLatexCode: finalLatexCode,
+    segmentId,
+  });
+  const previewQueries = buildTailoredResumeInteractivePreviewQueries({
+    annotatedLatexCode: finalAnnotatedLatex,
+    edits: [
+      {
+        afterLatexCode: finalLatexCode,
+        beforeLatexCode,
+        command: "resumeitem",
+        customLatexCode: null,
+        editId: `${segmentId}:full`,
+        reason: "Full block edit.",
+        state: "applied",
+        segmentId,
+      },
+      {
+        afterLatexCode:
+          String.raw`\resumeitem{Built Elasticsearch ad-similarity search}`,
+        beforeLatexCode,
+        command: "resumeitem",
+        customLatexCode: null,
+        editId: `${segmentId}:nested`,
+        reason: "Historical nested edit.",
+        state: "applied",
+        segmentId: `${segmentId}.nested`,
+      },
+    ],
+    sourceAnnotatedLatexCode: normalized.annotatedLatex,
+  });
+
+  assert.equal(previewQueries.highlightQueries.length, 1);
+  assert.equal(previewQueries.highlightQueries[0]?.key, `segment:${segmentId}`);
+  assert.equal(
+    previewQueries.highlightQueries[0]?.query.anchorText,
+    "Built Elasticsearch ad-similarity search for 359K ads across 20 clients with sharding/replication and sub-second queries",
   );
 });
 

@@ -3,6 +3,7 @@ import test from "node:test";
 import { buildTailoredResumeDiffRows } from "../lib/tailor-resume-review.ts";
 import {
   buildTailoredResumePreviewFocusQuery,
+  dedupeTailoredResumePreviewHighlightRanges,
   renderTailoredResumeLatexToPlainText,
   resolveTailoredResumePreviewFocusRanges,
 } from "../lib/tailor-resume-preview-focus.ts";
@@ -126,3 +127,17 @@ for (const testCase of characterAccuracyCases) {
     );
   });
 }
+
+test("dedupes nested highlight ranges before preview overlays are painted", () => {
+  const ranges = dedupeTailoredResumePreviewHighlightRanges([
+    { end: 65, start: 20, tone: "changed" },
+    { end: 37, start: 20, tone: "changed" },
+    { end: 52, start: 41, tone: "changed" },
+    { end: 92, start: 72, tone: "added" },
+  ]);
+
+  assert.deepEqual(ranges, [
+    { end: 65, start: 20, tone: "changed" },
+    { end: 92, start: 72, tone: "added" },
+  ]);
+});

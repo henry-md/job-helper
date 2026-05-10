@@ -2,7 +2,9 @@ import type { TailorResumeDbRunRecord } from "./tailor-resume-route-response-sta
 import { normalizeTailorResumeJobUrl } from "./tailor-resume-job-url.ts";
 import {
   normalizeTailorResumeKeywordKind,
+  parseTailoredResumeKeywordCoverage,
   type TailoredResumeEmphasizedTechnology,
+  type TailoredResumeKeywordCoverage,
   type TailorResumeGenerationStepEvent,
   type TailorResumePendingInterview,
 } from "./tailor-resume-types.ts";
@@ -55,6 +57,7 @@ export type TailorResumeExistingTailoringState =
       emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
       jobIdentifier: string | null;
       jobUrl: string | null;
+      keywordCoverage: TailoredResumeKeywordCoverage | null;
       kind: "completed";
       positionTitle: string | null;
       status: string;
@@ -558,6 +561,9 @@ export function readTailorResumeExistingTailoringState(
       id,
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
       jobUrl: readNullableString(existingTailoring.jobUrl),
+      keywordCoverage: parseTailoredResumeKeywordCoverage(
+        existingTailoring.keywordCoverage,
+      ),
       kind,
       positionTitle: readNullableString(existingTailoring.positionTitle),
       status: readString(existingTailoring.status) || "ready",

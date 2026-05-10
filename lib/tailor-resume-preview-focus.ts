@@ -1,5 +1,6 @@
 import {
   buildTailoredResumeCombinedActiveEdits,
+  buildTailoredResumeFinalBlockDiffs,
   buildTailoredResumeResolvedSegmentMap,
   resolveTailoredResumeCurrentEditLatexCode,
 } from "./tailor-resume-edit-history.ts";
@@ -749,6 +750,45 @@ export function resolveTailoredResumePreviewFocusRanges(input: {
   });
 }
 
+export function dedupeTailoredResumePreviewHighlightRanges<
+  T extends TailoredResumePreviewHighlightRange,
+>(ranges: T[]) {
+  const sortedByCoverage = ranges
+    .map((range, index) => ({ index, range }))
+    .sort((left, right) => {
+      const rightLength = right.range.end - right.range.start;
+      const leftLength = left.range.end - left.range.start;
+
+      return (
+        rightLength - leftLength ||
+        left.range.start - right.range.start ||
+        left.index - right.index
+      );
+    });
+  const keptRanges: Array<{ index: number; range: T }> = [];
+
+  for (const candidate of sortedByCoverage) {
+    const isContainedByKeptRange = keptRanges.some(
+      (kept) =>
+        kept.range.start <= candidate.range.start &&
+        kept.range.end >= candidate.range.end,
+    );
+
+    if (!isContainedByKeptRange) {
+      keptRanges.push(candidate);
+    }
+  }
+
+  return keptRanges
+    .sort(
+      (left, right) =>
+        left.range.start - right.range.start ||
+        left.range.end - right.range.end ||
+        left.index - right.index,
+    )
+    .map((entry) => entry.range);
+}
+
 export function renderTailoredResumeLatexToPlainText(latexCode: string) {
   const strippedLatex = stripTailorResumeComments(
     stripTailorResumeSegmentIds(latexCode),
@@ -829,11 +869,20 @@ export function buildTailoredResumeInteractivePreviewQueries(
   const combinedActiveEditBySegmentId = new Map(
     combinedActiveEdits.map((edit) => [edit.segmentId, edit]),
   );
+  const finalBlockDiffs = buildTailoredResumeFinalBlockDiffs(record);
+  const editSegmentIds = new Set(record.edits.map((edit) => edit.segmentId));
+  const finalBlockDiffsForEditedSegments = finalBlockDiffs.filter((edit) =>
+    editSegmentIds.has(edit.segmentId),
+  );
+  const steadyHighlightEdits =
+    finalBlockDiffsForEditedSegments.length > 0
+      ? finalBlockDiffsForEditedSegments
+      : combinedActiveEdits;
   const resolvedSegmentMap = buildTailoredResumeResolvedSegmentMap(record);
   const focusQueryByEditId = new Map<string, TailoredResumePreviewFocusQuery | null>();
   const highlightQueries: TailoredResumeInteractivePreviewQuery[] = [];
 
-  for (const edit of combinedActiveEdits) {
+  for (const edit of steadyHighlightEdits) {
     const query = buildTailoredResumePreviewFocusQuery({
       beforeLatexCode: edit.beforeLatexCode,
       currentLatexCode: edit.afterLatexCode,

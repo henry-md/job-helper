@@ -2,6 +2,7 @@
 Required final checks:
 - After any implementation change, run a lint check.
 - After any feature update, bug fix, or other implementation task, run `npm run build` before considering the work done.
+- For user-facing Tailor Resume changes that could affect both the dashboard and Chrome extension, treat the extension as the primary surface unless the user explicitly says web app. Update shared logic plus extension code/build artifacts as needed, then verify the unpacked extension UI, not only the dashboard.
 - If a required check is blocked by an unrelated pre-existing failure, surface that clearly.
 
 Local dev server hygiene:

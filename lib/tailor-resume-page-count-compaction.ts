@@ -692,6 +692,23 @@ function buildCompactionSubmissionToolOutput(input: {
   );
 }
 
+function buildCompactionToolRepairOutput(input: {
+  error: string;
+  editableSegmentIds: ReadonlySet<string>;
+  toolName: string;
+}) {
+  return JSON.stringify(
+    {
+      error: input.error,
+      nextAction:
+        `Revise the ${input.toolName} call and try again using a candidates array with only editable segmentId values.`,
+      editableSegmentIds: [...input.editableSegmentIds],
+    },
+    null,
+    2,
+  );
+}
+
 function getOpenAIClient() {
   const apiKey = process.env.OPENAI_API_KEY;
 
@@ -1420,16 +1437,21 @@ async function collectVerifiedCompactionCandidates(input: {
           JSON.parse(toolCall.arguments),
         );
       } catch (error) {
-        return {
-          error:
-            error instanceof Error
-              ? error.message
-              : "The model returned an invalid final compaction submission.",
-          measurementResult: latestMeasurementResult,
-          pageCountVerification: latestPageCountVerification,
-          model: latestModel,
-          ok: false,
-        };
+        responseInput = [
+          {
+            call_id: toolCall.call_id,
+            output: buildCompactionToolRepairOutput({
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "The model returned an invalid final compaction submission.",
+              editableSegmentIds: input.editableSegmentIds,
+              toolName: toolCall.name,
+            }),
+            type: "function_call_output",
+          },
+        ];
+        continue;
       }
 
       if (!measuredAtLeastOnce) {
@@ -1532,16 +1554,21 @@ async function collectVerifiedCompactionCandidates(input: {
                 skillData: input.skillData,
               });
       } catch (error) {
-        return {
-          error:
-            error instanceof Error
-              ? error.message
-              : "The model returned an invalid resume skill query tool call.",
-          measurementResult: latestMeasurementResult,
-          pageCountVerification: latestPageCountVerification,
-          model: latestModel,
-          ok: false,
-        };
+        responseInput = [
+          {
+            call_id: toolCall.call_id,
+            output: buildCompactionToolRepairOutput({
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "The model returned an invalid resume skill query tool call.",
+              editableSegmentIds: input.editableSegmentIds,
+              toolName: toolCall.name,
+            }),
+            type: "function_call_output",
+          },
+        ];
+        continue;
       }
 
       responseInput = [
@@ -1563,16 +1590,21 @@ async function collectVerifiedCompactionCandidates(input: {
       try {
         candidates = parseLineReductionCandidates(JSON.parse(toolCall.arguments));
       } catch (error) {
-        return {
-          error:
-            error instanceof Error
-              ? error.message
-              : "The model returned an invalid resume inspection tool call.",
-          measurementResult: latestMeasurementResult,
-          pageCountVerification: latestPageCountVerification,
-          model: latestModel,
-          ok: false,
-        };
+        responseInput = [
+          {
+            call_id: toolCall.call_id,
+            output: buildCompactionToolRepairOutput({
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "The model returned an invalid resume inspection tool call.",
+              editableSegmentIds: input.editableSegmentIds,
+              toolName: toolCall.name,
+            }),
+            type: "function_call_output",
+          },
+        ];
+        continue;
       }
 
       const candidateAnnotatedLatex =
@@ -1610,16 +1642,21 @@ async function collectVerifiedCompactionCandidates(input: {
       try {
         candidates = parseCompactionSubmissionCandidates(JSON.parse(toolCall.arguments));
       } catch (error) {
-        return {
-          error:
-            error instanceof Error
-              ? error.message
-              : "The model returned an invalid exact page-count verification tool call.",
-          measurementResult: latestMeasurementResult,
-          pageCountVerification: latestPageCountVerification,
-          model: latestModel,
-          ok: false,
-        };
+        responseInput = [
+          {
+            call_id: toolCall.call_id,
+            output: buildCompactionToolRepairOutput({
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "The model returned an invalid exact page-count verification tool call.",
+              editableSegmentIds: input.editableSegmentIds,
+              toolName: toolCall.name,
+            }),
+            type: "function_call_output",
+          },
+        ];
+        continue;
       }
 
       latestPageCountVerification = await verifyTailorResumePageCountCandidates({
@@ -1648,16 +1685,21 @@ async function collectVerifiedCompactionCandidates(input: {
     try {
       candidates = parseLineReductionCandidates(JSON.parse(toolCall.arguments));
     } catch (error) {
-      return {
-        error:
-          error instanceof Error
-            ? error.message
-            : "The model returned an invalid line-measurement tool call.",
-        measurementResult: latestMeasurementResult,
-        pageCountVerification: latestPageCountVerification,
-        model: latestModel,
-        ok: false,
-      };
+      responseInput = [
+        {
+          call_id: toolCall.call_id,
+          output: buildCompactionToolRepairOutput({
+            error:
+              error instanceof Error
+                ? error.message
+                : "The model returned an invalid line-measurement tool call.",
+            editableSegmentIds: input.editableSegmentIds,
+            toolName: toolCall.name,
+          }),
+          type: "function_call_output",
+        },
+      ];
+      continue;
     }
 
     latestMeasurementResult = await measureTailorResumeLineReductionCandidates({

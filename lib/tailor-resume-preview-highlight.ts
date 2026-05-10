@@ -1,5 +1,6 @@
 import {
   buildTailoredResumeCombinedActiveEdits,
+  buildTailoredResumeFinalBlockDiffs,
   resolveTailoredResumeSourceAnnotatedLatex,
 } from "./tailor-resume-edit-history.ts";
 import type { TailoredResumeBlockEditRecord } from "./tailor-resume-types.ts";
@@ -253,11 +254,24 @@ export function buildTailoredResumeReviewHighlightedLatex(input: {
   edits: TailoredResumeBlockEditRecord[];
   sourceAnnotatedLatexCode?: string | null;
 }) {
+  const finalBlockDiffs = buildTailoredResumeFinalBlockDiffs({
+    annotatedLatexCode: input.annotatedLatexCode,
+    edits: input.edits,
+    sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode ?? null,
+  });
   const combinedEdits = buildTailoredResumeCombinedActiveEdits({
     annotatedLatexCode: input.annotatedLatexCode,
     edits: input.edits,
     sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode ?? null,
   });
+  const editSegmentIds = new Set(input.edits.map((edit) => edit.segmentId));
+  const finalBlockDiffsForEditedSegments = finalBlockDiffs.filter((edit) =>
+    editSegmentIds.has(edit.segmentId),
+  );
+  const highlightEdits =
+    finalBlockDiffsForEditedSegments.length > 0
+      ? finalBlockDiffsForEditedSegments
+      : combinedEdits;
   const normalizedAnnotatedLatex = resolveTailoredResumeSourceAnnotatedLatex({
     annotatedLatexCode: input.annotatedLatexCode,
     edits: input.edits,
@@ -266,7 +280,9 @@ export function buildTailoredResumeReviewHighlightedLatex(input: {
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n");
   const blocks = readPersistedAnnotatedBlocks(normalizedAnnotatedLatex);
-  const editsBySegmentId = new Map(combinedEdits.map((edit) => [edit.segmentId, edit]));
+  const editsBySegmentId = new Map(
+    highlightEdits.map((edit) => [edit.segmentId, edit]),
+  );
   let result = "";
   let cursor = 0;
 

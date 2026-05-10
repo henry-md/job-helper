@@ -1037,9 +1037,11 @@ function normalizeTailoredResumeMetadata(value: {
 }) {
   const companyName = readTrimmedString(value.companyName);
   const positionTitle = readTrimmedString(value.positionTitle);
+  const generatedDisplayName = buildDisplayName({ companyName, positionTitle });
   const displayName =
-    readTrimmedString(value.displayName) ||
-    buildDisplayName({ companyName, positionTitle });
+    generatedDisplayName !== "Tailored Resume"
+      ? generatedDisplayName
+      : readTrimmedString(value.displayName) || generatedDisplayName;
   const jobIdentifier = readTrimmedString(value.jobIdentifier) || "General";
 
   return {
@@ -1729,6 +1731,44 @@ function validateTailoredResumePlanChanges(input: {
 
     seenSegmentIds.add(change.segmentId);
   }
+}
+
+function formatTailorResumePlanningSegmentIds(
+  planningBlocks: TailorResumePlanningBlock[],
+) {
+  return planningBlocks.map((block) => block.segmentId).join(", ");
+}
+
+function buildPlanningKeywordCheckRepairToolOutput(input: {
+  error: string;
+  planningBlocks: TailorResumePlanningBlock[];
+}) {
+  return JSON.stringify(
+    {
+      error: input.error,
+      nextAction:
+        "Revise the Step 3 intent plan, then call check_planned_keyword_assignments again with a changes array that uses only valid segmentId values.",
+      validSegmentIds: input.planningBlocks.map((block) => block.segmentId),
+    },
+    null,
+    2,
+  );
+}
+
+function buildImplementationToolRepairOutput(input: {
+  error: string;
+  plannedChanges: TailoredResumePlanningChange[];
+}) {
+  return JSON.stringify(
+    {
+      error: input.error,
+      nextAction:
+        "Revise the Step 4A candidate, then call the tool again using exactly the planned segmentId values.",
+      requiredSegmentIds: input.plannedChanges.map((change) => change.segmentId),
+    },
+    null,
+    2,
+  );
 }
 
 function buildPlannedResumePlainText(input: {
@@ -4069,43 +4109,53 @@ export async function planTailoredResume(input: {
         if (inspectionToolCall) {
           let inspectionToolOutput: string | null = null;
           try {
-            const inspectionArguments = JSON.parse(inspectionToolCall.arguments);
+            try {
+              const inspectionArguments = JSON.parse(inspectionToolCall.arguments);
 
-            if (inspectionToolCall.name === tailorResumeSingleSkillQueryToolName) {
-              inspectionToolOutput =
-                buildTailorResumeSingleSkillQueryToolOutput({
-                  ...parseTailorResumeSingleSkillQuery(inspectionArguments),
-                  skillData: input.skillData,
+              if (inspectionToolCall.name === tailorResumeSingleSkillQueryToolName) {
+                inspectionToolOutput =
+                  buildTailorResumeSingleSkillQueryToolOutput({
+                    ...parseTailorResumeSingleSkillQuery(inspectionArguments),
+                    skillData: input.skillData,
+                  });
+              } else if (
+                inspectionToolCall.name === tailorResumeBatchSkillQueryToolName
+              ) {
+                inspectionToolOutput =
+                  buildTailorResumeBatchSkillQueryToolOutput({
+                    queries: parseTailorResumeBatchSkillQuery(inspectionArguments),
+                    skillData: input.skillData,
+                  });
+              } else {
+                const inspectionPayload =
+                  parseResumeInspectionPayload(inspectionArguments);
+                const candidateAnnotatedLatex = applyInspectionChanges({
+                  annotatedLatexCode: normalizedInput.annotatedLatex,
+                  changes: inspectionPayload.changes,
                 });
-            } else if (
-              inspectionToolCall.name === tailorResumeBatchSkillQueryToolName
-            ) {
-              inspectionToolOutput =
-                buildTailorResumeBatchSkillQueryToolOutput({
-                  queries: parseTailorResumeBatchSkillQuery(inspectionArguments),
-                  skillData: input.skillData,
-                });
-            } else {
-              const inspectionPayload =
-                parseResumeInspectionPayload(inspectionArguments);
-              const candidateAnnotatedLatex = applyInspectionChanges({
-                annotatedLatexCode: normalizedInput.annotatedLatex,
-                changes: inspectionPayload.changes,
-              });
-              inspectionToolOutput =
-                inspectionToolCall.name === tailorResumeKeywordUsageToolName
-                  ? buildResumeKeywordUsageToolOutput({
-                      annotatedLatexCode: candidateAnnotatedLatex,
-                      emphasizedTechnologies: emphasizedTechnologiesForPlanning,
-                    })
-                  : await buildResumeMalformedBulletsToolOutput({
-                      annotatedLatexCode: candidateAnnotatedLatex,
-                      changedSegmentIds: new Set(
-                        inspectionPayload.changes.map(
-                          (change) => change.segmentId,
+                inspectionToolOutput =
+                  inspectionToolCall.name === tailorResumeKeywordUsageToolName
+                    ? buildResumeKeywordUsageToolOutput({
+                        annotatedLatexCode: candidateAnnotatedLatex,
+                        emphasizedTechnologies: emphasizedTechnologiesForPlanning,
+                      })
+                    : await buildResumeMalformedBulletsToolOutput({
+                        annotatedLatexCode: candidateAnnotatedLatex,
+                        changedSegmentIds: new Set(
+                          inspectionPayload.changes.map(
+                            (change) => change.segmentId,
+                          ),
                         ),
-                      ),
-                    });
+                      });
+              }
+            } catch (error) {
+              inspectionToolOutput = buildPlanningKeywordCheckRepairToolOutput({
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "The inspection tool call was invalid.",
+                planningBlocks: planningSnapshot.blocks,
+              });
             }
             responseInput = [
               {
@@ -4145,25 +4195,35 @@ export async function planTailoredResume(input: {
         keywordCheckCalled = true;
         let keywordCheckToolOutput: string | null = null;
         try {
-          const candidateChanges = parseKeywordCheckPlanningChanges(
-            JSON.parse(keywordCheckToolCall.arguments),
-          );
-          validateTailoredResumePlanChanges({
-            changes: candidateChanges.map((change) => ({
-              ...change,
-              reason: "[keyword check candidate]",
-            })),
-            planningBlocks: planningSnapshot.blocks,
-          });
-          const keywordAssignmentCheckResult =
-            buildTailorResumePlanningKeywordAssignmentCheckResult({
-              changes: candidateChanges,
-              emphasizedTechnologies: emphasizedTechnologiesForPlanning,
-              planningSnapshot,
+          try {
+            const candidateChanges = parseKeywordCheckPlanningChanges(
+              JSON.parse(keywordCheckToolCall.arguments),
+            );
+            validateTailoredResumePlanChanges({
+              changes: candidateChanges.map((change) => ({
+                ...change,
+                reason: "[keyword check candidate]",
+              })),
+              planningBlocks: planningSnapshot.blocks,
             });
-          keywordCheckToolOutput = buildKeywordCheckToolOutput(
-            keywordAssignmentCheckResult,
-          );
+            const keywordAssignmentCheckResult =
+              buildTailorResumePlanningKeywordAssignmentCheckResult({
+                changes: candidateChanges,
+                emphasizedTechnologies: emphasizedTechnologiesForPlanning,
+                planningSnapshot,
+              });
+            keywordCheckToolOutput = buildKeywordCheckToolOutput(
+              keywordAssignmentCheckResult,
+            );
+          } catch (error) {
+            keywordCheckToolOutput = buildPlanningKeywordCheckRepairToolOutput({
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "The keyword-check tool call was invalid.",
+              planningBlocks: planningSnapshot.blocks,
+            });
+          }
           responseInput = [
             {
               call_id: keywordCheckToolCall.call_id,
@@ -4217,7 +4277,7 @@ export async function planTailoredResume(input: {
           : {}),
       };
       planningFeedback =
-        `The previous planning attempt failed before producing a valid final plan.\n\nExact issue:\n${lastError}\n\nCall ${tailorResumePlanningKeywordCheckToolName} before returning the final structured response, and then return the full structured response with thesis, metadata, and intent block changes.`;
+        `The previous planning attempt failed before producing a valid final plan.\n\nExact issue:\n${lastError}\n\nCall ${tailorResumePlanningKeywordCheckToolName} before returning the final structured response, and then return the full structured response with thesis, metadata, and intent block changes. Use only these segmentId values: ${formatTailorResumePlanningSegmentIds(planningSnapshot.blocks)}.`;
 
       if (attempt < maxPlanningAttempts) {
         continue;
@@ -4346,7 +4406,7 @@ export async function planTailoredResume(input: {
         summary: "Generating edit intent outline",
       });
       planningFeedback =
-        `The previous response could not be parsed or validated.\n\nExact issue:\n${lastError}\n\nReturn the full structured response with thesis, metadata, and intent block changes.`;
+        `The previous response could not be parsed or validated.\n\nExact issue:\n${lastError}\n\nReturn the full structured response with thesis, metadata, and intent block changes. Use only these segmentId values: ${formatTailorResumePlanningSegmentIds(planningSnapshot.blocks)}.`;
       lastPlanningDebug = {
         outputJson: outputText,
         prompt: planningPrompt,
@@ -4618,44 +4678,54 @@ export async function implementTailoredResumePlan(input: {
         if (inspectionToolCall) {
           let inspectionToolOutput: string | null = null;
           try {
-            const inspectionArguments = JSON.parse(inspectionToolCall.arguments);
+            try {
+              const inspectionArguments = JSON.parse(inspectionToolCall.arguments);
 
-            if (inspectionToolCall.name === tailorResumeSingleSkillQueryToolName) {
-              inspectionToolOutput =
-                buildTailorResumeSingleSkillQueryToolOutput({
-                  ...parseTailorResumeSingleSkillQuery(inspectionArguments),
-                  skillData: input.skillData,
+              if (inspectionToolCall.name === tailorResumeSingleSkillQueryToolName) {
+                inspectionToolOutput =
+                  buildTailorResumeSingleSkillQueryToolOutput({
+                    ...parseTailorResumeSingleSkillQuery(inspectionArguments),
+                    skillData: input.skillData,
+                  });
+              } else if (
+                inspectionToolCall.name === tailorResumeBatchSkillQueryToolName
+              ) {
+                inspectionToolOutput =
+                  buildTailorResumeBatchSkillQueryToolOutput({
+                    queries: parseTailorResumeBatchSkillQuery(inspectionArguments),
+                    skillData: input.skillData,
+                  });
+              } else {
+                const inspectionPayload =
+                  parseResumeInspectionPayload(inspectionArguments);
+                const candidateAnnotatedLatex = applyInspectionChanges({
+                  annotatedLatexCode: normalizedInput.annotatedLatex,
+                  changes: inspectionPayload.changes,
+                  plannedChanges: input.planningResult.changes,
                 });
-            } else if (
-              inspectionToolCall.name === tailorResumeBatchSkillQueryToolName
-            ) {
-              inspectionToolOutput =
-                buildTailorResumeBatchSkillQueryToolOutput({
-                  queries: parseTailorResumeBatchSkillQuery(inspectionArguments),
-                  skillData: input.skillData,
-                });
-            } else {
-              const inspectionPayload =
-                parseResumeInspectionPayload(inspectionArguments);
-              const candidateAnnotatedLatex = applyInspectionChanges({
-                annotatedLatexCode: normalizedInput.annotatedLatex,
-                changes: inspectionPayload.changes,
+                inspectionToolOutput =
+                  inspectionToolCall.name === tailorResumeKeywordUsageToolName
+                    ? buildResumeKeywordUsageToolOutput({
+                        annotatedLatexCode: candidateAnnotatedLatex,
+                        emphasizedTechnologies: implementationRequiredTechnologies,
+                      })
+                    : await buildResumeMalformedBulletsToolOutput({
+                        annotatedLatexCode: candidateAnnotatedLatex,
+                        changedSegmentIds: new Set(
+                          inspectionPayload.changes.map(
+                            (change) => change.segmentId,
+                          ),
+                        ),
+                      });
+              }
+            } catch (error) {
+              inspectionToolOutput = buildImplementationToolRepairOutput({
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "The inspection tool call was invalid.",
                 plannedChanges: input.planningResult.changes,
               });
-              inspectionToolOutput =
-                inspectionToolCall.name === tailorResumeKeywordUsageToolName
-                  ? buildResumeKeywordUsageToolOutput({
-                      annotatedLatexCode: candidateAnnotatedLatex,
-                      emphasizedTechnologies: implementationRequiredTechnologies,
-                    })
-                  : await buildResumeMalformedBulletsToolOutput({
-                      annotatedLatexCode: candidateAnnotatedLatex,
-                      changedSegmentIds: new Set(
-                        inspectionPayload.changes.map(
-                          (change) => change.segmentId,
-                        ),
-                      ),
-                    });
             }
             responseInput = [
               {
@@ -4695,36 +4765,47 @@ export async function implementTailoredResumePlan(input: {
         keywordCheckCalled = true;
         let implementationCheckToolOutput: string | null = null;
         try {
-          const implementationCheckPayload = parseKeywordCheckImplementationPayload(
-            JSON.parse(keywordCheckToolCall.arguments),
-          );
-          const candidateBlockChanges = buildTailoredResumeBlockChanges({
-            implementationChanges: implementationCheckPayload.changes.map(
-              (change) => ({
-                latexCode: change.latexCode,
-                segmentId: change.segmentId,
-              }),
-            ),
-            plannedChanges: input.planningResult.changes,
-          });
-          const candidateAnnotatedLatex = applyTailorResumeBlockChanges({
-            annotatedLatexCode: normalizedInput.annotatedLatex,
-            changes: candidateBlockChanges,
-          }).annotatedLatex;
-          const keywordCheckResult = buildTailorResumeKeywordCheckResult({
-            emphasizedTechnologies: implementationRequiredTechnologies,
-            text: renderTailoredResumeLatexToPlainText(candidateAnnotatedLatex),
-          });
-          implementationCheckToolOutput = await buildImplementationCheckToolOutput({
-            changedSegmentIds: new Set(
-              candidateBlockChanges.map((change) => change.segmentId),
-            ),
-            keywordCheckResult,
-            renderedAnnotatedLatexCode: candidateAnnotatedLatex,
-            requestedLineCountSegmentIds: new Set(
-              implementationCheckPayload.lineCountSegmentIds,
-            ),
-          });
+          try {
+            const implementationCheckPayload =
+              parseKeywordCheckImplementationPayload(
+                JSON.parse(keywordCheckToolCall.arguments),
+              );
+            const candidateBlockChanges = buildTailoredResumeBlockChanges({
+              implementationChanges: implementationCheckPayload.changes.map(
+                (change) => ({
+                  latexCode: change.latexCode,
+                  segmentId: change.segmentId,
+                }),
+              ),
+              plannedChanges: input.planningResult.changes,
+            });
+            const candidateAnnotatedLatex = applyTailorResumeBlockChanges({
+              annotatedLatexCode: normalizedInput.annotatedLatex,
+              changes: candidateBlockChanges,
+            }).annotatedLatex;
+            const keywordCheckResult = buildTailorResumeKeywordCheckResult({
+              emphasizedTechnologies: implementationRequiredTechnologies,
+              text: renderTailoredResumeLatexToPlainText(candidateAnnotatedLatex),
+            });
+            implementationCheckToolOutput = await buildImplementationCheckToolOutput({
+              changedSegmentIds: new Set(
+                candidateBlockChanges.map((change) => change.segmentId),
+              ),
+              keywordCheckResult,
+              renderedAnnotatedLatexCode: candidateAnnotatedLatex,
+              requestedLineCountSegmentIds: new Set(
+                implementationCheckPayload.lineCountSegmentIds,
+              ),
+            });
+          } catch (error) {
+            implementationCheckToolOutput = buildImplementationToolRepairOutput({
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "The keyword-check tool call was invalid.",
+              plannedChanges: input.planningResult.changes,
+            });
+          }
           responseInput = [
             {
               call_id: keywordCheckToolCall.call_id,

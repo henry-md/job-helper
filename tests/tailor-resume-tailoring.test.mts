@@ -513,6 +513,22 @@ test("parseTailoredResumePlanResponse keeps the structured thesis payload", () =
   );
 });
 
+test("parseTailoredResumePlanResponse derives display name from company and role", () => {
+  const parsed = parseTailoredResumePlanResponse({
+    changes: [],
+    companyName: "Palantir",
+    displayName: "Palantir.pdf",
+    emphasizedTechnologies: [],
+    positionTitle: "Forward Deployed Engineer",
+    thesis: {
+      jobDescriptionFocus: "Focuses on customer-facing engineering.",
+      resumeChanges: "Emphasizes deployment and stakeholder experience.",
+    },
+  });
+
+  assert.equal(parsed.displayName, "Palantir - Forward Deployed Engineer");
+});
+
 test("parseTailoredResumePlanResponse rejects a missing thesis payload", () => {
   assert.throws(
     () =>

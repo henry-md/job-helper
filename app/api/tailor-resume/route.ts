@@ -189,10 +189,6 @@ import {
   bumpUserSyncState,
   readUserSyncStateSnapshotForUser,
 } from "@/lib/user-sync-state";
-import {
-  buildTailoredResumeDownloadFilename,
-} from "@/lib/tailored-resume-download-filename";
-
 const maxJobDescriptionLength = 200_000;
 const maxLatexCodeLength = 300_000;
 const maxTailoredResumeRefinementPreviewImageCount = 6;
@@ -759,6 +755,7 @@ type TailorResumeGenerationPreparation =
       lockedLinks: TailorResumeLockedLinkRecord[];
       overwrittenDbTailoredResumeIds: string[];
       overwrittenTailoredResumeIds: string[];
+      positionTitle: string | null;
       rawProfile: TailorResumeProfile;
       runId: string | null;
     };
@@ -945,6 +942,8 @@ async function completeTailorResumeInterviewAndFinalize(input: {
   return finalizeTailorResumeGeneration({
     applicationId: input.applicationId,
     clearTailoringInterview: true,
+    fallbackCompanyName: input.tailoringInterview.planningResult.companyName,
+    fallbackPositionTitle: input.tailoringInterview.planningResult.positionTitle,
     generationSourceAnnotatedLatex,
     generationSourceSnapshot: input.tailoringInterview.generationSourceSnapshot,
     jobDescription: input.tailoringInterview.jobDescription,
@@ -1833,6 +1832,58 @@ function readJobHostName(jobUrl: string | null) {
   }
 }
 
+function readCompanyNameFromPageTitle(value: string | null) {
+  const title = value?.trim() ?? "";
+  const match = title.match(/\|\s*([^|]+?)\s+Careers?\b/i);
+  return match?.[1]?.trim() || null;
+}
+
+function readCompanyNameFromHostName(value: string | null) {
+  const hostName = readJobHostName(value);
+
+  if (!hostName) {
+    return null;
+  }
+
+  const ignoredLabels = new Set([
+    "apply",
+    "careers",
+    "jobs",
+    "job",
+    "www",
+    "www2",
+  ]);
+  const labels = hostName.split(".").filter(Boolean);
+  const candidate =
+    labels.find((label) => !ignoredLabels.has(label.toLowerCase())) ??
+    labels[0] ??
+    "";
+
+  if (!candidate) {
+    return null;
+  }
+
+  return candidate
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function normalizeTailorResumeCompanyName(value: string | null | undefined) {
+  const companyName = value?.trim() ?? "";
+
+  if (!companyName) {
+    return null;
+  }
+
+  if (/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(companyName)) {
+    return readCompanyNameFromHostName(`https://${companyName}`) ?? companyName;
+  }
+
+  return companyName.replace(/\s+Careers?\b/i, "").trim() || companyName;
+}
+
 function normalizeTailorResumeApplicationLocation(value: string | null) {
   const normalizedValue = value?.toLowerCase() ?? "";
 
@@ -1897,10 +1948,18 @@ function buildTailorResumeApplicationDraft(input: {
     input.applicationContext?.pageTitle ||
     "Untitled role";
   const companyName =
-    input.applicationContext?.companyName ||
-    readFirstJobDescriptionHint(input.jobDescription, "Company hints") ||
-    readFirstJobDescriptionHint(input.jobDescription, "Site name") ||
-    readJobHostName(input.jobUrl) ||
+    normalizeTailorResumeCompanyName(input.applicationContext?.companyName) ||
+    normalizeTailorResumeCompanyName(
+      readFirstJobDescriptionHint(input.jobDescription, "Company hints"),
+    ) ||
+    readCompanyNameFromPageTitle(
+      input.applicationContext?.pageTitle ||
+        readFirstJobDescriptionHint(input.jobDescription, "Page title"),
+    ) ||
+    normalizeTailorResumeCompanyName(
+      readFirstJobDescriptionHint(input.jobDescription, "Site name"),
+    ) ||
+    readCompanyNameFromHostName(input.jobUrl) ||
     "Unknown company";
 
   return {
@@ -2026,6 +2085,7 @@ async function ensureTailorResumeJobApplication(input: {
   return {
     companyName: applicationDraft.companyName,
     id: application.id,
+    jobTitle: applicationDraft.jobTitle,
     jobUrlHash,
   };
 }
@@ -2063,6 +2123,7 @@ function buildCompletedExistingTailoringState(
     id: tailoredResume.id,
     jobIdentifier: tailoredResume.jobIdentifier || null,
     jobUrl: tailoredResume.jobUrl,
+    keywordCoverage: tailoredResume.keywordCoverage,
     kind: "completed",
     positionTitle: tailoredResume.positionTitle,
     status: tailoredResume.status,
@@ -2084,6 +2145,7 @@ function buildDbCompletedExistingTailoringState(
     id: tailoredResume.id,
     jobIdentifier: null,
     jobUrl: tailoredResume.jobUrl,
+    keywordCoverage: null,
     kind: "completed",
     positionTitle: tailoredResume.positionTitle,
     status: tailoredResume.status,
@@ -2254,6 +2316,69 @@ function fallbackTailorResumeStepSummary(stepNumber: number) {
   }
 }
 
+type TailorResumeFailureHistoryEntry = {
+  attempt: number | null;
+  detail: string | null;
+  loggedAtLocal: string;
+  loggedAtTimeZone: string;
+  loggedAtUtc: string;
+  retrying: boolean;
+  stepNumber: number;
+  summary: string;
+};
+
+const tailorResumeFailureHistoryByRun = new Map<
+  string,
+  TailorResumeFailureHistoryEntry[]
+>();
+const maxTailorResumeFailureHistoryEntries = 12;
+
+function buildTailorResumeLogTimestamp() {
+  const loggedAtUtc = new Date().toISOString();
+  const loggedAtTimeZone =
+    Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const loggedAtLocal = new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "long",
+    timeZone: loggedAtTimeZone,
+  }).format(new Date(loggedAtUtc));
+
+  return {
+    loggedAtLocal,
+    loggedAtTimeZone,
+    loggedAtUtc,
+  };
+}
+
+function rememberTailorResumeFailure(input: {
+  event: TailorResumeGenerationStepEvent;
+  runId: string | null;
+  timestamp: ReturnType<typeof buildTailorResumeLogTimestamp>;
+}) {
+  if (!input.runId) {
+    return [];
+  }
+
+  const previousHistory = tailorResumeFailureHistoryByRun.get(input.runId) ?? [];
+  const nextEntry: TailorResumeFailureHistoryEntry = {
+    attempt: input.event.attempt,
+    detail: input.event.detail,
+    loggedAtLocal: input.timestamp.loggedAtLocal,
+    loggedAtTimeZone: input.timestamp.loggedAtTimeZone,
+    loggedAtUtc: input.timestamp.loggedAtUtc,
+    retrying: input.event.retrying,
+    stepNumber: input.event.stepNumber,
+    summary: input.event.summary,
+  };
+  const nextHistory = [...previousHistory, nextEntry].slice(
+    -maxTailorResumeFailureHistoryEntries,
+  );
+
+  tailorResumeFailureHistoryByRun.set(input.runId, nextHistory);
+
+  return nextHistory;
+}
+
 async function readTailorResumeRunFailureLogContext(input: {
   runId: string | null;
   userId: string;
@@ -2300,6 +2425,12 @@ async function logTailorResumeRunStepFailure(input: {
     return;
   }
 
+  const timestamp = buildTailorResumeLogTimestamp();
+  const failureHistory = rememberTailorResumeFailure({
+    event: input.event,
+    runId: input.runId,
+    timestamp,
+  });
   const runContext = await readTailorResumeRunFailureLogContext({
     runId: input.runId,
     userId: input.userId,
@@ -2309,9 +2440,13 @@ async function logTailorResumeRunStepFailure(input: {
     action: input.action,
     applicationId: runContext?.applicationId ?? null,
     event: input.event,
+    failureHistory,
     interviewId: input.interviewId,
     jobDescription: runContext?.jobDescription ?? null,
     jobUrl: runContext?.jobUrl ?? null,
+    loggedAt: timestamp.loggedAtUtc,
+    loggedAtLocal: timestamp.loggedAtLocal,
+    loggedAtTimeZone: timestamp.loggedAtTimeZone,
     logKind: input.logKind,
     runId: input.runId,
     tailoredResumeId: runContext?.tailoredResumeId ?? null,
@@ -2472,6 +2607,10 @@ async function updateTailorResumeRunStatus(input: {
       runId: input.runId,
       userId: input.userId,
     });
+  }
+
+  if (input.status !== "RUNNING" && input.status !== "NEEDS_INPUT") {
+    tailorResumeFailureHistoryByRun.delete(input.runId);
   }
 }
 
@@ -2689,6 +2828,8 @@ async function upsertDbTailoredResume(input: {
 async function finalizeTailorResumeGeneration(input: {
   applicationId: string | null;
   clearTailoringInterview?: boolean;
+  fallbackCompanyName?: string | null;
+  fallbackPositionTitle?: string | null;
   generationSourceAnnotatedLatex: string;
   generationSourceSnapshot: ReturnType<typeof buildTailorResumeGenerationSourceSnapshot>;
   jobDescription: string;
@@ -2937,6 +3078,21 @@ async function finalizeTailorResumeGeneration(input: {
   const shouldReplaceOverwrittenTailoredResumes = Boolean(
     tailoringResult.previewPdf && !tailoringResult.validationError?.trim(),
   );
+  const tailoredResumeCompanyName =
+    tailoringResult.companyName?.trim() ||
+    input.fallbackCompanyName?.trim() ||
+    "Unknown company";
+  const fallbackPositionTitle =
+    input.fallbackPositionTitle?.trim() ||
+    readFirstJobDescriptionHint(input.jobDescription, "Role title hints") ||
+    readFirstJobDescriptionHint(input.jobDescription, "Page title") ||
+    "Untitled role";
+  const tailoredResumePositionTitle =
+    tailoringResult.positionTitle?.trim() || fallbackPositionTitle;
+  const tailoredResumeDisplayName =
+    tailoredResumeCompanyName && tailoredResumePositionTitle
+      ? `${tailoredResumeCompanyName} - ${tailoredResumePositionTitle}`
+      : tailoringResult.displayName;
   const overwrittenTailoredResumeIds = uniqueNonEmptyStrings(
     shouldReplaceOverwrittenTailoredResumes
       ? (input.overwrittenTailoredResumeIds ?? [])
@@ -2979,12 +3135,9 @@ async function finalizeTailorResumeGeneration(input: {
         applicationId: input.applicationId,
         annotatedLatexCode: tailoringResult.annotatedLatexCode,
         archivedAt: null,
-        companyName: tailoringResult.companyName,
+        companyName: tailoredResumeCompanyName,
         createdAt: tailoredResumeUpdatedAt,
-        displayName: buildTailoredResumeDownloadFilename({
-          companyName: tailoringResult.companyName,
-          displayName: tailoringResult.displayName,
-        }),
+        displayName: tailoredResumeDisplayName,
         edits: tailoringResult.edits,
         error: tailoringResult.validationError,
         id: tailoredResumeId,
@@ -2996,7 +3149,7 @@ async function finalizeTailorResumeGeneration(input: {
         openAiDebug: tailoringResult.openAiDebug,
         pdfUpdatedAt: tailoringResult.previewPdf ? tailoredResumeUpdatedAt : null,
         planningResult: tailoringResult.planningResult,
-        positionTitle: tailoringResult.positionTitle,
+        positionTitle: tailoredResumePositionTitle,
         sourceAnnotatedLatexCode: input.generationSourceAnnotatedLatex,
         status: tailoringResult.previewPdf ? "ready" : "failed",
         thesis: tailoringResult.thesis,
@@ -3383,6 +3536,7 @@ async function handleTailorResumeGeneration(
           ...dbOverwriteTargets.map((record) => record.profileRecordId),
         ]),
         overwrittenTailoredResumeIds: profileOverwriteTargetIds,
+        positionTitle: application?.jobTitle ?? null,
         rawProfile: nextRawProfile,
         runId,
       };
@@ -3463,6 +3617,7 @@ async function handleTailorResumeGeneration(
     const prePlanningResult = buildPrePlanningTailoredResumePlanningResult({
       companyName: preparation.companyName,
       emphasizedTechnologies: classifiedEmphasizedTechnologies,
+      positionTitle: preparation.positionTitle,
     });
     const sourcePlanningSnapshot = buildTailorResumePlanningSnapshot(
       generationSourceAnnotatedLatex,

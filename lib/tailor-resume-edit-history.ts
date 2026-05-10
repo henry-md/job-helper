@@ -225,6 +225,44 @@ export function buildTailoredResumeCombinedActiveEdits(
   });
 }
 
+export function buildTailoredResumeFinalBlockDiffs(
+  record: Pick<
+    TailoredResumeRecord,
+    "annotatedLatexCode" | "edits" | "sourceAnnotatedLatexCode"
+  >,
+) {
+  const sourceAnnotatedLatexCode = resolveTailoredResumeSourceAnnotatedLatex(record);
+  const finalAnnotatedLatexCode = readNormalizedAnnotatedLatex(
+    record.annotatedLatexCode,
+  );
+  const sourceBlocksById = new Map(
+    readAnnotatedTailorResumeBlocks(sourceAnnotatedLatexCode).map((block) => [
+      block.id,
+      block,
+    ]),
+  );
+
+  return readAnnotatedTailorResumeBlocks(finalAnnotatedLatexCode).flatMap((block) => {
+    const sourceBlock = sourceBlocksById.get(block.id);
+    const beforeLatexCode = normalizeStoredBlockLatex(
+      sourceBlock?.latexCode ?? "",
+    );
+    const afterLatexCode = normalizeStoredBlockLatex(block.latexCode);
+
+    if (!afterLatexCode.trim() || afterLatexCode === beforeLatexCode) {
+      return [];
+    }
+
+    return [
+      {
+        afterLatexCode,
+        beforeLatexCode,
+        segmentId: block.id,
+      },
+    ];
+  });
+}
+
 export function rebuildTailoredResumeAnnotatedLatex(
   record: Pick<
     TailoredResumeRecord,

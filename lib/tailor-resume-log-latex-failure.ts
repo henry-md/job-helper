@@ -43,9 +43,13 @@ export async function logTailorResumeStepFailure(input: {
   action?: string | null;
   applicationId?: string | null;
   event: TailorResumeGenerationStepEvent;
+  failureHistory?: TailorResumeStepFailureLogPayload["failureHistory"];
   interviewId?: string | null;
   jobDescription?: string | null;
   jobUrl?: string | null;
+  loggedAt?: string;
+  loggedAtLocal?: string;
+  loggedAtTimeZone?: string;
   logKind: TailorResumeStepFailureLogPayload["logKind"];
   runId?: string | null;
   tailoredResumeId?: string | null;
