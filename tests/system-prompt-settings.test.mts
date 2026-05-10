@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildJobApplicationExtractionSystemPrompt,
+  buildTailorResumePageCountCompactionInstructions,
   buildTailorResumePageCountCompactionPrompt,
   buildResumeLatexSystemPrompt,
   buildTailorResumeInterviewSystemPrompt,
@@ -139,7 +140,8 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /check_planned_keyword_assignments/i);
   assert.match(prompt, /\{ changes: \[\{ segmentId, editIntent, targetKeywords \}\] \}/i);
   assert.match(prompt, /assigned to planned segment edits/i);
-  assert.match(prompt, /Return final JSON only after high-priority assignments are complete/i);
+  assert.match(prompt, /pushing high-priority assignments as far as truth, block scope, and layout allow/i);
+  assert.match(prompt, /Step 4 writes the actual LaTeX and performs the final resume-text keyword coverage check/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
 
@@ -160,6 +162,8 @@ test("buildTailorResumePlanningSystemPrompt appends skills keyword coverage to s
   );
   assert.match(prompt, /Available tools:/);
   assert.match(prompt, /check_planned_keyword_assignments/i);
+  assert.match(prompt, /list_current_resume_keyword_usage/i);
+  assert.match(prompt, /list_malformed_resume_bullets/i);
   assert.match(prompt, /Coverage ambition/i);
   assert.match(prompt, /actively work through low-priority terms/i);
 });
@@ -323,6 +327,8 @@ test("buildTailorResumeImplementationSystemPrompt appends USER.md bolding guidan
   assert.match(prompt, /\\textbf\{\.\.\.\}/);
   assert.match(prompt, /Available tools:/);
   assert.match(prompt, /check_implemented_resume_keyword_coverage/i);
+  assert.match(prompt, /list_current_resume_keyword_usage/i);
+  assert.match(prompt, /list_malformed_resume_bullets/i);
   assert.match(prompt, /missing supported high- or low-priority keyword/i);
 });
 
@@ -366,4 +372,17 @@ test("buildTailorResumePageCountCompactionPrompt injects page count tokens", () 
   assert.match(prompt, /fully replaces the old reason shown to the user/i);
   assert.equal(prompt.includes("{{TARGET_PAGE_COUNT_REQUIREMENT}}"), false);
   assert.equal(prompt.includes("{{ESTIMATED_LINE_REDUCTION}}"), false);
+});
+
+test("buildTailorResumePageCountCompactionInstructions exposes resume inspection tools", () => {
+  const instructions = buildTailorResumePageCountCompactionInstructions({
+    lineReductionSubmissionToolName: "submit_verified_line_reductions",
+    lineReductionToolName: "measure_resume_line_reductions",
+    pageCountVerificationToolName: "verify_resume_page_count",
+  });
+
+  assert.match(instructions, /list_current_resume_keyword_usage/i);
+  assert.match(instructions, /list_malformed_resume_bullets/i);
+  assert.match(instructions, /most updated resume draft/i);
+  assert.match(instructions, /malformed rendered bullet/i);
 });

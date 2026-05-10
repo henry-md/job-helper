@@ -849,6 +849,9 @@ async function completeTailorResumeInterviewAndFinalize(input: {
     sourceAnnotatedLatexCode: input.tailoringInterview.sourceAnnotatedLatexCode,
     userId: input.userId,
   });
+  const skillData = await readTailorResumeStoredSkillData({
+    userId: input.userId,
+  });
   const userMarkdownForModel: TailorResumeUserMarkdownState = skillEvidenceMarkdown
     ? {
         ...input.userMarkdown,
@@ -864,6 +867,7 @@ async function completeTailorResumeInterviewAndFinalize(input: {
       input.tailoringInterview.planningResult.emphasizedTechnologies,
     promptSettings: input.rawProfile.promptSettings.values,
     questioningSummary: input.tailoringInterview.planningResult.questioningSummary,
+    skillData,
     userMarkdown: userMarkdownForModel,
   });
 

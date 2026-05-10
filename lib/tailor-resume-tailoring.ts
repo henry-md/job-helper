@@ -38,6 +38,10 @@ import {
   readAnnotatedTailorResumeBlocks,
   stripTailorResumeSegmentIds,
 } from "./tailor-resume-segmentation.ts";
+import {
+  filterTailorResumeSpareBulletsForSearch,
+  type TailorResumeSpareBulletSearchMode,
+} from "./tailor-resume-spare-bullet-search.ts";
 import type {
   TailorResumeConversationMessage,
   TailorResumeGenerationStepEvent,
@@ -52,6 +56,7 @@ import type {
   TailoredResumePlanningChange,
   TailoredResumePlanningResult,
   TailoredResumeThesis,
+  TailorResumeStoredSkillData,
 } from "./tailor-resume-types.ts";
 import {
   filterTailorResumeNonTechnologiesFromEmphasizedTechnologies,
@@ -180,7 +185,11 @@ const tailorResumePlanningKeywordCheckToolName =
   "check_planned_keyword_assignments";
 const tailorResumeImplementationKeywordCheckToolName =
   "check_implemented_resume_keyword_coverage";
-const maxKeywordCheckToolRoundsPerAttempt = 4;
+const tailorResumeKeywordUsageToolName = "list_current_resume_keyword_usage";
+const tailorResumeMalformedBulletsToolName = "list_malformed_resume_bullets";
+const tailorResumeSingleSkillQueryToolName = "query_single_resume_skill";
+const tailorResumeBatchSkillQueryToolName = "batch_query_resume_skills";
+const maxTailorResumeToolCallsPerAttempt = 30;
 
 const tailorResumePlanningKeywordCheckTool = {
   type: "function",
@@ -246,6 +255,112 @@ const tailorResumeImplementationKeywordCheckTool = {
   },
 } as const;
 
+const tailorResumeKeywordUsageTool = {
+  type: "function",
+  name: tailorResumeKeywordUsageToolName,
+  description:
+    "List which job keywords are present or missing in the most updated full resume draft after applying any candidate block replacements supplied in this tool call. Use changes: [] to inspect the current draft with no extra replacements.",
+  strict: true,
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      changes: {
+        type: "array",
+        description:
+          "Candidate LaTeX block replacements to apply before inspecting keyword usage. Pass [] when no candidate LaTeX edits exist yet.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            latexCode: { type: "string" },
+            segmentId: { type: "string" },
+          },
+          required: ["segmentId", "latexCode"],
+        },
+      },
+    },
+    required: ["changes"],
+  },
+} as const;
+
+const tailorResumeMalformedBulletsTool = {
+  type: "function",
+  name: tailorResumeMalformedBulletsToolName,
+  description:
+    "Return every malformed rendered bullet in the most updated full resume draft after applying any candidate block replacements supplied in this tool call. Use changes: [] to inspect the current draft with no extra replacements.",
+  strict: true,
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      changes: {
+        type: "array",
+        description:
+          "Candidate LaTeX block replacements to apply before inspecting rendered bullet health. Pass [] when no candidate LaTeX edits exist yet.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            latexCode: { type: "string" },
+            segmentId: { type: "string" },
+          },
+          required: ["segmentId", "latexCode"],
+        },
+      },
+    },
+    required: ["changes"],
+  },
+} as const;
+
+const tailorResumeSkillQueryParameters = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    mode: {
+      type: "string",
+      enum: ["skills", "body", "both"],
+      description:
+        "Where to search saved resume-bullet support: skills searches attached skill names, body searches quote/replacesQuote text, both searches both.",
+    },
+    query: {
+      type: "string",
+      description: "Keyword or short phrase to search for in saved resume-bullet support.",
+    },
+  },
+  required: ["query", "mode"],
+} as const;
+
+const tailorResumeSingleSkillQueryTool = {
+  type: "function",
+  name: tailorResumeSingleSkillQueryToolName,
+  description:
+    "Query saved resume-bullet support once and return only the top matching saved bullet, or null if no saved bullet matches.",
+  strict: true,
+  parameters: tailorResumeSkillQueryParameters,
+} as const;
+
+const tailorResumeBatchSkillQueryTool = {
+  type: "function",
+  name: tailorResumeBatchSkillQueryToolName,
+  description:
+    "Query saved resume-bullet support for many keywords in one call. Each query has its own skills/body/both mode, and each result is the top matching saved bullet or null.",
+  strict: true,
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      queries: {
+        type: "array",
+        minItems: 1,
+        maxItems: 30,
+        items: tailorResumeSkillQueryParameters,
+      },
+    },
+    required: ["queries"],
+  },
+} as const;
+
 type TailoredResumeImplementationChange = {
   latexCode: string;
   segmentId: string;
@@ -303,6 +418,24 @@ type TailorResumeImplementationKeywordCheckToolCall = {
   arguments: string;
   call_id: string;
   name: typeof tailorResumeImplementationKeywordCheckToolName;
+};
+
+type TailorResumeInspectionToolCall = {
+  arguments: string;
+  call_id: string;
+  name:
+    | typeof tailorResumeKeywordUsageToolName
+    | typeof tailorResumeMalformedBulletsToolName
+    | typeof tailorResumeSingleSkillQueryToolName
+    | typeof tailorResumeBatchSkillQueryToolName;
+};
+
+type TailorResumeModelProvider = "anthropic" | "openai";
+
+type TailorResumeModelRef = {
+  model: string;
+  provider: TailorResumeModelProvider;
+  serialized: string;
 };
 
 type TailoredResumeResponse = {
@@ -400,6 +533,59 @@ function getOpenAIClient() {
   return new OpenAI({ apiKey });
 }
 
+function getAnthropicApiKey() {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("ANTHROPIC_API_KEY is not set.");
+  }
+
+  return apiKey;
+}
+
+function parseTailorResumeModelRef(value: string | undefined): TailorResumeModelRef {
+  const rawValue = value?.trim() || "gpt-5-mini";
+  const separatorIndex = rawValue.indexOf(":");
+
+  if (separatorIndex > 0) {
+    const provider = rawValue
+      .slice(0, separatorIndex)
+      .trim()
+      .toLowerCase();
+    const model = rawValue.slice(separatorIndex + 1).trim();
+
+    if (!model) {
+      throw new Error(`Invalid model reference "${rawValue}".`);
+    }
+
+    if (provider === "anthropic" || provider === "openai") {
+      return {
+        model,
+        provider,
+        serialized: `${provider}:${model}`,
+      };
+    }
+
+    throw new Error(
+      `Unsupported model provider "${provider}" in model reference "${rawValue}".`,
+    );
+  }
+
+  return {
+    model: rawValue,
+    provider: "openai",
+    serialized: rawValue,
+  };
+}
+
+function resolveTailorResumePlanningModelRef() {
+  return parseTailorResumeModelRef(
+    process.env.TAILOR_RESUME_PLANNING_MODEL ??
+      process.env.OPENAI_TAILOR_RESUME_MODEL ??
+      "gpt-5-mini",
+  );
+}
+
 function isTestOpenAIResponseEnabled() {
   const value = process.env.TEST_OPENAI_RESPONSE?.trim().toLowerCase();
   return value === "true" || value === "1" || value === "yes";
@@ -433,6 +619,42 @@ function formatTailorResumeDebugJsonText(value: string) {
   } catch {
     return value;
   }
+}
+
+function parseTailorResumeModelJsonOutput(outputText: string) {
+  const trimmedOutput = outputText.trim();
+  const candidates = [trimmedOutput];
+  const fencedJson = trimmedOutput.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+
+  if (fencedJson?.[1]) {
+    candidates.push(fencedJson[1].trim());
+  }
+
+  const firstObjectBraceIndex = trimmedOutput.indexOf("{");
+  const lastObjectBraceIndex = trimmedOutput.lastIndexOf("}");
+
+  if (
+    firstObjectBraceIndex >= 0 &&
+    lastObjectBraceIndex > firstObjectBraceIndex
+  ) {
+    candidates.push(
+      trimmedOutput.slice(firstObjectBraceIndex, lastObjectBraceIndex + 1),
+    );
+  }
+
+  let lastError: unknown = null;
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("The model returned invalid JSON.");
 }
 
 function buildTailorResumeDebugToolCall(input: {
@@ -564,6 +786,70 @@ function findImplementationKeywordCheckToolCall(
   return null;
 }
 
+function findInspectionToolCall(
+  response: TailoredResumeResponse,
+): TailorResumeInspectionToolCall | null {
+  for (const outputItem of response.output ?? []) {
+    if (
+      outputItem.type === "function_call" &&
+      (outputItem.name === tailorResumeKeywordUsageToolName ||
+        outputItem.name === tailorResumeMalformedBulletsToolName ||
+        outputItem.name === tailorResumeSingleSkillQueryToolName ||
+        outputItem.name === tailorResumeBatchSkillQueryToolName) &&
+      typeof outputItem.call_id === "string" &&
+      typeof outputItem.arguments === "string"
+    ) {
+      return {
+        arguments: outputItem.arguments,
+        call_id: outputItem.call_id,
+        name: outputItem.name,
+      };
+    }
+  }
+
+  return null;
+}
+
+function parseTailorResumeSkillQueryMode(value: unknown) {
+  if (value === "skills" || value === "body" || value === "both") {
+    return value satisfies TailorResumeSpareBulletSearchMode;
+  }
+
+  throw new Error("Skill query mode must be one of skills, body, or both.");
+}
+
+function parseTailorResumeSingleSkillQuery(value: unknown): {
+  mode: TailorResumeSpareBulletSearchMode;
+  query: string;
+} {
+  if (!value || typeof value !== "object") {
+    throw new Error("The resume skill query tool call must be an object.");
+  }
+
+  const query = "query" in value ? readTrimmedString(value.query) : "";
+
+  if (!query) {
+    throw new Error("The resume skill query tool call must include a query.");
+  }
+
+  return {
+    mode: parseTailorResumeSkillQueryMode("mode" in value ? value.mode : null),
+    query,
+  };
+}
+
+function parseTailorResumeBatchSkillQuery(value: unknown) {
+  if (!value || typeof value !== "object" || !("queries" in value)) {
+    throw new Error("The batch resume skill query tool call must include queries.");
+  }
+
+  if (!Array.isArray(value.queries)) {
+    throw new Error("The batch resume skill query tool call must include queries.");
+  }
+
+  return value.queries.map(parseTailorResumeSingleSkillQuery);
+}
+
 function readTrimmedString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -686,6 +972,46 @@ function parseKeywordCheckImplementationPayload(value: unknown): {
   return {
     changes,
     lineCountSegmentIds,
+  };
+}
+
+function parseResumeInspectionPayload(value: unknown): {
+  changes: Array<Pick<TailoredResumeImplementationChange, "latexCode" | "segmentId">>;
+} {
+  if (!value || typeof value !== "object" || !("changes" in value)) {
+    throw new Error("The resume inspection tool call did not include a changes array.");
+  }
+
+  const rawChanges = value.changes;
+
+  if (!Array.isArray(rawChanges)) {
+    throw new Error("The resume inspection tool call did not include a changes array.");
+  }
+
+  return {
+    changes: rawChanges.map((change) => {
+      if (!change || typeof change !== "object") {
+        throw new Error("The resume inspection tool call included an invalid change.");
+      }
+
+      const segmentId =
+        "segmentId" in change ? readTrimmedString(change.segmentId) : "";
+      const latexCode =
+        "latexCode" in change && typeof change.latexCode === "string"
+          ? change.latexCode
+          : "";
+
+      if (!segmentId) {
+        throw new Error(
+          "The resume inspection tool call included a change without a segmentId.",
+        );
+      }
+
+      return {
+        latexCode,
+        segmentId,
+      };
+    }),
   };
 }
 
@@ -1616,6 +1942,147 @@ async function buildImplementationCheckToolOutput(input: {
   );
 }
 
+function buildResumeKeywordUsageToolOutput(input: {
+  annotatedLatexCode: string;
+  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+}) {
+  return JSON.stringify(
+    {
+      keywordUsage: buildTailorResumeKeywordCheckResult({
+        emphasizedTechnologies: input.emphasizedTechnologies,
+        text: renderTailoredResumeLatexToPlainText(input.annotatedLatexCode),
+      }),
+      nextAction:
+        "Use this as the current keyword ledger. If you make another candidate edit, call this tool again with the updated replacements to verify the keyword list changed as intended.",
+    },
+    null,
+    2,
+  );
+}
+
+function buildTailorResumeSkillQueryResult(input: {
+  mode: TailorResumeSpareBulletSearchMode;
+  query: string;
+  skillData?: TailorResumeStoredSkillData | null;
+}) {
+  const topMatch = filterTailorResumeSpareBulletsForSearch({
+    mode: input.mode,
+    query: input.query,
+    spareBullets: input.skillData?.spareBullets ?? [],
+  })[0];
+
+  if (!topMatch) {
+    return null;
+  }
+
+  return {
+    id: topMatch.id,
+    quote: topMatch.quote,
+    replacesQuote: topMatch.replacesQuote,
+    resumeExperienceId: topMatch.resumeExperienceId,
+    skills: topMatch.skills.map((skill) => skill.name),
+  };
+}
+
+function buildTailorResumeSingleSkillQueryToolOutput(input: {
+  mode: TailorResumeSpareBulletSearchMode;
+  query: string;
+  skillData?: TailorResumeStoredSkillData | null;
+}) {
+  return JSON.stringify(
+    {
+      query: input.query,
+      mode: input.mode,
+      result: buildTailorResumeSkillQueryResult(input),
+      nextAction:
+        "Use this single top saved resume-bullet support result as evidence if it is relevant. If result is null, do not invent support for that query.",
+    },
+    null,
+    2,
+  );
+}
+
+function buildTailorResumeBatchSkillQueryToolOutput(input: {
+  queries: Array<{
+    mode: TailorResumeSpareBulletSearchMode;
+    query: string;
+  }>;
+  skillData?: TailorResumeStoredSkillData | null;
+}) {
+  return JSON.stringify(
+    {
+      results: input.queries.map((query) => ({
+        query: query.query,
+        mode: query.mode,
+        result: buildTailorResumeSkillQueryResult({
+          ...query,
+          skillData: input.skillData,
+        }),
+      })),
+      nextAction:
+        "Use each top saved resume-bullet support result only when it is relevant. Null means no saved resume-bullet support matched that query.",
+    },
+    null,
+    2,
+  );
+}
+
+async function buildResumeMalformedBulletsToolOutput(input: {
+  annotatedLatexCode: string;
+  changedSegmentIds: ReadonlySet<string>;
+}) {
+  const layout = await measureTailorResumeLayout({
+    annotatedLatexCode: input.annotatedLatexCode,
+  });
+  const renderedBulletHealth = buildTailorResumeRenderedBulletHealthCheck({
+    changedSegmentIds: input.changedSegmentIds,
+    layout,
+  });
+
+  return JSON.stringify(
+    {
+      malformedBullets: renderedBulletHealth.malformedBullets,
+      pageCount: renderedBulletHealth.pageCount,
+      warnings: renderedBulletHealth.warnings,
+      nextAction:
+        renderedBulletHealth.malformedBullets.length > 0
+          ? "Revise any changed malformed bullets and call this tool again. Pre-existing malformed bullets elsewhere should be surfaced as warnings."
+          : "No malformed rendered bullets were found in the inspected resume draft.",
+    },
+    null,
+    2,
+  );
+}
+
+function applyInspectionChanges(input: {
+  annotatedLatexCode: string;
+  changes: Array<Pick<TailoredResumeImplementationChange, "latexCode" | "segmentId">>;
+  plannedChanges?: TailoredResumePlanningChange[];
+}) {
+  if (input.changes.length === 0) {
+    return input.annotatedLatexCode;
+  }
+
+  const blockChanges = input.plannedChanges
+    ? buildTailoredResumeBlockChanges({
+        implementationChanges: input.changes.map((change) => ({
+          latexCode: change.latexCode,
+          segmentId: change.segmentId,
+        })),
+        plannedChanges: input.plannedChanges,
+      })
+    : input.changes.map((change) => ({
+        latexCode: change.latexCode,
+        reason: "[resume inspection candidate]",
+        segmentId: change.segmentId,
+      }));
+
+  return applyTailorResumeBlockChanges({
+    annotatedLatexCode: input.annotatedLatexCode,
+    changes: blockChanges,
+  }).annotatedLatex;
+}
+
 function serializeTailorResumePlanningBlocks(
   blocks: TailorResumePlanningBlock[],
 ) {
@@ -2358,16 +2825,6 @@ export function validateTailoredResumePlanningKeywordAssignments(input: {
       ].join("\n"),
     );
   }
-
-  if (input.keywordAssignmentCheckResult.missingHighPriority.length > 0) {
-    throw new Error(
-      [
-        "The Step 3 plan still misses required high-priority keyword assignments.",
-        `Missing high-priority keywords: ${input.keywordAssignmentCheckResult.missingHighPriority.join(", ")}`,
-        "Assign each supported high-priority keyword to a concrete segment edit, or leave it preserved in an unchanged original block.",
-      ].join("\n"),
-    );
-  }
 }
 
 export function validateTailoredResumeImplementationKeywordCoverage(input: {
@@ -2560,6 +3017,256 @@ function buildTailoringImplementationInstructions(input: {
       feedback: input.feedback,
     },
   );
+}
+
+type AnthropicTextContentBlock = {
+  text: string;
+  type: "text";
+};
+
+type AnthropicToolUseContentBlock = {
+  id: string;
+  input: unknown;
+  name: string;
+  type: "tool_use";
+};
+
+type AnthropicToolResultContentBlock = {
+  content: string;
+  tool_use_id: string;
+  type: "tool_result";
+};
+
+type AnthropicContentBlock =
+  | AnthropicTextContentBlock
+  | AnthropicToolResultContentBlock
+  | AnthropicToolUseContentBlock;
+
+type AnthropicMessage = {
+  content: AnthropicContentBlock[];
+  role: "assistant" | "user";
+};
+
+type AnthropicMessagesResponse = {
+  content?: AnthropicContentBlock[];
+  id?: string;
+  model?: string;
+};
+
+function appendAnthropicResponseInput(input: {
+  messages: AnthropicMessage[];
+  responseInput: TailorResumeStepResponseInput;
+}) {
+  for (const item of input.responseInput) {
+    if ("role" in item) {
+      const textBlocks = item.content
+        .map((content) => content.text.trim())
+        .filter(Boolean)
+        .map<AnthropicTextContentBlock>((text) => ({
+          text,
+          type: "text",
+        }));
+
+      if (textBlocks.length > 0) {
+        input.messages.push({
+          content: textBlocks,
+          role: "user",
+        });
+      }
+
+      continue;
+    }
+
+    input.messages.push({
+      content: [
+        {
+          content: item.output,
+          tool_use_id: item.call_id,
+          type: "tool_result",
+        },
+      ],
+      role: "user",
+    });
+  }
+}
+
+function normalizeAnthropicPlanningResponse(input: {
+  fallbackModel: string;
+  response: AnthropicMessagesResponse;
+}): TailoredResumeResponse {
+  const output: NonNullable<TailoredResumeResponse["output"]> = [];
+  const textChunks: string[] = [];
+
+  for (const content of input.response.content ?? []) {
+    if (content.type === "text") {
+      textChunks.push(content.text);
+      output.push({
+        content: [
+          {
+            text: content.text,
+            type: "output_text",
+          },
+        ],
+        type: "message",
+      });
+      continue;
+    }
+
+    if (content.type === "tool_use") {
+      output.push({
+        arguments: JSON.stringify(content.input ?? {}),
+        call_id: content.id,
+        name: content.name,
+        type: "function_call",
+      });
+    }
+  }
+
+  const model = input.response.model ?? input.fallbackModel;
+
+  return {
+    id: input.response.id,
+    model: `anthropic:${model}`,
+    output,
+    output_text: textChunks.join("").trim(),
+  };
+}
+
+async function createAnthropicPlanningResponse(input: {
+  apiKey: string;
+  instructions: string;
+  messages: AnthropicMessage[];
+  model: string;
+  responseInput: TailorResumeStepResponseInput;
+}) {
+  appendAnthropicResponseInput({
+    messages: input.messages,
+    responseInput: input.responseInput,
+  });
+
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    body: JSON.stringify({
+      max_tokens: 8192,
+      messages: input.messages,
+      model: input.model,
+      system: input.instructions,
+      tool_choice: { type: "auto" },
+      tools: [
+        {
+          description: tailorResumePlanningKeywordCheckTool.description,
+          input_schema: tailorResumePlanningKeywordCheckTool.parameters,
+          name: tailorResumePlanningKeywordCheckTool.name,
+        },
+        {
+          description: tailorResumeKeywordUsageTool.description,
+          input_schema: tailorResumeKeywordUsageTool.parameters,
+          name: tailorResumeKeywordUsageTool.name,
+        },
+        {
+          description: tailorResumeMalformedBulletsTool.description,
+          input_schema: tailorResumeMalformedBulletsTool.parameters,
+          name: tailorResumeMalformedBulletsTool.name,
+        },
+        {
+          description: tailorResumeSingleSkillQueryTool.description,
+          input_schema: tailorResumeSingleSkillQueryTool.parameters,
+          name: tailorResumeSingleSkillQueryTool.name,
+        },
+        {
+          description: tailorResumeBatchSkillQueryTool.description,
+          input_schema: tailorResumeBatchSkillQueryTool.parameters,
+          name: tailorResumeBatchSkillQueryTool.name,
+        },
+      ],
+    }),
+    headers: {
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+      "x-api-key": input.apiKey,
+    },
+    method: "POST",
+  });
+  const responseJson = (await response.json().catch(() => null)) as
+    | (AnthropicMessagesResponse & { error?: { message?: string } })
+    | null;
+
+  if (!response.ok) {
+    throw new Error(
+      `Anthropic planning request failed with ${response.status}: ${
+        responseJson?.error?.message ?? response.statusText
+      }`,
+    );
+  }
+
+  if (!responseJson) {
+    throw new Error("Anthropic planning request returned an unreadable response.");
+  }
+
+  input.messages.push({
+    content: responseJson.content ?? [],
+    role: "assistant",
+  });
+
+  return normalizeAnthropicPlanningResponse({
+    fallbackModel: input.model,
+    response: responseJson,
+  });
+}
+
+function createTailorResumePlanningModelRequester(input: {
+  instructions: string;
+  modelRef: TailorResumeModelRef;
+  openAiClient: OpenAI;
+}) {
+  let previousOpenAiResponseId: string | undefined;
+  const anthropicMessages: AnthropicMessage[] = [];
+  const anthropicApiKey =
+    input.modelRef.provider === "anthropic" ? getAnthropicApiKey() : null;
+
+  return {
+    create(
+      responseInput: TailorResumeStepResponseInput,
+    ): Promise<TailoredResumeResponse> {
+      if (input.modelRef.provider === "anthropic") {
+        return createAnthropicPlanningResponse({
+          apiKey: anthropicApiKey ?? "",
+          instructions: input.instructions,
+          messages: anthropicMessages,
+          model: input.modelRef.model,
+          responseInput,
+        });
+      }
+
+      return input.openAiClient.responses
+        .create({
+          input: responseInput,
+          instructions: input.instructions,
+          model: input.modelRef.model,
+          parallel_tool_calls: false,
+          previous_response_id: previousOpenAiResponseId,
+          tools: [
+            tailorResumePlanningKeywordCheckTool,
+            tailorResumeKeywordUsageTool,
+            tailorResumeMalformedBulletsTool,
+            tailorResumeSingleSkillQueryTool,
+            tailorResumeBatchSkillQueryTool,
+          ],
+          text: {
+            verbosity: "low",
+            format: {
+              type: "json_schema",
+              name: "tailor_resume_edit_plan",
+              strict: true,
+              schema: tailorResumePlanSchema,
+            },
+          },
+        })
+        .then((response) => {
+          previousOpenAiResponseId = response.id;
+          return response as TailoredResumeResponse;
+        });
+    },
+  };
 }
 
 async function runTailorResumeStepModelRequest<T>(input: {
@@ -3233,10 +3940,12 @@ export async function planTailoredResume(input: {
   precomputedEmphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
   promptSettings?: SystemPromptSettings;
   questioningSummary?: TailoredResumePlanningResult["questioningSummary"] | null;
+  skillData?: TailorResumeStoredSkillData | null;
   userMarkdown?: TailorResumeUserMarkdownState;
 }): Promise<PlanTailoredResumeResult> {
   const startedAt = Date.now();
-  const model = process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
+  const planningModelRef = resolveTailorResumePlanningModelRef();
+  const model = planningModelRef.serialized;
   const maxPlanningAttempts = Math.min(2, getRetryAttemptsToGenerateLatexEdits());
   const normalizedInput = normalizeTailorResumeLatex(input.annotatedLatexCode);
   const planningSnapshot = buildTailorResumePlanningSnapshot(
@@ -3330,48 +4039,97 @@ export async function planTailoredResume(input: {
     let response: TailoredResumeResponse;
 
     try {
-      let previousResponseId: string | undefined;
       let responseInput: TailorResumeStepResponseInput = planInput;
       let finalResponse: TailoredResumeResponse | null = null;
       let keywordCheckCalled = false;
+      const planningModelRequester = createTailorResumePlanningModelRequester({
+        instructions: planInstructions,
+        modelRef: planningModelRef,
+        openAiClient: client,
+      });
 
       for (
         let toolRound = 1;
-        toolRound <= maxKeywordCheckToolRoundsPerAttempt;
+        toolRound <= maxTailorResumeToolCallsPerAttempt;
         toolRound += 1
       ) {
         const roundResponse = (await runTailorResumeStepModelRequest({
           attempt,
           onStepEvent: input.onStepEvent,
-          operation: () =>
-            client.responses.create({
-              input: responseInput,
-              instructions: planInstructions,
-              model,
-              parallel_tool_calls: false,
-              previous_response_id: previousResponseId,
-              tools: [tailorResumePlanningKeywordCheckTool],
-              text: {
-                verbosity: "low",
-                format: {
-                  type: "json_schema",
-                  name: "tailor_resume_edit_plan",
-                  strict: true,
-                  schema: tailorResumePlanSchema,
-                },
-              },
-            }),
+          operation: () => planningModelRequester.create(responseInput),
           readDurationMs: () => Math.max(0, Date.now() - startedAt),
           stepNumber: 3,
           summary: "Generating edit intent outline",
         })) as TailoredResumeResponse;
 
-        previousResponseId = roundResponse.id;
         const keywordCheckToolCall =
           findPlanningKeywordCheckToolCall(roundResponse);
+        const inspectionToolCall = findInspectionToolCall(roundResponse);
+
+        if (inspectionToolCall) {
+          let inspectionToolOutput: string | null = null;
+          try {
+            const inspectionArguments = JSON.parse(inspectionToolCall.arguments);
+
+            if (inspectionToolCall.name === tailorResumeSingleSkillQueryToolName) {
+              inspectionToolOutput =
+                buildTailorResumeSingleSkillQueryToolOutput({
+                  ...parseTailorResumeSingleSkillQuery(inspectionArguments),
+                  skillData: input.skillData,
+                });
+            } else if (
+              inspectionToolCall.name === tailorResumeBatchSkillQueryToolName
+            ) {
+              inspectionToolOutput =
+                buildTailorResumeBatchSkillQueryToolOutput({
+                  queries: parseTailorResumeBatchSkillQuery(inspectionArguments),
+                  skillData: input.skillData,
+                });
+            } else {
+              const inspectionPayload =
+                parseResumeInspectionPayload(inspectionArguments);
+              const candidateAnnotatedLatex = applyInspectionChanges({
+                annotatedLatexCode: normalizedInput.annotatedLatex,
+                changes: inspectionPayload.changes,
+              });
+              inspectionToolOutput =
+                inspectionToolCall.name === tailorResumeKeywordUsageToolName
+                  ? buildResumeKeywordUsageToolOutput({
+                      annotatedLatexCode: candidateAnnotatedLatex,
+                      emphasizedTechnologies: emphasizedTechnologiesForPlanning,
+                    })
+                  : await buildResumeMalformedBulletsToolOutput({
+                      annotatedLatexCode: candidateAnnotatedLatex,
+                      changedSegmentIds: new Set(
+                        inspectionPayload.changes.map(
+                          (change) => change.segmentId,
+                        ),
+                      ),
+                    });
+            }
+            responseInput = [
+              {
+                call_id: inspectionToolCall.call_id,
+                output: inspectionToolOutput,
+                type: "function_call_output" as const,
+              },
+            ];
+          } finally {
+            planningToolCalls.push(
+              buildTailorResumeDebugToolCall({
+                id: inspectionToolCall.call_id,
+                input: inspectionToolCall.arguments,
+                output: inspectionToolOutput,
+                toolName: inspectionToolCall.name,
+              }),
+            );
+          }
+          continue;
+        }
 
         if (!keywordCheckToolCall) {
-          if (!keywordCheckCalled) {
+          const outputText = readOutputText(roundResponse);
+          if (!keywordCheckCalled && !outputText) {
             responseInput = buildRequiredKeywordCheckToolReminderInput({
               finalResponse: roundResponse,
               stageName: "Step 3 plan",
@@ -3425,15 +4183,11 @@ export async function planTailoredResume(input: {
         }
       }
 
-      if (!keywordCheckCalled) {
-        throw new Error(
-          `Call ${tailorResumePlanningKeywordCheckToolName} before returning the final Step 3 plan.`,
-        );
-      }
-
       if (!finalResponse) {
         throw new Error(
-          "The model did not return a final planning response after the required keyword check.",
+          keywordCheckCalled
+            ? "The model did not return a final planning response after the keyword check."
+            : "The model did not return a final planning response.",
         );
       }
 
@@ -3501,20 +4255,34 @@ export async function planTailoredResume(input: {
     }
 
     try {
-      const nextPlan = parseTailoredResumePlanResponse(JSON.parse(outputText));
+      const nextPlan = parseTailoredResumePlanResponse(
+        parseTailorResumeModelJsonOutput(outputText),
+      );
+      const plannerMergedTechnologies =
+        mergeTailorResumeJobDescriptionTechnologies({
+          employerName: input.employerName,
+          extractedTechnologies: emphasizedTechnologiesForPlanning,
+          jobDescription: input.jobDescription,
+          nonTechnologies: input.userMarkdown?.nonTechnologies,
+          plannerTechnologies: nextPlan.emphasizedTechnologies,
+        });
+      const reviewedOrderedTechnologies =
+        input.precomputedEmphasizedTechnologies &&
+        input.precomputedEmphasizedTechnologies.length > 0
+          ? mergeTailorResumeScrapedKeywordSnapshot({
+              planningTechnologies: plannerMergedTechnologies,
+              scrapedTechnologies: input.precomputedEmphasizedTechnologies,
+            })
+          : plannerMergedTechnologies;
       const nextPlanWithJobTechnologies: TailoredResumePlanResponse = {
         ...nextPlan,
-        emphasizedTechnologies: filterUnsupportedEmphasizedTechnologiesForPlanning({
-          emphasizedTechnologies: mergeTailorResumeJobDescriptionTechnologies({
-            employerName: input.employerName,
-            extractedTechnologies: emphasizedTechnologiesForPlanning,
-            jobDescription: input.jobDescription,
-            nonTechnologies: input.userMarkdown?.nonTechnologies,
-            plannerTechnologies: nextPlan.emphasizedTechnologies,
-          }),
-          resumePlainText: planningSnapshot.resumePlainText,
-          userMarkdown: input.userMarkdown,
-        }),
+        emphasizedTechnologies: input.precomputedEmphasizedTechnologies
+          ? reviewedOrderedTechnologies
+          : filterUnsupportedEmphasizedTechnologiesForPlanning({
+              emphasizedTechnologies: reviewedOrderedTechnologies,
+              resumePlainText: planningSnapshot.resumePlainText,
+              userMarkdown: input.userMarkdown,
+            }),
       };
       validateTailoredResumePlanChanges({
         changes: nextPlanWithJobTechnologies.changes,
@@ -3625,6 +4393,7 @@ export async function implementTailoredResumePlan(input: {
   planningResult: TailoredResumePlanningResult;
   planningSnapshot?: TailorResumePlanningSnapshot;
   promptSettings?: SystemPromptSettings;
+  skillData?: TailorResumeStoredSkillData | null;
   userMarkdown?: TailorResumeUserMarkdownState;
 }): Promise<GenerateTailoredResumeResult> {
   const startedAt = Date.now();
@@ -3806,7 +4575,7 @@ export async function implementTailoredResumePlan(input: {
 
       for (
         let toolRound = 1;
-        toolRound <= maxKeywordCheckToolRoundsPerAttempt;
+        toolRound <= maxTailorResumeToolCallsPerAttempt;
         toolRound += 1
       ) {
         const roundResponse = (await runTailorResumeStepModelRequest({
@@ -3819,7 +4588,13 @@ export async function implementTailoredResumePlan(input: {
               model,
               parallel_tool_calls: false,
               previous_response_id: previousResponseId,
-              tools: [tailorResumeImplementationKeywordCheckTool],
+              tools: [
+                tailorResumeImplementationKeywordCheckTool,
+                tailorResumeKeywordUsageTool,
+                tailorResumeMalformedBulletsTool,
+                tailorResumeSingleSkillQueryTool,
+                tailorResumeBatchSkillQueryTool,
+              ],
               text: {
                 verbosity: "low",
                 format: {
@@ -3838,9 +4613,73 @@ export async function implementTailoredResumePlan(input: {
         previousResponseId = roundResponse.id;
         const keywordCheckToolCall =
           findImplementationKeywordCheckToolCall(roundResponse);
+        const inspectionToolCall = findInspectionToolCall(roundResponse);
+
+        if (inspectionToolCall) {
+          let inspectionToolOutput: string | null = null;
+          try {
+            const inspectionArguments = JSON.parse(inspectionToolCall.arguments);
+
+            if (inspectionToolCall.name === tailorResumeSingleSkillQueryToolName) {
+              inspectionToolOutput =
+                buildTailorResumeSingleSkillQueryToolOutput({
+                  ...parseTailorResumeSingleSkillQuery(inspectionArguments),
+                  skillData: input.skillData,
+                });
+            } else if (
+              inspectionToolCall.name === tailorResumeBatchSkillQueryToolName
+            ) {
+              inspectionToolOutput =
+                buildTailorResumeBatchSkillQueryToolOutput({
+                  queries: parseTailorResumeBatchSkillQuery(inspectionArguments),
+                  skillData: input.skillData,
+                });
+            } else {
+              const inspectionPayload =
+                parseResumeInspectionPayload(inspectionArguments);
+              const candidateAnnotatedLatex = applyInspectionChanges({
+                annotatedLatexCode: normalizedInput.annotatedLatex,
+                changes: inspectionPayload.changes,
+                plannedChanges: input.planningResult.changes,
+              });
+              inspectionToolOutput =
+                inspectionToolCall.name === tailorResumeKeywordUsageToolName
+                  ? buildResumeKeywordUsageToolOutput({
+                      annotatedLatexCode: candidateAnnotatedLatex,
+                      emphasizedTechnologies: implementationRequiredTechnologies,
+                    })
+                  : await buildResumeMalformedBulletsToolOutput({
+                      annotatedLatexCode: candidateAnnotatedLatex,
+                      changedSegmentIds: new Set(
+                        inspectionPayload.changes.map(
+                          (change) => change.segmentId,
+                        ),
+                      ),
+                    });
+            }
+            responseInput = [
+              {
+                call_id: inspectionToolCall.call_id,
+                output: inspectionToolOutput,
+                type: "function_call_output" as const,
+              },
+            ];
+          } finally {
+            implementationToolCalls.push(
+              buildTailorResumeDebugToolCall({
+                id: inspectionToolCall.call_id,
+                input: inspectionToolCall.arguments,
+                output: inspectionToolOutput,
+                toolName: inspectionToolCall.name,
+              }),
+            );
+          }
+          continue;
+        }
 
         if (!keywordCheckToolCall) {
-          if (!keywordCheckCalled) {
+          const outputText = readOutputText(roundResponse);
+          if (!keywordCheckCalled && !outputText) {
             responseInput = buildRequiredKeywordCheckToolReminderInput({
               finalResponse: roundResponse,
               stageName: "Step 4 implementation",
@@ -3905,15 +4744,11 @@ export async function implementTailoredResumePlan(input: {
         }
       }
 
-      if (!keywordCheckCalled) {
-        throw new Error(
-          `Call ${tailorResumeImplementationKeywordCheckToolName} before returning the final Step 4 JSON implementation.`,
-        );
-      }
-
       if (!finalResponse) {
         throw new Error(
-          "The model did not return a final implementation response after the required keyword check.",
+          keywordCheckCalled
+            ? "The model did not return a final implementation response after the keyword check."
+            : "The model did not return a final implementation response.",
         );
       }
 
@@ -4269,6 +5104,7 @@ export async function generateTailoredResume(input: {
     event: TailorResumeGenerationStepEvent,
   ) => void | Promise<void>;
   promptSettings?: SystemPromptSettings;
+  skillData?: TailorResumeStoredSkillData | null;
   userMarkdown?: TailorResumeUserMarkdownState;
 }): Promise<GenerateTailoredResumeResult> {
   const startedAt = Date.now();
@@ -4328,6 +5164,7 @@ export async function generateTailoredResume(input: {
     onStepEvent: input.onStepEvent,
     precomputedEmphasizedTechnologies: keywordStage.emphasizedTechnologies,
     promptSettings: input.promptSettings,
+    skillData: input.skillData,
     userMarkdown: input.userMarkdown,
   });
 
@@ -4391,6 +5228,7 @@ export async function generateTailoredResume(input: {
     planningResult: planningStage.planningResult,
     planningSnapshot: planningStage.planningSnapshot,
     promptSettings: input.promptSettings,
+    skillData: input.skillData,
     userMarkdown: input.userMarkdown,
   });
 }

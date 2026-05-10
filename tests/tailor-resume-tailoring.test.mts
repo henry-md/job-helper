@@ -843,14 +843,52 @@ test("validateTailoredResumeImplementationIncludesQuestioningLearnings rejects i
   );
 });
 
-test("validateTailoredResumePlanningKeywordAssignments rejects missing high-priority keywords", () => {
+test("validateTailoredResumePlanningKeywordAssignments allows missing high-priority planning targets", () => {
+  assert.doesNotThrow(() =>
+    validateTailoredResumePlanningKeywordAssignments({
+      keywordAssignmentCheckResult: {
+        missingHighPriority: ["Cassandra"],
+        missingLowPriority: ["Redux"],
+        nextAction: "Revise Step 3.",
+        satisfiedHighPriority: ["Go"],
+        satisfiedLowPriority: [],
+        terms: [
+          {
+            assigned: true,
+            assignedSegmentIds: ["technical-skills.section-1"],
+            name: "Go",
+            preservedOriginalSegmentIds: [],
+            priority: "high",
+          },
+          {
+            assigned: false,
+            assignedSegmentIds: [],
+            name: "Cassandra",
+            preservedOriginalSegmentIds: [],
+            priority: "high",
+          },
+          {
+            assigned: false,
+            assignedSegmentIds: [],
+            name: "Redux",
+            preservedOriginalSegmentIds: [],
+            priority: "low",
+          },
+        ],
+        unrecognizedTargetKeywords: [],
+      },
+    }),
+  );
+});
+
+test("validateTailoredResumePlanningKeywordAssignments rejects unrecognized target keywords", () => {
   assert.throws(
     () =>
       validateTailoredResumePlanningKeywordAssignments({
         keywordAssignmentCheckResult: {
-          missingHighPriority: ["Cassandra"],
-          missingLowPriority: ["Redux"],
-          nextAction: "Revise Step 3.",
+          missingHighPriority: [],
+          missingLowPriority: [],
+          nextAction: "Use exact keyword names.",
           satisfiedHighPriority: ["Go"],
           satisfiedLowPriority: [],
           terms: [
@@ -861,25 +899,11 @@ test("validateTailoredResumePlanningKeywordAssignments rejects missing high-prio
               preservedOriginalSegmentIds: [],
               priority: "high",
             },
-            {
-              assigned: false,
-              assignedSegmentIds: [],
-              name: "Cassandra",
-              preservedOriginalSegmentIds: [],
-              priority: "high",
-            },
-            {
-              assigned: false,
-              assignedSegmentIds: [],
-              name: "Redux",
-              preservedOriginalSegmentIds: [],
-              priority: "low",
-            },
           ],
-          unrecognizedTargetKeywords: [],
+          unrecognizedTargetKeywords: ["Golang"],
         },
       }),
-    /high-priority keyword assignments/i,
+    /targeted keywords that are not in the supported emphasized-technology list/i,
   );
 });
 
