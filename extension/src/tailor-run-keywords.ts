@@ -23,6 +23,61 @@ function readTimestamp(value: string | null | undefined) {
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
+function normalizeTechnologyName(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function hasKeywordClassification(technology: TailoredResumeEmphasizedTechnology) {
+  return Boolean(technology.classification);
+}
+
+function readLatestStepTechnologies(
+  stepTimings: NonNullable<TailorResumeRunRecord["generationStepTimings"]>,
+  stepNumber: number,
+) {
+  for (let index = stepTimings.length - 1; index >= 0; index -= 1) {
+    const timing = stepTimings[index];
+    const technologies = timing?.emphasizedTechnologies ?? [];
+
+    if (timing?.stepNumber === stepNumber && technologies.length > 0) {
+      return technologies;
+    }
+  }
+
+  return [] satisfies TailoredResumeEmphasizedTechnology[];
+}
+
+function isReviewedKeywordSnapshot(input: {
+  candidateTechnologies: TailoredResumeEmphasizedTechnology[];
+  scrapedTechnologies: TailoredResumeEmphasizedTechnology[];
+}) {
+  if (
+    input.candidateTechnologies.length === 0 ||
+    !input.candidateTechnologies.some(hasKeywordClassification)
+  ) {
+    return false;
+  }
+
+  if (input.scrapedTechnologies.length === 0) {
+    return true;
+  }
+
+  const candidateNames = new Set(
+    input.candidateTechnologies
+      .map((technology) => normalizeTechnologyName(technology.name))
+      .filter(Boolean),
+  );
+  const scrapedNames = input.scrapedTechnologies
+    .map((technology) => normalizeTechnologyName(technology.name))
+    .filter(Boolean);
+
+  if (scrapedNames.length === 0) {
+    return true;
+  }
+
+  return scrapedNames.every((name) => candidateNames.has(name));
+}
+
 export function readStoredTailoringRunRecord(
   value: unknown,
 ): TailorResumeRunRecord | null {
@@ -75,18 +130,42 @@ export function readTailorRunKeywordTechnologies(
   run: Pick<TailorResumeRunRecord, "generationStep" | "generationStepTimings">,
 ) {
   const stepTimings = run.generationStepTimings ?? [];
+  const scrapedTimingTechnologies = readLatestStepTechnologies(stepTimings, 1);
+  const scrapedGenerationStepTechnologies =
+    run.generationStep?.stepNumber === 1
+      ? run.generationStep.emphasizedTechnologies ?? []
+      : [];
+  const scrapedTechnologies =
+    scrapedTimingTechnologies.length > 0
+      ? scrapedTimingTechnologies
+      : scrapedGenerationStepTechnologies;
+  const reviewedTimingTechnologies = readLatestStepTechnologies(stepTimings, 2);
 
-  for (let index = stepTimings.length - 1; index >= 0; index -= 1) {
-    const timing = stepTimings[index];
-    const technologies = timing?.emphasizedTechnologies ?? [];
-
-    if (timing?.stepNumber === 1 && technologies.length > 0) {
-      return technologies;
-    }
+  if (
+    isReviewedKeywordSnapshot({
+      candidateTechnologies: reviewedTimingTechnologies,
+      scrapedTechnologies,
+    })
+  ) {
+    return reviewedTimingTechnologies;
   }
 
   const generationStepTechnologies =
     run.generationStep?.emphasizedTechnologies ?? [];
+
+  if (
+    run.generationStep?.stepNumber === 2 &&
+    isReviewedKeywordSnapshot({
+      candidateTechnologies: generationStepTechnologies,
+      scrapedTechnologies,
+    })
+  ) {
+    return generationStepTechnologies;
+  }
+
+  if (scrapedTimingTechnologies.length > 0) {
+    return scrapedTimingTechnologies;
+  }
 
   if (
     run.generationStep?.stepNumber === 1 &&

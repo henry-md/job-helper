@@ -8,7 +8,7 @@ test("buildTailoredResumeDownloadFilename uses only the company name", () => {
       companyName: "Palantir",
       displayName: "Forward Deployed Engineer at Palantir",
     }),
-    "Palantir Resume.pdf",
+    "Palantir.pdf",
   );
 });
 
@@ -18,14 +18,21 @@ test("buildTailoredResumeDownloadFilename can infer company from display name", 
       companyName: "",
       displayName: "Acme/AI - Senior Product Engineer",
     }),
-    "Acme-AI Resume.pdf",
+    "Acme-AI.pdf",
   );
   assert.equal(
     buildTailoredResumeDownloadFilename({
       companyName: "",
       displayName: "Palantir Resume.pdf",
     }),
-    "Palantir Resume.pdf",
+    "Palantir.pdf",
+  );
+  assert.equal(
+    buildTailoredResumeDownloadFilename({
+      companyName: "",
+      displayName: "Palantir.pdf",
+    }),
+    "Palantir.pdf",
   );
 });
 
@@ -35,6 +42,6 @@ test("buildTailoredResumeDownloadFilename never includes job identifiers", () =>
       companyName: "OpenAI",
       displayName: "Research Engineer - REQ-12345",
     }),
-    "OpenAI Resume.pdf",
+    "OpenAI.pdf",
   );
 });

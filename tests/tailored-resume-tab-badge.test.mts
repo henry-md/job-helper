@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildCompanyResumeDownloadName } from "../lib/tailored-resume-download-filename.ts";
-import { resolveTailoredResumeTabBadge } from "../extension/src/tailored-resume-tab-badge.ts";
+import {
+  resolveTailoredResumeTabBadge,
+  shouldActiveTailoringBlockTailoredResumeTabBadge,
+} from "../extension/src/tailored-resume-tab-badge.ts";
 import type {
   TailorResumeExistingTailoringState,
   TailoredResumeKeywordCoverage,
@@ -117,6 +120,30 @@ function buildActiveTailoring(
   };
 }
 
+function buildCompletedTailoring(
+  overrides: Partial<
+    Extract<TailorResumeExistingTailoringState, { kind: "completed" }>
+  > = {},
+): Extract<TailorResumeExistingTailoringState, { kind: "completed" }> {
+  return {
+    applicationId: "app-123",
+    companyName: "Example Corp",
+    createdAt: "2026-04-25T15:00:00.000Z",
+    displayName: "Example Corp - Software Engineer",
+    emphasizedTechnologies: [],
+    error: null,
+    id: "db-tailored-123",
+    jobIdentifier: "Software Engineer",
+    jobUrl: matchingJobUrl,
+    kind: "completed",
+    positionTitle: "Software Engineer",
+    status: "ready",
+    tailoredResumeId: "tailored-123",
+    updatedAt: "2026-04-25T15:10:00.000Z",
+    ...overrides,
+  };
+}
+
 test("returns a tab badge for a completed tailored resume matching the page URL", () => {
   const keywordCoverage = buildKeywordCoverage();
   const badge = resolveTailoredResumeTabBadge({
@@ -129,7 +156,7 @@ test("returns a tab badge for a completed tailored resume matching the page URL"
     badgeKey: "tailored-resume:tailored-123",
     companyName: "Example Corp",
     displayName: "Example Corp - Software Engineer",
-    downloadName: "Example Corp Resume.pdf",
+    downloadName: "Example Corp.pdf",
     emphasizedTechnologies: [
       {
         evidence: "Required section lists TypeScript.",
@@ -167,27 +194,57 @@ test("does not show the generated-resume badge while a matching run is active", 
   assert.equal(badge, null);
 });
 
+test("completed tailorings do not block finished resume keyword coverage badges", () => {
+  assert.equal(
+    shouldActiveTailoringBlockTailoredResumeTabBadge(buildCompletedTailoring()),
+    false,
+  );
+  assert.equal(
+    shouldActiveTailoringBlockTailoredResumeTabBadge(buildActiveTailoring()),
+    true,
+  );
+});
+
+test("uses the saved resume keywords and coverage for completed tailoring badges", () => {
+  const keywordCoverage = buildKeywordCoverage();
+  const badge = resolveTailoredResumeTabBadge({
+    activeTailorings: [buildCompletedTailoring()],
+    pageIdentity: buildPageIdentity(),
+    tailoredResumes: [buildTailoredResumeSummary({ keywordCoverage })],
+  });
+
+  assert.equal(badge?.tailoredResumeId, "tailored-123");
+  assert.equal(badge?.keywordCoverage, keywordCoverage);
+  assert.deepEqual(badge?.emphasizedTechnologies, [
+    {
+      evidence: "Required section lists TypeScript.",
+      name: "TypeScript",
+      priority: "high",
+    },
+  ]);
+});
+
 test("builds company resume download names from company or display name", () => {
   assert.equal(
     buildCompanyResumeDownloadName({
       companyName: "Notion",
       displayName: "Notion - Product Designer",
     }),
-    "Notion Resume.pdf",
+    "Notion.pdf",
   );
   assert.equal(
     buildCompanyResumeDownloadName({
       companyName: null,
       displayName: "Acme/AI - Senior Product Engineer",
     }),
-    "Acme-AI Resume.pdf",
+    "Acme-AI.pdf",
   );
   assert.equal(
     buildCompanyResumeDownloadName({
       companyName: null,
       displayName: "Palantir Resume.pdf",
     }),
-    "Palantir Resume.pdf",
+    "Palantir.pdf",
   );
 });
 

@@ -35,6 +35,12 @@ function readCompanyNameFromDisplayName(value: string | null | undefined) {
     return resumeFilenameMatch[1];
   }
 
+  const pdfFilenameMatch = displayName.match(/^(.+?)\.pdf$/i);
+
+  if (pdfFilenameMatch?.[1]) {
+    return pdfFilenameMatch[1];
+  }
+
   const atMatch = displayName.match(/^.+?\s+at\s+(.+)$/i);
 
   return atMatch?.[1] ?? displayName;
@@ -50,7 +56,7 @@ export function buildTailoredResumeDownloadFilename(
     ) ||
     "Tailored";
 
-  return `${companyName} Resume.pdf`;
+  return `${companyName}.pdf`;
 }
 
 export const buildCompanyResumeDownloadName =

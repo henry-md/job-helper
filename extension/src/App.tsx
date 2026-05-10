@@ -19,6 +19,7 @@ import type { TailoredResumeOpenAiDebugStage } from "../../lib/tailor-resume-typ
 import { buildJobApplicationDisplayParts } from "../../lib/job-application-display.ts";
 import { buildTailoredResumeInteractivePreviewQueries } from "../../lib/tailor-resume-preview-focus.ts";
 import type { TailoredResumeInteractivePreviewQuery } from "../../lib/tailor-resume-preview-focus.ts";
+import { buildTailoredResumeDownloadFilename } from "../../lib/tailored-resume-download-filename.ts";
 import "./App.css";
 import {
   AUTH_SESSION_STORAGE_KEY,
@@ -1932,7 +1933,9 @@ function readTailorRunKeywordTechnologiesFromExistingTailoring(
   }
 
   if (existingTailoring.kind === "active_generation") {
-    return existingTailoring.lastStep?.emphasizedTechnologies ?? [];
+    return existingTailoring.emphasizedTechnologies?.length
+      ? existingTailoring.emphasizedTechnologies
+      : existingTailoring.lastStep?.emphasizedTechnologies ?? [];
   }
 
   return existingTailoring.emphasizedTechnologies;
@@ -7474,6 +7477,8 @@ function App() {
     authState.status === "signedIn" ? authState.session.sessionToken : null;
   const tailoredResumePreviewPdfUpdatedAt =
     activeTailoredResumeReviewRecord?.pdfUpdatedAt ?? null;
+  const shouldRequestHighlightedTailoredResumePreview =
+    shouldShowTailoredPreviewDiffHighlighting;
   const tailoredResumePreviewObjectUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -7503,6 +7508,7 @@ function App() {
       try {
         const response = await fetch(
           buildTailoredResumePreviewUrl({
+            highlights: shouldRequestHighlightedTailoredResumePreview,
             pdfUpdatedAt: tailoredResumePdfUpdatedAt,
             tailoredResumeId,
           }),
@@ -10896,9 +10902,9 @@ function App() {
       }`.trim()}
     >
       <div
-        aria-hidden={isTailorRunShellOverlayActive ? "true" : undefined}
+        aria-hidden={shouldObscureTailorRunBody ? "true" : undefined}
         className={`tailor-run-shell-body ${
-          isTailorRunShellOverlayActive
+          shouldObscureTailorRunBody
             ? "tailor-run-shell-body-obscured"
             : ""
         }`.trim()}
@@ -10938,7 +10944,6 @@ function App() {
                     aria-expanded={isTailorRunMenuOpen}
                     aria-label="More tailor run actions"
                     className="secondary-action compact-action tailor-run-menu-trigger"
-                    disabled={tailorRunMenuActionState !== "idle"}
                     type="button"
                     onClick={() => {
                       setTailorRunMenuError(null);
@@ -11100,7 +11105,6 @@ function App() {
                         aria-expanded={isTailorRunMenuOpen}
                         aria-label="More tailor run actions"
                         className="secondary-action compact-action tailor-run-menu-trigger"
-                        disabled={tailorRunMenuActionState !== "idle"}
                         type="button"
                         onClick={() => {
                           setTailorRunMenuError(null);
@@ -11581,6 +11585,11 @@ function App() {
               tailoredResume.emphasizedTechnologies.length > 0 ||
               Boolean(tailoredResume.keywordCoverage) ||
               isKeywordBadgeDismissed;
+            const displayName =
+              tailoredResume.displayName.trim().toLowerCase() ===
+              "tailored resume"
+                ? buildTailoredResumeDownloadFilename(tailoredResume)
+                : tailoredResume.displayName;
 
             return (
               <div
@@ -11605,7 +11614,7 @@ function App() {
                 >
                   <span className="tailored-resume-main">
                     <span className="tailored-resume-title">
-                      {tailoredResume.displayName}
+                      {displayName}
                     </span>
                     <span className="tailored-resume-meta">
                       {tailoredResume.companyName ||
@@ -11625,7 +11634,7 @@ function App() {
                   >
                     <button
                       aria-expanded={isMenuOpen}
-                      aria-label={`Actions for ${tailoredResume.displayName}`}
+                      aria-label={`Actions for ${displayName}`}
                       className="secondary-action compact-action tailor-run-menu-trigger"
                       disabled={isMenuTriggerDisabled}
                       type="button"

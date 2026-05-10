@@ -21,6 +21,12 @@ export type TailoredResumeTabBadgeSummary = {
   tailoredResumeId: string;
 };
 
+export function shouldActiveTailoringBlockTailoredResumeTabBadge(
+  tailoring: TailorResumeExistingTailoringState | null,
+) {
+  return Boolean(tailoring && tailoring.kind !== "completed");
+}
+
 function isUsableCompletedTailoring(
   tailoring: TailorResumeExistingTailoringState | null,
 ): tailoring is Extract<TailorResumeExistingTailoringState, { kind: "completed" }> {
@@ -47,6 +53,14 @@ export function resolveTailoredResumeTabBadge(input: {
   pageIdentity: TailorOverwritePageIdentity;
   tailoredResumes: TailoredResumeSummary[];
 }): TailoredResumeTabBadgeSummary | null {
+  const blockingActiveTailoring = input.activeTailorings.find((tailoring) =>
+    shouldActiveTailoringBlockTailoredResumeTabBadge(tailoring),
+  );
+
+  if (blockingActiveTailoring) {
+    return null;
+  }
+
   const completedTailoring = resolveCompletedTailoringForPage(input);
 
   if (!isUsableCompletedTailoring(completedTailoring)) {
@@ -57,13 +71,17 @@ export function resolveTailoredResumeTabBadge(input: {
     input.tailoredResumes.find(
       (resume) => resume.id === completedTailoring.tailoredResumeId,
     ) ?? null;
+  const emphasizedTechnologies =
+    tailoredResume?.emphasizedTechnologies.length
+      ? tailoredResume.emphasizedTechnologies
+      : completedTailoring.emphasizedTechnologies;
 
   return {
     badgeKey: `tailored-resume:${completedTailoring.tailoredResumeId}`,
     companyName: completedTailoring.companyName,
     displayName: completedTailoring.displayName,
     downloadName: buildCompanyResumeDownloadName(completedTailoring),
-    emphasizedTechnologies: completedTailoring.emphasizedTechnologies,
+    emphasizedTechnologies,
     jobUrl: completedTailoring.jobUrl,
     keywordCoverage: tailoredResume?.keywordCoverage ?? null,
     tailoredResumeId: completedTailoring.tailoredResumeId,

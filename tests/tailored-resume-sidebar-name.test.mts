@@ -13,6 +13,17 @@ test("formatTailoredResumeSidebarName keeps short display names unchanged", () =
   );
 });
 
+test("formatTailoredResumeSidebarName recovers generic tailored resume names", () => {
+  assert.equal(
+    formatTailoredResumeSidebarName({
+      companyName: "Palantir Technologies",
+      displayName: "Tailored Resume",
+      positionTitle: "Backend Software Engineer",
+    }),
+    "Palantir Technologies.pdf",
+  );
+});
+
 test("formatTailoredResumeSidebarName abbreviates long parenthetical titles", () => {
   assert.equal(
     formatTailoredResumeSidebarName({

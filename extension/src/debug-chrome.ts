@@ -693,6 +693,8 @@ export function installDebugChromeRuntime() {
               kind: "active_generation" as const,
               lastStep: mockTailoringRun.generationStep ?? null,
               positionTitle: mockTailoringRun.positionTitle,
+              error: null,
+              status: "RUNNING" as const,
               updatedAt: mockTailoringRun.capturedAt,
             },
           ]

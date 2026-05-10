@@ -189,6 +189,9 @@ import {
   bumpUserSyncState,
   readUserSyncStateSnapshotForUser,
 } from "@/lib/user-sync-state";
+import {
+  buildTailoredResumeDownloadFilename,
+} from "@/lib/tailored-resume-download-filename";
 
 const maxJobDescriptionLength = 200_000;
 const maxLatexCodeLength = 300_000;
@@ -2771,6 +2774,7 @@ async function finalizeTailorResumeGeneration(input: {
               }),
             previewPdf: tailoringResult.previewPdf,
             promptSettings: input.rawProfile.promptSettings.values,
+            skillData,
             sourceAnnotatedLatexCode: input.generationSourceAnnotatedLatex,
             targetPageCount,
             thesis: tailoringResult.thesis,
@@ -2977,7 +2981,10 @@ async function finalizeTailorResumeGeneration(input: {
         archivedAt: null,
         companyName: tailoringResult.companyName,
         createdAt: tailoredResumeUpdatedAt,
-        displayName: tailoringResult.displayName,
+        displayName: buildTailoredResumeDownloadFilename({
+          companyName: tailoringResult.companyName,
+          displayName: tailoringResult.displayName,
+        }),
         edits: tailoringResult.edits,
         error: tailoringResult.validationError,
         id: tailoredResumeId,

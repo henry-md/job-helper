@@ -72,7 +72,10 @@ import {
   resolveActiveTailoringForPage,
   matchesTailorOverwritePageIdentity,
 } from "./tailor-overwrite-guard";
-import { resolveTailoredResumeTabBadge } from "./tailored-resume-tab-badge";
+import {
+  resolveTailoredResumeTabBadge,
+  shouldActiveTailoringBlockTailoredResumeTabBadge,
+} from "./tailored-resume-tab-badge";
 import {
   deriveKeywordBadgeDismissalKey,
   KEYWORD_BADGE_DISMISSAL_STORAGE_KEY,
@@ -421,6 +424,23 @@ async function sendTailoredResumeBadgeMessage(
 ) {
   try {
     await chrome.tabs.sendMessage(tabId, message);
+    return;
+  } catch {
+    // Some pages do not allow content scripts or have not finished injecting.
+  }
+
+  try {
+    const contentScriptFiles = readContentScriptLoaderFiles();
+
+    if (contentScriptFiles.length === 0) {
+      return;
+    }
+
+    await chrome.scripting.executeScript({
+      files: contentScriptFiles,
+      target: { tabId },
+    });
+    await chrome.tabs.sendMessage(tabId, message);
   } catch {
     // Some pages do not allow content scripts or have not finished injecting.
   }
@@ -534,7 +554,9 @@ function readExistingTailoringEmphasizedTechnologies(
 
   return activeTailoring.kind === "pending_interview"
     ? activeTailoring.emphasizedTechnologies
-    : activeTailoring.lastStep?.emphasizedTechnologies ?? [];
+    : activeTailoring.emphasizedTechnologies?.length
+      ? activeTailoring.emphasizedTechnologies
+      : activeTailoring.lastStep?.emphasizedTechnologies ?? [];
 }
 
 function readStepEventEmphasizedTechnologies(
@@ -657,6 +679,10 @@ async function showActiveTailoringKeywordBadgeForTab(input: {
     activeTailorings: input.personalInfo.activeTailorings,
     pageIdentity: input.pageIdentity,
   });
+
+  if (activeTailoring?.kind === "completed") {
+    return false;
+  }
 
   const emphasizedTechnologies =
     readExistingTailoringEmphasizedTechnologies(activeTailoring).filter(
@@ -1200,7 +1226,10 @@ async function refreshTailoredResumeBadgeForTab(
     return;
   }
 
-  if (matchingActiveTailoring || localActiveKeywordBadge.matchedActiveRun) {
+  if (
+    shouldActiveTailoringBlockTailoredResumeTabBadge(matchingActiveTailoring) ||
+    localActiveKeywordBadge.matchedActiveRun
+  ) {
     await sendTailoredResumeBadgeMessage(tabId, {
       type: "JOB_HELPER_HIDE_TAILORED_RESUME_BADGE",
     });

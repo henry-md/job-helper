@@ -50,6 +50,10 @@ function buildDisplayName(companyName: string, positionTitle: string) {
   return companyName || positionTitle || "Tailored Resume";
 }
 
+function buildCompanyPdfName(companyName: string) {
+  return companyName ? `${companyName}.pdf` : "";
+}
+
 function abbreviateParentheticalContent(value: string) {
   return value.replace(/\(([^()]+)\)/g, (match, rawContent: string) => {
     const words = rawContent
@@ -131,6 +135,11 @@ export function formatTailoredResumeSidebarName(
   const companyName = collapseWhitespace(record.companyName);
   const positionTitle = collapseWhitespace(record.positionTitle);
   const displayName = collapseWhitespace(record.displayName);
+  const companyPdfName = buildCompanyPdfName(companyName);
+
+  if (displayName.toLowerCase() === "tailored resume" && companyPdfName) {
+    return truncateText(companyPdfName, maxLength);
+  }
 
   if (displayName && displayName.length <= maxLength) {
     return displayName;

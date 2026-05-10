@@ -164,6 +164,109 @@ test("keeps Step 1 scraped keywords when Step 2 carries a question subset", () =
   );
 });
 
+test("uses the classified Step 2 keyword review snapshot during later steps", () => {
+  const technologies = readTailorRunKeywordTechnologies(
+    buildRun({
+      generationStep: {
+        attempt: 1,
+        detail: "Planner identified block changes.",
+        durationMs: 200,
+        emphasizedTechnologies: [
+          {
+            evidence: "Planner targeted API development.",
+            name: "API development",
+            priority: "high",
+          },
+          {
+            evidence: "Planner targeted AI systems.",
+            name: "AI systems",
+            priority: "low",
+          },
+        ],
+        retrying: false,
+        status: "succeeded",
+        stepCount: 5,
+        stepNumber: 3,
+        summary: "Generating edit intent outline",
+      },
+      generationStepTimings: [
+        {
+          attempt: 1,
+          detail: "Prepared all scraped keywords.",
+          durationMs: 17,
+          emphasizedTechnologies: [
+            {
+              evidence: "Required section lists TypeScript.",
+              name: "TypeScript",
+              priority: "high",
+            },
+            {
+              evidence: "Posting asks for API development.",
+              name: "API development",
+              priority: "high",
+            },
+            {
+              evidence: "Nice-to-have section mentions AI systems.",
+              name: "AI systems",
+              priority: "low",
+            },
+          ],
+          observedAt: "2026-05-05T14:00:17.000Z",
+          retrying: false,
+          status: "succeeded",
+          stepCount: 5,
+          stepNumber: 1,
+          summary: "Scrape keywords",
+        },
+        {
+          attempt: null,
+          detail: "All skills-section keywords are covered.",
+          durationMs: 0,
+          emphasizedTechnologies: [
+            {
+              classification: "skills_section",
+              evidence: "Required section lists TypeScript.",
+              name: "TypeScript",
+              priority: "high",
+            },
+            {
+              classification: "narrative",
+              evidence: "Posting asks for API development.",
+              name: "API development",
+              priority: "high",
+            },
+            {
+              classification: "narrative",
+              evidence: "Nice-to-have section mentions AI systems.",
+              name: "AI systems",
+              priority: "low",
+            },
+          ],
+          observedAt: "2026-05-05T14:01:00.000Z",
+          retrying: false,
+          status: "running",
+          stepCount: 5,
+          stepNumber: 2,
+          summary: "Review classified keywords",
+        },
+      ],
+    }),
+  );
+
+  assert.deepEqual(
+    technologies.map((technology) => [
+      technology.name,
+      technology.priority,
+      technology.classification,
+    ]),
+    [
+      ["TypeScript", "high", "skills_section"],
+      ["API development", "high", "narrative"],
+      ["AI systems", "low", "narrative"],
+    ],
+  );
+});
+
 test("parses Step 2 blocking skills-section terms separately from all keywords", () => {
   const step = readTailorResumeGenerationStepSummary({
     attempt: 1,

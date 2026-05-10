@@ -1367,7 +1367,7 @@ function appendDraggableKeywordMatrix(
     const titleParts: string[] = [];
     const chipBackground =
       coverageTone === "new"
-        ? "rgba(16, 185, 129, 0.18)"
+        ? "rgba(52, 211, 153, 0.3)"
         : coverageTone === "missing"
           ? "rgba(244, 63, 94, 0.13)"
           : coverageTone === "original"
@@ -1379,7 +1379,7 @@ function appendDraggableKeywordMatrix(
                 : "rgba(244, 244, 245, 0.07)";
     const chipBorder =
       coverageTone === "new"
-        ? "1px solid rgba(52, 211, 153, 0.34)"
+        ? "1px solid rgba(110, 231, 183, 0.68)"
         : coverageTone === "missing"
           ? "1px solid rgba(251, 113, 133, 0.34)"
           : coverageTone === "original"
@@ -1395,7 +1395,7 @@ function appendDraggableKeywordMatrix(
         : coverageTone === "missing"
           ? "#ffe4e6"
           : coverageTone === "original"
-            ? "#e0f2fe"
+            ? "#f0f9ff"
             : technology.classification === "non_skill"
               ? "#a1a1aa"
               : "#f4f4f5";
@@ -1860,7 +1860,7 @@ function appendKeywordCoverageDisclosure(
     createLegendItem(
       "new",
       `In New ${coverageToneCounts.new}`,
-      "#34d399",
+      "#6ee7b7",
       "In New: this job keyword is present in the new tailored resume, but not in the original base resume.",
     ),
     createLegendItem(
