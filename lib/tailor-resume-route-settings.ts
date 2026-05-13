@@ -22,6 +22,7 @@ import {
 } from "./tailor-resume-user-memory.ts";
 
 const maxSystemPromptLength = 200_000;
+const maxCustomResumeDownloadNameLength = 160;
 
 export function readPromptSettingsUpdates(value: unknown) {
   if (!value || typeof value !== "object") {
@@ -61,13 +62,35 @@ export function readGenerationSettingsUpdates(value: unknown) {
     return null;
   }
 
-  const rawUpdates = value as Partial<
-    Record<(typeof tailorResumeGenerationSettingKeys)[number], unknown>
-  >;
+  const rawUpdates = value as Partial<Record<keyof TailorResumeGenerationSettings, unknown>>;
   const updates: Partial<TailorResumeGenerationSettings> = {};
   let changeCount = 0;
 
   for (const key of tailorResumeGenerationSettingKeys) {
+    if (key === "customResumeDownloadName") {
+      const nextValue = rawUpdates[key];
+
+      if (typeof nextValue !== "string") {
+        continue;
+      }
+
+      const trimmedValue = nextValue.trim();
+
+      if (!trimmedValue) {
+        throw new Error("Enter a custom resume download name.");
+      }
+
+      if (trimmedValue.length > maxCustomResumeDownloadNameLength) {
+        throw new Error(
+          `Keep the custom resume download name under ${maxCustomResumeDownloadNameLength.toLocaleString()} characters.`,
+        );
+      }
+
+      updates[key] = trimmedValue;
+      changeCount += 1;
+      continue;
+    }
+
     if (typeof rawUpdates[key] !== "boolean") {
       continue;
     }

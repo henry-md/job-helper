@@ -24,8 +24,20 @@ test("mergeSystemPromptSettings preserves defaults for missing keys", () => {
   );
   assert.equal(typeof mergedSettings.resumeLatexExtraction, "string");
   assert.equal(typeof mergedSettings.tailorResumeInterview, "string");
+  assert.equal(typeof mergedSettings.tailorResumeStep2ExperienceChat, "string");
   assert.equal(typeof mergedSettings.tailorResumeRefinement, "string");
   assert.equal(typeof mergedSettings.tailorResumePageCountCompaction, "string");
+});
+
+test("default Step 2 experience chat prompt is editable without dynamic technology names", () => {
+  const settings = createDefaultSystemPromptSettings();
+
+  assert.match(
+    settings.tailorResumeStep2ExperienceChat,
+    /Help me craft resume experiences/i,
+  );
+  assert.match(settings.tailorResumeStep2ExperienceChat, /letter order A\. B\. C\./i);
+  assert.doesNotMatch(settings.tailorResumeStep2ExperienceChat, /Technologies:/i);
 });
 
 test("job application extraction prompt encourages short team names in job titles", () => {
@@ -143,6 +155,26 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /pushing high-priority assignments as far as truth, block scope, and layout allow/i);
   assert.match(prompt, /Step 4 writes the actual LaTeX and performs the final resume-text keyword coverage check/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
+});
+
+test("buildTailorResumePlanningSystemPrompt only changes for Ludicrous Mode missing terms", () => {
+  const settings = createDefaultSystemPromptSettings();
+  const defaultPrompt = buildTailorResumePlanningSystemPrompt(settings, {});
+  const emptyLudicrousPrompt = buildTailorResumePlanningSystemPrompt(settings, {
+    ludicrousMissingSkillsSectionTerms: [],
+  });
+  const missingTermsPrompt = buildTailorResumePlanningSystemPrompt(settings, {
+    ludicrousMissingSkillsSectionTerms: ["Kubernetes", "Terraform"],
+  });
+
+  assert.equal(emptyLudicrousPrompt, defaultPrompt);
+  assert.match(
+    missingTermsPrompt,
+    /Ludicrous Mode missing skills-section terms:/,
+  );
+  assert.match(missingTermsPrompt, /Kubernetes, Terraform/);
+  assert.match(missingTermsPrompt, /Take lots of liberty/i);
+  assert.match(missingTermsPrompt, /real project/i);
 });
 
 test("buildTailorResumePlanningSystemPrompt appends skills keyword coverage to saved prompts", () => {

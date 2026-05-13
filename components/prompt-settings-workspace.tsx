@@ -8,6 +8,7 @@ import {
   tailorResumePromptFieldDefinitions,
 } from "@/lib/tailor-resume-settings-metadata";
 import { buildTailoredResumeHighlightedPreviewUrl } from "@/lib/tailored-resume-preview-url";
+import type { TailorResumeGenerationSettings } from "@/lib/tailor-resume-generation-settings";
 import type {
   TailorResumeProfile,
   TailoredResumeRecord,
@@ -25,8 +26,7 @@ type PromptSettingsResponse = {
   profile?: TailorResumeProfile;
 };
 
-type GenerationSettingKey =
-  (typeof tailorResumeGenerationSettingDefinitions)[number]["key"];
+type GenerationSettingKey = keyof TailorResumeGenerationSettings;
 type PromptFieldKey = (typeof tailorResumePromptFieldDefinitions)[number]["key"];
 
 function formatSavedAt(value: string | null) {
@@ -227,6 +227,8 @@ export default function PromptSettingsWorkspace({
   const [generationSettings, setGenerationSettings] = useState(
     initialGenerationSettings,
   );
+  const [draftCustomResumeDownloadName, setDraftCustomResumeDownloadName] =
+    useState(initialGenerationSettings.values.customResumeDownloadName);
   const [savedPromptSettings, setSavedPromptSettings] = useState(
     initialPromptSettings,
   );
@@ -247,6 +249,9 @@ export default function PromptSettingsWorkspace({
 
   useEffect(() => {
     setGenerationSettings(initialGenerationSettings);
+    setDraftCustomResumeDownloadName(
+      initialGenerationSettings.values.customResumeDownloadName,
+    );
   }, [initialGenerationSettings]);
 
   useEffect(() => {
@@ -359,9 +364,57 @@ export default function PromptSettingsWorkspace({
     }
   }
 
+  async function deletePromptField(key: PromptFieldKey) {
+    setSavingPromptKey(key);
+
+    try {
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({
+          action: "savePromptSettings",
+          promptSettings: {
+            [key]: "",
+          },
+        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
+      const payload = (await response.json()) as PromptSettingsResponse;
+
+      if (!response.ok || !payload.profile) {
+        throw new Error(payload.error ?? "Unable to delete the prompt setting.");
+      }
+
+      const nextPromptSettings = payload.profile.promptSettings;
+
+      setSavedPromptSettings(nextPromptSettings);
+      setDraftPromptValues((currentValue) => ({
+        ...currentValue,
+        [key]: nextPromptSettings.values[key],
+      }));
+      setOpenPromptKeys((currentValue) => ({
+        ...currentValue,
+        [key]: false,
+      }));
+      setPreviewingOriginalKey((currentValue) =>
+        currentValue === key ? null : currentValue,
+      );
+      toast.success("Deleted the prompt override.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Unable to delete the prompt setting.",
+      );
+    } finally {
+      setSavingPromptKey(null);
+    }
+  }
+
   async function updateGenerationSetting(
     key: GenerationSettingKey,
-    nextValue: boolean,
+    nextValue: TailorResumeGenerationSettings[GenerationSettingKey],
   ) {
     const previousGenerationSettings = generationSettings;
 
@@ -394,9 +447,15 @@ export default function PromptSettingsWorkspace({
       }
 
       setGenerationSettings(payload.profile.generationSettings);
+      setDraftCustomResumeDownloadName(
+        payload.profile.generationSettings.values.customResumeDownloadName,
+      );
       toast.success("Saved the generation setting.");
     } catch (error) {
       setGenerationSettings(previousGenerationSettings);
+      setDraftCustomResumeDownloadName(
+        previousGenerationSettings.values.customResumeDownloadName,
+      );
       toast.error(
         error instanceof Error
           ? error.message
@@ -450,6 +509,73 @@ export default function PromptSettingsWorkspace({
           </div>
 
           <div className="mt-4 grid gap-4">
+            <div className="flex flex-col gap-4 border-b border-white/8 pb-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="max-w-3xl">
+                <h4 className="text-sm font-semibold text-zinc-100">
+                  Resume download name
+                </h4>
+                <p className="mt-2 text-sm leading-6 text-zinc-400">
+                  Use the company name for each PDF, or use one fixed name for
+                  every tailored resume download.
+                </p>
+              </div>
+
+              <div className="flex w-full flex-col gap-3 sm:w-[18rem]">
+                <button
+                  aria-checked={
+                    generationSettings.values.useCustomResumeDownloadName
+                  }
+                  className={`inline-flex w-full items-center justify-between gap-3 rounded-full border px-4 py-3 text-sm font-medium transition ${
+                    generationSettings.values.useCustomResumeDownloadName
+                      ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-200"
+                      : "border-white/10 bg-white/[0.04] text-zinc-300"
+                  } ${isSavingGenerationSettings ? "cursor-wait opacity-70" : "hover:border-white/20 hover:bg-white/[0.07]"}`}
+                  disabled={isSavingGenerationSettings}
+                  onClick={() =>
+                    void updateGenerationSetting(
+                      "useCustomResumeDownloadName",
+                      !generationSettings.values.useCustomResumeDownloadName,
+                    )
+                  }
+                  role="switch"
+                  type="button"
+                >
+                  <span className="text-left">
+                    {generationSettings.values.useCustomResumeDownloadName
+                      ? "Fixed name"
+                      : "Company name"}
+                  </span>
+                </button>
+                <label className="flex flex-col gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                  Fixed PDF name
+                  <input
+                    className="rounded-2xl border border-white/10 bg-black/28 px-4 py-3 text-sm font-medium normal-case tracking-normal text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-300/40 focus:bg-black/38"
+                    disabled={isSavingGenerationSettings}
+                    maxLength={160}
+                    onBlur={(event) => {
+                      const nextName = event.currentTarget.value.trim();
+
+                      if (
+                        nextName &&
+                        nextName !==
+                          generationSettings.values.customResumeDownloadName
+                      ) {
+                        void updateGenerationSetting(
+                          "customResumeDownloadName",
+                          nextName,
+                        );
+                      }
+                    }}
+                    onChange={(event) => {
+                      setDraftCustomResumeDownloadName(event.currentTarget.value);
+                    }}
+                    placeholder="Resume"
+                    type="text"
+                    value={draftCustomResumeDownloadName}
+                  />
+                </label>
+              </div>
+            </div>
             {tailorResumeGenerationSettingDefinitions.map((setting, index) => {
               const isEnabled = generationSettings.values[setting.key];
 
@@ -670,6 +796,20 @@ export default function PromptSettingsWorkspace({
                           >
                             Cancel
                           </button>
+                          {field.key === "tailorResumeStep2ExperienceChat" ? (
+                            <button
+                              className="rounded-full border border-red-300/20 bg-red-400/10 px-4 py-2.5 text-sm font-medium text-red-200 transition hover:border-red-300/35 hover:bg-red-400/15 disabled:cursor-not-allowed disabled:opacity-50"
+                              disabled={
+                                isSaving ||
+                                savedPromptSettings.values[field.key].trim().length ===
+                                  0
+                              }
+                              onClick={() => void deletePromptField(field.key)}
+                              type="button"
+                            >
+                              Delete
+                            </button>
+                          ) : null}
                           <button
                             className={`rounded-full border px-4 py-2.5 text-sm font-medium transition ${
                               isAtOriginalValue

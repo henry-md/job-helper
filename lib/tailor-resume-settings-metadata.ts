@@ -32,6 +32,15 @@ export const tailorResumePromptFieldDefinitions = [
     title: "Legacy Tailoring Follow-Up Interview",
   },
   {
+    description:
+      "Base text prefilled into the shared Resume Chat from the Step 2 experience-help icon. The extension appends the current waiting skills at click time.",
+    helper:
+      "Runtime tokens: none. The extension appends `Technologies: ...` automatically.",
+    key: "tailorResumeStep2ExperienceChat",
+    minHeightClassName: "min-h-[220px]",
+    title: "Step 2 Experience Chat",
+  },
+  {
     description: "Step 4 LaTeX block generation for the tailored resume.",
     helper: "Runtime tokens: {{FEEDBACK_BLOCK}}.",
     key: "tailorResumeImplementation",
@@ -63,6 +72,12 @@ export const tailorResumePromptFieldDefinitions = [
 }>;
 
 export const tailorResumeGenerationSettingDefinitions = [
+  {
+    description:
+      "Skips the Step 2 user review gate and immediately starts tailoring. If skills-section terms are still missing, Step 3 is told to create realistic project experience for the important missing keywords.",
+    key: "ludicrousMode",
+    title: "Ludicrous Mode",
+  },
   {
     description:
       "Low-priority terms are always tracked and shown. This only chooses whether the displayed coverage percentage is calculated from high-priority terms or all tracked terms.",

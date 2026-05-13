@@ -49,6 +49,22 @@ test("buildTailoredResumeDownloadFilename never includes job identifiers", () =>
   );
 });
 
+test("buildTailoredResumeDownloadFilename can use a fixed configured name", () => {
+  assert.equal(
+    buildTailoredResumeDownloadFilename(
+      {
+        companyName: "OpenAI",
+        displayName: "Research Engineer",
+      },
+      {
+        customResumeDownloadName: "Henry Deutsch Resume",
+        useCustomResumeDownloadName: true,
+      },
+    ),
+    "Henry Deutsch Resume.pdf",
+  );
+});
+
 test("buildUniqueTailoredResumeDownloadFilename increments company pdf collisions", () => {
   assert.equal(
     buildUniqueTailoredResumeDownloadFilename({

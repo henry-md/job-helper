@@ -586,12 +586,14 @@ function TailoredResumeDevInspectorSection({
 
 export default function TailoredResumeReviewModal({
   debugUiEnabled,
+  generationSettings,
   onClose,
   onTailorResumeProfileChange,
   onTailoredResumesChange,
   record,
 }: {
   debugUiEnabled: boolean;
+  generationSettings: TailorResumeProfile["generationSettings"];
   onClose: () => void;
   onTailorResumeProfileChange?: (profile: TailorResumeProfile) => void;
   onTailoredResumesChange: (
@@ -1533,7 +1535,10 @@ export default function TailoredResumeReviewModal({
       const downloadLink = document.createElement("a");
 
       downloadLink.href = downloadUrl;
-      downloadLink.download = buildTailoredResumeDownloadFilename(record);
+      downloadLink.download = buildTailoredResumeDownloadFilename(
+        record,
+        generationSettings.values,
+      );
       downloadLink.style.display = "none";
       document.body.appendChild(downloadLink);
       downloadLink.click();

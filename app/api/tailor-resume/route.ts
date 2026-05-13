@@ -19,6 +19,7 @@ import {
   mergeTailorResumeLinksWithLockedLinks,
   mergeTailorResumeProfileWithLockedLinks,
   readLockedTailorResumeLinksFromLinks,
+  readTailorResumeLockedLinks,
   replaceTailorResumeLockedLinks,
   stripTailorResumeLinkLocks,
 } from "@/lib/tailor-resume-locked-links";
@@ -800,6 +801,7 @@ type TailoredResumeDbRecord = {
 async function completeTailorResumeInterviewAndFinalize(input: {
   applicationId: string | null;
   lockedLinks: TailorResumeLockedLinkRecord[];
+  ludicrousMissingSkillsSectionTerms?: TailoredResumeEmphasizedTechnology[];
   onStepEvent: (
     event: TailorResumeGenerationStepEvent,
   ) => void | Promise<void>;
@@ -862,6 +864,10 @@ async function completeTailorResumeInterviewAndFinalize(input: {
     annotatedLatexCode: input.tailoringInterview.sourceAnnotatedLatexCode,
     employerName: input.tailoringInterview.planningResult.companyName || null,
     jobDescription: input.tailoringInterview.jobDescription,
+    ludicrousMissingSkillsSectionTerms:
+      input.ludicrousMissingSkillsSectionTerms?.map(
+        (technology) => technology.name,
+      ),
     onStepEvent: input.onStepEvent,
     precomputedEmphasizedTechnologies:
       input.tailoringInterview.planningResult.emphasizedTechnologies,
@@ -3629,6 +3635,57 @@ async function handleTailorResumeGeneration(
         userId,
       });
 
+    if (preparation.rawProfile.generationSettings.values.ludicrousMode) {
+      const ludicrousInterview = buildTailorResumeQuestionStartInterview({
+        accumulatedModelDurationMs,
+        applicationId: preparation.applicationId,
+        generationSourceSnapshot,
+        jobDescription: preparation.jobDescription,
+        jobUrl: preparation.jobUrl,
+        keywordExtractionDebug: keywordStage.extractionDebug,
+        planningDebug: {
+          outputJson: null,
+          prompt: null,
+          skippedReason:
+            "Step 3 planning has not run yet because Ludicrous Mode is skipping Step 2 user input.",
+        },
+        planningResult: prePlanningResult,
+        runId: preparation.runId,
+        sourceAnnotatedLatexCode: generationSourceAnnotatedLatex,
+        status: "ready",
+        uncoveredEmphasizedTechnologies,
+      });
+
+      await handleStepEvent({
+        attempt: null,
+        detail:
+          uncoveredEmphasizedTechnologies.length > 0
+            ? `Ludicrous Mode skipped Step 2 user input with ${formatSkillsSectionBlockerCount(uncoveredEmphasizedTechnologies.length)} still missing. Step 3 will take liberty with realistic experience for important missing keywords.`
+            : "Ludicrous Mode skipped Step 2 user input. Every skills-section keyword was already covered.",
+        blockingTechnologies: uncoveredEmphasizedTechnologies,
+        durationMs: 0,
+        emphasizedTechnologies: classifiedEmphasizedTechnologies,
+        retrying: false,
+        status: "skipped",
+        stepCount: 5,
+        stepNumber: 2,
+        summary: "Skipped Step 2 input",
+      });
+
+      return await completeTailorResumeInterviewAndFinalize({
+        applicationId: preparation.applicationId,
+        lockedLinks: preparation.lockedLinks,
+        ludicrousMissingSkillsSectionTerms: uncoveredEmphasizedTechnologies,
+        onStepEvent: handleStepEvent,
+        rawProfile: preparation.rawProfile,
+        runId: preparation.runId,
+        stepTwoCompletionEvent: null,
+        tailoringInterview: ludicrousInterview,
+        userId,
+        userMarkdown: userMarkdownForPlanning,
+      });
+    }
+
     const questionStart = await createTailorResumeQuestionStart({
       accumulatedModelDurationMs,
       applicationId: preparation.applicationId,
@@ -3669,17 +3726,17 @@ async function handleTailorResumeGeneration(
       );
     }
 
-    await updateTailorResumeRunStatus({
-      runId: preparation.runId,
-      status: "NEEDS_INPUT",
-      userId,
-    });
     await handleStepEvent(
       buildTailorResumeQuestionStartReadyStepEvent(
         classifiedEmphasizedTechnologies,
         uncoveredEmphasizedTechnologies,
       ),
     );
+    await updateTailorResumeRunStatus({
+      runId: preparation.runId,
+      status: "NEEDS_INPUT",
+      userId,
+    });
     const pendingQuestionStartTailoring =
       buildPendingInterviewExistingTailoringState(questionStart.interview);
     const skillData = await readTailorResumeStoredSkillData({
@@ -5506,18 +5563,15 @@ export async function PATCH(request: Request) {
         sourceAnnotatedLatexCode: rawProfile.annotatedLatex.code,
         userId: session.user.id,
       });
-      const refreshed = await reevaluateTailorResumeStepTwoCheckpoints(
-        session.user.id,
-      );
       const skillData = await readTailorResumeStoredSkillData({
-        sourceAnnotatedLatexCode: refreshed.rawProfile.annotatedLatex.code,
+        sourceAnnotatedLatexCode: rawProfile.annotatedLatex.code,
         userId: session.user.id,
       });
 
       return NextResponse.json({
         profile: mergeTailorResumeProfileWithLockedLinks(
-          refreshed.rawProfile,
-          refreshed.lockedLinks,
+          rawProfile,
+          await readTailorResumeLockedLinks(session.user.id),
           {
             includeLockedOnly: true,
           },
@@ -6139,6 +6193,132 @@ export async function PATCH(request: Request) {
         includeLockedOnly: true,
       }),
       tailoredResumeIds: archiveTargetIds,
+    });
+  }
+
+  if ("action" in body && body.action === "deleteAllTailoredResumeArtifacts") {
+    const requestedTailoredResumeIds =
+      "tailoredResumeIds" in body && Array.isArray(body.tailoredResumeIds)
+        ? body.tailoredResumeIds
+            .map((tailoredResumeId) =>
+              typeof tailoredResumeId === "string" ? tailoredResumeId.trim() : "",
+            )
+            .filter(Boolean)
+        : [];
+    const requestedRunIds =
+      "runIds" in body && Array.isArray(body.runIds)
+        ? body.runIds
+            .map((runId) => (typeof runId === "string" ? runId.trim() : ""))
+            .filter(Boolean)
+        : [];
+    const requestedJobUrls =
+      "jobUrls" in body && Array.isArray(body.jobUrls)
+        ? body.jobUrls
+            .map((jobUrl) => (typeof jobUrl === "string" ? jobUrl.trim() : ""))
+            .filter(Boolean)
+        : [];
+    const requestedTailoredResumeIdSet = new Set(requestedTailoredResumeIds);
+    const deleteTargetIds =
+      requestedTailoredResumeIds.length > 0
+        ? rawProfile.tailoredResumes
+            .filter((record) => requestedTailoredResumeIdSet.has(record.id))
+            .map((record) => record.id)
+        : rawProfile.tailoredResumes
+            .filter((record) => !record.archivedAt)
+            .map((record) => record.id);
+    const deleteTargetIdSet = new Set(deleteTargetIds);
+    const tailoringInterviews = readTailorResumeWorkspaceInterviews(
+      rawProfile.workspace,
+    );
+    const activeRuns = await getPrismaClient().tailorResumeRun.findMany({
+      select: {
+        id: true,
+        jobUrl: true,
+      },
+      where: {
+        status: {
+          in: ["RUNNING", "NEEDS_INPUT"],
+        },
+        userId: session.user.id,
+      },
+    });
+    const runIdsToDelete = uniqueNonEmptyStrings([
+      ...requestedRunIds,
+      ...activeRuns.map((run) => run.id),
+      ...tailoringInterviews.map((interview) => interview.tailorResumeRunId),
+    ]);
+    const cancelledRuns = await getPrismaClient().tailorResumeRun.updateMany({
+      data: {
+        status: "CANCELLED",
+      },
+      where: {
+        status: {
+          in: ["RUNNING", "NEEDS_INPUT"],
+        },
+        userId: session.user.id,
+      },
+    });
+
+    if (deleteTargetIds.length > 0) {
+      await deleteTailorResumeArtifacts({
+        jobUrls: [
+          ...requestedJobUrls,
+          ...activeRuns.map((run) => run.jobUrl),
+          ...tailoringInterviews.map((interview) => interview.jobUrl),
+          ...rawProfile.tailoredResumes
+            .filter((record) => deleteTargetIdSet.has(record.id))
+            .map((record) => record.jobUrl),
+        ],
+        runIds: runIdsToDelete,
+        tailoredResumeIds: deleteTargetIds,
+        userId: session.user.id,
+      });
+    } else if (runIdsToDelete.length > 0 || requestedJobUrls.length > 0) {
+      await deleteTailorResumeArtifacts({
+        jobUrls: [
+          ...requestedJobUrls,
+          ...activeRuns.map((run) => run.jobUrl),
+          ...tailoringInterviews.map((interview) => interview.jobUrl),
+        ],
+        runIds: runIdsToDelete,
+        userId: session.user.id,
+      });
+    }
+
+    const nextRawProfile: TailorResumeProfile =
+      deleteTargetIds.length === 0 && tailoringInterviews.length === 0
+        ? rawProfile
+        : {
+            ...rawProfile,
+            tailoredResumes: rawProfile.tailoredResumes.filter(
+              (record) => !deleteTargetIdSet.has(record.id),
+            ),
+            workspace:
+              tailoringInterviews.length > 0
+                ? withTailorResumeWorkspaceInterviews(
+                    rawProfile.workspace,
+                    [],
+                    new Date().toISOString(),
+                  )
+                : rawProfile.workspace,
+          };
+
+    if (nextRawProfile !== rawProfile) {
+      await writeTailorResumeProfileAndMarkChanged(
+        session.user.id,
+        nextRawProfile,
+      );
+    } else if (cancelledRuns.count > 0) {
+      await markTailoringChanged(session.user.id);
+    }
+
+    return NextResponse.json({
+      cancelledCount: cancelledRuns.count + tailoringInterviews.length,
+      deletedCount: deleteTargetIds.length,
+      profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
+        includeLockedOnly: true,
+      }),
+      tailoredResumeIds: deleteTargetIds,
     });
   }
 

@@ -2035,7 +2035,7 @@ function buildTailorResumeSingleSkillQueryToolOutput(input: {
       mode: input.mode,
       result: buildTailorResumeSkillQueryResult(input),
       nextAction:
-        "Use this single top saved resume-bullet support result as evidence if it is relevant. If result is null, do not invent support for that query.",
+        "Use this single top saved resume-bullet support result as evidence if it is relevant. If result is null, do not invent support for that query. **** **WARNING: IF MULTIPLE SAVED REPLACEMENT BULLETS TARGET THE SAME SOURCE BULLET, TREAT THEM AS ALTERNATIVES UNLESS YOU INTENTIONALLY PLAN ONE MULTI-BULLET REPLACEMENT.** ****",
     },
     null,
     2,
@@ -2060,7 +2060,7 @@ function buildTailorResumeBatchSkillQueryToolOutput(input: {
         }),
       })),
       nextAction:
-        "Use each top saved resume-bullet support result only when it is relevant. Null means no saved resume-bullet support matched that query.",
+        "Use each top saved resume-bullet support result only when it is relevant. Null means no saved resume-bullet support matched that query. **** **WARNING: IF MULTIPLE SAVED REPLACEMENT BULLETS TARGET THE SAME SOURCE BULLET, TREAT THEM AS ALTERNATIVES UNLESS YOU INTENTIONALLY PLAN ONE MULTI-BULLET REPLACEMENT.** ****",
     },
     null,
     2,
@@ -3037,12 +3037,15 @@ async function extractTailorResumeJobDescriptionTechnologies(input: {
 
 function buildTailoringPlanInstructions(input: {
   feedback?: string;
+  ludicrousMissingSkillsSectionTerms?: string[];
   promptSettings?: SystemPromptSettings;
 }) {
   return buildTailorResumePlanningSystemPrompt(
     input.promptSettings ?? createDefaultSystemPromptSettings(),
     {
       feedback: input.feedback,
+      ludicrousMissingSkillsSectionTerms:
+        input.ludicrousMissingSkillsSectionTerms,
     },
   );
 }
@@ -3385,15 +3388,6 @@ export function applyTailorResumeBlockChanges(input: {
     );
 
     if (replacementLatex.trim()) {
-      const replacementSegmentCount =
-        normalizeTailorResumeLatex(replacementLatex).segmentCount;
-
-      if (replacementSegmentCount > 1) {
-        throw new Error(
-          `Replacement for segment ${change.segmentId} spans multiple logical blocks.`,
-        );
-      }
-
       chunks.push(replacementLatex);
 
       if (!replacementLatex.endsWith("\n") && block.contentEnd < normalizedInput.annotatedLatex.length) {
@@ -3974,6 +3968,7 @@ export async function planTailoredResume(input: {
   annotatedLatexCode: string;
   employerName?: string | null;
   jobDescription: string;
+  ludicrousMissingSkillsSectionTerms?: string[];
   onStepEvent?: (
     event: TailorResumeGenerationStepEvent,
   ) => void | Promise<void>;
@@ -4004,6 +3999,8 @@ export async function planTailoredResume(input: {
     skippedReason:
       "Planning stage did not run because no valid planner response was produced.",
     systemPrompt: buildTailoringPlanInstructions({
+      ludicrousMissingSkillsSectionTerms:
+        input.ludicrousMissingSkillsSectionTerms,
       promptSettings: input.promptSettings,
     }),
   };
@@ -4058,6 +4055,8 @@ export async function planTailoredResume(input: {
     });
     const planInstructions = buildTailoringPlanInstructions({
       feedback: planningFeedback,
+      ludicrousMissingSkillsSectionTerms:
+        input.ludicrousMissingSkillsSectionTerms,
       promptSettings: input.promptSettings,
     });
     const planningPrompt = serializeTailoredResumePrompt({

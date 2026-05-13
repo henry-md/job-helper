@@ -8,6 +8,7 @@ export const systemPromptSettingKeys = [
   "resumeLatexExtraction",
   "tailorResumePlanning",
   "tailorResumeInterview",
+  "tailorResumeStep2ExperienceChat",
   "tailorResumeImplementation",
   "tailorResumeRefinement",
   "tailorResumePageCountCompaction",
@@ -192,6 +193,18 @@ export function buildTailorResumePageCountCompactionInstructions(input: {
 const jobApplicationExtractionTitleTeamInstruction =
   'When a visible job title includes or is clearly paired with a short team name, prefer jobTitle in the format "Role (Team)" with only a 1-2 word parenthetical, for example "Software Engineer (Quantum)". If no short visible team name is provided, return the plain role title with no parentheses. Keep teamOrDepartment as the separate field for the fuller team or department name when it is visible.';
 
+const tailorResumePlanningRedundantBulletGuardrail =
+  "- Do not plan two separate bullets under the same experience when they would be sufficiently redundant, even if they mention different technologies. For example, do not keep two bullets whose main claim is building CI/CD pipelines with different tools. Combine the technologies into the strongest single bullet when it stays truthful and compact; otherwise leave one keyword out of experience bullets. Concrete skills-section keywords can still be listed in Skills, so excluding a high-priority tool from a body bullet is acceptable when the alternative would be redundant or weaker.\n";
+
+const tailorResumeImplementationRedundantBulletGuardrail =
+  "- Do not implement or preserve two separate bullets under the same experience when they make the same core claim with different technologies. For example, do not leave two CI/CD pipeline bullets just to mention separate tools. Combine supported technologies into one strong bullet when it remains truthful and compact; otherwise omit the weaker keyword from body bullets. Concrete tools can still appear in the Skills section, so do not sacrifice resume quality or add redundancy solely for keyword coverage.\n";
+
+const tailorResumePageCountRedundantBulletGuardrail =
+  "Do not preserve two sufficiently redundant bullets under the same experience just to keep different technology keywords in body text. For example, two bullets about building CI/CD pipelines with different tools should be merged or reduced to the stronger one when page fit or resume quality benefits. If a high-priority concrete tool must be excluded from an experience bullet to avoid redundancy, that is acceptable because supported tools can still appear in the Skills section. ";
+
+export const defaultTailorResumeStep2ExperienceChatPrompt =
+  "Help me craft resume experiences for the following technologies. Be optimistic about what my experience may be and I can correct you if it's too much. Create FAANG level experiences for each resume point, and give 3 sample bullets for each of the following experiences. Suggest them *in the context of my actual resume*, and for each bullet say which of my previous experiences you would put them under. List your bullets in letter order A. B. C., and be ready for me to answer like '[keyword] A' which should tell you to (1) iterate on this one by checking that it's not malformed (2) save it as a new resume bullet for me if you didn't have to change the string, or give a version that isn't malformed and ask me if you can add it.";
+
 function ensureJobApplicationExtractionPromptRules(prompt: string) {
   const trimmedPrompt = prompt.trim();
 
@@ -200,6 +213,51 @@ function ensureJobApplicationExtractionPromptRules(prompt: string) {
   }
 
   return `${trimmedPrompt} ${jobApplicationExtractionTitleTeamInstruction}`;
+}
+
+function ensurePromptIncludesLine(prompt: string, requiredLine: string) {
+  const trimmedPrompt = prompt.trim();
+  const trimmedRequiredLine = requiredLine.trim();
+
+  if (!trimmedRequiredLine || trimmedPrompt.includes(trimmedRequiredLine)) {
+    return trimmedPrompt;
+  }
+
+  return `${trimmedPrompt}\n${trimmedRequiredLine}`;
+}
+
+function ensurePromptIncludesSentence(prompt: string, requiredSentence: string) {
+  const trimmedPrompt = prompt.trim();
+  const trimmedRequiredSentence = requiredSentence.trim();
+
+  if (
+    !trimmedRequiredSentence ||
+    trimmedPrompt.includes(trimmedRequiredSentence)
+  ) {
+    return trimmedPrompt;
+  }
+
+  return `${trimmedPrompt} ${trimmedRequiredSentence}`;
+}
+
+function buildTailorResumeLudicrousMissingSkillsBlock(
+  terms: string[] | undefined,
+) {
+  const missingTerms = [
+    ...new Set((terms ?? []).map((term) => term.trim()).filter(Boolean)),
+  ];
+
+  if (missingTerms.length === 0) {
+    return "";
+  }
+
+  return [
+    "Ludicrous Mode missing skills-section terms:",
+    `The user enabled Ludicrous Mode, so Step 2 intentionally skipped user input even though these skills-section terms were not already saved: ${missingTerms.join(", ")}.`,
+    "Create resume experience plans that cover the important missing keywords when doing so improves fit for the job.",
+    "Take lots of liberty, but keep the planned bullets realistic: they should be plausible examples of how a strong candidate would use the technology in a real project, with results a successful project could realistically see.",
+    "Do not invent impossible credentials, employers, titles, dates, degrees, certifications, or wildly inflated metrics.",
+  ].join("\n");
 }
 
 function buildTailorResumeInterviewDebugBlock(input: {
@@ -429,6 +487,7 @@ const defaultSystemPromptSettings = {
     "- Your primary goal is to create the ideal job-specific resume, not a lightly polished draft. Make meaningful, supported edits wherever they improve fit.\n" +
     "- First make sure the final intent plan accounts for every remaining high-priority keyword that is already supported by the original resume, USER.md, or Step 2 user-confirmed learnings. Then actively work through the low-priority keyword list and assign each supported term to a truthful compact block wherever it can fit without weakening higher-value content.\n" +
     "- Do not abandon a keyword after one awkward attempt. Try multiple compact strategies before leaving it out: a valid Skills entry, a tighter bullet rewrite, a bullet swap that removes weaker detail, or a different supported block. Only give up if adding the term would require unsupported experience, likely extend a rendered line/page, remove an important keyword or stronger claim, or break block scope.\n" +
+    tailorResumePlanningRedundantBulletGuardrail +
     "- When editing Skills or Technical Skills, add only actual skills. A new skills entry must be a concrete tool, language, framework, database, infrastructure tool, developer tool, or named method, and it must either already be supported as a real skill by the source resume or have a dedicated USER.md sentence/bullet for that exact technology saying it can be listed in skills, describing direct experience/exposure, or providing quoted experience evidence. If any planned non-skills bullet uses a concrete actual skill that passes this gate and a Skills or Technical Skills block is editable, return a Skills change in the same plan that lists that exact skill in the closest existing category. Do not rely on the bullet alone to cover the Skills section. Do not add peppering/capability phrases such as RESTful, RESTful APIs, cloud infrastructure, data structures, production infrastructure, or similar wording to Skills merely because the job description emphasized them; use those in bullets or coverage checks when they fit naturally. Skills-only concrete tools like Windsurf are valid Skills additions when USER.md has a dedicated note permitting them, even if they are not worthy of an experience bullet.\n" +
     "- Follow the Available tools section before final JSON. Treat low-priority misses from the assignment tool as revise-again signals unless you have already tried to assign them to a truthful compact block and can explain why truth, line fit, or higher-priority content prevents it.\n\n" +
     "Metadata rules:\n" +
@@ -501,6 +560,7 @@ const defaultSystemPromptSettings = {
     "- For confirmed missing technologies, prefer recording a skills-section category even when you also record experience-evidence bullets, so Step 3 has a direct place to consider the exact keyword. If you are unsure about resume placement but the user confirmed the technology, record that it can be listed in the skills section and finish.\n" +
     "- Optimistically infer likely employer/project context from the resume, but only record confirmed user experience or confirmed non-experience. Do not ask the user to choose resume edit placement; Step 3 planning owns that decision.\n" +
     "- When calling finish_tailor_resume_interview, include USER.md edit operations for every durable fact from the entire chat that is not already reflected in the current USER.md. Do not write only the latest user message if earlier answers in the same chat confirmed other technologies or constraints.\n",
+  tailorResumeStep2ExperienceChat: defaultTailorResumeStep2ExperienceChatPrompt,
   tailorResumeImplementation:
     "{{FEEDBACK_BLOCK}}Implement the approved resume edit plan as exact LaTeX block replacements. The strategic edit choices, targeted segments, keyword targets, and block-level intent are already decided; the exact resume wording is your job.\n\n" +
     "You must return a strict JSON object containing only changes.\n\n" +
@@ -509,7 +569,7 @@ const defaultSystemPromptSettings = {
     "- latexCode must contain only the replacement for that one segment.\n" +
     "- Never include content from the previous or next segment inside the same latexCode string.\n" +
     "- Never invent, rename, or return % JOBHELPER_SEGMENT_ID comments. The server re-adds them deterministically after applying your edits.\n" +
-    "- Keep the replacement faithful to the targeted block's existing shape. If the source block is one bullet, return one bullet. If the source block is an opening wrapper plus one bullet, return only that opening wrapper plus one bullet.\n" +
+    "- Keep the replacement faithful to the targeted block's local style. A replacement may contain multiple bullets when the edit intent calls for it, but it must still belong entirely to the targeted segment.\n" +
     "- Do not add or remove neighboring bullets, \\end{...} lines, or surrounding wrappers unless they are part of that exact targeted block.\n" +
     "- Use the editIntent and targetKeywords as the target visible outcome, but preserve the source block's macro style, argument structure, and local formatting conventions whenever possible.\n" +
     "- If the editIntent is a deletion for one planned bullet or line, use an empty latexCode when removal is clearly the right implementation. Do not leave an empty \\resumeitem{}, placeholder text, or a comment.\n" +
@@ -520,8 +580,9 @@ const defaultSystemPromptSettings = {
     "- Treat user-confirmed background learnings as factual additions, but never invent beyond what the user explicitly confirmed.\n" +
     "- Preserve factual and stylistic details that are outside the planned edit intent. Do not change dates of experience, employers, titles, metrics, punctuation, separators, capitalization, or link text merely to polish the block.\n" +
     "- Use the emphasized technology list and each planned change's targetKeywords as keyword guidance for both high- and low-priority terms. Include exact technology names where they are already supported by the source resume, USER.md, user-confirmed learnings, or the accepted editIntent, but never add unsupported tools just because the job asks for them.\n" +
-    "- If the accepted plan replaces a lower-signal bullet with user-confirmed technology experience, return that replacement as the single planned bullet. Do not move the technology only to skills and leave the planned experience bullet unchanged.\n" +
+    "- If the accepted plan replaces a lower-signal bullet with user-confirmed technology experience, return that replacement inside the planned segment. Do not move the technology only to skills and leave the planned experience bullet unchanged.\n" +
     "- Your primary goal is to implement the accepted Step 3 plan faithfully while preserving its ambition. Within the planned replacements, keep pushing keyword coverage for both high- and low-priority terms instead of settling for a slightly better draft. Do not make Step 4 invent unsupported experience or edit unplanned blocks, but do try repeated compact wording passes before leaving a planned/supported keyword out.\n" +
+    tailorResumeImplementationRedundantBulletGuardrail +
     "- If the accepted plan adds actual skills to a skills section, preserve those planned skills entries. When the accepted plan uses a concrete actual skill in a bullet and also includes a Skills or Technical Skills replacement, make sure that replacement lists the same exact skill in the closest existing category. Do not treat the bullet mention as a substitute for the skills-list entry. Do not add extra capability phrases such as RESTful, RESTful APIs, cloud infrastructure, or data structures to Skills merely to improve keyword coverage; they belong in bullets only when the accepted plan already uses them there.\n" +
     "- Follow the Available tools section before final JSON.\n\n" +
     "Common pitfalls:\n" +
@@ -547,7 +608,7 @@ const defaultSystemPromptSettings = {
     "Refinement rules:\n" +
     "- Keep the exact same set of segmentIds. Do not add new segments, drop segments, or touch unedited blocks.\n" +
     "- latexCode must contain only the replacement for that one segment.\n" +
-    "- Preserve each block's local structure. If the source is one bullet, return one bullet. Do not spill into neighboring blocks.\n" +
+    "- Preserve each block's local structure and style. A replacement may contain multiple bullets when the revision calls for it, but do not spill into neighboring source blocks.\n" +
     "- Use the screenshots as a layout guardrail: prefer tighter, cleaner phrasing when the preview suggests the resume is too long, cramped, or wrapping awkwardly.\n" +
     "- Preserve factual accuracy. Never invent achievements, employers, dates, titles, technologies, metrics, degrees, or certifications.\n" +
     "- Keep the tailored resume pdflatex-compatible.\n" +
@@ -568,6 +629,7 @@ const defaultSystemPromptSettings = {
     "The measurement tool will reject any candidate whose rendered line count does not actually drop for that block, including candidates that merely shorten text while preserving the same number of rendered lines. " +
     "Prioritize blocks that currently render across multiple lines; treat already-one-line blocks as last-resort cuts unless deleting one is truly necessary. " +
     "If only one line needs to be reclaimed overall, strongly prefer one minimal verified line-saving change and leave the other edited blocks effectively the same. " +
+    tailorResumePageCountRedundantBulletGuardrail +
     "If a verified candidate set still leaves the resume above the target page count, widen the next pass by adding another high-priority multi-line block rather than repeating the same small cut shape. " +
     "If the exact page-count verification still shows the resume above the target, you may still submit those verified line-saving candidates so the next pass starts from a smaller draft, but do not call the job done until the exact page-count verification is at or below the target. " +
     "For every returned block reason, remember that it fully replaces the old reason shown to the user. Lead with what changed in the context of the job description, such as the technology, responsibility, metric, or outcome being emphasized. Mention the need to shorten only as a passing sentence fragment, and never lead with claims like shortened, tightened, removed filler, or reclaimed space.",
@@ -627,33 +689,48 @@ export function buildResumeLatexSystemPrompt(
 
 export function buildTailorResumePlanningSystemPrompt(
   settings: SystemPromptSettings,
-  input: { feedback?: string },
+  input: {
+    feedback?: string;
+    ludicrousMissingSkillsSectionTerms?: string[];
+  },
 ) {
-  const prompt = renderSystemPromptTemplate(settings.tailorResumePlanning, {
-    FEEDBACK_BLOCK: buildFeedbackBlock(
-      "Previous attempt feedback",
-      input.feedback,
-    ),
-  }).trim();
+  const prompt = ensurePromptIncludesLine(
+    renderSystemPromptTemplate(settings.tailorResumePlanning, {
+      FEEDBACK_BLOCK: buildFeedbackBlock(
+        "Previous attempt feedback",
+        input.feedback,
+      ),
+    }),
+    tailorResumePlanningRedundantBulletGuardrail,
+  );
 
   return [
     prompt,
+    buildTailorResumeLudicrousMissingSkillsBlock(
+      input.ludicrousMissingSkillsSectionTerms,
+    ),
     buildTailorResumePlanningTechnologyContextBlock(),
     buildTailorResumePlanningOutputContractBlock(),
     buildTailorResumePlanningToolContractBlock(),
-  ].join("\n\n").trim();
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
 }
 
 export function buildTailorResumeImplementationSystemPrompt(
   settings: SystemPromptSettings,
   input: { feedback?: string },
 ) {
-  const prompt = renderSystemPromptTemplate(settings.tailorResumeImplementation, {
-    FEEDBACK_BLOCK: buildFeedbackBlock(
-      "Previous implementation feedback",
-      input.feedback,
-    ),
-  }).trim();
+  const prompt = ensurePromptIncludesLine(
+    renderSystemPromptTemplate(settings.tailorResumeImplementation, {
+      FEEDBACK_BLOCK: buildFeedbackBlock(
+        "Previous implementation feedback",
+        input.feedback,
+      ),
+    }),
+    tailorResumeImplementationRedundantBulletGuardrail,
+  );
 
   return [
     prompt,
@@ -711,18 +788,21 @@ export function buildTailorResumePageCountCompactionPrompt(
   );
   const normalizedTargetPageCount = Math.max(1, Math.floor(input.targetPageCount));
 
-  return renderSystemPromptTemplate(settings.tailorResumePageCountCompaction, {
-    CURRENT_PAGE_COUNT: String(normalizedCurrentPageCount),
-    CURRENT_PAGE_LABEL: normalizedCurrentPageCount === 1 ? "page" : "pages",
-    ESTIMATED_LINE_REDUCTION: String(normalizedEstimatedLineReduction),
-    ESTIMATED_LINE_REDUCTION_LABEL:
-      normalizedEstimatedLineReduction === 1 ? "rendered line" : "rendered lines",
-    TARGET_PAGE_COUNT: String(normalizedTargetPageCount),
-    TARGET_PAGE_COUNT_HARD_REQUIREMENT: buildPageCountHardRequirement(
-      normalizedTargetPageCount,
-    ),
-    TARGET_PAGE_COUNT_REQUIREMENT: buildPageCountRequirement(
-      normalizedTargetPageCount,
-    ),
-  }).trim();
+  return ensurePromptIncludesSentence(
+    renderSystemPromptTemplate(settings.tailorResumePageCountCompaction, {
+      CURRENT_PAGE_COUNT: String(normalizedCurrentPageCount),
+      CURRENT_PAGE_LABEL: normalizedCurrentPageCount === 1 ? "page" : "pages",
+      ESTIMATED_LINE_REDUCTION: String(normalizedEstimatedLineReduction),
+      ESTIMATED_LINE_REDUCTION_LABEL:
+        normalizedEstimatedLineReduction === 1 ? "rendered line" : "rendered lines",
+      TARGET_PAGE_COUNT: String(normalizedTargetPageCount),
+      TARGET_PAGE_COUNT_HARD_REQUIREMENT: buildPageCountHardRequirement(
+        normalizedTargetPageCount,
+      ),
+      TARGET_PAGE_COUNT_REQUIREMENT: buildPageCountRequirement(
+        normalizedTargetPageCount,
+      ),
+    }),
+    tailorResumePageCountRedundantBulletGuardrail,
+  );
 }

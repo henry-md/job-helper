@@ -1502,6 +1502,7 @@ export default function DashboardWorkspace({
 
       <TailoredResumeReviewModal
         debugUiEnabled={tailorResumeDebugUiEnabled}
+        generationSettings={tailorResumeProfileState.generationSettings}
         key={reviewingTailoredResume?.id ?? "closed"}
         onClose={closeTailoredResumeReview}
         onTailorResumeProfileChange={applyTailorResumeProfileChange}

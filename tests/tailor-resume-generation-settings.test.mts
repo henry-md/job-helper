@@ -8,8 +8,11 @@ import {
 test("createDefaultTailorResumeGenerationSettings enables page-count protection", () => {
   assert.deepEqual(createDefaultTailorResumeGenerationSettings(), {
     allowTailorResumeFollowUpQuestions: true,
+    customResumeDownloadName: "Resume",
     includeLowPriorityTermsInKeywordCoverage: false,
+    ludicrousMode: false,
     preventPageCountIncrease: true,
+    useCustomResumeDownloadName: false,
   });
 });
 
@@ -17,13 +20,19 @@ test("mergeTailorResumeGenerationSettings keeps visible saved overrides", () => 
   assert.deepEqual(
     mergeTailorResumeGenerationSettings({
       allowTailorResumeFollowUpQuestions: false,
+      customResumeDownloadName: "Henry Deutsch Resume",
       includeLowPriorityTermsInKeywordCoverage: true,
+      ludicrousMode: true,
       preventPageCountIncrease: false,
+      useCustomResumeDownloadName: true,
     }),
     {
       allowTailorResumeFollowUpQuestions: false,
+      customResumeDownloadName: "Henry Deutsch Resume",
       includeLowPriorityTermsInKeywordCoverage: true,
+      ludicrousMode: true,
       preventPageCountIncrease: false,
+      useCustomResumeDownloadName: true,
     },
   );
 });
@@ -35,8 +44,11 @@ test("mergeTailorResumeGenerationSettings defaults missing follow-up toggle on",
     }),
     {
       allowTailorResumeFollowUpQuestions: true,
+      customResumeDownloadName: "Resume",
       includeLowPriorityTermsInKeywordCoverage: false,
+      ludicrousMode: false,
       preventPageCountIncrease: false,
+      useCustomResumeDownloadName: false,
     },
   );
 });

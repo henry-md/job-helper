@@ -232,10 +232,13 @@ test("parseTailorResumeProfile keeps saved generation settings", () => {
       updatedAt: "2026-05-01T22:30:00.000Z",
       values: {
         allowTailorResumeFollowUpQuestions: false,
+        customResumeDownloadName: "Henry Deutsch Resume",
         includeLowPriorityTermsInKeywordCoverage: true,
+        ludicrousMode: true,
         preventPageCountIncrease: false,
+        useCustomResumeDownloadName: true,
       },
-      version: 2,
+      version: 4,
     },
   });
 
@@ -243,7 +246,7 @@ test("parseTailorResumeProfile keeps saved generation settings", () => {
     profile.generationSettings.updatedAt,
     "2026-05-01T22:30:00.000Z",
   );
-  assert.equal(profile.generationSettings.version, 2);
+  assert.equal(profile.generationSettings.version, 4);
   assert.equal(
     profile.generationSettings.values.allowTailorResumeFollowUpQuestions,
     false,
@@ -254,6 +257,15 @@ test("parseTailorResumeProfile keeps saved generation settings", () => {
   );
   assert.equal(
     profile.generationSettings.values.includeLowPriorityTermsInKeywordCoverage,
+    true,
+  );
+  assert.equal(profile.generationSettings.values.ludicrousMode, true);
+  assert.equal(
+    profile.generationSettings.values.customResumeDownloadName,
+    "Henry Deutsch Resume",
+  );
+  assert.equal(
+    profile.generationSettings.values.useCustomResumeDownloadName,
     true,
   );
 });
@@ -265,12 +277,13 @@ test("parseTailorResumeProfile migrates legacy hidden follow-up disable", () => 
       values: {
         allowTailorResumeFollowUpQuestions: false,
         includeLowPriorityTermsInKeywordCoverage: true,
+        ludicrousMode: true,
         preventPageCountIncrease: false,
       },
     },
   });
 
-  assert.equal(profile.generationSettings.version, 2);
+  assert.equal(profile.generationSettings.version, 4);
   assert.equal(
     profile.generationSettings.values.allowTailorResumeFollowUpQuestions,
     true,
@@ -283,6 +296,7 @@ test("parseTailorResumeProfile migrates legacy hidden follow-up disable", () => 
     profile.generationSettings.values.includeLowPriorityTermsInKeywordCoverage,
     true,
   );
+  assert.equal(profile.generationSettings.values.ludicrousMode, true);
 });
 
 test("parseTailorResumeProfile keeps an active tailoring interview", () => {

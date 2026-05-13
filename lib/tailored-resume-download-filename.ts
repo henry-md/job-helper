@@ -3,6 +3,11 @@ type TailoredResumeDownloadFilenameRecord = {
   displayName?: string | null;
 };
 
+type TailoredResumeDownloadNameSettings = {
+  customResumeDownloadName?: string | null;
+  useCustomResumeDownloadName?: boolean | null;
+};
+
 function collapseWhitespace(value: string | null | undefined) {
   return (value ?? "").trim().replace(/\s+/g, " ");
 }
@@ -48,7 +53,17 @@ function readCompanyNameFromDisplayName(value: string | null | undefined) {
 
 export function buildTailoredResumeDownloadFilename(
   record: TailoredResumeDownloadFilenameRecord,
+  settings?: TailoredResumeDownloadNameSettings | null,
 ) {
+  const customName =
+    settings?.useCustomResumeDownloadName === true
+      ? sanitizeResumeDownloadFilenameBase(settings.customResumeDownloadName)
+      : "";
+
+  if (customName) {
+    return `${customName}.pdf`;
+  }
+
   const companyName =
     sanitizeResumeDownloadFilenameBase(record.companyName) ||
     sanitizeResumeDownloadFilenameBase(
