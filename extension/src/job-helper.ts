@@ -186,13 +186,16 @@ export const defaultExtensionPreferences: ExtensionPreferences = {
   tailorRunTimeDisplayMode: "specific",
 };
 
-const currentTailorResumeGenerationSettingsVersion = 2;
+const currentTailorResumeGenerationSettingsVersion = 4;
 
 export const defaultTailorResumeGenerationSettingsSummary:
   TailorResumeGenerationSettingsSummary = {
     allowTailorResumeFollowUpQuestions: true,
+    customResumeDownloadName: "Resume",
     includeLowPriorityTermsInKeywordCoverage: false,
+    ludicrousMode: false,
     preventPageCountIncrease: true,
+    useCustomResumeDownloadName: false,
     version: currentTailorResumeGenerationSettingsVersion,
   };
 
@@ -350,8 +353,11 @@ function normalizeTailorResumeKeywordKind(
 
 export type TailorResumeGenerationSettingsSummary = {
   allowTailorResumeFollowUpQuestions: boolean;
+  customResumeDownloadName: string;
   includeLowPriorityTermsInKeywordCoverage: boolean;
+  ludicrousMode: boolean;
   preventPageCountIncrease: boolean;
+  useCustomResumeDownloadName: boolean;
   version: number;
 };
 
@@ -382,6 +388,7 @@ export type PersonalInfoSummary = {
   companyCount: number;
   generationSettings: TailorResumeGenerationSettingsSummary;
   originalResume: OriginalResumeSummary;
+  promptSettings: TailorResumePromptSettingsSummary;
   syncState: UserSyncStateSnapshot;
   skillData: TailorResumeStoredSkillData;
   tailoredResumes: TailoredResumeSummary[];
@@ -389,6 +396,10 @@ export type PersonalInfoSummary = {
   tailoringInterviews: TailorResumePendingInterviewSummary[];
   userMemory: UserMemorySummary;
   userMarkdown: UserMarkdownSummary;
+};
+
+export type TailorResumePromptSettingsSummary = {
+  tailorResumeStep2ExperienceChat: string | null;
 };
 
 export type UserMarkdownSummary = {
@@ -563,6 +574,7 @@ export type TailorResumeExistingTailoringState =
     };
 
 export type TailorResumeProfileSummary = {
+  promptSettings: TailorResumePromptSettingsSummary;
   tailoredResumes: TailoredResumeSummary[];
   tailoringInterview: TailorResumePendingInterviewSummary | null;
   tailoringInterviews: TailorResumePendingInterviewSummary[];
@@ -1261,10 +1273,23 @@ export function readTailorResumeGenerationSettingsSummary(
       typeof settings.includeLowPriorityTermsInKeywordCoverage === "boolean"
         ? settings.includeLowPriorityTermsInKeywordCoverage
         : defaultTailorResumeGenerationSettingsSummary.includeLowPriorityTermsInKeywordCoverage,
+    customResumeDownloadName:
+      typeof settings.customResumeDownloadName === "string" &&
+      settings.customResumeDownloadName.trim()
+        ? settings.customResumeDownloadName.trim()
+        : defaultTailorResumeGenerationSettingsSummary.customResumeDownloadName,
+    ludicrousMode:
+      typeof settings.ludicrousMode === "boolean"
+        ? settings.ludicrousMode
+        : defaultTailorResumeGenerationSettingsSummary.ludicrousMode,
     preventPageCountIncrease:
       typeof settings.preventPageCountIncrease === "boolean"
         ? settings.preventPageCountIncrease
         : defaultTailorResumeGenerationSettingsSummary.preventPageCountIncrease,
+    useCustomResumeDownloadName:
+      typeof settings.useCustomResumeDownloadName === "boolean"
+        ? settings.useCustomResumeDownloadName
+        : defaultTailorResumeGenerationSettingsSummary.useCustomResumeDownloadName,
     version: currentTailorResumeGenerationSettingsVersion,
   };
 }
@@ -1630,6 +1655,7 @@ export function readTailorResumeProfileSummary(
   const tailoringInterviews = readTailorResumePendingInterviewSummaries(workspace);
 
   return {
+    promptSettings: readTailorResumePromptSettingsSummary(profile),
     tailoredResumes: readTailoredResumeSummaries(profile.tailoredResumes),
     tailoringInterview: tailoringInterviews[0] ?? null,
     tailoringInterviews,
@@ -1960,6 +1986,26 @@ function readUserMemorySummary(value: unknown): UserMemorySummary {
   };
 }
 
+function readTailorResumePromptSettingsSummary(
+  value: unknown,
+): TailorResumePromptSettingsSummary {
+  const payloadRecord = isRecord(value) ? value : {};
+  const profile = isRecord(payloadRecord.profile)
+    ? payloadRecord.profile
+    : payloadRecord;
+  const promptSettings = isRecord(profile.promptSettings)
+    ? profile.promptSettings
+    : {};
+  const values = isRecord(promptSettings.values)
+    ? promptSettings.values
+    : promptSettings;
+
+  return {
+    tailorResumeStep2ExperienceChat:
+      readString(values.tailorResumeStep2ExperienceChat) || null,
+  };
+}
+
 export function readPersonalInfoSummary(input: {
   applicationsPayload: unknown;
   tailorResumePayload: unknown;
@@ -1989,6 +2035,7 @@ export function readPersonalInfoSummary(input: {
       input.tailorResumePayload,
     ),
     originalResume: readOriginalResumeSummary(input.tailorResumePayload),
+    promptSettings: readTailorResumePromptSettingsSummary(input.tailorResumePayload),
     syncState: readUserSyncStateSnapshot(input.tailorResumePayload),
     skillData: readTailorResumeStoredSkillData(payloadRecord.skillData),
     tailoredResumes: tailorResumeProfile?.tailoredResumes ?? [],
@@ -2039,6 +2086,7 @@ export function readPersonalInfoPayload(value: unknown): PersonalInfoSummary {
         ? payloadRecord.originalResume
         : payloadRecord,
     ),
+    promptSettings: readTailorResumePromptSettingsSummary(payload),
     syncState:
       "syncState" in payloadRecord
         ? readUserSyncStateSnapshot(payloadRecord.syncState)

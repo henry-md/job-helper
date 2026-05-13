@@ -1,5 +1,6 @@
 import type {
   TailorResumeExistingTailoringState,
+  TailorResumeGenerationSettingsSummary,
   TailoredResumeEmphasizedTechnology,
   TailoredResumeKeywordCoverage,
   TailoredResumeSummary,
@@ -51,6 +52,7 @@ function isUsableCompletedTailoring(
 
 export function resolveTailoredResumeTabBadge(input: {
   activeTailorings: TailorResumeExistingTailoringState[];
+  generationSettings: TailorResumeGenerationSettingsSummary;
   pageIdentity: TailorOverwritePageIdentity;
   tailoredResumes: TailoredResumeSummary[];
 }): TailoredResumeTabBadgeSummary | null {
@@ -79,7 +81,6 @@ export function resolveTailoredResumeTabBadge(input: {
     ) ??
     input.tailoredResumes.find((resume) =>
       matchesTailorOverwritePageIdentity({
-        applicationId: resume.applicationId,
         jobUrl: resume.jobUrl,
         pageIdentity: input.pageIdentity,
       }),
@@ -93,7 +94,10 @@ export function resolveTailoredResumeTabBadge(input: {
     badgeKey: `tailored-resume:${completedTailoring.tailoredResumeId}`,
     companyName: completedTailoring.companyName,
     displayName: completedTailoring.displayName,
-    downloadName: buildCompanyResumeDownloadName(completedTailoring),
+    downloadName: buildCompanyResumeDownloadName(
+      completedTailoring,
+      input.generationSettings,
+    ),
     emphasizedTechnologies,
     jobUrl: completedTailoring.jobUrl,
     keywordCoverage:

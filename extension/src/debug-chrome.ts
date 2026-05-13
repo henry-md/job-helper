@@ -594,6 +594,15 @@ function readInitialExtensionPreferences(searchParams: URLSearchParams) {
   };
 }
 
+function readInitialPromptSettings(searchParams: URLSearchParams) {
+  const step2ExperienceChat =
+    searchParams.get("step2ExperienceChatPrompt")?.trim() ?? "";
+
+  return {
+    tailorResumeStep2ExperienceChat: step2ExperienceChat || null,
+  };
+}
+
 function readRequestBody(
   body: BodyInit | null | undefined,
 ): Record<string, unknown> {
@@ -710,6 +719,7 @@ export function installDebugChromeRuntime() {
   );
   const initialExtensionPreferences =
     readInitialExtensionPreferences(searchParams);
+  const initialPromptSettings = readInitialPromptSettings(searchParams);
 
   if (mockTailoringRun) {
     storage.set(LAST_TAILORING_STORAGE_KEY, mockTailoringRun);
@@ -794,6 +804,7 @@ export function installDebugChromeRuntime() {
         pdfUpdatedAt: new Date("2026-04-21T22:45:00.000Z").toISOString(),
         resumeUpdatedAt: new Date("2026-04-21T22:45:00.000Z").toISOString(),
       },
+      promptSettings: initialPromptSettings,
       syncState: emptyUserSyncStateSnapshot(),
       skillData: mockSkillData,
       tailoredResumes: mockTailoredResumes,
@@ -1436,6 +1447,45 @@ export function installDebugChromeRuntime() {
               tailoringInterview: null,
             },
             tailoredResumeIds: archivedResumeIds,
+          }),
+          {
+            headers: {
+              "Content-Type": "application/json",
+            },
+            status: 200,
+          },
+        );
+      }
+
+      if (action === "deleteAllTailoredResumeArtifacts") {
+        const requestedIds = Array.isArray(body.tailoredResumeIds)
+          ? body.tailoredResumeIds
+              .map((id) => (typeof id === "string" ? id.trim() : ""))
+              .filter(Boolean)
+          : [];
+        const requestedIdSet = new Set(requestedIds);
+        const deletedResumeIds =
+          requestedIds.length > 0
+            ? mockTailoredResumes
+                .filter((record) => requestedIdSet.has(record.id))
+                .map((record) => record.id)
+            : mockTailoredResumes
+                .filter((record) => !record.archivedAt)
+                .map((record) => record.id);
+        const deletedResumeIdSet = new Set(deletedResumeIds);
+
+        mockTailoredResumes = mockTailoredResumes.filter(
+          (record) => !deletedResumeIdSet.has(record.id),
+        );
+
+        return new Response(
+          JSON.stringify({
+            deletedCount: deletedResumeIds.length,
+            profile: {
+              tailoredResumes: mockTailoredResumes,
+              tailoringInterview: null,
+            },
+            tailoredResumeIds: deletedResumeIds,
           }),
           {
             headers: {

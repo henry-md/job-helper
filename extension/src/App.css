@@ -840,6 +840,7 @@ button:disabled {
 
 .settings-toggle-row {
   display: flex;
+  flex-wrap: wrap;
   width: 100%;
   min-height: 0;
   align-items: center;
@@ -1683,10 +1684,33 @@ button:disabled {
   align-self: flex-start;
 }
 
+.settings-toggle-switch {
+  flex: 0 0 auto;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted-strong);
+  background: rgba(255, 255, 255, 0.04);
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    color 0.16s ease;
+}
+
+.settings-toggle-switch-active {
+  border-color: rgba(16, 185, 129, 0.34);
+  color: rgb(167, 243, 208);
+  background: rgba(16, 185, 129, 0.14);
+}
+
 .settings-toggle-row-keyword {
   align-items: flex-start;
   padding-top: 10px;
   border-top: 1px solid var(--border);
+}
+
+.settings-toggle-row-keyword .settings-toggle-copy {
+  flex: 1 1 100%;
 }
 
 .settings-keyword-toggle-group {
@@ -1694,6 +1718,7 @@ button:disabled {
   align-self: flex-start;
   display: grid;
   min-width: 168px;
+  max-width: 100%;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -2535,6 +2560,15 @@ button:disabled {
   border-radius: 12px;
   background: rgba(196, 181, 253, 0.09);
   z-index: 1;
+}
+
+.tailor-run-answer-block-icon[role="button"] {
+  cursor: pointer;
+}
+
+.tailor-run-answer-block-icon[role="button"]:focus-visible {
+  outline: 2px solid rgba(167, 243, 208, 0.88);
+  outline-offset: 2px;
 }
 
 .tailor-run-answer-block svg {
@@ -3918,7 +3952,7 @@ button:disabled {
 
 .tailored-resume-archive-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 8px;
 }
@@ -3960,7 +3994,8 @@ button:disabled {
   background: var(--primary);
 }
 
-.tailored-resume-archive-all-action {
+.tailored-resume-archive-all-action,
+.tailored-resume-delete-all-action {
   min-height: 36px;
   padding: 0 10px;
 }
@@ -5185,7 +5220,9 @@ button:disabled {
     width: 100%;
   }
 
-  .tailored-resume-archive-all-action {
+  .tailored-resume-archive-all-action,
+  .tailored-resume-delete-all-action,
+  .tailored-resume-retry-all-action {
     width: auto;
   }
 }

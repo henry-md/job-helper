@@ -10,9 +10,12 @@ function buildPersonalInfo() {
     companyCount: 0,
     generationSettings: {
       allowTailorResumeFollowUpQuestions: true,
+      customResumeDownloadName: "Resume",
       includeLowPriorityTermsInKeywordCoverage: false,
+      ludicrousMode: false,
       preventPageCountIncrease: true,
-      version: 2,
+      useCustomResumeDownloadName: false,
+      version: 4,
     },
     originalResume: {
       error: null,
@@ -20,6 +23,9 @@ function buildPersonalInfo() {
       latexStatus: null,
       pdfUpdatedAt: null,
       resumeUpdatedAt: null,
+    },
+    promptSettings: {
+      tailorResumeStep2ExperienceChat: null,
     },
     skillData: {
       keywordClassifications: [],

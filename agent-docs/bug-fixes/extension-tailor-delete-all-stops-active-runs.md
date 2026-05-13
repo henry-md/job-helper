@@ -1,0 +1,4 @@
+- Symptom: the extension Tailor tab could show active/pending run cards while `Delete all` stayed disabled because the button only counted saved unarchived resumes.
+- Root cause: bulk delete only targeted completed profile artifacts and did not cancel or remove currently running Tailor Resume work.
+- Fix: count active run cards as bulk-delete targets, have the extension abort local/background in-flight requests before deletion, and have the API bulk-delete action cancel/remove active run/interview records in the same operation.
+- Guardrail: `Delete all` should be unavailable only when there are no active/pending Tailor runs and no unarchived saved tailored resumes.
