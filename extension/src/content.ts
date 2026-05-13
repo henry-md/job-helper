@@ -20,6 +20,7 @@ type TailoredResumeBadgePayload = {
   emphasizedTechnologies?: TailoredResumeEmphasizedTechnologyPayload[];
   includeLowPriorityTermsInKeywordCoverage?: boolean;
   jobUrl?: string;
+  keywordState?: "empty" | "loading";
   keywordCoverage?: TailoredResumeKeywordCoveragePayload | null;
   nonTechnologies?: string[];
   nonTechnologyNames?: string[];
@@ -949,6 +950,11 @@ function ensurePagePromptStyles() {
     #${emphasizedTechnologyBadgeRootId} summary::marker {
       content: "";
     }
+    @keyframes job-helper-keyword-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
   `;
   document.documentElement.appendChild(style);
 }
@@ -1292,6 +1298,44 @@ function updateBadgePayloadKeywordClassification(input: {
   );
 }
 
+// Renames a keyword in the currently shown badge while keeping its bucket state.
+function updateBadgePayloadKeywordName(input: {
+  newName: string;
+  oldName: string;
+  payload: TailoredResumeBadgePayload;
+}) {
+  const normalizedNewName = normalizeNonTechnologyTerm(input.newName);
+  const normalizedOldName = normalizeNonTechnologyTerm(input.oldName);
+
+  if (!normalizedNewName || !normalizedOldName) {
+    return;
+  }
+
+  const technologies = input.payload.emphasizedTechnologies ?? [];
+  const renamedTechnologies = technologies.map((technology) =>
+    normalizeNonTechnologyTerm(technology.name) === normalizedOldName
+      ? {
+          ...technology,
+          name: input.newName,
+        }
+      : technology,
+  );
+  const technologiesByName = new Map<
+    string,
+    TailoredResumeEmphasizedTechnologyPayload
+  >();
+
+  for (const technology of renamedTechnologies) {
+    const normalizedName = normalizeNonTechnologyTerm(technology.name);
+
+    if (normalizedName) {
+      technologiesByName.set(normalizedName, technology);
+    }
+  }
+
+  input.payload.emphasizedTechnologies = [...technologiesByName.values()];
+}
+
 function appendDraggableKeywordMatrix(
   container: HTMLElement,
   payload: TailoredResumeBadgePayload,
@@ -1329,6 +1373,7 @@ function appendDraggableKeywordMatrix(
   const grid = document.createElement("div");
   const matrix = document.createElement("div");
   const nonSkillSection = document.createElement("div");
+  const editDragThresholdPx = 6;
 
   styleElement(grid, {
     display: "grid",
@@ -1349,9 +1394,12 @@ function appendDraggableKeywordMatrix(
   });
 
   function createChip(technology: Required<TailoredResumeEmphasizedTechnologyPayload>) {
-    const chip = document.createElement("button");
+    const chip = document.createElement("div");
     const label = document.createElement("span");
     const handle = document.createElement("span");
+    let didDrag = false;
+    let isEditing = false;
+    let pointerStart: { x: number; y: number } | null = null;
     const coverageTone = readTechnologyKeywordCoverageTone(
       technology,
       coverageTones,
@@ -1407,28 +1455,31 @@ function appendDraggableKeywordMatrix(
       titleParts.push(technology.evidence);
     }
 
-    chip.type = "button";
+    chip.tabIndex = 0;
     chip.draggable = true;
+    chip.role = "button";
     chip.dataset.keywordName = technology.name;
+    chip.setAttribute("aria-label", `Edit or drag ${technology.name}`);
     if (coverageTone) {
       chip.dataset.keywordCoverageTone = coverageTone;
     }
-    chip.title = titleParts.join(" - ") || "Drag to change classification";
+    chip.title = titleParts.join(" - ") || "Click to edit. Drag to change classification.";
     styleElement(chip, {
       alignItems: "center",
       appearance: "none",
       background: chipBackground,
       border: chipBorder,
       borderRadius: "999px",
+      boxSizing: "border-box",
       color: chipColor,
       cursor: "grab",
       display: "inline-flex",
-      font: "650 12px/1.35 Inter, ui-sans-serif, system-ui, sans-serif",
-      gap: "6px",
+      font: "650 12px/1 Inter, ui-sans-serif, system-ui, sans-serif",
+      gap: "4px",
       maxWidth: "100%",
-      minHeight: "28px",
+      minHeight: "22px",
       overflowWrap: "anywhere",
-      padding: "5px 7px 5px 10px",
+      padding: "3px 6px 3px 8px",
       textAlign: "left",
     });
     styleElement(label, {
@@ -1438,13 +1489,171 @@ function appendDraggableKeywordMatrix(
     styleElement(handle, {
       color: "rgba(244, 244, 245, 0.55)",
       flex: "0 0 auto",
-      fontSize: "13px",
+      fontSize: "11px",
       lineHeight: "1",
     });
     label.textContent = technology.name;
     handle.textContent = "↕";
     chip.append(label, handle);
+
+    function saveEditedName(rawName: string) {
+      const nextName = rawName.replace(/\s+/g, " ").trim();
+      const previousName = technology.name;
+
+      if (
+        !nextName ||
+        normalizeNonTechnologyTerm(nextName) ===
+          normalizeNonTechnologyTerm(previousName)
+      ) {
+        showEmphasizedTechnologyBadge(payload, badgeKey);
+        return;
+      }
+
+      updateBadgePayloadKeywordName({
+        newName: nextName,
+        oldName: previousName,
+        payload,
+      });
+      rememberKeywordClassificationOverride({
+        badgeKey,
+        kind: technology.classification,
+        name: nextName,
+        payload,
+        priority: technology.priority,
+      });
+      void enqueueKeywordClassificationSave({
+        kind: technology.classification,
+        name: nextName,
+        priority:
+          technology.classification === "non_skill"
+            ? null
+            : technology.priority,
+      });
+      showEmphasizedTechnologyBadge(payload, badgeKey);
+    }
+
+    function beginEdit() {
+      if (isEditing) {
+        return;
+      }
+
+      isEditing = true;
+      chip.draggable = false;
+      const textarea = document.createElement("textarea");
+      let editFinished = false;
+
+      function finishEdit(nextValue: string | null) {
+        if (editFinished) {
+          return;
+        }
+
+        editFinished = true;
+
+        if (nextValue === null) {
+          showEmphasizedTechnologyBadge(payload, badgeKey);
+          return;
+        }
+
+        saveEditedName(nextValue);
+      }
+
+      textarea.value = technology.name;
+      textarea.rows = 1;
+      textarea.setAttribute("aria-label", `Edit ${technology.name}`);
+      styleElement(textarea, {
+        appearance: "none",
+        background: "rgba(9, 9, 11, 0.72)",
+        border: "0",
+        borderRadius: "8px",
+        boxSizing: "border-box",
+        color: "inherit",
+        font: "inherit",
+        margin: "-2px 0",
+        maxWidth: "180px",
+        minHeight: "22px",
+        minWidth: "90px",
+        outline: "1px solid rgba(110, 231, 183, 0.52)",
+        overflow: "hidden",
+        padding: "2px 3px",
+        resize: "none",
+      });
+      chip.replaceChildren(textarea);
+      textarea.focus();
+      textarea.select();
+      textarea.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+      textarea.addEventListener("pointerdown", (event) => {
+        event.stopPropagation();
+      });
+      textarea.addEventListener("dragstart", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      textarea.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          finishEdit(textarea.value);
+        }
+
+        if (event.key === "Escape") {
+          event.preventDefault();
+          finishEdit(null);
+        }
+      });
+      textarea.addEventListener("blur", () => {
+        finishEdit(textarea.value);
+      });
+    }
+
+    chip.addEventListener("pointerdown", (event) => {
+      if (isEditing) {
+        return;
+      }
+
+      didDrag = false;
+      pointerStart = {
+        x: event.clientX,
+        y: event.clientY,
+      };
+    });
+    chip.addEventListener("pointermove", (event) => {
+      if (!pointerStart || isEditing) {
+        return;
+      }
+
+      if (
+        Math.hypot(
+          event.clientX - pointerStart.x,
+          event.clientY - pointerStart.y,
+        ) > editDragThresholdPx
+      ) {
+        didDrag = true;
+      }
+    });
+    chip.addEventListener("pointerup", () => {
+      pointerStart = null;
+    });
+    chip.addEventListener("click", (event) => {
+      event.preventDefault();
+
+      if (didDrag || isEditing) {
+        didDrag = false;
+        return;
+      }
+
+      beginEdit();
+    });
+    chip.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== "F2") {
+        return;
+      }
+
+      event.preventDefault();
+      beginEdit();
+    });
     chip.addEventListener("dragstart", (event) => {
+      didDrag = true;
       event.dataTransfer?.setData("text/plain", technology.name);
       event.dataTransfer?.setData("application/x-job-helper-keyword", technology.name);
       if (event.dataTransfer) {
@@ -1454,6 +1663,10 @@ function appendDraggableKeywordMatrix(
     });
     chip.addEventListener("dragend", () => {
       chip.style.opacity = "1";
+      pointerStart = null;
+      window.setTimeout(() => {
+        didDrag = false;
+      }, 0);
     });
 
     return chip;
@@ -1914,11 +2127,6 @@ function showEmphasizedTechnologyBadge(
   const dismissalKey = resolveKeywordBadgeDismissalKey(payload, badgeKey);
   lastShownKeywordBadgePayload = { badgeKey, payload };
 
-  if (technologies.length === 0) {
-    hideEmphasizedTechnologyBadge();
-    return;
-  }
-
   if (dismissedKeywordBadgeKeys.has(dismissalKey)) {
     hideEmphasizedTechnologyBadge();
     return;
@@ -1964,7 +2172,62 @@ function showEmphasizedTechnologyBadge(
     void rememberDismissedKeywordBadgeKey(dismissalKey);
     hideEmphasizedTechnologyBadge();
   });
-  if (!appendKeywordCoverageDisclosure(groups, payload, badgeKey, technologies)) {
+  if (technologies.length === 0) {
+    const emptyState = document.createElement("div");
+    const emptyHeader = document.createElement("div");
+    const loadingIcon = document.createElement("span");
+    const emptyTitle = document.createElement("div");
+    const emptyCopy = document.createElement("p");
+    const isLoadingKeywords = payload.keywordState === "loading";
+
+    styleElement(emptyState, {
+      background: "rgba(244, 244, 245, 0.04)",
+      border: "1px solid rgba(244, 244, 245, 0.1)",
+      borderRadius: "12px",
+      display: "grid",
+      gap: "5px",
+      padding: "12px",
+    });
+    styleElement(emptyHeader, {
+      alignItems: "center",
+      display: "flex",
+      gap: "8px",
+      minWidth: "0",
+    });
+    styleElement(loadingIcon, {
+      animation: "job-helper-keyword-spin 850ms linear infinite",
+      border: "2px solid rgba(110, 231, 183, 0.24)",
+      borderRadius: "999px",
+      borderTopColor: "#6ee7b7",
+      display: isLoadingKeywords ? "inline-block" : "none",
+      flex: "0 0 auto",
+      height: "14px",
+      width: "14px",
+    });
+    styleElement(emptyTitle, {
+      color: "#f4f4f5",
+      fontSize: "13px",
+      fontWeight: "800",
+      lineHeight: "1.25",
+      minWidth: "0",
+    });
+    styleElement(emptyCopy, {
+      color: "#a1a1aa",
+      fontSize: "12px",
+      lineHeight: "1.35",
+      margin: "0",
+    });
+    emptyTitle.textContent = isLoadingKeywords
+      ? "Loading keywords..."
+      : "No saved keywords";
+    emptyCopy.textContent =
+      isLoadingKeywords
+        ? "Job Helper is scanning this posting for concrete resume keywords."
+        : "This tailored resume does not have any concrete job keywords saved yet.";
+    emptyHeader.append(loadingIcon, emptyTitle);
+    emptyState.append(emptyHeader, emptyCopy);
+    groups.append(emptyState);
+  } else if (!appendKeywordCoverageDisclosure(groups, payload, badgeKey, technologies)) {
     appendDraggableKeywordMatrix(groups, payload, badgeKey, technologies);
   }
   content.append(eyebrow);

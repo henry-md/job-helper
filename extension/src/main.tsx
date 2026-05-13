@@ -4,7 +4,11 @@ import App from "./App";
 import { installDebugChromeRuntime } from "./debug-chrome";
 import "./index.css";
 
-if (import.meta.env.DEV) {
+const shouldInstallDebugChromeRuntime =
+  import.meta.env.DEV ||
+  new URLSearchParams(globalThis.location.search).get("debugChrome") === "1";
+
+if (shouldInstallDebugChromeRuntime) {
   installDebugChromeRuntime();
 }
 

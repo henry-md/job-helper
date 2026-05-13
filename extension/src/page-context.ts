@@ -124,6 +124,117 @@ async function injectContentScript(tabId: number) {
   });
 }
 
+function collectPageContextInPage(): JobPageContext {
+  const cleanText = (value: string | null | undefined, maxLength = 24_000) =>
+    (value ?? "").replace(/\s+/g, " ").trim().slice(0, maxLength);
+  const uniqueStrings = (values: string[], limit: number) => {
+    const seen = new Set<string>();
+    const result: string[] = [];
+
+    for (const value of values) {
+      const normalizedValue = cleanText(value, 1_200);
+      const key = normalizedValue.toLowerCase();
+
+      if (!normalizedValue || seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      result.push(normalizedValue);
+
+      if (result.length >= limit) {
+        break;
+      }
+    }
+
+    return result;
+  };
+  const queryMetaContent = (selector: string) =>
+    cleanText(document.querySelector(selector)?.getAttribute("content"), 1_200);
+  const bodyText = cleanText(document.body?.innerText, 24_000);
+  const title = cleanText(document.title, 300);
+  const siteName =
+    queryMetaContent('meta[property="og:site_name"]') ||
+    queryMetaContent('meta[name="application-name"]');
+  const headings = uniqueStrings(
+    Array.from(document.querySelectorAll("h1, h2, h3")).map((heading) =>
+      cleanText(heading.textContent, 200),
+    ),
+    12,
+  );
+  const salaryMentions = uniqueStrings(
+    bodyText.match(
+      /(?:[$€£]\s?\d[\d,]*(?:\.\d+)?(?:\s?[kKmM])?(?:\s*(?:-|–|—|to)\s*(?:[$€£]\s?)?\d[\d,]*(?:\.\d+)?(?:\s?[kKmM])?)?(?:\s*(?:per year|a year|\/year|yearly|per hour|\/hr|hourly))?)/g,
+    ) ?? [],
+    8,
+  );
+  const locationCandidates = uniqueStrings(
+    bodyText
+      .split(/\n+/)
+      .filter((line) =>
+        /\b(remote|hybrid|onsite|on-site|in office|in-office)\b/i.test(line),
+      ),
+    8,
+  );
+  const employmentTypeCandidates = uniqueStrings(
+    bodyText.match(
+      /\b(full[- ]?time|part[- ]?time|contract|internship|temporary|intern)\b/gi,
+    ) ?? [],
+    8,
+  );
+  const titleCandidates = uniqueStrings(
+    [title.split("|")[0] ?? "", title.split("-")[0] ?? "", ...headings.slice(0, 4)],
+    8,
+  );
+  const topTextBlocks = uniqueStrings(
+    Array.from(
+      document.querySelectorAll(
+        "main, article, [role='main'], section, div[data-testid], div[class]",
+      ),
+    )
+      .map((element) => cleanText(element.textContent, 1_200))
+      .filter((text) => text.length >= 180)
+      .sort((left, right) => right.length - left.length),
+    10,
+  );
+
+  return {
+    canonicalUrl:
+      cleanText(document.querySelector("link[rel='canonical']")?.getAttribute("href")) ||
+      "",
+    companyCandidates: uniqueStrings([siteName], 8),
+    description:
+      queryMetaContent('meta[name="description"]') ||
+      queryMetaContent('meta[property="og:description"]'),
+    employmentTypeCandidates,
+    headings,
+    jsonLdJobPostings: [],
+    locationCandidates,
+    rawText: bodyText,
+    salaryMentions,
+    selectionText: cleanText(window.getSelection()?.toString(), 2_000),
+    siteName,
+    title,
+    titleCandidates,
+    topTextBlocks,
+    url: window.location.href,
+  };
+}
+
+async function collectPageContextWithOneShotScript(tabId: number) {
+  const [result] = await chrome.scripting.executeScript({
+    func: collectPageContextInPage,
+    target: { tabId },
+  });
+  const pageContext = result?.result;
+
+  if (!isJobPageContext(pageContext)) {
+    throw new Error("The page collector returned unusable page details.");
+  }
+
+  return pageContext;
+}
+
 export async function collectPageContextFromTab(
   tabId: number,
   messageType: PageContextMessageType,
@@ -134,13 +245,21 @@ export async function collectPageContextFromTab(
     try {
       await injectContentScript(tabId);
     } catch {
-      throw new Error(formatPageContextErrorMessage(firstError));
+      try {
+        return await collectPageContextWithOneShotScript(tabId);
+      } catch {
+        throw new Error(formatPageContextErrorMessage(firstError));
+      }
     }
   }
 
   try {
     return await requestPageContext(tabId, messageType);
   } catch (secondError) {
-    throw new Error(formatPageContextErrorMessage(secondError));
+    try {
+      return await collectPageContextWithOneShotScript(tabId);
+    } catch {
+      throw new Error(formatPageContextErrorMessage(secondError));
+    }
   }
 }

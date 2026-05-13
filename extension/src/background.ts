@@ -514,6 +514,7 @@ async function sendEmphasizedTechnologiesBadgeMessage(
       >;
       includeLowPriorityTermsInKeywordCoverage: boolean;
       jobUrl: string | null;
+      keywordState?: "empty" | "loading";
       keywordCoverage: unknown | null;
       nonTechnologyNames?: string[];
       tailoredResumeId?: string;
@@ -646,13 +647,15 @@ async function showStepOneKeywordBadge(input: {
     input.stepEvent,
   );
 
-  if (emphasizedTechnologies.length === 0) {
-    return;
-  }
-
   const pageApplicationContext = buildTailorResumeApplicationContext(
     input.pageContext,
   );
+  const keywordState =
+    emphasizedTechnologies.length > 0
+      ? undefined
+      : input.stepEvent.status === "running" || input.stepEvent.retrying
+        ? "loading"
+        : "empty";
 
   await sendEmphasizedTechnologiesBadgeMessage(input.tabId, {
     payload: {
@@ -664,6 +667,7 @@ async function showStepOneKeywordBadge(input: {
       emphasizedTechnologies,
       includeLowPriorityTermsInKeywordCoverage: false,
       jobUrl: readJobUrlFromPageContext(input.pageContext),
+      ...(keywordState ? { keywordState } : {}),
       keywordCoverage: null,
     },
     type: "JOB_HELPER_SHOW_EMPHASIZED_TECHNOLOGIES_BADGE",
@@ -1241,6 +1245,7 @@ async function refreshTailoredResumeBadgeForTab(
 
   const badge = resolveTailoredResumeTabBadge({
     activeTailorings: personalInfo.activeTailorings,
+    generationSettings: personalInfo.generationSettings,
     pageIdentity,
     tailoredResumes: personalInfo.tailoredResumes,
   });
@@ -1650,6 +1655,11 @@ async function cancelCurrentTailoring(input: {
 
   if (pageKey) {
     activeTailorResumeAbortControllers.delete(pageKey);
+  } else {
+    for (const controller of activeTailorResumeAbortControllers.values()) {
+      controller.abort();
+    }
+    activeTailorResumeAbortControllers.clear();
   }
 
   abortController?.abort();
@@ -1861,10 +1871,11 @@ async function downloadTailoredResumePdf(input: {
   }
 
   const filename = normalizeTailoredResumeDownloadName(
-    buildCompanyResumeDownloadName({
-      companyName: input.companyName,
-      displayName: input.displayName || input.downloadName,
-    }),
+    input.downloadName ||
+      buildCompanyResumeDownloadName({
+        companyName: input.companyName,
+        displayName: input.displayName,
+      }),
   );
   const session = await ensureJobHelperSession({ interactive: false });
   const response = await fetch(
