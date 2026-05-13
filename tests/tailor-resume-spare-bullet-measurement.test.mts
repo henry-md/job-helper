@@ -47,3 +47,30 @@ test("measureTailorResumeSpareBulletLineCount matches escaped tilde text", async
   assert.equal(measurement.malformed, false);
   assert.equal(measurement.targetSegmentId, experience.bulletSegmentIds[0]);
 });
+
+test("measureTailorResumeSpareBulletLineCount matches less-than latency text", async () => {
+  const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
+  const experience = extractTailorResumeResumeExperiences(
+    normalized.annotatedLatex,
+  ).find(
+    (candidate) =>
+      candidate.id === "work-experience.entry-4.heading" &&
+      candidate.bulletSegmentIds.length > 0,
+  );
+
+  assert.ok(
+    experience,
+    "Expected the fixture to expose the Johns Hopkins experience.",
+  );
+
+  const measurement = await measureTailorResumeSpareBulletLineCount({
+    quote:
+      "Built Go streaming microservice to ingest disaster-response sensor data at 1k msg/sec with <250ms end-to-end latency in dashboards.",
+    resumeExperienceId: experience.id,
+    sourceAnnotatedLatexCode: normalized.annotatedLatex,
+  });
+
+  assert.equal(measurement.lineCount, 2);
+  assert.equal(measurement.malformed, true);
+  assert.equal(measurement.targetSegmentId, experience.bulletSegmentIds[0]);
+});

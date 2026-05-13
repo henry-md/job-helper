@@ -265,8 +265,32 @@ function normalizeLayoutSpecialCharacters(value: string) {
 
 function normalizeLayoutText(value: string) {
   return normalizeLayoutSpecialCharacters(value)
+    .replace(/([A-Za-z])-\s+(?=[A-Za-z])/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function shouldSkipCompactLayoutCharacter(value: string, index: number) {
+  const currentCharacter = value[index] ?? "";
+
+  if (/\s/.test(currentCharacter) || currentCharacter === "•") {
+    return true;
+  }
+
+  if (currentCharacter !== "-") {
+    return false;
+  }
+
+  const previousCharacter = value[index - 1] ?? "";
+  let nextIndex = index + 1;
+
+  while (nextIndex < value.length && /\s/.test(value[nextIndex] ?? "")) {
+    nextIndex += 1;
+  }
+
+  const nextCharacter = value[nextIndex] ?? "";
+
+  return /[A-Za-z]/.test(previousCharacter) && /[A-Za-z]/.test(nextCharacter);
 }
 
 function appendNormalizedMatchCharacter(input: {
@@ -441,7 +465,9 @@ function addCompactIndex(
   for (let index = 0; index < documentIndex.normalizedText.length; index += 1) {
     const currentCharacter = documentIndex.normalizedText[index] ?? "";
 
-    if (!/\s/.test(currentCharacter) && currentCharacter !== "•") {
+    if (
+      !shouldSkipCompactLayoutCharacter(documentIndex.normalizedText, index)
+    ) {
       compactTextParts.push(currentCharacter);
       compactPositions.push(index);
       compactLength += 1;
@@ -544,7 +570,7 @@ function findNormalizedRange(input: {
   for (let index = 0; index < normalizedAnchorText.length; index += 1) {
     const currentCharacter = normalizedAnchorText[index] ?? "";
 
-    if (!/\s/.test(currentCharacter) && currentCharacter !== "•") {
+    if (!shouldSkipCompactLayoutCharacter(normalizedAnchorText, index)) {
       compactAnchorParts.push(currentCharacter);
       compactAnchorPositions.push(index);
     }

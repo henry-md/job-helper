@@ -594,12 +594,10 @@ function normalizeSkillNames(values: readonly string[] | null | undefined) {
   return [...skillsByNormalizedName.values()];
 }
 
-async function assertNoSpareBulletReplacementConflict(input: {
-  excludeSpareBulletId?: string | null;
+function assertSpareBulletReplacementTargetExists(input: {
   replacesQuote: string;
   resumeExperienceId: string;
   sourceAnnotatedLatexCode: string;
-  userId: string;
 }) {
   const target = findTailorResumeReplacementTarget({
     resumeExperienceId: input.resumeExperienceId,
@@ -611,44 +609,6 @@ async function assertNoSpareBulletReplacementConflict(input: {
     throw new Error(
       "Choose an experience with at least one bullet before saving a replacement bullet.",
     );
-  }
-
-  const existingModBullets =
-    await getPrismaClient().tailorResumeSpareBullet.findMany({
-      select: {
-        id: true,
-        replacesQuote: true,
-      },
-      where: {
-        id: input.excludeSpareBulletId
-          ? { not: input.excludeSpareBulletId }
-          : undefined,
-        replacesQuote: {
-          not: null,
-        },
-        resumeExperienceId: input.resumeExperienceId,
-        userId: input.userId,
-      },
-    });
-
-  for (const existingBullet of existingModBullets) {
-    const existingTarget = existingBullet.replacesQuote
-      ? findTailorResumeReplacementTarget({
-          resumeExperienceId: input.resumeExperienceId,
-          sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode,
-          sourceQuote: existingBullet.replacesQuote,
-        })
-      : null;
-
-    if (existingTarget?.segmentId === target.segmentId) {
-      throw new Error(
-        [
-          "Only one replacement spare bullet can target a source bullet.",
-          `Both replacements currently match ${target.segmentId} (${Math.round(target.confidence * 100)}% confidence).`,
-          "Edit the existing spare bullet to cover multiple skills-section keywords, or choose a different source bullet.",
-        ].join(" "),
-      );
-    }
   }
 }
 
@@ -765,12 +725,10 @@ export async function saveTailorResumeSpareBullet(input: {
   }
 
   if (replacesQuote) {
-    await assertNoSpareBulletReplacementConflict({
-      excludeSpareBulletId: input.id,
+    assertSpareBulletReplacementTargetExists({
       replacesQuote,
       resumeExperienceId,
       sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode,
-      userId: input.userId,
     });
   }
 
@@ -959,6 +917,7 @@ export async function buildTailorResumeSkillEvidenceMarkdown(input: {
   return [
     "## Structured skills-section keyword support",
     "The following entries come from first-class skills-section support objects, not USER.md. Treat quoted spare bullets as user-approved evidence candidates.",
+    "**** **WARNING: IF MULTIPLE SAVED REPLACEMENT BULLETS TARGET THE SAME SOURCE BULLET, TREAT THEM AS ALTERNATIVES UNLESS YOU INTENTIONALLY PLAN ONE MULTI-BULLET REPLACEMENT.** ****",
     ...sections,
   ].join("\n\n");
 }

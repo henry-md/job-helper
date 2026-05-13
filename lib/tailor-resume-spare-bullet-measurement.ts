@@ -12,7 +12,7 @@ import {
 } from "./tailor-resume-spare-bullet-line-display.ts";
 
 function escapePlainTextForLatex(value: string) {
-  return value.replace(/[\\{}#%&$_^~]/g, (character) => {
+  return value.replace(/[\\{}#%&$_^~<>]/g, (character) => {
     switch (character) {
       case "\\":
         return String.raw`\textbackslash{}`;
@@ -34,6 +34,10 @@ function escapePlainTextForLatex(value: string) {
         return String.raw`\^{}`;
       case "~":
         return String.raw`\~{}`;
+      case "<":
+        return String.raw`\textless{}`;
+      case ">":
+        return String.raw`\textgreater{}`;
       default:
         return character;
     }

@@ -611,7 +611,7 @@ function buildTailorResumeSingleSkillQueryToolOutput(input: {
       mode: input.mode,
       result: buildTailorResumeSkillQueryResult(input),
       nextAction:
-        "Use this single top saved resume-bullet support result as evidence if it is relevant. If result is null, do not invent support for that query.",
+        "Use this single top saved resume-bullet support result as evidence if it is relevant. If result is null, do not invent support for that query. **** **WARNING: IF MULTIPLE SAVED REPLACEMENT BULLETS TARGET THE SAME SOURCE BULLET, TREAT THEM AS ALTERNATIVES UNLESS YOU INTENTIONALLY PLAN ONE MULTI-BULLET REPLACEMENT.** ****",
     },
     null,
     2,
@@ -636,7 +636,7 @@ function buildTailorResumeBatchSkillQueryToolOutput(input: {
         }),
       })),
       nextAction:
-        "Use each top saved resume-bullet support result only when it is relevant. Null means no saved resume-bullet support matched that query.",
+        "Use each top saved resume-bullet support result only when it is relevant. Null means no saved resume-bullet support matched that query. **** **WARNING: IF MULTIPLE SAVED REPLACEMENT BULLETS TARGET THE SAME SOURCE BULLET, TREAT THEM AS ALTERNATIVES UNLESS YOU INTENTIONALLY PLAN ONE MULTI-BULLET REPLACEMENT.** ****",
     },
     null,
     2,

@@ -128,7 +128,7 @@ Tailor Resume object model:
   - `replacesQuote`: nullable; when present, this is a modified-bullet support record and the model should replace the closest current source bullet in the required resume experience
   - `resumeExperienceId`: required; derived from the annotated LaTeX heading segment for the owning experience/project
   - many-to-many skills-section keywords through `TailorResumeSpareBulletSkill`
-- On spare-bullet save, mod bullets are fuzzily matched within the selected resume experience and rejected if another mod already targets the same top current bullet. This keeps the stored state from having two replacement bullets for one source bullet.
+- On spare-bullet save, modified bullets are fuzzily matched within the selected resume experience to confirm the quoted source belongs to a real current bullet. Multiple saved replacements may target the same source bullet when they support different skills-section keywords.
 - Resume experiences are not stored as durable rows yet. They are scanned from the current annotated LaTeX so heading edits/order changes do not require maintaining another synchronized object graph.
 - The extension top-level resume chat can create these same durable records through server-side tool calls. Its prompt should treat `skills_section` as "could go in the resume Skills section" first and use tools rather than prose whenever the user asks to save skills-section support.
 
