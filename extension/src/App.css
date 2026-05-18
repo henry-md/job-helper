@@ -2310,6 +2310,50 @@ button:disabled {
   align-self: center;
 }
 
+.current-page-archived-resume-suggestion {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 11px 12px;
+  border: 1px solid rgba(251, 191, 36, 0.26);
+  border-radius: 15px;
+  background: rgba(251, 191, 36, 0.08);
+}
+
+.current-page-archived-resume-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.current-page-archived-resume-title,
+.current-page-archived-resume-detail {
+  margin: 0;
+}
+
+.current-page-archived-resume-title {
+  color: #fde68a;
+  font-size: 11px;
+  font-weight: 760;
+  letter-spacing: 0.14em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.current-page-archived-resume-detail {
+  color: rgba(244, 244, 245, 0.88);
+  font-size: 12px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.current-page-archived-resume-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .tailor-progress-copy-terminal {
   gap: 2px;
   padding: 0;
@@ -3952,13 +3996,29 @@ button:disabled {
 
 .tailored-resume-archive-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+}
+
+.tailored-resume-retry-all-shell {
+  display: contents;
+}
+
+.tailored-resume-retry-all-options {
+  display: contents;
+}
+
+.tailored-resume-retry-all-options .compact-action {
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 4px;
+  width: 100%;
 }
 
 .tailored-resume-filter-toggle {
   display: grid;
+  grid-column: 1 / -1;
   min-width: 0;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 3px;
@@ -3979,6 +4039,21 @@ button:disabled {
   box-shadow: none;
   font-size: 12px;
   transform: none;
+}
+
+.tailored-resume-archive-all-action,
+.tailored-resume-delete-all-action {
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 4px;
+  width: 100%;
+}
+
+.tailored-resume-archive-controls .compact-action {
+  font-size: 13px;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: clip;
 }
 
 .tailored-resume-filter-option:hover:not(:disabled) {
@@ -5186,8 +5261,17 @@ button:disabled {
 
 @media (max-width: 340px) {
   .action-grid,
+  .current-page-archived-resume-suggestion,
   .interview-actions {
     grid-template-columns: 1fr;
+  }
+
+  .current-page-archived-resume-actions {
+    justify-content: stretch;
+  }
+
+  .current-page-archived-resume-actions .compact-action {
+    flex: 1 1 0;
   }
 
   .settings-toggle-row {
@@ -5224,5 +5308,9 @@ button:disabled {
   .tailored-resume-delete-all-action,
   .tailored-resume-retry-all-action {
     width: auto;
+  }
+
+  .tailored-resume-retry-all-options .compact-action {
+    width: 100%;
   }
 }

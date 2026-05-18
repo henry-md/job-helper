@@ -4020,6 +4020,8 @@ function App() {
   ] = useState(false);
   const [isRetryingAllTailorRuns, setIsRetryingAllTailorRuns] =
     useState(false);
+  const [retryingTailorRunBatchScope, setRetryingTailorRunBatchScope] =
+    useState<"inFlight" | "all" | null>(null);
   const [tailoredResumeMutationError, setTailoredResumeMutationError] =
     useState<string | null>(null);
   const [tailoringRunsByKey, setTailoringRunsByKey] = useState<
@@ -5122,6 +5124,21 @@ function App() {
             tailoredResume.id === currentPageCompletedTailoring.tailoredResumeId,
         ) ?? null
       : null);
+  const currentPageArchivedTailoredResume =
+    currentPageCompletedTailoredResume
+      ? null
+      : resolveTailoredResumeByComparableUrl({
+          candidates: [
+            currentPageCompletedTailoring?.jobUrl ?? null,
+            currentPageStoredTailoringRun?.pageUrl ?? null,
+            currentPageUrl,
+            currentPageIdentity?.jobUrl ?? null,
+            currentPageIdentity?.canonicalUrl ?? null,
+            currentPageIdentity?.pageUrl ?? null,
+            currentPageResolvedRegistryKey,
+          ],
+          tailoredResumes: archivedTailoredResumes,
+        });
   const hasCurrentPageCompletedTailoring =
     Boolean(currentPageCompletedTailoredResume);
   const currentActiveTailorRunCard = buildCurrentActiveTailorRunCard({
@@ -5414,19 +5431,29 @@ function App() {
 
     return Boolean(targetUrl);
   });
+  const retryableUnarchivedTailoredResumes =
+    displayedUnarchivedTailoredResumes.filter((tailoredResume) =>
+      Boolean(tailoredResume.jobUrl?.trim()),
+    );
   const hasBackgroundTailorRunAction =
     Object.keys(backgroundTailorRunActionStates).length > 0;
-  const canRetryAllTailorRuns =
+  const canRetryTailorRunBatch =
     authState.status === "signedIn" &&
     personalInfoState.status === "ready" &&
-    retryableTailorRunCards.length > 0 &&
     !isRetryingAllTailorRuns &&
     tailorRunMenuActionState === "idle" &&
+    tailoredResumeMenuActionState === "idle" &&
     !hasBackgroundTailorRunAction &&
     !isStoppingCurrentTailoring &&
     !isDeletingAllTailoredResumes &&
     authActionState !== "running" &&
     !isDeletingPersonalItem;
+  const canRetryInFlightTailorRuns =
+    canRetryTailorRunBatch && retryableTailorRunCards.length > 0;
+  const canRetryAllTailorRuns =
+    canRetryTailorRunBatch &&
+    (retryableTailorRunCards.length > 0 ||
+      retryableUnarchivedTailoredResumes.length > 0);
   const canArchiveAllTailoredResumes =
     authState.status === "signedIn" &&
     personalInfoState.status === "ready" &&
@@ -5846,6 +5873,7 @@ function App() {
     displayedUnarchivedTailoredResumes.length > 0 ||
     activeTailorRunCards.length > 0 ||
     Boolean(pageCaptureFailureRun) ||
+    Boolean(currentPageArchivedTailoredResume) ||
     shouldRenderLegacyTailorRunShell;
   const shouldRenderUnarchivedResumeEmptySurface =
     authState.status === "signedIn" &&
@@ -10744,23 +10772,33 @@ function App() {
     }
   }
 
-  async function retryAllTailorRuns() {
-    if (!canRetryAllTailorRuns) {
+  async function retryTailorRunBatch(scope: "inFlight" | "all") {
+    const canRetryRequestedBatch =
+      scope === "inFlight" ? canRetryInFlightTailorRuns : canRetryAllTailorRuns;
+
+    if (!canRetryRequestedBatch) {
       return;
     }
 
     const cardsToRetry = retryableTailorRunCards;
+    const resumesToRetry =
+      scope === "all" ? retryableUnarchivedTailoredResumes : [];
 
-    if (cardsToRetry.length === 0) {
+    if (cardsToRetry.length === 0 && resumesToRetry.length === 0) {
       return;
     }
 
     setIsRetryingAllTailorRuns(true);
+    setRetryingTailorRunBatchScope(scope);
     setTailorRunMenuError(null);
     setBackgroundTailorRunMenuError(null);
     setBackgroundTailorRunMenuErrorCardId(null);
+    setTailoredResumeMenuError(null);
+    setTailoredResumeMenuErrorResumeId(null);
     setIsTailorRunMenuOpen(false);
     setBackgroundTailorRunMenuId(null);
+    setTailoredResumeMenuId(null);
+    setTailoredResumeMenuPosition(null);
 
     try {
       for (const card of cardsToRetry) {
@@ -10770,8 +10808,13 @@ function App() {
           await handleRetryBackgroundTailorRun(card);
         }
       }
+
+      for (const tailoredResume of resumesToRetry) {
+        await handleRetryTailoredResumeFromMenu(tailoredResume);
+      }
     } finally {
       setIsRetryingAllTailorRuns(false);
+      setRetryingTailorRunBatchScope(null);
     }
   }
 
@@ -12057,19 +12100,42 @@ function App() {
             Archived
           </button>
         </div>
-        <button
-          className="secondary-action compact-action tailored-resume-retry-all-action"
-          disabled={!canRetryAllTailorRuns}
-          title={
-            retryableTailorRunCards.length > 0
-              ? "Retry every active tailoring run"
-              : "No active tailoring runs to retry"
-          }
-          type="button"
-          onClick={() => void retryAllTailorRuns()}
-        >
-          {isRetryingAllTailorRuns ? "Retrying..." : "Retry all"}
-        </button>
+        <div className="tailored-resume-retry-all-shell">
+          <div
+            aria-label="Retry tailoring runs"
+            className="tailored-resume-retry-all-options"
+            role="group"
+          >
+            <button
+              className="secondary-action compact-action"
+              disabled={!canRetryInFlightTailorRuns}
+              title={
+                retryableTailorRunCards.length > 0
+                  ? "Retry in-flight tailoring runs"
+                  : "No in-flight tailoring runs to retry"
+              }
+              type="button"
+              onClick={() => void retryTailorRunBatch("inFlight")}
+            >
+              {retryingTailorRunBatchScope === "inFlight"
+                ? "Retrying..."
+                : "Retry in-flight"}
+            </button>
+            <button
+              className="secondary-action compact-action"
+              disabled={!canRetryAllTailorRuns}
+              title={
+                canRetryAllTailorRuns
+                  ? "Retry every unarchived tailoring run"
+                  : "No unarchived tailoring runs to retry"
+              }
+              type="button"
+              onClick={() => void retryTailorRunBatch("all")}
+            >
+              {retryingTailorRunBatchScope === "all" ? "Retrying..." : "Retry all"}
+            </button>
+          </div>
+        </div>
         <button
           className="secondary-action compact-action tailored-resume-archive-all-action"
           disabled={!canArchiveAllTailoredResumes}
@@ -12088,6 +12154,72 @@ function App() {
         >
           {isDeletingAllTailoredResumes ? "Deleting..." : "Delete all"}
         </button>
+      </div>
+    );
+  }
+
+  function renderCurrentPageArchivedTailoredResumeSuggestion() {
+    if (!currentPageArchivedTailoredResume || isShowingArchivedTailoredResumes) {
+      return null;
+    }
+
+    const isActionPending = tailoredResumeArchiveActionIds.has(
+      currentPageArchivedTailoredResume.id,
+    );
+    const displayName =
+      currentPageArchivedTailoredResume.displayName.trim().toLowerCase() ===
+      "tailored resume"
+        ? buildTailoredResumeDownloadFilename(
+            currentPageArchivedTailoredResume,
+            personalInfo?.generationSettings,
+          )
+        : currentPageArchivedTailoredResume.displayName;
+    const restoreDisabled =
+      authActionState === "running" ||
+      isDeletingPersonalItem ||
+      isArchivingAllTailoredResumes ||
+      isDeletingAllTailoredResumes ||
+      isActionPending;
+
+    return (
+      <div className="current-page-archived-resume-suggestion">
+        <div className="current-page-archived-resume-copy">
+          <p className="current-page-archived-resume-title">
+            Archived resume for this job
+          </p>
+          <p className="current-page-archived-resume-detail">
+            {displayName} is archived. Restore it to bring it back into your
+            active tailored resumes.
+          </p>
+        </div>
+        <div className="current-page-archived-resume-actions">
+          <button
+            className="secondary-action compact-action"
+            disabled={authActionState === "running"}
+            type="button"
+            onClick={() =>
+              openTailoredResumeDetailView(
+                currentPageArchivedTailoredResume.id,
+                "quickReview",
+              )
+            }
+          >
+            View
+          </button>
+          <button
+            className="primary-action compact-action"
+            disabled={restoreDisabled}
+            type="button"
+            onClick={() =>
+              void setTailoredResumeArchivedState({
+                archived: false,
+                tailoredResumeId: currentPageArchivedTailoredResume.id,
+              })
+            }
+          >
+            {isActionPending ? "Restoring..." : "Restore"}
+          </button>
+        </div>
       </div>
     );
   }
@@ -12130,6 +12262,7 @@ function App() {
         className="tailor-resume-library-surface"
       >
         <div className="tailored-resume-card-stack">
+          {renderCurrentPageArchivedTailoredResumeSuggestion()}
           {renderPageCaptureFailureNotice()}
           {legacyTailorRunShell}
           {activeTailorRunCards.length > 0 ? (
