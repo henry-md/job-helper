@@ -61,6 +61,7 @@ Retry model:
 - Planning can retry independently if the structured plan is empty or malformed.
 - Step 4A block-scoped implementation retries stay local to the selected segments and compile validation.
 - Step 4B page-count compaction retries stay local to the edited blocks until the preview fits or the attempt budget is exhausted, and they use their own retry budget instead of borrowing the generic edit-stage retry count.
+- Steps 3, 4A, and 4B each have a five-minute wall-clock timeout. A timeout emits a failed step event with no retry and lets the route mark the run terminally failed.
 - Design goal: retry the failing stage, not the entire pipeline.
 
 Failure logging:

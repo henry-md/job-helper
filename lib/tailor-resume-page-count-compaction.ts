@@ -30,7 +30,11 @@ import {
 } from "./tailor-resume-rendered-bullet-health.ts";
 import { buildTailoredResumeBlockEdits } from "./tailor-resume-review.ts";
 import { stripTailorResumeSegmentIds } from "./tailor-resume-segmentation.ts";
-import { applyTailorResumeBlockChanges } from "./tailor-resume-tailoring.ts";
+import {
+  applyTailorResumeBlockChanges,
+  createTailorResumeStepTimeout,
+  isTailorResumeStepTimeoutError,
+} from "./tailor-resume-tailoring.ts";
 import {
   resolveTailoredResumeCurrentEditLatexCode,
 } from "./tailor-resume-edit-history.ts";
@@ -63,6 +67,15 @@ type TailorResumeCompactionResponse = {
   output?: TailorResumeCompactionOutputItem[];
   output_text?: string;
 };
+
+function resolveTailorResumeCompactionModel(inputModel?: string) {
+  return (
+    inputModel ??
+    process.env.OPENAI_TAILOR_RESUME_COMPACTION_MODEL ??
+    process.env.OPENAI_TAILOR_RESUME_MODEL ??
+    "gpt-5-mini"
+  );
+}
 
 type TailorResumeCompactionOutputItem = {
   arguments?: string;
@@ -1342,6 +1355,7 @@ function buildCompactionInput(input: {
 }
 
 async function collectVerifiedCompactionCandidates(input: {
+  deadline: ReturnType<typeof createTailorResumeStepTimeout>;
   attemptHistory: TailorResumeCompactionAttemptHistoryEntry[];
   client: OpenAI;
   currentAnnotatedLatexCode: string;
@@ -1382,6 +1396,8 @@ async function collectVerifiedCompactionCandidates(input: {
   });
 
   for (let round = 1; round <= maxCompactionSelfCheckRounds; round += 1) {
+    input.deadline.assertNotTimedOut();
+    const timeout = input.deadline.createAbortSignal();
     const response = mapCompactionResponse(
       await runWithTransientModelRetries({
         operation: () =>
@@ -1407,7 +1423,18 @@ async function collectVerifiedCompactionCandidates(input: {
               tailorResumeBatchSkillQueryTool,
               tailorResumeLineReductionSubmissionTool,
             ],
-          }),
+          }, { signal: timeout.signal }),
+      }).catch((error) => {
+        if (timeout.signal.aborted) {
+          const reason = timeout.signal.reason;
+          throw isTailorResumeStepTimeoutError(reason)
+            ? reason
+            : error;
+        }
+
+        throw error;
+      }).finally(() => {
+        timeout.clear();
       }),
     );
 
@@ -1785,7 +1812,7 @@ export async function compactTailoredResumePageCount(input: {
       edits: input.edits,
       generationDurationMs: 0,
       latexCode: input.latexCode,
-      model: input.model ?? process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini",
+      model: resolveTailorResumeCompactionModel(input.model),
       pageCount: input.initialPageCount,
       previewPdf: input.previewPdf,
       validationError: null,
@@ -1811,7 +1838,7 @@ export async function compactTailoredResumePageCount(input: {
       edits: input.edits,
       generationDurationMs: 0,
       latexCode: input.latexCode,
-      model: input.model ?? process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini",
+      model: resolveTailorResumeCompactionModel(input.model),
       pageCount: input.initialPageCount,
       previewPdf: input.previewPdf,
       validationError: errorMessage,
@@ -1819,12 +1846,16 @@ export async function compactTailoredResumePageCount(input: {
   }
 
   const startedAt = Date.now();
+  const stepTimeout = createTailorResumeStepTimeout({
+    startedAt,
+    stepLabel: "Step 4B page-count compaction",
+  });
   const promptSettings = input.promptSettings ?? createDefaultSystemPromptSettings();
   const maxCompactionAttempts = Math.max(
     1,
     getRetryAttemptsToGeneratePageCountCompaction(),
   );
-  const model = input.model ?? process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
+  const model = resolveTailorResumeCompactionModel(input.model);
   const client = input.client ?? getOpenAIClient();
   const editableSegmentIds = new Set(input.edits.map((edit) => edit.segmentId));
   let workingEdits = input.edits.map((edit) => ({ ...edit }));
@@ -1906,25 +1937,46 @@ export async function compactTailoredResumePageCount(input: {
       targetPageCount,
     });
     const estimatedLinesToRecover = overflowEstimate.estimatedLinesToRecover;
-    const selfCheckResult = await collectVerifiedCompactionCandidates({
-      attemptHistory,
-      client,
-      currentAnnotatedLatexCode,
-      currentLayout,
-      currentPageCount,
-      editableSegmentIds,
-      emphasizedTechnologies: input.emphasizedTechnologies ?? [],
-      estimatedLinesToRecover,
-      jobDescription: input.jobDescription ?? "[not available]",
-      model,
-      promptSettings,
-      skillData: input.skillData,
-      sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode,
-      sourceLayout,
-      targetPageCount,
-      thesis: input.thesis,
-      workingEdits,
-    });
+    let selfCheckResult: TailorResumeCompactionSelfCheckResult;
+
+    try {
+      selfCheckResult = await collectVerifiedCompactionCandidates({
+        attemptHistory,
+        client,
+        currentAnnotatedLatexCode,
+        currentLayout,
+        currentPageCount,
+        deadline: stepTimeout,
+        editableSegmentIds,
+        emphasizedTechnologies: input.emphasizedTechnologies ?? [],
+        estimatedLinesToRecover,
+        jobDescription: input.jobDescription ?? "[not available]",
+        model,
+        promptSettings,
+        skillData: input.skillData,
+        sourceAnnotatedLatexCode: input.sourceAnnotatedLatexCode,
+        sourceLayout,
+        targetPageCount,
+        thesis: input.thesis,
+        workingEdits,
+      });
+    } catch (error) {
+      lastError =
+        error instanceof Error
+          ? error.message
+          : "Step 4B page-count compaction failed before producing candidates.";
+      await input.onStepEvent?.({
+        attempt,
+        detail: lastError,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        retrying: false,
+        status: "failed",
+        stepCount: 5,
+        stepNumber: 5,
+        summary: "Keeping the tailored resume within the original page count",
+      });
+      break;
+    }
 
     lastModel = selfCheckResult.model;
 

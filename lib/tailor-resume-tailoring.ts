@@ -189,7 +189,9 @@ const tailorResumeKeywordUsageToolName = "list_current_resume_keyword_usage";
 const tailorResumeMalformedBulletsToolName = "list_malformed_resume_bullets";
 const tailorResumeSingleSkillQueryToolName = "query_single_resume_skill";
 const tailorResumeBatchSkillQueryToolName = "batch_query_resume_skills";
-const maxTailorResumeToolCallsPerAttempt = 30;
+const maxTailorResumePlanningToolCallsPerAttempt = 12;
+const maxTailorResumeImplementationToolCallsPerAttempt = 30;
+export const tailorResumeStepTimeoutMs = 5 * 60 * 1000;
 
 const tailorResumePlanningKeywordCheckTool = {
   type: "function",
@@ -744,9 +746,11 @@ function buildRequiredKeywordCheckToolReminderInput(input: {
   ] satisfies TailorResumeStepResponseInput;
 }
 
-function findPlanningKeywordCheckToolCall(
+function findPlanningKeywordCheckToolCalls(
   response: TailoredResumeResponse,
-): TailorResumePlanningKeywordCheckToolCall | null {
+): TailorResumePlanningKeywordCheckToolCall[] {
+  const toolCalls: TailorResumePlanningKeywordCheckToolCall[] = [];
+
   for (const outputItem of response.output ?? []) {
     if (
       outputItem.type === "function_call" &&
@@ -754,15 +758,15 @@ function findPlanningKeywordCheckToolCall(
       typeof outputItem.call_id === "string" &&
       typeof outputItem.arguments === "string"
     ) {
-      return {
+      toolCalls.push({
         arguments: outputItem.arguments,
         call_id: outputItem.call_id,
         name: tailorResumePlanningKeywordCheckToolName,
-      };
+      });
     }
   }
 
-  return null;
+  return toolCalls;
 }
 
 function findImplementationKeywordCheckToolCall(
@@ -789,6 +793,14 @@ function findImplementationKeywordCheckToolCall(
 function findInspectionToolCall(
   response: TailoredResumeResponse,
 ): TailorResumeInspectionToolCall | null {
+  return findInspectionToolCalls(response)[0] ?? null;
+}
+
+function findInspectionToolCalls(
+  response: TailoredResumeResponse,
+): TailorResumeInspectionToolCall[] {
+  const toolCalls: TailorResumeInspectionToolCall[] = [];
+
   for (const outputItem of response.output ?? []) {
     if (
       outputItem.type === "function_call" &&
@@ -799,15 +811,15 @@ function findInspectionToolCall(
       typeof outputItem.call_id === "string" &&
       typeof outputItem.arguments === "string"
     ) {
-      return {
+      toolCalls.push({
         arguments: outputItem.arguments,
         call_id: outputItem.call_id,
         name: outputItem.name,
-      };
+      });
     }
   }
 
-  return null;
+  return toolCalls;
 }
 
 function parseTailorResumeSkillQueryMode(value: unknown) {
@@ -860,6 +872,69 @@ function readTrimmedStringArray(value: unknown) {
   }
 
   return [...new Set(value.map(readTrimmedString).filter(Boolean))];
+}
+
+export class TailorResumeStepTimeoutError extends Error {
+  constructor(stepLabel: string) {
+    super(`${stepLabel} exceeded the 5 minute step timeout.`);
+    this.name = "TailorResumeStepTimeoutError";
+  }
+}
+
+export function isTailorResumeStepTimeoutError(error: unknown) {
+  return error instanceof TailorResumeStepTimeoutError;
+}
+
+export function createTailorResumeStepTimeout(input: {
+  startedAt: number;
+  stepLabel: string;
+}) {
+  const readRemainingMs = () =>
+    Math.max(0, input.startedAt + tailorResumeStepTimeoutMs - Date.now());
+
+  const assertNotTimedOut = () => {
+    if (readRemainingMs() <= 0) {
+      throw new TailorResumeStepTimeoutError(input.stepLabel);
+    }
+  };
+
+  const createAbortSignal = () => {
+    assertNotTimedOut();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort(new TailorResumeStepTimeoutError(input.stepLabel));
+    }, readRemainingMs());
+
+    return {
+      signal: controller.signal,
+      clear: () => clearTimeout(timeout),
+    };
+  };
+
+  return {
+    assertNotTimedOut,
+    createAbortSignal,
+  };
+}
+
+function normalizeTailorResumeStepTimeoutError(input: {
+  error: unknown;
+  signal?: AbortSignal;
+  stepLabel: string;
+}) {
+  if (isTailorResumeStepTimeoutError(input.error)) {
+    return input.error;
+  }
+
+  if (input.signal?.aborted) {
+    const reason = input.signal.reason;
+
+    return isTailorResumeStepTimeoutError(reason)
+      ? reason
+      : new TailorResumeStepTimeoutError(input.stepLabel);
+  }
+
+  return input.error;
 }
 
 function parseKeywordCheckPlanningChanges(
@@ -3096,12 +3171,27 @@ type AnthropicMessagesResponse = {
   model?: string;
 };
 
-function appendAnthropicResponseInput(input: {
+function buildAnthropicRequestMessages(input: {
   messages: AnthropicMessage[];
   responseInput: TailorResumeStepResponseInput;
 }) {
+  const messages = [...input.messages];
+  let pendingToolResults: AnthropicToolResultContentBlock[] = [];
+  const flushPendingToolResults = () => {
+    if (pendingToolResults.length === 0) {
+      return;
+    }
+
+    messages.push({
+      content: pendingToolResults,
+      role: "user",
+    });
+    pendingToolResults = [];
+  };
+
   for (const item of input.responseInput) {
     if ("role" in item) {
+      flushPendingToolResults();
       const textBlocks = item.content
         .map((content) => content.text.trim())
         .filter(Boolean)
@@ -3111,7 +3201,7 @@ function appendAnthropicResponseInput(input: {
         }));
 
       if (textBlocks.length > 0) {
-        input.messages.push({
+        messages.push({
           content: textBlocks,
           role: "user",
         });
@@ -3120,17 +3210,16 @@ function appendAnthropicResponseInput(input: {
       continue;
     }
 
-    input.messages.push({
-      content: [
-        {
-          content: item.output,
-          tool_use_id: item.call_id,
-          type: "tool_result",
-        },
-      ],
-      role: "user",
+    pendingToolResults.push({
+      content: item.output,
+      tool_use_id: item.call_id,
+      type: "tool_result",
     });
   }
+
+  flushPendingToolResults();
+
+  return messages;
 }
 
 function normalizeAnthropicPlanningResponse(input: {
@@ -3181,8 +3270,9 @@ async function createAnthropicPlanningResponse(input: {
   messages: AnthropicMessage[];
   model: string;
   responseInput: TailorResumeStepResponseInput;
+  signal?: AbortSignal;
 }) {
-  appendAnthropicResponseInput({
+  const requestMessages = buildAnthropicRequestMessages({
     messages: input.messages,
     responseInput: input.responseInput,
   });
@@ -3190,7 +3280,7 @@ async function createAnthropicPlanningResponse(input: {
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     body: JSON.stringify({
       max_tokens: 8192,
-      messages: input.messages,
+      messages: requestMessages,
       model: input.model,
       system: input.instructions,
       tool_choice: { type: "auto" },
@@ -3228,6 +3318,7 @@ async function createAnthropicPlanningResponse(input: {
       "x-api-key": input.apiKey,
     },
     method: "POST",
+    signal: input.signal,
   });
   const responseJson = (await response.json().catch(() => null)) as
     | (AnthropicMessagesResponse & { error?: { message?: string } })
@@ -3245,7 +3336,7 @@ async function createAnthropicPlanningResponse(input: {
     throw new Error("Anthropic planning request returned an unreadable response.");
   }
 
-  input.messages.push({
+  input.messages.splice(0, input.messages.length, ...requestMessages, {
     content: responseJson.content ?? [],
     role: "assistant",
   });
@@ -3269,6 +3360,7 @@ function createTailorResumePlanningModelRequester(input: {
   return {
     create(
       responseInput: TailorResumeStepResponseInput,
+      signal?: AbortSignal,
     ): Promise<TailoredResumeResponse> {
       if (input.modelRef.provider === "anthropic") {
         return createAnthropicPlanningResponse({
@@ -3277,6 +3369,7 @@ function createTailorResumePlanningModelRequester(input: {
           messages: anthropicMessages,
           model: input.modelRef.model,
           responseInput,
+          signal,
         });
       }
 
@@ -3303,7 +3396,7 @@ function createTailorResumePlanningModelRequester(input: {
               schema: tailorResumePlanSchema,
             },
           },
-        })
+        }, { signal })
         .then((response) => {
           previousOpenAiResponseId = response.id;
           return response as TailoredResumeResponse;
@@ -3314,17 +3407,34 @@ function createTailorResumePlanningModelRequester(input: {
 
 async function runTailorResumeStepModelRequest<T>(input: {
   attempt: number;
+  deadline: ReturnType<typeof createTailorResumeStepTimeout>;
   onStepEvent:
     | ((event: TailorResumeGenerationStepEvent) => void | Promise<void>)
     | undefined;
-  operation: () => Promise<T>;
+  operation: (signal: AbortSignal) => Promise<T>;
   readDurationMs: () => number;
+  stepLabel: string;
   stepNumber: number;
   summary: string;
 }) {
   return runWithTransientModelRetries({
-    operation: input.operation,
+    operation: async () => {
+      const timeout = input.deadline.createAbortSignal();
+
+      try {
+        return await input.operation(timeout.signal);
+      } catch (error) {
+        throw normalizeTailorResumeStepTimeoutError({
+          error,
+          signal: timeout.signal,
+          stepLabel: input.stepLabel,
+        });
+      } finally {
+        timeout.clear();
+      }
+    },
     onRetry: async (retryEvent) => {
+      input.deadline.assertNotTimedOut();
       await emitTailorResumeGenerationStep(input.onStepEvent, {
         attempt: input.attempt,
         detail:
@@ -3979,6 +4089,10 @@ export async function planTailoredResume(input: {
   userMarkdown?: TailorResumeUserMarkdownState;
 }): Promise<PlanTailoredResumeResult> {
   const startedAt = Date.now();
+  const stepTimeout = createTailorResumeStepTimeout({
+    startedAt,
+    stepLabel: "Step 3 planning",
+  });
   const planningModelRef = resolveTailorResumePlanningModelRef();
   const model = planningModelRef.serialized;
   const maxPlanningAttempts = Math.min(2, getRetryAttemptsToGenerateLatexEdits());
@@ -4089,94 +4203,156 @@ export async function planTailoredResume(input: {
 
       for (
         let toolRound = 1;
-        toolRound <= maxTailorResumeToolCallsPerAttempt;
+        toolRound <= maxTailorResumePlanningToolCallsPerAttempt;
         toolRound += 1
       ) {
         const roundResponse = (await runTailorResumeStepModelRequest({
           attempt,
+          deadline: stepTimeout,
           onStepEvent: input.onStepEvent,
-          operation: () => planningModelRequester.create(responseInput),
+          operation: (signal) => planningModelRequester.create(responseInput, signal),
           readDurationMs: () => Math.max(0, Date.now() - startedAt),
+          stepLabel: "Step 3 planning",
           stepNumber: 3,
           summary: "Generating edit intent outline",
         })) as TailoredResumeResponse;
 
-        const keywordCheckToolCall =
-          findPlanningKeywordCheckToolCall(roundResponse);
-        const inspectionToolCall = findInspectionToolCall(roundResponse);
+        const inspectionToolCalls = findInspectionToolCalls(roundResponse);
+        const keywordCheckToolCalls =
+          findPlanningKeywordCheckToolCalls(roundResponse);
 
-        if (inspectionToolCall) {
-          let inspectionToolOutput: string | null = null;
-          try {
+        if (inspectionToolCalls.length > 0 || keywordCheckToolCalls.length > 0) {
+          const nextResponseInput: TailorResumeStepResponseInput = [];
+
+          for (const inspectionToolCall of inspectionToolCalls) {
+            let inspectionToolOutput: string | null = null;
             try {
-              const inspectionArguments = JSON.parse(inspectionToolCall.arguments);
+              try {
+                const inspectionArguments = JSON.parse(
+                  inspectionToolCall.arguments,
+                );
 
-              if (inspectionToolCall.name === tailorResumeSingleSkillQueryToolName) {
-                inspectionToolOutput =
-                  buildTailorResumeSingleSkillQueryToolOutput({
-                    ...parseTailorResumeSingleSkillQuery(inspectionArguments),
-                    skillData: input.skillData,
+                if (
+                  inspectionToolCall.name === tailorResumeSingleSkillQueryToolName
+                ) {
+                  inspectionToolOutput =
+                    buildTailorResumeSingleSkillQueryToolOutput({
+                      ...parseTailorResumeSingleSkillQuery(inspectionArguments),
+                      skillData: input.skillData,
+                    });
+                } else if (
+                  inspectionToolCall.name === tailorResumeBatchSkillQueryToolName
+                ) {
+                  inspectionToolOutput =
+                    buildTailorResumeBatchSkillQueryToolOutput({
+                      queries:
+                        parseTailorResumeBatchSkillQuery(inspectionArguments),
+                      skillData: input.skillData,
+                    });
+                } else {
+                  const inspectionPayload =
+                    parseResumeInspectionPayload(inspectionArguments);
+                  const candidateAnnotatedLatex = applyInspectionChanges({
+                    annotatedLatexCode: normalizedInput.annotatedLatex,
+                    changes: inspectionPayload.changes,
                   });
-              } else if (
-                inspectionToolCall.name === tailorResumeBatchSkillQueryToolName
-              ) {
-                inspectionToolOutput =
-                  buildTailorResumeBatchSkillQueryToolOutput({
-                    queries: parseTailorResumeBatchSkillQuery(inspectionArguments),
-                    skillData: input.skillData,
-                  });
-              } else {
-                const inspectionPayload =
-                  parseResumeInspectionPayload(inspectionArguments);
-                const candidateAnnotatedLatex = applyInspectionChanges({
-                  annotatedLatexCode: normalizedInput.annotatedLatex,
-                  changes: inspectionPayload.changes,
-                });
-                inspectionToolOutput =
-                  inspectionToolCall.name === tailorResumeKeywordUsageToolName
-                    ? buildResumeKeywordUsageToolOutput({
-                        annotatedLatexCode: candidateAnnotatedLatex,
-                        emphasizedTechnologies: emphasizedTechnologiesForPlanning,
-                      })
-                    : await buildResumeMalformedBulletsToolOutput({
-                        annotatedLatexCode: candidateAnnotatedLatex,
-                        changedSegmentIds: new Set(
-                          inspectionPayload.changes.map(
-                            (change) => change.segmentId,
+                  inspectionToolOutput =
+                    inspectionToolCall.name === tailorResumeKeywordUsageToolName
+                      ? buildResumeKeywordUsageToolOutput({
+                          annotatedLatexCode: candidateAnnotatedLatex,
+                          emphasizedTechnologies:
+                            emphasizedTechnologiesForPlanning,
+                        })
+                      : await buildResumeMalformedBulletsToolOutput({
+                          annotatedLatexCode: candidateAnnotatedLatex,
+                          changedSegmentIds: new Set(
+                            inspectionPayload.changes.map(
+                              (change) => change.segmentId,
+                            ),
                           ),
-                        ),
-                      });
+                        });
+                }
+              } catch (error) {
+                inspectionToolOutput = buildPlanningKeywordCheckRepairToolOutput({
+                  error:
+                    error instanceof Error
+                      ? error.message
+                      : "The inspection tool call was invalid.",
+                  planningBlocks: planningSnapshot.blocks,
+                });
               }
-            } catch (error) {
-              inspectionToolOutput = buildPlanningKeywordCheckRepairToolOutput({
-                error:
-                  error instanceof Error
-                    ? error.message
-                    : "The inspection tool call was invalid.",
-                planningBlocks: planningSnapshot.blocks,
-              });
-            }
-            responseInput = [
-              {
+              nextResponseInput.push({
                 call_id: inspectionToolCall.call_id,
                 output: inspectionToolOutput,
                 type: "function_call_output" as const,
-              },
-            ];
-          } finally {
-            planningToolCalls.push(
-              buildTailorResumeDebugToolCall({
-                id: inspectionToolCall.call_id,
-                input: inspectionToolCall.arguments,
-                output: inspectionToolOutput,
-                toolName: inspectionToolCall.name,
-              }),
-            );
+              });
+            } finally {
+              planningToolCalls.push(
+                buildTailorResumeDebugToolCall({
+                  id: inspectionToolCall.call_id,
+                  input: inspectionToolCall.arguments,
+                  output: inspectionToolOutput,
+                  toolName: inspectionToolCall.name,
+                }),
+              );
+            }
           }
+
+          for (const keywordCheckToolCall of keywordCheckToolCalls) {
+            keywordCheckCalled = true;
+            let keywordCheckToolOutput: string | null = null;
+            try {
+              try {
+                const candidateChanges = parseKeywordCheckPlanningChanges(
+                  JSON.parse(keywordCheckToolCall.arguments),
+                );
+                validateTailoredResumePlanChanges({
+                  changes: candidateChanges.map((change) => ({
+                    ...change,
+                    reason: "[keyword check candidate]",
+                  })),
+                  planningBlocks: planningSnapshot.blocks,
+                });
+                const keywordAssignmentCheckResult =
+                  buildTailorResumePlanningKeywordAssignmentCheckResult({
+                    changes: candidateChanges,
+                    emphasizedTechnologies: emphasizedTechnologiesForPlanning,
+                    planningSnapshot,
+                  });
+                keywordCheckToolOutput = buildKeywordCheckToolOutput(
+                  keywordAssignmentCheckResult,
+                );
+              } catch (error) {
+                keywordCheckToolOutput = buildPlanningKeywordCheckRepairToolOutput({
+                  error:
+                    error instanceof Error
+                      ? error.message
+                      : "The keyword-check tool call was invalid.",
+                  planningBlocks: planningSnapshot.blocks,
+                });
+              }
+              nextResponseInput.push({
+                call_id: keywordCheckToolCall.call_id,
+                output: keywordCheckToolOutput,
+                type: "function_call_output" as const,
+              });
+            } finally {
+              planningToolCalls.push(
+                buildTailorResumeDebugToolCall({
+                  id: keywordCheckToolCall.call_id,
+                  input: keywordCheckToolCall.arguments,
+                  output: keywordCheckToolOutput,
+                  toolName: keywordCheckToolCall.name,
+                }),
+              );
+            }
+          }
+
+          responseInput = nextResponseInput;
           continue;
         }
 
-        if (!keywordCheckToolCall) {
+        {
           const outputText = readOutputText(roundResponse);
           if (!keywordCheckCalled && !outputText) {
             responseInput = buildRequiredKeywordCheckToolReminderInput({
@@ -4190,63 +4366,13 @@ export async function planTailoredResume(input: {
           finalResponse = roundResponse;
           break;
         }
-
-        keywordCheckCalled = true;
-        let keywordCheckToolOutput: string | null = null;
-        try {
-          try {
-            const candidateChanges = parseKeywordCheckPlanningChanges(
-              JSON.parse(keywordCheckToolCall.arguments),
-            );
-            validateTailoredResumePlanChanges({
-              changes: candidateChanges.map((change) => ({
-                ...change,
-                reason: "[keyword check candidate]",
-              })),
-              planningBlocks: planningSnapshot.blocks,
-            });
-            const keywordAssignmentCheckResult =
-              buildTailorResumePlanningKeywordAssignmentCheckResult({
-                changes: candidateChanges,
-                emphasizedTechnologies: emphasizedTechnologiesForPlanning,
-                planningSnapshot,
-              });
-            keywordCheckToolOutput = buildKeywordCheckToolOutput(
-              keywordAssignmentCheckResult,
-            );
-          } catch (error) {
-            keywordCheckToolOutput = buildPlanningKeywordCheckRepairToolOutput({
-              error:
-                error instanceof Error
-                  ? error.message
-                  : "The keyword-check tool call was invalid.",
-              planningBlocks: planningSnapshot.blocks,
-            });
-          }
-          responseInput = [
-            {
-              call_id: keywordCheckToolCall.call_id,
-              output: keywordCheckToolOutput,
-              type: "function_call_output" as const,
-            },
-          ];
-        } finally {
-          planningToolCalls.push(
-            buildTailorResumeDebugToolCall({
-              id: keywordCheckToolCall.call_id,
-              input: keywordCheckToolCall.arguments,
-              output: keywordCheckToolOutput,
-              toolName: keywordCheckToolCall.name,
-            }),
-          );
-        }
       }
 
       if (!finalResponse) {
         throw new Error(
           keywordCheckCalled
-            ? "The model did not return a final planning response after the keyword check."
-            : "The model did not return a final planning response.",
+            ? `The model did not return a final planning response after the keyword check within ${maxTailorResumePlanningToolCallsPerAttempt} tool rounds.`
+            : `The model did not return a final planning response within ${maxTailorResumePlanningToolCallsPerAttempt} tool rounds.`,
         );
       }
 
@@ -4257,11 +4383,12 @@ export async function planTailoredResume(input: {
         : error instanceof Error
           ? error.message
           : "The planning pass failed before a valid response was produced.";
+      const timedOut = isTailorResumeStepTimeoutError(error);
       await emitTailorResumeGenerationStep(input.onStepEvent, {
         attempt,
         detail: lastError,
         durationMs: Math.max(0, Date.now() - startedAt),
-        retrying: attempt < maxPlanningAttempts,
+        retrying: !timedOut && attempt < maxPlanningAttempts,
         status: "failed",
         stepNumber: 3,
         summary: "Generating edit intent outline",
@@ -4278,7 +4405,7 @@ export async function planTailoredResume(input: {
       planningFeedback =
         `The previous planning attempt failed before producing a valid final plan.\n\nExact issue:\n${lastError}\n\nCall ${tailorResumePlanningKeywordCheckToolName} before returning the final structured response, and then return the full structured response with thesis, metadata, and intent block changes. Use only these segmentId values: ${formatTailorResumePlanningSegmentIds(planningSnapshot.blocks)}.`;
 
-      if (attempt < maxPlanningAttempts) {
+      if (!timedOut && attempt < maxPlanningAttempts) {
         continue;
       }
 
@@ -4596,6 +4723,10 @@ export async function implementTailoredResumePlan(input: {
   const client = getOpenAIClient();
   let implementationFeedback = "";
   const maxTailoredResumeAttempts = getRetryAttemptsToGenerateLatexEdits();
+  const stepTimeout = createTailorResumeStepTimeout({
+    startedAt,
+    stepLabel: "Step 4 implementation",
+  });
 
   for (let attempt = 1; attempt <= maxTailoredResumeAttempts; attempt += 1) {
     const implementationInput = buildTailoringImplementationInput({
@@ -4634,13 +4765,14 @@ export async function implementTailoredResumePlan(input: {
 
       for (
         let toolRound = 1;
-        toolRound <= maxTailorResumeToolCallsPerAttempt;
+        toolRound <= maxTailorResumeImplementationToolCallsPerAttempt;
         toolRound += 1
       ) {
         const roundResponse = (await runTailorResumeStepModelRequest({
           attempt,
+          deadline: stepTimeout,
           onStepEvent: input.onStepEvent,
-          operation: () =>
+          operation: (signal) =>
             client.responses.create({
               input: responseInput,
               instructions: implementationInstructions,
@@ -4663,8 +4795,9 @@ export async function implementTailoredResumePlan(input: {
                   schema: tailorResumeImplementationSchema,
                 },
               },
-            }),
+            }, { signal }),
           readDurationMs: () => Math.max(0, Date.now() - startedAt),
+          stepLabel: "Step 4 implementation",
           stepNumber: 4,
           summary: "Generating block-scoped edits",
         })) as TailoredResumeResponse;
@@ -4840,12 +4973,13 @@ export async function implementTailoredResumePlan(input: {
         : error instanceof Error
           ? error.message
           : "The implementation pass failed before a valid response was produced.";
+      const timedOut = isTailorResumeStepTimeoutError(error);
       implementationSkippedReason = null;
       await emitTailorResumeGenerationStep(input.onStepEvent, {
         attempt,
         detail: lastError,
         durationMs: Math.max(0, Date.now() - startedAt),
-        retrying: attempt < maxTailoredResumeAttempts,
+        retrying: !timedOut && attempt < maxTailoredResumeAttempts,
         status: "failed",
         stepNumber: 4,
         summary: "Generating block-scoped edits",
@@ -4853,7 +4987,7 @@ export async function implementTailoredResumePlan(input: {
       implementationFeedback =
         `The previous implementation attempt failed before producing a valid final block-scoped response.\n\nExact issue:\n${lastError}\n\nCall ${tailorResumeImplementationKeywordCheckToolName} before returning the final strict JSON object with one LaTeX replacement per planned segment.`;
 
-      if (attempt < maxTailoredResumeAttempts) {
+      if (!timedOut && attempt < maxTailoredResumeAttempts) {
         continue;
       }
 
@@ -4970,6 +5104,7 @@ export async function implementTailoredResumePlan(input: {
           text: renderTailoredResumeLatexToPlainText(appliedCandidate.annotatedLatex),
         }),
       });
+      stepTimeout.assertNotTimedOut();
       const candidateLayout = await measureTailorResumeLayout({
         annotatedLatexCode: appliedCandidate.annotatedLatex,
       });
@@ -4995,6 +5130,7 @@ export async function implementTailoredResumePlan(input: {
         error instanceof Error
           ? error.message
           : "Unable to apply the requested block replacements.";
+      const timedOut = isTailorResumeStepTimeoutError(error);
       await input.onInvalidReplacement?.(
         buildInvalidTailorResumeReplacementLogPayload({
           annotatedLatexCode: normalizedInput.annotatedLatex,
@@ -5008,14 +5144,18 @@ export async function implementTailoredResumePlan(input: {
         attempt,
         detail: lastError,
         durationMs: Math.max(0, Date.now() - startedAt),
-        retrying: attempt < maxTailoredResumeAttempts,
+        retrying: !timedOut && attempt < maxTailoredResumeAttempts,
         status: "failed",
         stepNumber: 4,
         summary: "Generating block-scoped edits",
       });
       implementationFeedback =
         `The previous LaTeX implementation did not satisfy the block replacement requirements.\n\nExact issue:\n${lastError}\n\nReturn a corrected strict JSON object with one LaTeX replacement per planned segment.`;
-      continue;
+      if (!timedOut && attempt < maxTailoredResumeAttempts) {
+        continue;
+      }
+
+      break;
     }
 
     const normalizedCandidate = applySavedTailoredResumeLinks(
@@ -5023,9 +5163,45 @@ export async function implementTailoredResumePlan(input: {
       linkOverrides,
     );
     hasAppliedCandidate = true;
-    const validation = await validateTailorResumeLatexDocument(
-      stripTailorResumeSegmentIds(normalizedCandidate.normalizedLatex.annotatedLatex),
-    );
+    let validation: Awaited<ReturnType<typeof validateTailorResumeLatexDocument>>;
+
+    try {
+      stepTimeout.assertNotTimedOut();
+      validation = await validateTailorResumeLatexDocument(
+        stripTailorResumeSegmentIds(
+          normalizedCandidate.normalizedLatex.annotatedLatex,
+        ),
+      );
+    } catch (error) {
+      lastError =
+        error instanceof Error
+          ? error.message
+          : "Unable to validate the generated LaTeX implementation.";
+      await emitTailorResumeGenerationStep(input.onStepEvent, {
+        attempt,
+        detail: lastError,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        retrying:
+          !isTailorResumeStepTimeoutError(error) &&
+          attempt < maxTailoredResumeAttempts,
+        status: "failed",
+        stepNumber: 4,
+        summary: "Generating block-scoped edits",
+      });
+
+      if (
+        !isTailorResumeStepTimeoutError(error) &&
+        attempt < maxTailoredResumeAttempts
+      ) {
+        implementationFeedback =
+          `Validating your previous LaTeX implementations failed.\n\n` +
+          `Exact issue:\n${lastError}\n\n` +
+          "Return corrected LaTeX replacements for the same planned segments only.";
+        continue;
+      }
+
+      break;
+    }
 
     lastAnnotatedLatex = normalizedCandidate.normalizedLatex.annotatedLatex;
     lastEdits = candidateEdits;
@@ -5300,7 +5476,6 @@ export async function generateTailoredResume(input: {
       questioningSummary: planningStage.planningResult.questioningSummary,
     }),
     linkOverrides,
-    model: planningStage.model,
     onBuildFailure: input.onBuildFailure,
     onInvalidReplacement: input.onInvalidReplacement,
     onStepEvent: input.onStepEvent,

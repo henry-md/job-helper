@@ -13,6 +13,7 @@ import {
   mergeTailorResumeScrapedKeywordSnapshot,
   parseTailorResumeTechnologyExtractionResponse,
   parseTailoredResumePlanResponse,
+  planTailoredResume,
   readRequiredTailorResumeQuestioningKeywords,
   validateTailoredResumeImplementationIncludesQuestioningLearnings,
   validateTailoredResumeImplementationKeywordCoverage,
@@ -147,6 +148,114 @@ test("filterUnsupportedEmphasizedTechnologiesForPlanning reads no-experience not
     technologies.map((technology) => technology.name),
     ["React"],
   );
+});
+
+test("planTailoredResume answers every Anthropic tool use in one continuation message", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
+  const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
+  const originalPlanningModel = process.env.TAILOR_RESUME_PLANNING_MODEL;
+  const requestBodies: Array<{
+    messages: Array<{
+      content: Array<{ tool_use_id?: string; type: string }>;
+      role: string;
+    }>;
+  }> = [];
+
+  process.env.OPENAI_API_KEY = "test-openai-key";
+  process.env.ANTHROPIC_API_KEY = "test-anthropic-key";
+  process.env.TAILOR_RESUME_PLANNING_MODEL = "anthropic:claude-test";
+
+  globalThis.fetch = (async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    requestBodies.push(body);
+
+    if (requestBodies.length === 1) {
+      return new Response(
+        JSON.stringify({
+          content: [
+            {
+              id: "toolu_keyword_usage",
+              input: { changes: [] },
+              name: "list_current_resume_keyword_usage",
+              type: "tool_use",
+            },
+            {
+              id: "toolu_keyword_check",
+              input: { changes: [] },
+              name: "check_planned_keyword_assignments",
+              type: "tool_use",
+            },
+          ],
+          id: "anthropic-round-1",
+          model: "claude-test",
+        }),
+        { status: 200 },
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        content: [
+          {
+            text: JSON.stringify({
+              changes: [],
+              companyName: "Acme",
+              displayName: "Acme - Software Engineer",
+              emphasizedTechnologies: [],
+              positionTitle: "Software Engineer",
+              thesis: {
+                jobDescriptionFocus: "Backend systems",
+                resumeChanges: "No targeted edits needed",
+              },
+            }),
+            type: "text",
+          },
+        ],
+        id: "anthropic-round-2",
+        model: "claude-test",
+      }),
+      { status: 200 },
+    );
+  }) as typeof fetch;
+
+  try {
+    const result = await planTailoredResume({
+      annotatedLatexCode: normalizeTailorResumeLatex(tailorResumeLatexExample)
+        .annotatedLatex,
+      jobDescription: "Acme is hiring a Software Engineer.",
+      precomputedEmphasizedTechnologies: [],
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(requestBodies.length, 2);
+
+    const secondMessages = requestBodies[1]?.messages ?? [];
+    const assistantToolMessageIndex = secondMessages.findIndex(
+      (message) =>
+        message.role === "assistant" &&
+        message.content.some((content) => content.type === "tool_use"),
+    );
+    assert.notEqual(assistantToolMessageIndex, -1);
+
+    const toolResultMessage = secondMessages[assistantToolMessageIndex + 1];
+    assert.equal(toolResultMessage?.role, "user");
+    assert.deepEqual(
+      toolResultMessage.content.map((content) => ({
+        tool_use_id: content.tool_use_id,
+        type: content.type,
+      })),
+      [
+        { tool_use_id: "toolu_keyword_usage", type: "tool_result" },
+        { tool_use_id: "toolu_keyword_check", type: "tool_result" },
+      ],
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    process.env.OPENAI_API_KEY = originalOpenAiApiKey;
+    process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey;
+    process.env.TAILOR_RESUME_PLANNING_MODEL = originalPlanningModel;
+  }
 });
 
 test("applyTailorResumeBlockChanges replaces a segment and re-normalizes ids", () => {
