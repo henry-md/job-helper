@@ -32,6 +32,7 @@ import { buildTailoredResumeBlockEdits } from "./tailor-resume-review.ts";
 import { stripTailorResumeSegmentIds } from "./tailor-resume-segmentation.ts";
 import {
   applyTailorResumeBlockChanges,
+  createTailorResumeStepAttemptTimeout,
   createTailorResumeStepTimeout,
   isTailorResumeStepTimeoutError,
 } from "./tailor-resume-tailoring.ts";
@@ -154,6 +155,7 @@ const tailorResumeBatchSkillQueryToolName = "batch_query_resume_skills";
 const maxCompactionSelfCheckRounds = 30;
 const maxCompactionHistoryAttemptsForPrompt = 3;
 const maxCompactionMeasurementsPerAttemptForPrompt = 6;
+const tailorResumeCompactionMaxOutputTokens = 8192;
 
 const tailorResumeLineReductionTool = {
   type: "function",
@@ -1396,8 +1398,9 @@ async function collectVerifiedCompactionCandidates(input: {
   });
 
   for (let round = 1; round <= maxCompactionSelfCheckRounds; round += 1) {
-    input.deadline.assertNotTimedOut();
-    const timeout = input.deadline.createAbortSignal();
+    const timeout = createTailorResumeStepAttemptTimeout(
+      "Step 4B page-count compaction",
+    );
     const response = mapCompactionResponse(
       await runWithTransientModelRetries({
         operation: () =>
@@ -1410,6 +1413,7 @@ async function collectVerifiedCompactionCandidates(input: {
               pageCountVerificationToolName:
                 tailorResumePageCountVerificationToolName,
             }),
+            max_output_tokens: tailorResumeCompactionMaxOutputTokens,
             model: input.model,
             parallel_tool_calls: false,
             previous_response_id: previousResponseId,

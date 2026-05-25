@@ -192,6 +192,9 @@ const tailorResumeBatchSkillQueryToolName = "batch_query_resume_skills";
 const maxTailorResumePlanningToolCallsPerAttempt = 12;
 const maxTailorResumeImplementationToolCallsPerAttempt = 30;
 export const tailorResumeStepTimeoutMs = 5 * 60 * 1000;
+const tailorResumeKeywordExtractionMaxOutputTokens = 2048;
+const tailorResumePlanningMaxOutputTokens = 8192;
+const tailorResumeImplementationMaxOutputTokens = 8192;
 
 const tailorResumePlanningKeywordCheckTool = {
   type: "function",
@@ -914,6 +917,18 @@ export function createTailorResumeStepTimeout(input: {
   return {
     assertNotTimedOut,
     createAbortSignal,
+  };
+}
+
+export function createTailorResumeStepAttemptTimeout(stepLabel: string) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort(new TailorResumeStepTimeoutError(stepLabel));
+  }, tailorResumeStepTimeoutMs);
+
+  return {
+    signal: controller.signal,
+    clear: () => clearTimeout(timeout),
   };
 }
 
@@ -3051,17 +3066,24 @@ async function extractTailorResumeJobDescriptionTechnologiesWithDebug(input: {
   employerName?: string | null;
   jobDescription: string;
   model: string;
+  onStepEvent?: (
+    event: TailorResumeGenerationStepEvent,
+  ) => void | Promise<void>;
+  readDurationMs?: () => number;
 }) {
   const responseInput = buildTechnologyExtractionInput({
     employerName: input.employerName,
     jobDescription: input.jobDescription,
   });
   const instructions = buildTechnologyExtractionInstructions();
-  const response = await runWithTransientModelRetries({
-    operation: () =>
+  const response = await runTailorResumeStepModelRequest({
+    attempt: 1,
+    onStepEvent: input.onStepEvent,
+    operation: (signal) =>
       input.client.responses.create({
         input: responseInput,
         instructions,
+        max_output_tokens: tailorResumeKeywordExtractionMaxOutputTokens,
         model: input.model,
         reasoning: buildTechnologyExtractionReasoning(),
         text: {
@@ -3073,7 +3095,11 @@ async function extractTailorResumeJobDescriptionTechnologiesWithDebug(input: {
             schema: tailorResumeTechnologyExtractionSchema,
           },
         },
-      }),
+      }, { signal }),
+    readDurationMs: input.readDurationMs ?? (() => 0),
+    stepLabel: "Step 1 keyword extraction",
+    stepNumber: 1,
+    summary: "Scrape keywords",
   });
   const outputText = readOutputText(response);
 
@@ -3377,6 +3403,7 @@ function createTailorResumePlanningModelRequester(input: {
         .create({
           input: responseInput,
           instructions: input.instructions,
+          max_output_tokens: tailorResumePlanningMaxOutputTokens,
           model: input.modelRef.model,
           parallel_tool_calls: false,
           previous_response_id: previousOpenAiResponseId,
@@ -3407,7 +3434,6 @@ function createTailorResumePlanningModelRequester(input: {
 
 async function runTailorResumeStepModelRequest<T>(input: {
   attempt: number;
-  deadline: ReturnType<typeof createTailorResumeStepTimeout>;
   onStepEvent:
     | ((event: TailorResumeGenerationStepEvent) => void | Promise<void>)
     | undefined;
@@ -3419,7 +3445,7 @@ async function runTailorResumeStepModelRequest<T>(input: {
 }) {
   return runWithTransientModelRetries({
     operation: async () => {
-      const timeout = input.deadline.createAbortSignal();
+      const timeout = createTailorResumeStepAttemptTimeout(input.stepLabel);
 
       try {
         return await input.operation(timeout.signal);
@@ -3434,7 +3460,6 @@ async function runTailorResumeStepModelRequest<T>(input: {
       }
     },
     onRetry: async (retryEvent) => {
-      input.deadline.assertNotTimedOut();
       await emitTailorResumeGenerationStep(input.onStepEvent, {
         attempt: input.attempt,
         detail:
@@ -3545,6 +3570,7 @@ export function buildInvalidTailorResumeReplacementLogPayload(input: {
   annotatedLatexCode: string;
   candidate: TailoredResumeStructuredResponse;
   error: string;
+  modelDebug?: TailoredResumeOpenAiDebugStage;
 }) {
   const blocksById = new Map(
     readAnnotatedTailorResumeBlocks(input.annotatedLatexCode).map((block) => [
@@ -3578,6 +3604,23 @@ export function buildInvalidTailorResumeReplacementLogPayload(input: {
     "Structured response:",
     JSON.stringify(input.candidate, null, 2),
     "",
+    ...(input.modelDebug
+      ? [
+          "Step 4 model debug:",
+          JSON.stringify(
+            {
+              outputJson: input.modelDebug.outputJson,
+              prompt: input.modelDebug.prompt,
+              skippedReason: input.modelDebug.skippedReason,
+              systemPrompt: input.modelDebug.systemPrompt,
+              toolCalls: input.modelDebug.toolCalls ?? [],
+            },
+            null,
+            2,
+          ),
+          "",
+        ]
+      : []),
     "Referenced source blocks:",
     referencedBlockSections.length > 0
       ? referencedBlockSections.join("\n\n---\n\n")
@@ -4012,6 +4055,8 @@ export async function extractTailorResumeEmphasizedTechnologiesForQuestioning(in
         employerName: input.employerName,
         jobDescription: input.jobDescription,
         model,
+        onStepEvent: input.onStepEvent,
+        readDurationMs: () => Math.max(0, Date.now() - startedAt),
       });
     extractedTechnologies = extractionResult.technologies;
     extractionDebug = extractionResult.extractionDebug;
@@ -4089,10 +4134,6 @@ export async function planTailoredResume(input: {
   userMarkdown?: TailorResumeUserMarkdownState;
 }): Promise<PlanTailoredResumeResult> {
   const startedAt = Date.now();
-  const stepTimeout = createTailorResumeStepTimeout({
-    startedAt,
-    stepLabel: "Step 3 planning",
-  });
   const planningModelRef = resolveTailorResumePlanningModelRef();
   const model = planningModelRef.serialized;
   const maxPlanningAttempts = Math.min(2, getRetryAttemptsToGenerateLatexEdits());
@@ -4208,7 +4249,6 @@ export async function planTailoredResume(input: {
       ) {
         const roundResponse = (await runTailorResumeStepModelRequest({
           attempt,
-          deadline: stepTimeout,
           onStepEvent: input.onStepEvent,
           operation: (signal) => planningModelRequester.create(responseInput, signal),
           readDurationMs: () => Math.max(0, Date.now() - startedAt),
@@ -4353,8 +4393,7 @@ export async function planTailoredResume(input: {
         }
 
         {
-          const outputText = readOutputText(roundResponse);
-          if (!keywordCheckCalled && !outputText) {
+          if (!keywordCheckCalled) {
             responseInput = buildRequiredKeywordCheckToolReminderInput({
               finalResponse: roundResponse,
               stageName: "Step 3 plan",
@@ -4723,12 +4762,12 @@ export async function implementTailoredResumePlan(input: {
   const client = getOpenAIClient();
   let implementationFeedback = "";
   const maxTailoredResumeAttempts = getRetryAttemptsToGenerateLatexEdits();
-  const stepTimeout = createTailorResumeStepTimeout({
-    startedAt,
-    stepLabel: "Step 4 implementation",
-  });
 
   for (let attempt = 1; attempt <= maxTailoredResumeAttempts; attempt += 1) {
+    const stepTimeout = createTailorResumeStepTimeout({
+      startedAt: Date.now(),
+      stepLabel: "Step 4 implementation",
+    });
     const implementationInput = buildTailoringImplementationInput({
       jobDescription: input.jobDescription,
       plan: input.planningResult,
@@ -4770,15 +4809,21 @@ export async function implementTailoredResumePlan(input: {
       ) {
         const roundResponse = (await runTailorResumeStepModelRequest({
           attempt,
-          deadline: stepTimeout,
           onStepEvent: input.onStepEvent,
           operation: (signal) =>
             client.responses.create({
               input: responseInput,
               instructions: implementationInstructions,
+              max_output_tokens: tailorResumeImplementationMaxOutputTokens,
               model,
               parallel_tool_calls: false,
               previous_response_id: previousResponseId,
+              tool_choice: keywordCheckCalled
+                ? "auto"
+                : {
+                    name: tailorResumeImplementationKeywordCheckToolName,
+                    type: "function",
+                  },
               tools: [
                 tailorResumeImplementationKeywordCheckTool,
                 tailorResumeKeywordUsageTool,
@@ -4880,8 +4925,7 @@ export async function implementTailoredResumePlan(input: {
         }
 
         if (!keywordCheckToolCall) {
-          const outputText = readOutputText(roundResponse);
-          if (!keywordCheckCalled && !outputText) {
+          if (!keywordCheckCalled) {
             responseInput = buildRequiredKeywordCheckToolReminderInput({
               finalResponse: roundResponse,
               stageName: "Step 4 implementation",
@@ -5136,6 +5180,7 @@ export async function implementTailoredResumePlan(input: {
           annotatedLatexCode: normalizedInput.annotatedLatex,
           candidate: candidateForLogging,
           error: lastError,
+          modelDebug: openAiDebug.implementation,
         }),
         lastError,
         attempt,

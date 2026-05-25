@@ -336,6 +336,7 @@ test("buildTailorResumeImplementationSystemPrompt injects retry feedback", () =>
   assert.match(prompt, /never add inline bolding inside Skills or Technical Skills sections/i);
   assert.equal(prompt.match(/Available tools:/g)?.length, 1);
   assert.match(prompt, /check_implemented_resume_keyword_coverage/i);
+  assert.match(prompt, /first response should be a check_implemented_resume_keyword_coverage tool call/i);
   assert.match(prompt, /malformed rendered bullets/i);
   assert.match(prompt, /\{ changes: \[\{ segmentId, latexCode \}\], lineCountSegmentIds: \[\] \}/i);
   assert.match(prompt, /reports keyword coverage, rendered page count/i);
@@ -359,6 +360,7 @@ test("buildTailorResumeImplementationSystemPrompt appends USER.md bolding guidan
   assert.match(prompt, /\\textbf\{\.\.\.\}/);
   assert.match(prompt, /Available tools:/);
   assert.match(prompt, /check_implemented_resume_keyword_coverage/i);
+  assert.match(prompt, /first response should be a check_implemented_resume_keyword_coverage tool call/i);
   assert.match(prompt, /list_current_resume_keyword_usage/i);
   assert.match(prompt, /list_malformed_resume_bullets/i);
   assert.match(prompt, /missing supported high- or low-priority keyword/i);

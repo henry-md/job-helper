@@ -377,6 +377,7 @@ function buildTailorResumeImplementationToolContractBlock() {
   return (
     "Available tools:\n" +
     "- You have a maximum of 30 tool calls for this step. Prefer batch_query_resume_skills when checking several saved skill-support queries so you do not spend one call per keyword.\n" +
+    "- Tool-call order is part of the contract: your first response should be a check_implemented_resume_keyword_coverage tool call, not final JSON. Use that tool call as your draft submission scratchpad.\n" +
     "- check_implemented_resume_keyword_coverage is required before final JSON. Call it with your current implementation as { changes: [{ segmentId, latexCode }], lineCountSegmentIds: [] }.\n" +
     "- The tool applies those LaTeX replacements to the full resume and reports keyword coverage, rendered page count, malformed rendered bullets, and any requested segment line counts.\n" +
     "- query_single_resume_skill is available for one saved resume-bullet support lookup. Call it with { query, mode }, where mode is skills, body, or both. It returns only the top saved resume-bullet support result or null.\n" +
@@ -385,7 +386,7 @@ function buildTailorResumeImplementationToolContractBlock() {
     "- list_malformed_resume_bullets is available as a rendered-bullet health check. Call it with the current candidate changes to return every malformed rendered bullet in the most updated full resume draft; call it again after revisions to verify the health check is clean.\n" +
     "- Pass lineCountSegmentIds as [] unless exact rendered line counts for specific segmentIds would help you revise, especially when you are testing whether a missing keyword can fit without creating another rendered line.\n" +
     "- If the tool reports a missing supported high- or low-priority keyword, revise and call it again. Try multiple compact placements before giving up: preserve the accepted plan, but tighten wording, swap weaker phrasing, or add a valid skills-list entry inside the planned replacements when the evidence supports it.\n" +
-    "- Give up on a keyword only when repeated attempts show it would require unsupported experience, extend a rendered line/page, remove a higher-value keyword or claim, or violate the planned segment boundaries. Return final JSON only after coverage and changed-bullet health are acceptable.\n"
+    "- Give up on a keyword only when repeated attempts show it would require unsupported experience, extend a rendered line/page, remove a higher-value keyword or claim, or violate the planned segment boundaries. Return final JSON only after coverage and changed-bullet health are acceptable, and make that final JSON match the last checked candidate unless the tool output explicitly required a revision.\n"
   );
 }
 

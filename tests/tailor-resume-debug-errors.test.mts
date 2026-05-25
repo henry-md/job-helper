@@ -146,6 +146,20 @@ test("buildInvalidTailorResumeReplacementLogPayload captures the rejected replac
       },
     },
     error: `Replacement for segment ${targetSegment.id} spans multiple logical blocks.`,
+    modelDebug: {
+      outputJson: "{\"changes\":[]}",
+      prompt: "Serialized Step 4 input",
+      skippedReason: null,
+      systemPrompt: "Step 4 system prompt",
+      toolCalls: [
+        {
+          id: "call-health",
+          input: "{\"changes\":[]}",
+          output: "{\"missingHighPriority\":[\"Go\"]}",
+          toolName: "check_implemented_resume_keyword_coverage",
+        },
+      ],
+    },
   });
 
   assert.equal(
@@ -158,6 +172,9 @@ test("buildInvalidTailorResumeReplacementLogPayload captures the rejected replac
   assert.equal(payload.includes("Annotated source LaTeX:"), true);
   assert.equal(payload.includes("% JOBHELPER_SEGMENT_ID:"), true);
   assert.equal(payload.includes("Tailored bullet two"), true);
+  assert.equal(payload.includes("Step 4 model debug:"), true);
+  assert.equal(payload.includes("check_implemented_resume_keyword_coverage"), true);
+  assert.equal(payload.includes("Serialized Step 4 input"), true);
 });
 
 test("parseTailorResumeInvalidReplacementPayload reconstructs rejected changes from the logged payload", () => {

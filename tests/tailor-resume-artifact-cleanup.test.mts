@@ -112,6 +112,24 @@ test("keeps claimed question-decision runs while Step 2 is re-evaluating", () =>
   );
 });
 
+test("deletes stale running keyword-review runs that are already ready", () => {
+  const now = Date.parse("2026-04-25T18:00:00.000Z");
+
+  assert.equal(
+    shouldDeleteActiveTailorResumeRun({
+      hasMatchingInterview: true,
+      matchingInterviewStatus: "ready",
+      now,
+      status: "RUNNING",
+      stepStatus: "running",
+      updatedAt: new Date(
+        now - STALE_ACTIVE_TAILOR_RESUME_RUN_MAX_AGE_MS - 60_000,
+      ).toISOString(),
+    }),
+    true,
+  );
+});
+
 test("deletes active runs stuck on a terminal step", () => {
   const now = Date.parse("2026-04-25T18:00:00.000Z");
 
