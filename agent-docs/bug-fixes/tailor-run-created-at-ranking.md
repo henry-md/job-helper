@@ -1,0 +1,3 @@
+- Symptom: active Tailor Resume jobs could move in the extension or dashboard because progress updates changed `updatedAt`, so ranking was not purely newest-created-first.
+- Fix: extension and web active-run lists now sort by `createdAt` descending only, and saved tailored resume list filtering uses `createdAt` instead of `updatedAt`.
+- Guardrail: retrying/overwriting a job should create a fresh run timestamp and carry that run creation time into the replacement tailored-resume record, so retries rank by when the user initiated the retry.

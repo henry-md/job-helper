@@ -133,12 +133,6 @@ function readBlockingSkillsSectionTechnologies(
 }
 
 function readExistingTailoringTime(value: TailorResumeExistingTailoringState) {
-  const updatedAt = Date.parse(value.updatedAt);
-
-  if (Number.isFinite(updatedAt)) {
-    return updatedAt;
-  }
-
   const createdAt = Date.parse(value.createdAt);
   return Number.isFinite(createdAt) ? createdAt : 0;
 }
@@ -369,18 +363,9 @@ export function buildActiveTailoringStates(input: {
 
   return dedupeExistingTailoringsByJobUrl(
     dedupeExistingTailoringsByApplicationId(activeTailorings),
-  ).sort(
-    (left, right) => {
-      const createdAtDifference =
-        Date.parse(left.createdAt || "") - Date.parse(right.createdAt || "");
-
-      if (createdAtDifference !== 0) {
-        return createdAtDifference;
-      }
-
-      return Date.parse(left.updatedAt || "") - Date.parse(right.updatedAt || "");
-    },
-  );
+  ).sort((left, right) => {
+    return Date.parse(right.createdAt || "") - Date.parse(left.createdAt || "");
+  });
 }
 
 function readTailorResumeGenerationStepEvent(
@@ -597,14 +582,7 @@ export function readTailorResumeExistingTailoringStates(value: unknown) {
     return dedupeExistingTailoringsByJobUrl(
       dedupeExistingTailoringsByApplicationId(parsedActiveTailorings),
     ).sort((left, right) => {
-      const createdAtDifference =
-        Date.parse(right.createdAt || "") - Date.parse(left.createdAt || "");
-
-      if (createdAtDifference !== 0) {
-        return createdAtDifference;
-      }
-
-      return Date.parse(right.updatedAt || "") - Date.parse(left.updatedAt || "");
+      return Date.parse(right.createdAt || "") - Date.parse(left.createdAt || "");
     });
   }
 

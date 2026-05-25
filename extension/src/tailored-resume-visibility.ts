@@ -8,13 +8,14 @@ export type ActiveTailoredResumeReference = {
   url: string | null;
 };
 
+export type TailorRunResumeVisibilityCard = {
+  applicationId: string | null;
+  statusDisplayState: string;
+  suppressedTailoredResumeId?: string | null;
+  url: string | null;
+};
+
 function readResumeSortTime(resume: TailoredResumeSummary) {
-  const updatedAt = Date.parse(resume.updatedAt);
-
-  if (Number.isFinite(updatedAt)) {
-    return updatedAt;
-  }
-
   const createdAt = Date.parse(resume.createdAt);
   return Number.isFinite(createdAt) ? createdAt : 0;
 }
@@ -87,4 +88,46 @@ export function filterVisibleTailoredResumes(input: {
       seenComparableUrls.add(comparableUrl);
       return true;
     });
+}
+
+export function filterVisibleTailorRunCardsForSavedResumes<
+  T extends TailorRunResumeVisibilityCard,
+>(input: {
+  cards: T[];
+  resumes: TailoredResumeSummary[];
+}) {
+  const successfulApplicationIds = new Set(
+    input.resumes
+      .map((resume) => resume.applicationId?.trim() ?? "")
+      .filter(Boolean),
+  );
+  const successfulComparableUrls = new Set(
+    input.resumes
+      .map((resume) => normalizeComparableUrl(resume.jobUrl))
+      .filter((value): value is string => Boolean(value)),
+  );
+
+  return input.cards.filter((card) => {
+    if (card.statusDisplayState !== "error") {
+      return true;
+    }
+
+    const suppressedTailoredResumeId =
+      card.suppressedTailoredResumeId?.trim() ?? "";
+    const applicationId = card.applicationId?.trim() ?? "";
+    const comparableUrl = normalizeComparableUrl(card.url);
+
+    if (
+      suppressedTailoredResumeId &&
+      input.resumes.some((resume) => resume.id === suppressedTailoredResumeId)
+    ) {
+      return false;
+    }
+
+    if (applicationId && successfulApplicationIds.has(applicationId)) {
+      return false;
+    }
+
+    return !(comparableUrl && successfulComparableUrls.has(comparableUrl));
+  });
 }

@@ -1,3 +1,4 @@
 - Symptom: the extension could stop at a "Sign in with Google" prompt after a user clicked Tailor Current Page, even when Chrome could complete the Google token grant silently.
 - Root cause: the side panel treated signed-out Tailor actions as a prompt-only state, and the background auth status path never tried a non-interactive Chrome identity token exchange.
 - Fix: let the service worker silently exchange cached Google grants before reporting signed out, clear rejected cached Google tokens before retrying, and have Tailor Current Page connect inline before starting capture.
+- Follow-up: the side panel should poll auth status every second while it is not signed in, because a stored app session can disappear during an otherwise active extension session. Coalesce background auth-status requests so the reconnect loop cannot stack overlapping Chrome identity exchanges.

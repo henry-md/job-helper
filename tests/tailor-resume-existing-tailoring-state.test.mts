@@ -59,6 +59,42 @@ test("readTailorResumeExistingTailoringStates keeps query-distinct active runs",
   );
 });
 
+test("readTailorResumeExistingTailoringStates ranks only by created time", () => {
+  const activeTailorings = readTailorResumeExistingTailoringStates({
+    activeTailorings: [
+      {
+        companyName: "Older Corp",
+        createdAt: "2026-05-24T15:00:00.000Z",
+        id: "run-older-recently-updated",
+        jobDescription: "Role text",
+        jobIdentifier: "Older role",
+        jobUrl: "https://jobs.example.com/older",
+        kind: "active_generation",
+        lastStep: null,
+        positionTitle: "Software Engineer",
+        updatedAt: "2026-05-24T17:00:00.000Z",
+      },
+      {
+        companyName: "Newer Corp",
+        createdAt: "2026-05-24T16:00:00.000Z",
+        id: "run-newer",
+        jobDescription: "Role text",
+        jobIdentifier: "Newer role",
+        jobUrl: "https://jobs.example.com/newer",
+        kind: "active_generation",
+        lastStep: null,
+        positionTitle: "Software Engineer",
+        updatedAt: "2026-05-24T16:01:00.000Z",
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    activeTailorings.map((activeTailoring) => activeTailoring.id),
+    ["run-newer", "run-older-recently-updated"],
+  );
+});
+
 test("buildPendingInterviewExistingTailoringState exposes all scraped keywords", () => {
   const interview = {
     accumulatedModelDurationMs: 1200,
@@ -201,6 +237,56 @@ test("buildPendingInterviewExistingTailoringState exposes all scraped keywords",
       ["Load balancing", "narrative"],
       ["Terraform", "skills_section"],
     ],
+  );
+});
+
+test("buildActiveTailoringStates ranks active runs only by created time", () => {
+  const olderRun = {
+    application: {
+      company: {
+        name: "Older Corp",
+      },
+      title: "Software Engineer",
+    },
+    applicationId: "app-older",
+    createdAt: new Date("2026-05-24T15:00:00.000Z"),
+    error: null,
+    id: "run-older-recently-updated",
+    jobDescription: "Role text",
+    jobUrl: "https://jobs.example.com/older",
+    status: "RUNNING",
+    stepAttempt: null,
+    stepCount: null,
+    stepDetail: null,
+    stepNumber: null,
+    stepRetrying: false,
+    stepStatus: null,
+    stepSummary: null,
+    updatedAt: new Date("2026-05-24T17:00:00.000Z"),
+  } satisfies TailorResumeDbRunRecord;
+  const newerRun = {
+    ...olderRun,
+    application: {
+      company: {
+        name: "Newer Corp",
+      },
+      title: "Software Engineer",
+    },
+    applicationId: "app-newer",
+    createdAt: new Date("2026-05-24T16:00:00.000Z"),
+    id: "run-newer",
+    jobUrl: "https://jobs.example.com/newer",
+    updatedAt: new Date("2026-05-24T16:01:00.000Z"),
+  } satisfies TailorResumeDbRunRecord;
+
+  const activeTailorings = buildActiveTailoringStates({
+    activeRuns: [olderRun, newerRun],
+    tailoringInterviews: [],
+  });
+
+  assert.deepEqual(
+    activeTailorings.map((activeTailoring) => activeTailoring.id),
+    ["run-newer", "run-older-recently-updated"],
   );
 });
 

@@ -2271,6 +2271,7 @@ async function findDbTailoredResumeOverwriteTargets(input: {
 
 async function createTailorResumeRun(input: {
   applicationId: string | null;
+  createdAt: Date;
   jobDescription: string;
   jobUrl: string | null;
   jobUrlHash: string | null;
@@ -2283,6 +2284,7 @@ async function createTailorResumeRun(input: {
   const run = await getPrismaClient().tailorResumeRun.create({
     data: {
       applicationId: input.applicationId,
+      createdAt: input.createdAt,
       jobDescription: input.jobDescription,
       jobUrl: input.jobUrl,
       jobUrlHash: input.jobUrlHash,
@@ -2297,6 +2299,27 @@ async function createTailorResumeRun(input: {
   await markTailoringChanged(input.userId);
 
   return run.id;
+}
+
+async function readTailorResumeRunCreatedAt(input: {
+  runId: string | null;
+  userId: string;
+}) {
+  if (!input.runId) {
+    return null;
+  }
+
+  const run = await getPrismaClient().tailorResumeRun.findFirst({
+    select: {
+      createdAt: true,
+    },
+    where: {
+      id: input.runId,
+      userId: input.userId,
+    },
+  });
+
+  return run?.createdAt.toISOString() ?? null;
 }
 
 function readTailorResumeFailureStepNumberFromMessage(error: string | null | undefined) {
@@ -2783,6 +2806,7 @@ async function upsertDbTailoredResume(input: {
   applicationId: string | null;
   archivedAt: string | null;
   companyName: string | null;
+  createdAt: string;
   displayName: string;
   error: string | null;
   id: string;
@@ -2805,6 +2829,7 @@ async function upsertDbTailoredResume(input: {
       applicationId: input.applicationId,
       archivedAt: input.archivedAt ? new Date(input.archivedAt) : null,
       companyName: input.companyName,
+      createdAt: new Date(input.createdAt),
       displayName: input.displayName,
       error: input.error,
       id: input.id,
@@ -3075,6 +3100,11 @@ async function finalizeTailorResumeGeneration(input: {
 
   const tailoredResumeId = randomUUID();
   const tailoredResumeUpdatedAt = new Date().toISOString();
+  const tailoredResumeCreatedAt =
+    (await readTailorResumeRunCreatedAt({
+      runId: input.runId,
+      userId: input.userId,
+    })) ?? tailoredResumeUpdatedAt;
   const keywordCoverage = buildTailoredResumeKeywordCoverage({
     emphasizedTechnologies: tailoringResult.planningResult.emphasizedTechnologies,
     originalLatexCode: input.generationSourceAnnotatedLatex,
@@ -3142,7 +3172,7 @@ async function finalizeTailorResumeGeneration(input: {
         annotatedLatexCode: tailoringResult.annotatedLatexCode,
         archivedAt: null,
         companyName: tailoredResumeCompanyName,
-        createdAt: tailoredResumeUpdatedAt,
+        createdAt: tailoredResumeCreatedAt,
         displayName: tailoredResumeDisplayName,
         edits: tailoringResult.edits,
         error: tailoringResult.validationError,
@@ -3229,6 +3259,7 @@ async function finalizeTailorResumeGeneration(input: {
       applicationId: input.applicationId,
       archivedAt: savedTailoredResume.archivedAt,
       companyName: savedTailoredResume.companyName,
+      createdAt: savedTailoredResume.createdAt,
       displayName: savedTailoredResume.displayName,
       error: savedTailoredResume.error,
       id: savedTailoredResume.id,
@@ -3446,8 +3477,10 @@ async function handleTailorResumeGeneration(
         });
       }
 
+      const runCreatedAt = new Date();
       const runId = await createTailorResumeRun({
         applicationId: application?.id ?? null,
+        createdAt: runCreatedAt,
         jobDescription,
         jobUrl: jobUrlResult.jobUrl,
         jobUrlHash: application?.jobUrlHash ?? null,

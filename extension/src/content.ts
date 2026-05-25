@@ -20,6 +20,7 @@ type TailoredResumeBadgePayload = {
   emphasizedTechnologies?: TailoredResumeEmphasizedTechnologyPayload[];
   includeLowPriorityTermsInKeywordCoverage?: boolean;
   jobUrl?: string;
+  autoOpenOnPageNavigation?: boolean;
   keywordState?: "empty" | "loading";
   keywordCoverage?: TailoredResumeKeywordCoveragePayload | null;
   nonTechnologies?: string[];
@@ -112,6 +113,7 @@ const pagePromptWidth = "min(420px, calc(100vw - 32px))";
 let overlayTimeoutId: number | null = null;
 let lastShortcutAt = 0;
 const dismissedKeywordBadgeKeys = new Set<string>();
+const tabDismissedKeywordBadgeKeys = new Set<string>();
 let keywordClassificationSaveQueue: Promise<unknown> = Promise.resolve();
 const keywordClassificationOverridesByScope = new Map<
   string,
@@ -164,7 +166,7 @@ function reapplyKeywordBadgeDismissalState() {
   const { badgeKey, payload } = lastShownKeywordBadgePayload;
   const dismissalKey = resolveKeywordBadgeDismissalKey(payload, badgeKey);
 
-  if (dismissedKeywordBadgeKeys.has(dismissalKey)) {
+  if (isKeywordBadgeDismissedForPayload(payload, dismissalKey)) {
     hideEmphasizedTechnologyBadge();
     return;
   }
@@ -185,6 +187,21 @@ function resolveKeywordBadgeDismissalKey(
       tailoredResumeId: payload.tailoredResumeId ?? null,
     }) ?? `badge:${badgeKey}`
   );
+}
+
+function isKeywordBadgeDismissedForPayload(
+  payload: TailoredResumeBadgePayload,
+  dismissalKey: string,
+) {
+  if (tabDismissedKeywordBadgeKeys.has(dismissalKey)) {
+    return true;
+  }
+
+  if (payload.autoOpenOnPageNavigation === true) {
+    return false;
+  }
+
+  return dismissedKeywordBadgeKeys.has(dismissalKey);
 }
 
 function rememberKeywordClassificationOverride(input: {
@@ -2127,7 +2144,7 @@ function showEmphasizedTechnologyBadge(
   const dismissalKey = resolveKeywordBadgeDismissalKey(payload, badgeKey);
   lastShownKeywordBadgePayload = { badgeKey, payload };
 
-  if (dismissedKeywordBadgeKeys.has(dismissalKey)) {
+  if (isKeywordBadgeDismissedForPayload(payload, dismissalKey)) {
     hideEmphasizedTechnologyBadge();
     return;
   }
@@ -2169,6 +2186,7 @@ function showEmphasizedTechnologyBadge(
   closeButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    tabDismissedKeywordBadgeKeys.add(dismissalKey);
     void rememberDismissedKeywordBadgeKey(dismissalKey);
     hideEmphasizedTechnologyBadge();
   });

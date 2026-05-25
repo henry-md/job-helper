@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { filterVisibleTailoredResumes } from "../extension/src/tailored-resume-visibility.ts";
+import {
+  filterVisibleTailoredResumes,
+  filterVisibleTailorRunCardsForSavedResumes,
+} from "../extension/src/tailored-resume-visibility.ts";
 
 function buildTailoredResume(
   overrides: Partial<{
@@ -141,6 +144,32 @@ test("keeps saved resumes separate when query params differ", () => {
   );
 });
 
+test("ranks visible saved resumes only by created time", () => {
+  const visibleResumes = filterVisibleTailoredResumes({
+    resumes: [
+      buildTailoredResume({
+        createdAt: "2026-05-24T15:00:00.000Z",
+        displayName: "Older but edited",
+        id: "tailored-older",
+        jobUrl: "https://jobs.example.com/older",
+        updatedAt: "2026-05-24T17:00:00.000Z",
+      }),
+      buildTailoredResume({
+        createdAt: "2026-05-24T16:00:00.000Z",
+        displayName: "Newer",
+        id: "tailored-newer",
+        jobUrl: "https://jobs.example.com/newer",
+        updatedAt: "2026-05-24T16:01:00.000Z",
+      }),
+    ],
+  });
+
+  assert.deepEqual(
+    visibleResumes.map((resume) => resume.id),
+    ["tailored-newer", "tailored-older"],
+  );
+});
+
 test("dedupes saved resumes linked to the same application", () => {
   const visibleResumes = filterVisibleTailoredResumes({
     resumes: [
@@ -167,4 +196,45 @@ test("dedupes saved resumes linked to the same application", () => {
     visibleResumes.map((resume) => resume.id),
     ["tailored-new"],
   );
+});
+
+test("hides a failed run card when a successful saved resume owns the same url", () => {
+  const visibleCards = filterVisibleTailorRunCardsForSavedResumes({
+    cards: [
+      {
+        applicationId: null,
+        statusDisplayState: "error",
+        suppressedTailoredResumeId: null,
+        url: "https://apply.careers.microsoft.com/careers/job/123?domain=microsoft.com",
+      },
+      {
+        applicationId: null,
+        statusDisplayState: "error",
+        suppressedTailoredResumeId: null,
+        url: "https://jobs.example.com/other",
+      },
+    ],
+    resumes: [buildTailoredResume()],
+  });
+
+  assert.deepEqual(
+    visibleCards.map((card) => card.url),
+    ["https://jobs.example.com/other"],
+  );
+});
+
+test("keeps an in-flight run card ahead of a matching saved resume", () => {
+  const visibleCards = filterVisibleTailorRunCardsForSavedResumes({
+    cards: [
+      {
+        applicationId: null,
+        statusDisplayState: "loading",
+        suppressedTailoredResumeId: null,
+        url: "https://apply.careers.microsoft.com/careers/job/123?domain=microsoft.com",
+      },
+    ],
+    resumes: [buildTailoredResume()],
+  });
+
+  assert.equal(visibleCards.length, 1);
 });

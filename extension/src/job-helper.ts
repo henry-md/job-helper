@@ -186,14 +186,14 @@ export const defaultExtensionPreferences: ExtensionPreferences = {
   tailorRunTimeDisplayMode: "specific",
 };
 
-const currentTailorResumeGenerationSettingsVersion = 4;
+const currentTailorResumeGenerationSettingsVersion = 5;
 
 export const defaultTailorResumeGenerationSettingsSummary:
   TailorResumeGenerationSettingsSummary = {
     allowTailorResumeFollowUpQuestions: true,
     customResumeDownloadName: "Resume",
     includeLowPriorityTermsInKeywordCoverage: false,
-    ludicrousMode: false,
+    ludicrousMode: true,
     preventPageCountIncrease: true,
     useCustomResumeDownloadName: false,
     version: currentTailorResumeGenerationSettingsVersion,
@@ -919,14 +919,7 @@ export function readTailoredResumeSummaries(value: unknown) {
     .map(readTailoredResumeSummary)
     .filter((record): record is TailoredResumeSummary => Boolean(record))
     .sort((left, right) => {
-      const createdAtDifference =
-        new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
-
-      if (createdAtDifference !== 0) {
-        return createdAtDifference;
-      }
-
-      return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
+      return Date.parse(right.createdAt || "") - Date.parse(left.createdAt || "");
     });
 }
 
@@ -1262,6 +1255,10 @@ export function readTailorResumeGenerationSettingsSummary(
     typeof settings.allowTailorResumeFollowUpQuestions === "boolean"
       ? settings.allowTailorResumeFollowUpQuestions
       : defaultTailorResumeGenerationSettingsSummary.allowTailorResumeFollowUpQuestions;
+  const ludicrousMode =
+    typeof settings.ludicrousMode === "boolean"
+      ? settings.ludicrousMode
+      : defaultTailorResumeGenerationSettingsSummary.ludicrousMode;
 
   return {
     allowTailorResumeFollowUpQuestions:
@@ -1279,9 +1276,7 @@ export function readTailorResumeGenerationSettingsSummary(
         ? settings.customResumeDownloadName.trim()
         : defaultTailorResumeGenerationSettingsSummary.customResumeDownloadName,
     ludicrousMode:
-      typeof settings.ludicrousMode === "boolean"
-        ? settings.ludicrousMode
-        : defaultTailorResumeGenerationSettingsSummary.ludicrousMode,
+      version < currentTailorResumeGenerationSettingsVersion ? true : ludicrousMode,
     preventPageCountIncrease:
       typeof settings.preventPageCountIncrease === "boolean"
         ? settings.preventPageCountIncrease
@@ -1557,14 +1552,7 @@ export function readTailorResumeExistingTailoringStates(value: unknown) {
 
   if (parsedActiveTailorings.length > 0) {
     return parsedActiveTailorings.sort((left, right) => {
-      const createdAtDifference =
-        Date.parse(right.createdAt || "") - Date.parse(left.createdAt || "");
-
-      if (createdAtDifference !== 0) {
-        return createdAtDifference;
-      }
-
-      return Date.parse(right.updatedAt || "") - Date.parse(left.updatedAt || "");
+      return Date.parse(right.createdAt || "") - Date.parse(left.createdAt || "");
     });
   }
 

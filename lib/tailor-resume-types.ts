@@ -697,6 +697,10 @@ function parseTailorResumeGenerationSettingsState(
     values.allowTailorResumeFollowUpQuestions = true;
   }
 
+  if (version < currentTailorResumeGenerationSettingsVersion) {
+    values.ludicrousMode = true;
+  }
+
   return {
     updatedAt: readNullableString(value.updatedAt),
     values,

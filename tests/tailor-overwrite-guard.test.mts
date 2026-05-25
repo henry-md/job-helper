@@ -127,6 +127,7 @@ test("returns a completed overwrite prompt when a saved tailored resume matches"
     id: "tailored-123",
     jobIdentifier: "Software Engineer",
     jobUrl: matchingJobUrl,
+    keywordCoverage: null,
     kind: "completed",
     positionTitle: "Software Engineer",
     status: "ready",

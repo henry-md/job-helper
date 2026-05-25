@@ -148,7 +148,10 @@ import {
   pruneRawTailorStorageRegistry,
 } from "./tailor-storage-registry";
 import { buildTailoringRunsRefreshKey } from "./tailor-run-refresh";
-import { filterVisibleTailoredResumes } from "./tailored-resume-visibility";
+import {
+  filterVisibleTailoredResumes,
+  filterVisibleTailorRunCardsForSavedResumes,
+} from "./tailored-resume-visibility";
 import {
   deriveKeywordBadgeDismissalKey,
   KEYWORD_BADGE_DISMISSAL_STORAGE_KEY,
@@ -167,6 +170,11 @@ import {
 import {
   splitTailoredResumesByArchiveState,
 } from "../../lib/tailored-resume-archive-state.ts";
+import {
+  bestFuzzyTextScore,
+  normalizeFuzzySearchText,
+  scoreFuzzyText,
+} from "../../lib/fuzzy-search.ts";
 import {
   filterTailorResumeSpareBulletsForSearch,
   tailorResumeSpareBulletSearchModes,
@@ -204,6 +212,80 @@ type DashboardOpenActionState = "idle" | "running";
 
 type PanelTab = "applications" | "debug" | "settings" | "tailor";
 type TailoredResumeArchiveFilter = "archived" | "unarchived";
+
+function splitFuzzySearchTokens(value: string | null | undefined) {
+  return normalizeFuzzySearchText(value)
+    .split(/[^a-z0-9]+/g)
+    .filter(Boolean);
+}
+
+function scoreTailoredResumeArchiveSearch(input: {
+  query: string | null | undefined;
+  resume: TailoredResumeSummary;
+}) {
+  const normalizedQuery = normalizeFuzzySearchText(input.query);
+
+  if (!normalizedQuery) {
+    return 1;
+  }
+
+  const searchValues = [
+    input.resume.companyName,
+    input.resume.positionTitle,
+  ];
+  const combinedValue = searchValues.filter(Boolean).join(" ");
+  const directScore = Math.max(
+    bestFuzzyTextScore(searchValues, normalizedQuery),
+    scoreFuzzyText(combinedValue, normalizedQuery),
+  );
+
+  if (directScore >= 0) {
+    return directScore;
+  }
+
+  const queryTokens = splitFuzzySearchTokens(normalizedQuery);
+  const valueTokens = splitFuzzySearchTokens(combinedValue);
+
+  if (queryTokens.length === 0 || valueTokens.length === 0) {
+    return -1;
+  }
+
+  let tokenScore = 0;
+
+  for (const queryToken of queryTokens) {
+    const bestTokenScore = bestFuzzyTextScore(valueTokens, queryToken);
+
+    if (bestTokenScore < 0) {
+      return -1;
+    }
+
+    tokenScore += bestTokenScore;
+  }
+
+  return 40 + tokenScore;
+}
+
+function filterTailoredResumesForArchiveSearch(input: {
+  query: string | null | undefined;
+  resumes: readonly TailoredResumeSummary[];
+}) {
+  if (!normalizeFuzzySearchText(input.query)) {
+    return [...input.resumes];
+  }
+
+  return input.resumes
+    .map((resume, index) => ({
+      index,
+      resume,
+      score: scoreTailoredResumeArchiveSearch({
+        query: input.query,
+        resume,
+      }),
+    }))
+    .filter((item) => item.score >= 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map((item) => item.resume);
+}
 
 type SettingsSpareBulletEditDraft = {
   id: string;
@@ -298,6 +380,7 @@ type FloatingMenuPosition = {
 const TAILOR_RESUME_SHORTCUT_KEYS = ["⌘", "⇧", "S"] as const;
 const TAILOR_RESUME_SHORTCUT_ARIA_LABEL = "Command Shift S";
 const STALE_TAILORING_RUN_MAX_AGE_MS = 1000 * 60 * 2;
+const AUTH_RECONNECT_INTERVAL_MS = 1000;
 const SYNC_STATE_POLL_INTERVAL_MS = 500;
 const TAILOR_RUN_DETAIL_WIDE_LAYOUT_QUERY = "(min-width: 650px)";
 const FLOATING_MENU_VIEWPORT_PADDING = 12;
@@ -2001,11 +2084,7 @@ function readExistingTailoringSortTime(
 ) {
   const createdAtTimestamp = Date.parse(existingTailoring.createdAt);
 
-  if (Number.isFinite(createdAtTimestamp)) {
-    return createdAtTimestamp;
-  }
-
-  return readActiveTailorRunSortTime(existingTailoring.updatedAt);
+  return Number.isFinite(createdAtTimestamp) ? createdAtTimestamp : 0;
 }
 
 function buildTailorRunDeleteTarget(input: TailorRunDeleteTarget) {
@@ -2609,7 +2688,7 @@ function buildParallelTailorRunCards(input: {
     cards.push(nextCard);
   }
 
-  cards.sort((left, right) => left.sortTime - right.sortTime);
+  cards.sort((left, right) => right.sortTime - left.sortTime);
 
   return cards;
 }
@@ -2700,7 +2779,7 @@ function dedupeActiveTailorRunCards(cards: ActiveTailorRunCard[]) {
     }
   }
 
-  return selectedCards.sort((left, right) => left.sortTime - right.sortTime);
+  return selectedCards.sort((left, right) => right.sortTime - left.sortTime);
 }
 
 function readJobPageIdentity(pageContext: JobPageContext | null) {
@@ -2831,15 +2910,9 @@ function compareExistingTailoringPrompts(
   left: ExistingTailoringPromptState,
   right: ExistingTailoringPromptState,
 ) {
-  return (
-    compareIsoTimestampStrings(
-      left.existingTailoring.updatedAt,
-      right.existingTailoring.updatedAt,
-    ) ||
-    compareIsoTimestampStrings(
-      left.existingTailoring.createdAt,
-      right.existingTailoring.createdAt,
-    )
+  return compareIsoTimestampStrings(
+    left.existingTailoring.createdAt,
+    right.existingTailoring.createdAt,
   );
 }
 
@@ -3862,6 +3935,8 @@ function App() {
   );
   const [tailoredResumeArchiveFilter, setTailoredResumeArchiveFilter] =
     useState<TailoredResumeArchiveFilter>("unarchived");
+  const [tailoredResumeSearchQuery, setTailoredResumeSearchQuery] =
+    useState("");
   const [state, setState] = useState<PanelState>({
     status: "loading",
     snapshot: null,
@@ -4092,6 +4167,7 @@ function App() {
   const backgroundTailorRunMenuRef = useRef<HTMLDivElement | null>(null);
   const tailoredResumeMenuRef = useRef<HTMLDivElement | null>(null);
   const tailoredResumeMenuPopoverRef = useRef<HTMLDivElement | null>(null);
+  const currentPageTailoredResumeRowRef = useRef<HTMLDivElement | null>(null);
   const lastReadyPersonalInfoRef = useRef<PersonalInfoSummary | null>(null);
   const lastSeenSyncStateRef = useRef<UserSyncStateSnapshot | null>(null);
   const stoppedTailoringsByKeyRef = useRef<StoppedTailoringRegistry>({});
@@ -4100,6 +4176,7 @@ function App() {
   const lastSeenTailorInterviewFinishRequestRef = useRef<string | null>(null);
   const dismissedTailorInterviewFinishRequestRef = useRef<string | null>(null);
   const lastAutoFocusedTailorArtifactKeyRef = useRef<string | null>(null);
+  const lastAutoScrolledTailoredResumeKeyRef = useRef<string | null>(null);
   const activeTailorRequestAbortControllerRef =
     useRef<AbortController | null>(null);
   const availablePanelTabs = [
@@ -4976,7 +5053,7 @@ function App() {
   const includeLowPriorityTermsInKeywordCoverage =
     personalInfo?.generationSettings.includeLowPriorityTermsInKeywordCoverage ??
     false;
-  const ludicrousMode = personalInfo?.generationSettings.ludicrousMode ?? false;
+  const ludicrousMode = personalInfo?.generationSettings.ludicrousMode ?? true;
   const useCustomResumeDownloadName =
     personalInfo?.generationSettings.useCustomResumeDownloadName ?? false;
   const customResumeDownloadName =
@@ -5093,6 +5170,16 @@ function App() {
     : null;
   const { archived: archivedTailoredResumes, unarchived: unarchivedTailoredResumes } =
     splitTailoredResumesByArchiveState(personalInfo?.tailoredResumes ?? []);
+  const displayedArchivedTailoredResumes = useMemo(
+    () =>
+      filterTailoredResumesForArchiveSearch({
+        query: tailoredResumeSearchQuery,
+        resumes: archivedTailoredResumes,
+      }),
+    [tailoredResumeSearchQuery, archivedTailoredResumes],
+  );
+  const isTailoredResumeSearchActive =
+    tailoredResumeSearchQuery.trim().length > 0;
   const unarchivedTailoredResumeCount = unarchivedTailoredResumes.length;
   const currentPageCompletedTailoring =
     !existingTailoringPrompt &&
@@ -5124,6 +5211,18 @@ function App() {
             tailoredResume.id === currentPageCompletedTailoring.tailoredResumeId,
         ) ?? null
       : null);
+  const currentPageCompletedTailoredResumeAutoScrollKey =
+    currentPageCompletedTailoredResume
+      ? [
+          currentPageCompletedTailoredResume.id,
+          normalizeComparableUrl(currentPageUrl),
+          normalizeComparableUrl(currentPageIdentity?.jobUrl),
+          normalizeComparableUrl(currentPageIdentity?.canonicalUrl),
+          normalizeComparableUrl(currentPageIdentity?.pageUrl),
+        ]
+          .filter((value): value is string => Boolean(value))
+          .join(":")
+      : null;
   const currentPageArchivedTailoredResume =
     currentPageCompletedTailoredResume
       ? null
@@ -5415,10 +5514,23 @@ function App() {
     activeReferences: activeTailorRunVisibilityReferences,
     resumes: unarchivedTailoredResumes,
   });
-  const displayedUnarchivedTailoredResumes = visibleUnarchivedTailoredResumes;
+  const displayedUnarchivedTailoredResumes = useMemo(
+    () =>
+      filterTailoredResumesForArchiveSearch({
+        query: tailoredResumeSearchQuery,
+        resumes: visibleUnarchivedTailoredResumes,
+      }),
+    [tailoredResumeSearchQuery, visibleUnarchivedTailoredResumes],
+  );
+  const displayedActiveTailorRunCards = filterVisibleTailorRunCardsForSavedResumes({
+    cards: activeTailorRunCards,
+    resumes: displayedUnarchivedTailoredResumes,
+  });
   const shouldRenderUnarchivedResumeLibrary =
     authState.status !== "signedIn" ||
     personalInfoState.status !== "ready" ||
+    isTailoredResumeSearchActive ||
+    visibleUnarchivedTailoredResumes.length > 0 ||
     displayedUnarchivedTailoredResumes.length > 0;
   const shouldRenderArchivedResumeEmptySurface =
     authState.status === "signedIn" &&
@@ -5426,7 +5538,7 @@ function App() {
     archivedTailoredResumes.length === 0;
   const isShowingArchivedTailoredResumes =
     tailoredResumeArchiveFilter === "archived";
-  const retryableTailorRunCards = activeTailorRunCards.filter((card) => {
+  const retryableTailorRunCards = displayedActiveTailorRunCards.filter((card) => {
     const targetUrl = card.deleteTarget?.jobUrl?.trim() || card.url?.trim() || "";
 
     return Boolean(targetUrl);
@@ -5466,7 +5578,8 @@ function App() {
   const canDeleteAllTailoredResumes =
     authState.status === "signedIn" &&
     personalInfoState.status === "ready" &&
-    (unarchivedTailoredResumeCount > 0 || activeTailorRunCards.length > 0);
+    (unarchivedTailoredResumeCount > 0 ||
+      displayedActiveTailorRunCards.length > 0);
   const shouldRenderApplicationsEmptySurface =
     authState.status === "signedIn" &&
     personalInfoState.status === "ready" &&
@@ -5845,7 +5958,7 @@ function App() {
     shouldShowTailorRunFocusedStep;
   const tailorRunTimeDisplayMode = extensionPreferences.tailorRunTimeDisplayMode;
   const hasLoadingTailorRunTimer =
-    activeTailorRunCards.some(
+    displayedActiveTailorRunCards.some(
       (card) => card.statusDisplayState === "loading",
     ) || shouldShowLegacyTailorRunElapsedTime;
   const legacyTailorRunElapsedStartTime = readActiveTailorRunSortTime(
@@ -5870,8 +5983,8 @@ function App() {
         })
       : null;
   const hasUnarchivedTailorItems =
-    displayedUnarchivedTailoredResumes.length > 0 ||
-    activeTailorRunCards.length > 0 ||
+    visibleUnarchivedTailoredResumes.length > 0 ||
+    displayedActiveTailorRunCards.length > 0 ||
     Boolean(pageCaptureFailureRun) ||
     Boolean(currentPageArchivedTailoredResume) ||
     shouldRenderLegacyTailorRunShell;
@@ -5881,13 +5994,15 @@ function App() {
     !hasUnarchivedTailorItems;
   const unarchivedTailorDisplayCount =
     displayedUnarchivedTailoredResumes.length +
-    activeTailorRunCards.length +
+    displayedActiveTailorRunCards.length +
     (pageCaptureFailureRun ? 1 : 0) +
     (shouldRenderLegacyTailorRunShell &&
     displayedUnarchivedTailoredResumes.length === 0 &&
-    activeTailorRunCards.length === 0
+    displayedActiveTailorRunCards.length === 0
       ? 1
       : 0);
+  const unarchivedTailorDeleteCount =
+    unarchivedTailoredResumeCount + displayedActiveTailorRunCards.length;
   const showFullscreenTailorRunDetail =
     Boolean(activeTailorRunDetailView && focusedTailoredResumeId);
   const activeTailorRunDetailIdentity =
@@ -7278,6 +7393,40 @@ function App() {
   }, [loadAuthStatus]);
 
   useEffect(() => {
+    if (authState.status === "signedIn" || authActionState === "running") {
+      return;
+    }
+
+    let isCancelled = false;
+    let isReconnectCheckInFlight = false;
+
+    async function reconnectIfNeeded() {
+      if (isCancelled || isReconnectCheckInFlight) {
+        return;
+      }
+
+      isReconnectCheckInFlight = true;
+
+      try {
+        await loadAuthStatus();
+      } finally {
+        isReconnectCheckInFlight = false;
+      }
+    }
+
+    const intervalId = window.setInterval(() => {
+      void reconnectIfNeeded();
+    }, AUTH_RECONNECT_INTERVAL_MS);
+
+    void reconnectIfNeeded();
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [authActionState, authState.status, loadAuthStatus]);
+
+  useEffect(() => {
     if (authState.status !== "signedIn") {
       return;
     }
@@ -7916,6 +8065,53 @@ function App() {
       setSelectedTailoredResumeId(null);
     }
   }, [focusedTailoredResumeId]);
+
+  useEffect(() => {
+    const autoScrollKey = currentPageCompletedTailoredResumeAutoScrollKey;
+
+    if (!autoScrollKey || showFullscreenTailorRunDetail) {
+      if (state.status === "ready" && !autoScrollKey) {
+        lastAutoScrolledTailoredResumeKeyRef.current = null;
+      }
+      return;
+    }
+
+    if (lastAutoScrolledTailoredResumeKeyRef.current === autoScrollKey) {
+      return;
+    }
+
+    if (activePanelTab !== "tailor") {
+      setActivePanelTab("tailor");
+    }
+
+    if (tailoredResumeArchiveFilter !== "unarchived") {
+      setTailoredResumeArchiveFilter("unarchived");
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      const targetRow = currentPageTailoredResumeRowRef.current;
+
+      if (!targetRow) {
+        return;
+      }
+
+      targetRow.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      lastAutoScrolledTailoredResumeKeyRef.current = autoScrollKey;
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [
+    activePanelTab,
+    currentPageCompletedTailoredResumeAutoScrollKey,
+    showFullscreenTailorRunDetail,
+    state.status,
+    tailoredResumeArchiveFilter,
+  ]);
 
   const tailoredResumePreviewSessionToken =
     authState.status === "signedIn" ? authState.session.sessionToken : null;
@@ -12100,60 +12296,89 @@ function App() {
             Archived
           </button>
         </div>
-        <div className="tailored-resume-retry-all-shell">
-          <div
-            aria-label="Retry tailoring runs"
-            className="tailored-resume-retry-all-options"
-            role="group"
-          >
+        <label className="tailored-resume-archive-search">
+          <span className="sr-only">
+            Search tailored resumes by scraped company or title
+          </span>
+          <SearchIcon />
+          <input
+            aria-label="Search tailored resumes by company or title"
+            placeholder="Search company or title"
+            type="search"
+            value={tailoredResumeSearchQuery}
+            onChange={(event) =>
+              setTailoredResumeSearchQuery(event.target.value)
+            }
+          />
+          {isTailoredResumeSearchActive ? (
             <button
-              className="secondary-action compact-action"
-              disabled={!canRetryInFlightTailorRuns}
-              title={
-                retryableTailorRunCards.length > 0
-                  ? "Retry in-flight tailoring runs"
-                  : "No in-flight tailoring runs to retry"
-              }
+              aria-label="Clear tailored resume search"
+              className="tailored-resume-archive-search-clear"
               type="button"
-              onClick={() => void retryTailorRunBatch("inFlight")}
+              onClick={() => setTailoredResumeSearchQuery("")}
             >
-              {retryingTailorRunBatchScope === "inFlight"
-                ? "Retrying..."
-                : "Retry in-flight"}
+              <CloseIcon />
+            </button>
+          ) : null}
+        </label>
+        {!isShowingArchivedTailoredResumes ? (
+          <>
+            <div className="tailored-resume-retry-all-shell">
+              <div
+                aria-label="Retry tailoring runs"
+                className="tailored-resume-retry-all-options"
+                role="group"
+              >
+                <button
+                  className="secondary-action compact-action"
+                  disabled={!canRetryInFlightTailorRuns}
+                  title={
+                    retryableTailorRunCards.length > 0
+                      ? "Retry in-flight tailoring runs"
+                      : "No in-flight tailoring runs to retry"
+                  }
+                  type="button"
+                  onClick={() => void retryTailorRunBatch("inFlight")}
+                >
+                  {retryingTailorRunBatchScope === "inFlight"
+                    ? "Retrying..."
+                    : "Retry in-flight"}
+                </button>
+                <button
+                  className="secondary-action compact-action"
+                  disabled={!canRetryAllTailorRuns}
+                  title={
+                    canRetryAllTailorRuns
+                      ? "Retry every unarchived tailoring run"
+                      : "No unarchived tailoring runs to retry"
+                  }
+                  type="button"
+                  onClick={() => void retryTailorRunBatch("all")}
+                >
+                  {retryingTailorRunBatchScope === "all" ? "Retrying..." : "Retry all"}
+                </button>
+              </div>
+            </div>
+            <button
+              className="secondary-action compact-action tailored-resume-archive-all-action"
+              disabled={!canArchiveAllTailoredResumes}
+              title="Archive every unarchived saved resume"
+              type="button"
+              onClick={() => void archiveAllTailoredResumes()}
+            >
+              {isArchivingAllTailoredResumes ? "Archiving..." : "Archive all"}
             </button>
             <button
-              className="secondary-action compact-action"
-              disabled={!canRetryAllTailorRuns}
-              title={
-                canRetryAllTailorRuns
-                  ? "Retry every unarchived tailoring run"
-                  : "No unarchived tailoring runs to retry"
-              }
+              className="danger-action compact-action tailored-resume-delete-all-action"
+              disabled={!canDeleteAllTailoredResumes}
+              title="Delete every unarchived saved resume"
               type="button"
-              onClick={() => void retryTailorRunBatch("all")}
+              onClick={() => setIsDeleteAllTailoredResumesPromptOpen(true)}
             >
-              {retryingTailorRunBatchScope === "all" ? "Retrying..." : "Retry all"}
+              {isDeletingAllTailoredResumes ? "Deleting..." : "Delete all"}
             </button>
-          </div>
-        </div>
-        <button
-          className="secondary-action compact-action tailored-resume-archive-all-action"
-          disabled={!canArchiveAllTailoredResumes}
-          title="Archive every unarchived saved resume"
-          type="button"
-          onClick={() => void archiveAllTailoredResumes()}
-        >
-          {isArchivingAllTailoredResumes ? "Archiving..." : "Archive all"}
-        </button>
-        <button
-          className="danger-action compact-action tailored-resume-delete-all-action"
-          disabled={!canDeleteAllTailoredResumes}
-          title="Delete every unarchived saved resume"
-          type="button"
-          onClick={() => setIsDeleteAllTailoredResumesPromptOpen(true)}
-        >
-          {isDeletingAllTailoredResumes ? "Deleting..." : "Delete all"}
-        </button>
+          </>
+        ) : null}
       </div>
     );
   }
@@ -12240,9 +12465,12 @@ function App() {
           <div className="tailored-resume-card-stack">
             {renderTailoredResumeLibrary({
               actionLabel: "restore",
-              emptyMessage: "No archived tailored resumes yet.",
+              emptyMessage:
+                isTailoredResumeSearchActive
+                  ? "No archived resumes match that search."
+                  : "No archived tailored resumes yet.",
               flush: true,
-              resumes: archivedTailoredResumes,
+              resumes: displayedArchivedTailoredResumes,
               title: "Archived tailored resume",
             })}
           </div>
@@ -12265,19 +12493,23 @@ function App() {
           {renderCurrentPageArchivedTailoredResumeSuggestion()}
           {renderPageCaptureFailureNotice()}
           {legacyTailorRunShell}
-          {activeTailorRunCards.length > 0 ? (
+          {displayedActiveTailorRunCards.length > 0 ? (
             <section
               aria-label="Active tailoring runs"
               className="active-tailor-run-stack"
             >
-              {activeTailorRunCards.map((card) => renderActiveTailorRunCard(card))}
+              {displayedActiveTailorRunCards.map((card) =>
+                renderActiveTailorRunCard(card),
+              )}
             </section>
           ) : null}
 
           {shouldRenderUnarchivedResumeLibrary
             ? renderTailoredResumeLibrary({
                 actionLabel: "archive",
-                emptyMessage: "No active or completed tailored resumes yet.",
+                emptyMessage: isTailoredResumeSearchActive
+                  ? "No unarchived resumes match that search."
+                  : "No active or completed tailored resumes yet.",
                 flush: true,
                 highlightCurrentPage: true,
                 resumes: displayedUnarchivedTailoredResumes,
@@ -12400,6 +12632,9 @@ function App() {
             return (
               <div
                 key={tailoredResume.id}
+                ref={
+                  isCurrentPageMatch ? currentPageTailoredResumeRowRef : undefined
+                }
                 className={`tailored-resume-row-shell ${
                   isCurrentPageMatch
                     ? "tailored-resume-row-shell-current-page"
@@ -13739,7 +13974,12 @@ function App() {
               type="button"
               onClick={() => void updateLudicrousMode(!ludicrousMode)}
             >
-              {ludicrousMode ? "Enabled" : "Disabled"}
+              <span className="settings-toggle-switch-label">
+                {ludicrousMode ? "Enabled" : "Disabled"}
+              </span>
+              <span className="settings-toggle-switch-track" aria-hidden="true">
+                <span className="settings-toggle-switch-thumb" />
+              </span>
             </button>
           </div>
           <div className="settings-toggle-row settings-toggle-row-keyword">
@@ -13766,7 +14006,12 @@ function App() {
                 })
               }
             >
-              {useCustomResumeDownloadName ? "Fixed name" : "Company"}
+              <span className="settings-toggle-switch-label">
+                {useCustomResumeDownloadName ? "Fixed name" : "Company"}
+              </span>
+              <span className="settings-toggle-switch-track" aria-hidden="true">
+                <span className="settings-toggle-switch-thumb" />
+              </span>
             </button>
           </div>
           <label className="settings-spare-bullet-field">
@@ -15303,10 +15548,8 @@ function App() {
             <p className="eyebrow">Delete saved resumes</p>
             <h2 id="tailored-resume-delete-all-title">
               Delete{" "}
-              {unarchivedTailoredResumeCount + activeTailorRunCards.length} tailored{" "}
-              {unarchivedTailoredResumeCount + activeTailorRunCards.length === 1
-                ? "resume"
-                : "resumes"}
+              {unarchivedTailorDeleteCount} tailored{" "}
+              {unarchivedTailorDeleteCount === 1 ? "resume" : "resumes"}
               ?
             </h2>
             <p
@@ -15330,16 +15573,14 @@ function App() {
                 className="danger-action compact-action"
                 disabled={
                   isDeletingAllTailoredResumes ||
-                  unarchivedTailoredResumeCount + activeTailorRunCards.length === 0
+                  unarchivedTailorDeleteCount === 0
                 }
                 type="button"
                 onClick={() => void deleteAllTailoredResumes()}
               >
                 {isDeletingAllTailoredResumes
                   ? "Deleting..."
-                  : `Delete ${
-                      unarchivedTailoredResumeCount + activeTailorRunCards.length
-                    }`}
+                  : `Delete ${unarchivedTailorDeleteCount}`}
               </button>
             </div>
           </section>

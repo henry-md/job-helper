@@ -7,7 +7,7 @@ export const tailorResumeGenerationSettingKeys = [
   "useCustomResumeDownloadName",
 ] as const;
 
-export const currentTailorResumeGenerationSettingsVersion = 4;
+export const currentTailorResumeGenerationSettingsVersion = 5;
 
 export type TailorResumeGenerationSettings = {
   allowTailorResumeFollowUpQuestions: boolean;
@@ -23,7 +23,7 @@ export function createDefaultTailorResumeGenerationSettings(): TailorResumeGener
     allowTailorResumeFollowUpQuestions: true,
     customResumeDownloadName: "Resume",
     includeLowPriorityTermsInKeywordCoverage: false,
-    ludicrousMode: false,
+    ludicrousMode: true,
     preventPageCountIncrease: true,
     useCustomResumeDownloadName: false,
   };

@@ -153,6 +153,7 @@ const scheduledTailoredResumeBadgeChecks = new Map<
 const latestTailoredResumeBadgeCheckByTabId = new Map<number, number>();
 
 type TailoredResumeBadgeCheckOptions = {
+  autoOpenOnPageNavigation?: boolean;
   forceFreshPersonalInfo?: boolean;
 };
 
@@ -169,6 +170,7 @@ const activeTailorRunKeywordBadgesByPageKey = new Map<
   string,
   ActiveTailorRunKeywordBadgeSnapshot
 >();
+let authStatusPromise: Promise<AuthStatus> | null = null;
 
 async function configureSidePanelAction() {
   try {
@@ -414,6 +416,7 @@ async function sendTailoredResumeBadgeMessage(
           }[];
           includeLowPriorityTermsInKeywordCoverage: boolean;
           jobUrl: string | null;
+          autoOpenOnPageNavigation?: boolean;
           keywordCoverage: unknown | null;
           nonTechnologyNames?: string[];
           tailoredResumeId: string;
@@ -514,6 +517,7 @@ async function sendEmphasizedTechnologiesBadgeMessage(
       >;
       includeLowPriorityTermsInKeywordCoverage: boolean;
       jobUrl: string | null;
+      autoOpenOnPageNavigation?: boolean;
       keywordState?: "empty" | "loading";
       keywordCoverage: unknown | null;
       nonTechnologyNames?: string[];
@@ -675,6 +679,7 @@ async function showStepOneKeywordBadge(input: {
 }
 
 async function showActiveTailoringKeywordBadgeForTab(input: {
+  autoOpenOnPageNavigation?: boolean;
   pageIdentity: Awaited<ReturnType<typeof readTailoredResumeBadgePageIdentity>>;
   personalInfo: PersonalInfoSummary;
   tabId: number;
@@ -709,6 +714,7 @@ async function showActiveTailoringKeywordBadgeForTab(input: {
       emphasizedTechnologies,
       includeLowPriorityTermsInKeywordCoverage: false,
       jobUrl: activeTailoring.jobUrl,
+      autoOpenOnPageNavigation: input.autoOpenOnPageNavigation,
       keywordCoverage: null,
       nonTechnologyNames: input.personalInfo.userMarkdown.nonTechnologies,
     },
@@ -719,6 +725,7 @@ async function showActiveTailoringKeywordBadgeForTab(input: {
 }
 
 async function showLocalActiveTailorRunKeywordBadgeForTab(input: {
+  autoOpenOnPageNavigation?: boolean;
   nonTechnologyNames?: string[];
   pageIdentity: Awaited<ReturnType<typeof readTailoredResumeBadgePageIdentity>>;
   tabId: number;
@@ -750,6 +757,7 @@ async function showLocalActiveTailorRunKeywordBadgeForTab(input: {
           emphasizedTechnologies: rememberedBadge.technologies,
           includeLowPriorityTermsInKeywordCoverage: false,
           jobUrl: rememberedBadge.jobUrl,
+          autoOpenOnPageNavigation: input.autoOpenOnPageNavigation,
           keywordCoverage: null,
           nonTechnologyNames: input.nonTechnologyNames,
         },
@@ -796,6 +804,7 @@ async function showLocalActiveTailorRunKeywordBadgeForTab(input: {
       emphasizedTechnologies: resolution.technologies,
       includeLowPriorityTermsInKeywordCoverage: false,
       jobUrl: resolution.run.pageUrl,
+      autoOpenOnPageNavigation: input.autoOpenOnPageNavigation,
       keywordCoverage: null,
       nonTechnologyNames: input.nonTechnologyNames,
     },
@@ -906,6 +915,7 @@ async function revealDismissedKeywordBadge(input: {
   emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
   includeLowPriorityTermsInKeywordCoverage?: boolean;
   jobUrl: string | null;
+  autoOpenOnPageNavigation?: boolean;
   keywordCoverage?: unknown;
   nonTechnologyNames?: string[];
   tailoredResumeId: string | null;
@@ -1037,6 +1047,7 @@ async function refreshKeywordBadgeForMatchingTabs(input: {
   emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
   includeLowPriorityTermsInKeywordCoverage?: boolean;
   jobUrl: string | null;
+  autoOpenOnPageNavigation?: boolean;
   keywordCoverage?: unknown;
   nonTechnologyNames?: string[];
   tailoredResumeId?: string | null;
@@ -1083,6 +1094,7 @@ async function refreshKeywordBadgeForMatchingTabs(input: {
             includeLowPriorityTermsInKeywordCoverage:
               input.includeLowPriorityTermsInKeywordCoverage === true,
             jobUrl: input.jobUrl,
+            autoOpenOnPageNavigation: input.autoOpenOnPageNavigation,
             keywordCoverage: input.keywordCoverage ?? null,
             nonTechnologyNames: input.nonTechnologyNames ?? [],
             tailoredResumeId: input.tailoredResumeId ?? undefined,
@@ -1217,6 +1229,7 @@ async function refreshTailoredResumeBadgeForTab(
     pageIdentity,
   });
   const showedActiveKeywordBadge = await showActiveTailoringKeywordBadgeForTab({
+    autoOpenOnPageNavigation: options.autoOpenOnPageNavigation === true,
     pageIdentity,
     personalInfo,
     tabId,
@@ -1224,6 +1237,7 @@ async function refreshTailoredResumeBadgeForTab(
   const localActiveKeywordBadge = showedActiveKeywordBadge
     ? { matchedActiveRun: false, showed: false }
     : await showLocalActiveTailorRunKeywordBadgeForTab({
+        autoOpenOnPageNavigation: options.autoOpenOnPageNavigation === true,
         nonTechnologyNames: personalInfo.userMarkdown.nonTechnologies,
         pageIdentity,
         tabId,
@@ -1260,6 +1274,7 @@ async function refreshTailoredResumeBadgeForTab(
   await sendTailoredResumeBadgeMessage(tabId, {
     payload: {
       ...badge,
+      autoOpenOnPageNavigation: options.autoOpenOnPageNavigation === true,
       includeLowPriorityTermsInKeywordCoverage:
         personalInfo.generationSettings.includeLowPriorityTermsInKeywordCoverage,
       nonTechnologyNames: personalInfo.userMarkdown.nonTechnologies,
@@ -1968,6 +1983,14 @@ async function getAuthStatus(): Promise<AuthStatus> {
   return silentSession
     ? { session: silentSession, status: "signedIn" }
     : { status: "signedOut" };
+}
+
+function getCoalescedAuthStatus() {
+  authStatusPromise ??= getAuthStatus().finally(() => {
+    authStatusPromise = null;
+  });
+
+  return authStatusPromise;
 }
 
 async function requestGoogleAccessToken(interactive: boolean) {
@@ -3435,6 +3458,7 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
     .get(activeInfo.tabId)
     .then((tab) =>
       scheduleTailoredResumeBadgeCheck(tab, {
+        autoOpenOnPageNavigation: true,
         forceFreshPersonalInfo: true,
       }),
     )
@@ -3453,6 +3477,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 
   scheduleTailoredResumeBadgeCheck(tab, {
+    autoOpenOnPageNavigation: true,
     forceFreshPersonalInfo: true,
   });
 });
@@ -3507,7 +3532,7 @@ chrome.runtime.onMessage.addListener((
   }
 
   if (typedMessage?.type === "JOB_HELPER_AUTH_STATUS") {
-    return sendAsyncResponse(sendResponse, async () => getAuthStatus());
+    return sendAsyncResponse(sendResponse, getCoalescedAuthStatus);
   }
 
   if (typedMessage?.type === "JOB_HELPER_SIGN_IN") {

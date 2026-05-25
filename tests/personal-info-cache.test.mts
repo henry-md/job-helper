@@ -12,10 +12,10 @@ function buildPersonalInfo() {
       allowTailorResumeFollowUpQuestions: true,
       customResumeDownloadName: "Resume",
       includeLowPriorityTermsInKeywordCoverage: false,
-      ludicrousMode: false,
+      ludicrousMode: true,
       preventPageCountIncrease: true,
       useCustomResumeDownloadName: false,
-      version: 4,
+      version: 5,
     },
     originalResume: {
       error: null,

@@ -238,7 +238,7 @@ test("parseTailorResumeProfile keeps saved generation settings", () => {
         preventPageCountIncrease: false,
         useCustomResumeDownloadName: true,
       },
-      version: 4,
+      version: 5,
     },
   });
 
@@ -246,7 +246,7 @@ test("parseTailorResumeProfile keeps saved generation settings", () => {
     profile.generationSettings.updatedAt,
     "2026-05-01T22:30:00.000Z",
   );
-  assert.equal(profile.generationSettings.version, 4);
+  assert.equal(profile.generationSettings.version, 5);
   assert.equal(
     profile.generationSettings.values.allowTailorResumeFollowUpQuestions,
     false,
@@ -283,7 +283,7 @@ test("parseTailorResumeProfile migrates legacy hidden follow-up disable", () => 
     },
   });
 
-  assert.equal(profile.generationSettings.version, 4);
+  assert.equal(profile.generationSettings.version, 5);
   assert.equal(
     profile.generationSettings.values.allowTailorResumeFollowUpQuestions,
     true,
