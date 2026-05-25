@@ -3521,6 +3521,16 @@ export function applyTailorResumeBlockChanges(input: {
     const replacementLatex = repairTailoredResumeModelLatexBlock(
       stripTailorResumeSegmentIds(change.latexCode),
     );
+    const replacementBlocks =
+      replacementLatex.trim()
+        ? readAnnotatedTailorResumeBlocks(replacementLatex)
+        : [];
+
+    if (replacementBlocks.length > 1) {
+      throw new Error(
+        `Replacement for segment ${change.segmentId} spans multiple logical blocks.`,
+      );
+    }
 
     if (replacementLatex.trim()) {
       chunks.push(replacementLatex);
