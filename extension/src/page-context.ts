@@ -77,6 +77,108 @@ function readResponseError(response: PageContextResponse) {
     : "The content script did not return page details.";
 }
 
+function uniqueStrings(values: string[], limit: number) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const normalizedValue = value.replace(/\s+/g, " ").trim();
+    const key = normalizedValue.toLowerCase();
+
+    if (!normalizedValue || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    result.push(normalizedValue);
+
+    if (result.length >= limit) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+export function mergeJobPageContextFrames(
+  mainContext: JobPageContext,
+  frameContexts: readonly JobPageContext[],
+): JobPageContext {
+  const supplementalContexts = frameContexts.filter(
+    (context) => context.url !== mainContext.url || context.rawText !== mainContext.rawText,
+  );
+
+  if (supplementalContexts.length === 0) {
+    return mainContext;
+  }
+
+  return {
+    ...mainContext,
+    companyCandidates: uniqueStrings(
+      [
+        ...mainContext.companyCandidates,
+        ...supplementalContexts.flatMap((context) => context.companyCandidates),
+      ],
+      12,
+    ),
+    employmentTypeCandidates: uniqueStrings(
+      [
+        ...mainContext.employmentTypeCandidates,
+        ...supplementalContexts.flatMap(
+          (context) => context.employmentTypeCandidates,
+        ),
+      ],
+      12,
+    ),
+    headings: uniqueStrings(
+      [
+        ...mainContext.headings,
+        ...supplementalContexts.flatMap((context) => context.headings),
+      ],
+      20,
+    ),
+    jsonLdJobPostings: [
+      ...mainContext.jsonLdJobPostings,
+      ...supplementalContexts.flatMap((context) => context.jsonLdJobPostings),
+    ],
+    locationCandidates: uniqueStrings(
+      [
+        ...mainContext.locationCandidates,
+        ...supplementalContexts.flatMap((context) => context.locationCandidates),
+      ],
+      12,
+    ),
+    rawText: uniqueStrings(
+      [
+        mainContext.rawText,
+        ...supplementalContexts.map((context) => context.rawText),
+      ],
+      12,
+    ).join("\n\n"),
+    salaryMentions: uniqueStrings(
+      [
+        ...mainContext.salaryMentions,
+        ...supplementalContexts.flatMap((context) => context.salaryMentions),
+      ],
+      12,
+    ),
+    titleCandidates: uniqueStrings(
+      [
+        ...mainContext.titleCandidates,
+        ...supplementalContexts.flatMap((context) => context.titleCandidates),
+      ],
+      12,
+    ),
+    topTextBlocks: uniqueStrings(
+      [
+        ...mainContext.topTextBlocks,
+        ...supplementalContexts.flatMap((context) => context.topTextBlocks),
+      ],
+      16,
+    ),
+  };
+}
+
 async function requestPageContext(
   tabId: number,
   messageType: PageContextMessageType,
@@ -235,18 +337,48 @@ async function collectPageContextWithOneShotScript(tabId: number) {
   return pageContext;
 }
 
+async function collectPageContextFromAllFrames(tabId: number) {
+  const results = await chrome.scripting.executeScript({
+    func: collectPageContextInPage,
+    target: { allFrames: true, tabId },
+  });
+
+  return results
+    .map((result) => result.result)
+    .filter(isJobPageContext);
+}
+
+async function augmentPageContextWithFrames(
+  tabId: number,
+  pageContext: JobPageContext,
+) {
+  try {
+    const frameContexts = await collectPageContextFromAllFrames(tabId);
+
+    return mergeJobPageContextFrames(pageContext, frameContexts);
+  } catch {
+    return pageContext;
+  }
+}
+
 export async function collectPageContextFromTab(
   tabId: number,
   messageType: PageContextMessageType,
 ) {
   try {
-    return await requestPageContext(tabId, messageType);
+    return await augmentPageContextWithFrames(
+      tabId,
+      await requestPageContext(tabId, messageType),
+    );
   } catch (firstError) {
     try {
       await injectContentScript(tabId);
     } catch {
       try {
-        return await collectPageContextWithOneShotScript(tabId);
+        return await augmentPageContextWithFrames(
+          tabId,
+          await collectPageContextWithOneShotScript(tabId),
+        );
       } catch {
         throw new Error(formatPageContextErrorMessage(firstError));
       }
@@ -254,10 +386,16 @@ export async function collectPageContextFromTab(
   }
 
   try {
-    return await requestPageContext(tabId, messageType);
+    return await augmentPageContextWithFrames(
+      tabId,
+      await requestPageContext(tabId, messageType),
+    );
   } catch (secondError) {
     try {
-      return await collectPageContextWithOneShotScript(tabId);
+      return await augmentPageContextWithFrames(
+        tabId,
+        await collectPageContextWithOneShotScript(tabId),
+      );
     } catch {
       throw new Error(formatPageContextErrorMessage(secondError));
     }

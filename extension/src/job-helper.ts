@@ -96,6 +96,7 @@ export const DEFAULT_APP_BASE_URL = normalizeAppBaseUrl(
 );
 export const DEFAULT_DASHBOARD_URL = `${DEFAULT_APP_BASE_URL}/dashboard`;
 export const DEFAULT_SYNC_STATE_ENDPOINT = `${DEFAULT_APP_BASE_URL}/api/sync-state`;
+export const DEFAULT_AI_USAGE_ENDPOINT = `${DEFAULT_APP_BASE_URL}/api/ai-usage`;
 export const DEFAULT_JOB_APPLICATIONS_ENDPOINT =
   `${DEFAULT_APP_BASE_URL}/api/job-applications`;
 export const DEFAULT_TAILOR_RESUME_ENDPOINT =
