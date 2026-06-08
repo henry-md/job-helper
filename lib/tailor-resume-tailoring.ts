@@ -3219,12 +3219,15 @@ export function validateTailoredResumePlanningKeywordCoverage(input: {
 export function validateTailoredResumePlanningKeywordAssignments(input: {
   keywordAssignmentCheckResult: TailorResumePlanningKeywordAssignmentCheckResult;
 }) {
-  if (input.keywordAssignmentCheckResult.overloadedBulletSegments.length > 0) {
+  const overloadedBulletSegments =
+    input.keywordAssignmentCheckResult.overloadedBulletSegments ?? [];
+
+  if (overloadedBulletSegments.length > 0) {
     throw new Error(
       [
         `The Step 3 plan assigned more than ${maxTailorResumeBulletTargetKeywords} target keywords to a single bullet segment.`,
         "Split the keyword coverage across separate supported blocks, move concrete skills into Skills/Technical Skills when valid, or leave lower-value terms unassigned.",
-        ...input.keywordAssignmentCheckResult.overloadedBulletSegments.map(
+        ...overloadedBulletSegments.map(
           (segment) =>
             `- ${segment.segmentId}: ${segment.targetKeywords.join(", ")}`,
         ),
