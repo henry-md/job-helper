@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   buildTailoredResumeDiffRows,
   formatTailoredResumeEditLabel,
@@ -19,7 +19,26 @@ type TailoredResumeQuickReviewProps = {
     editId: string,
     nextState: TailoredResumeReviewEdit["state"],
   ) => void;
+  onSaveUserEdit: (editId: string, latexCode: string) => Promise<boolean>;
 };
+
+function PencilIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M4 20h4l11-11-4-4L4 16v4Z" />
+      <path d="m13.5 6.5 4 4" />
+    </svg>
+  );
+}
+
+function RevertIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h10a6 6 0 1 1-4.8 9.6" />
+    </svg>
+  );
+}
 
 function DiffCell({
   lineNumber,
@@ -63,29 +82,91 @@ function QuickReviewEditCard({
   edit,
   isUpdating,
   onFocusEdit,
+  onSaveUserEdit,
   onSetEditState,
 }: {
   edit: TailoredResumeReviewEdit;
   isUpdating: boolean;
   onFocusEdit?: TailoredResumeQuickReviewProps["onFocusEdit"];
+  onSaveUserEdit: TailoredResumeQuickReviewProps["onSaveUserEdit"];
   onSetEditState: TailoredResumeQuickReviewProps["onSetEditState"];
 }) {
   const proposedLatexCode = edit.customLatexCode ?? edit.afterLatexCode;
+  const [isEditingLatex, setIsEditingLatex] = useState(false);
+  const [draftLatexCode, setDraftLatexCode] = useState(proposedLatexCode);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const diffRows = useMemo(
     () => buildTailoredResumeDiffRows(edit.beforeLatexCode, proposedLatexCode),
     [edit.beforeLatexCode, proposedLatexCode],
   );
   const isCustomOverride = edit.customLatexCode !== null;
-  const isInteractionLocked = isUpdating || isCustomOverride;
+  const isSelectionLocked = isUpdating || isCustomOverride || isEditingLatex;
+
+  function resizeDraftTextarea() {
+    const textarea = textareaRef.current;
+
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = "auto";
+    const borderHeight = textarea.offsetHeight - textarea.clientHeight;
+    textarea.style.height = `${textarea.scrollHeight + borderHeight}px`;
+  }
+
+  useEffect(() => {
+    if (isEditingLatex) {
+      textareaRef.current?.focus();
+      resizeDraftTextarea();
+    }
+  }, [isEditingLatex]);
+
+  useEffect(() => {
+    if (isEditingLatex) {
+      resizeDraftTextarea();
+    }
+  }, [draftLatexCode, isEditingLatex]);
 
   function handleSurfaceSelect(nextState: TailoredResumeReviewEdit["state"]) {
     onFocusEdit?.(edit.editId);
 
-    if (isInteractionLocked) {
+    if (isSelectionLocked) {
       return;
     }
 
     onSetEditState(edit.editId, nextState);
+  }
+
+  function startEditingLatex() {
+    if (isUpdating) {
+      return;
+    }
+
+    onFocusEdit?.(edit.editId);
+    setDraftLatexCode(proposedLatexCode);
+    setIsEditingLatex(true);
+  }
+
+  function cancelEditingLatex() {
+    setDraftLatexCode(proposedLatexCode);
+    setIsEditingLatex(false);
+  }
+
+  function revertToModelSuggestion() {
+    setDraftLatexCode(edit.afterLatexCode);
+    textareaRef.current?.focus();
+  }
+
+  async function saveEditingLatex() {
+    if (isUpdating) {
+      return;
+    }
+
+    const wasSaved = await onSaveUserEdit(edit.editId, draftLatexCode);
+
+    if (wasSaved) {
+      setIsEditingLatex(false);
+    }
   }
 
   return (
@@ -105,21 +186,20 @@ function QuickReviewEditCard({
         </span>
       </button>
 
-      {isCustomOverride ? (
+      {isCustomOverride && !isEditingLatex ? (
         <p className="quick-review-custom-note">
-          This block has a custom edit from the web app. Review it there to avoid
-          overwriting that manual change.
+          This block has a custom edit.
         </p>
       ) : null}
 
       <div className="quick-review-diff-grid">
         <button
-          aria-disabled={isInteractionLocked}
+          aria-disabled={isSelectionLocked}
           aria-pressed={edit.state === "rejected"}
           className={`quick-review-diff-surface ${
             edit.state === "rejected" ? "quick-review-diff-surface-selected" : ""
-          } ${isInteractionLocked ? "quick-review-diff-surface-inert" : ""}`}
-          title={isCustomOverride ? "Review custom edits in the web app." : undefined}
+          } ${isSelectionLocked ? "quick-review-diff-surface-inert" : ""}`}
+          title={isCustomOverride ? "Use the pencil to revise this custom edit." : undefined}
           type="button"
           onClick={() => handleSurfaceSelect("rejected")}
         >
@@ -149,41 +229,108 @@ function QuickReviewEditCard({
           </div>
         </button>
 
-        <button
-          aria-disabled={isInteractionLocked}
-          aria-pressed={edit.state === "applied"}
+        <div
+          aria-disabled={isSelectionLocked}
           className={`quick-review-diff-surface ${
             edit.state === "applied" ? "quick-review-diff-surface-selected" : ""
-          } ${isInteractionLocked ? "quick-review-diff-surface-inert" : ""}`}
-          title={isCustomOverride ? "Review custom edits in the web app." : undefined}
-          type="button"
-          onClick={() => handleSurfaceSelect("applied")}
+          } ${isSelectionLocked ? "quick-review-diff-surface-inert" : ""}`}
         >
-          <div className="quick-review-diff-heading">Tailored block</div>
-          <div className="quick-review-diff-body">
-            {diffRows.length > 0 ? (
-              diffRows.map((row, index) => (
-                <DiffCell
-                  key={`tailored-${edit.editId}-${index}`}
-                  lineNumber={row.modifiedLineNumber}
-                  segments={row.modifiedSegments}
-                  text={row.modifiedText}
-                  tone={
-                    row.type === "added"
-                      ? "added"
-                      : row.type === "modified"
-                        ? "modified"
-                        : "context"
-                  }
-                />
-              ))
+          <div className="quick-review-diff-heading-row">
+            <button
+              aria-pressed={edit.state === "applied"}
+              className="quick-review-diff-heading quick-review-diff-heading-action"
+              disabled={isSelectionLocked}
+              type="button"
+              onClick={() => handleSurfaceSelect("applied")}
+            >
+              Tailored block
+            </button>
+            {isEditingLatex ? (
+              <div className="quick-review-inline-editor-actions">
+                <button
+                  aria-label="Revert to model suggestion"
+                  className="quick-review-inline-editor-icon-action"
+                  disabled={isUpdating || draftLatexCode === edit.afterLatexCode}
+                  title="Revert to the model suggestion"
+                  type="button"
+                  onClick={revertToModelSuggestion}
+                >
+                  <RevertIcon />
+                </button>
+                <button
+                  className="quick-review-inline-editor-cancel"
+                  disabled={isUpdating}
+                  type="button"
+                  onClick={cancelEditingLatex}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="quick-review-inline-editor-done"
+                  disabled={isUpdating}
+                  type="button"
+                  onClick={() => void saveEditingLatex()}
+                >
+                  {isUpdating ? "Saving" : "Done"}
+                </button>
+              </div>
             ) : (
-              <p className="quick-review-placeholder">
-                No tailored block preview is available yet.
-              </p>
+              <button
+                aria-label="Edit tailored block"
+                className="quick-review-edit-latex-action"
+                disabled={isUpdating}
+                title="Edit tailored block"
+                type="button"
+                onClick={startEditingLatex}
+              >
+                <PencilIcon />
+              </button>
             )}
           </div>
-        </button>
+          {isEditingLatex ? (
+            <div className="quick-review-inline-editor">
+              <textarea
+                ref={textareaRef}
+                spellCheck={false}
+                value={draftLatexCode}
+                onChange={(event) => {
+                  setDraftLatexCode(event.target.value);
+                  window.requestAnimationFrame(resizeDraftTextarea);
+                }}
+              />
+            </div>
+          ) : (
+            <button
+              aria-pressed={edit.state === "applied"}
+              className="quick-review-diff-body quick-review-diff-body-action"
+              disabled={isSelectionLocked}
+              type="button"
+              onClick={() => handleSurfaceSelect("applied")}
+            >
+              {diffRows.length > 0 ? (
+                diffRows.map((row, index) => (
+                  <DiffCell
+                    key={`tailored-${edit.editId}-${index}`}
+                    lineNumber={row.modifiedLineNumber}
+                    segments={row.modifiedSegments}
+                    text={row.modifiedText}
+                    tone={
+                      row.type === "added"
+                        ? "added"
+                        : row.type === "modified"
+                          ? "modified"
+                          : "context"
+                    }
+                  />
+                ))
+              ) : (
+                <p className="quick-review-placeholder">
+                  No tailored block preview is available yet.
+                </p>
+              )}
+            </button>
+          )}
+        </div>
       </div>
     </article>
   );
@@ -193,6 +340,7 @@ export default function TailoredResumeQuickReview({
   error,
   isUpdating,
   onFocusEdit,
+  onSaveUserEdit,
   record,
   variant = "card",
   onSetEditState,
@@ -234,6 +382,7 @@ export default function TailoredResumeQuickReview({
               edit={edit}
               isUpdating={isUpdating}
               onFocusEdit={onFocusEdit}
+              onSaveUserEdit={onSaveUserEdit}
               key={edit.editId}
               onSetEditState={onSetEditState}
             />

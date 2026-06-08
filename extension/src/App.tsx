@@ -13472,6 +13472,108 @@ function App() {
     }
   }
 
+  async function saveTailoredResumeReviewUserEdit(editId: string, latexCode: string) {
+    if (
+      authState.status !== "signedIn" ||
+      !activeTailoredResumeReviewRecord ||
+      pendingTailoredResumeReviewEditId
+    ) {
+      return false;
+    }
+
+    const currentEdit = activeTailoredResumeReviewRecord.edits.find(
+      (edit) => edit.editId === editId,
+    );
+
+    if (!currentEdit) {
+      return false;
+    }
+
+    const previousRecord = activeTailoredResumeReviewRecord;
+    const optimisticRecord: TailoredResumeReviewRecord = {
+      ...previousRecord,
+      edits: previousRecord.edits.map((edit) => {
+        if (edit.editId !== editId) {
+          return edit;
+        }
+
+        if (latexCode === edit.beforeLatexCode) {
+          return {
+            ...edit,
+            customLatexCode: null,
+            state: "rejected",
+          };
+        }
+
+        if (latexCode === edit.afterLatexCode) {
+          return {
+            ...edit,
+            customLatexCode: null,
+            state: "applied",
+          };
+        }
+
+        return {
+          ...edit,
+          customLatexCode: latexCode,
+        };
+      }),
+    };
+
+    setPendingTailoredResumeReviewEditId(editId);
+    setTailoredResumeReviewState({
+      record: optimisticRecord,
+      status: "ready",
+    });
+
+    try {
+      const result = await patchTailorResume({
+        action: "saveTailoredResumeUserEdit",
+        latexCode,
+        segmentId: currentEdit.segmentId,
+        tailoredResumeId: previousRecord.id,
+      });
+
+      if (!result.ok) {
+        throw new Error(
+          readTailorResumePayloadError(
+            result.payload,
+            "Unable to save the tailored resume block edit.",
+          ),
+        );
+      }
+
+      const reviewRecord =
+        resolveTailoredResumeReviewRecordFromPayload(
+          result.payload,
+          previousRecord.id,
+        ) ?? null;
+
+      if (!reviewRecord) {
+        throw new Error("The tailored resume review could not be refreshed.");
+      }
+
+      setTailoredResumeReviewState({
+        record: reviewRecord,
+        status: "ready",
+      });
+      syncTailoredResumeSummariesFromPayload(result.payload);
+      return true;
+    } catch (error) {
+      setTailoredResumeReviewState({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to save the tailored resume block edit.",
+        record: previousRecord,
+        status: "error",
+      });
+      return false;
+    } finally {
+      setPendingTailoredResumeReviewEditId(null);
+    }
+  }
+
   async function patchTailorResume(
     body: Record<string, unknown>,
     options: {
@@ -13733,6 +13835,7 @@ function App() {
             onFocusEdit={focusTailoredPreviewEdit}
             record={activeTailoredResumeReviewRecord}
             variant="fullscreen"
+            onSaveUserEdit={saveTailoredResumeReviewUserEdit}
             onSetEditState={(editId, nextState) =>
               void setTailoredResumeReviewEditState(editId, nextState)
             }

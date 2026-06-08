@@ -4283,12 +4283,12 @@ button:disabled {
 
 .quick-review-list {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
 .quick-review-edit-card {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -4346,7 +4346,7 @@ button:disabled {
 
 .quick-review-diff-grid {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .quick-review-diff-surface {
@@ -4392,7 +4392,7 @@ button:disabled {
 }
 
 .quick-review-diff-heading {
-  padding: 7px 10px;
+  padding: 5px 8px;
   border-bottom: 1px solid rgba(244, 244, 245, 0.08);
   color: var(--muted);
   font-size: 11px;
@@ -4402,22 +4402,219 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.quick-review-diff-surface-selected .quick-review-diff-heading {
+.quick-review-diff-heading-row {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  min-height: 29px;
+  border-bottom: 1px solid rgba(244, 244, 245, 0.08);
+}
+
+.quick-review-diff-heading-row .quick-review-diff-heading {
+  border-bottom: 0;
+}
+
+.quick-review-diff-heading-action {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: 28px;
+  align-items: center;
+  justify-content: flex-start;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+}
+
+.quick-review-diff-heading-action:hover:not(:disabled) {
+  transform: none;
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: none;
+}
+
+.quick-review-edit-latex-action {
+  display: inline-flex;
+  width: 30px;
+  min-width: 30px;
+  min-height: 0;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-left: 1px solid rgba(244, 244, 245, 0.08);
+  border-radius: 0;
+  color: var(--muted-strong);
+  background: rgba(255, 255, 255, 0.025);
+  box-shadow: none;
+}
+
+.quick-review-diff-surface-selected .quick-review-diff-heading-row {
   border-bottom-color: rgba(52, 211, 153, 0.16);
-  color: #86efac;
   background: rgba(52, 211, 153, 0.04);
 }
 
+.quick-review-diff-surface-selected .quick-review-edit-latex-action {
+  border-left-color: rgba(52, 211, 153, 0.16);
+  color: #86efac;
+  background: transparent;
+}
+
+.quick-review-edit-latex-action:hover:not(:disabled) {
+  transform: none;
+  color: #fde68a;
+  background: rgba(252, 211, 77, 0.1);
+  box-shadow: none;
+}
+
+.quick-review-edit-latex-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.quick-review-edit-latex-action svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.quick-review-diff-surface-selected .quick-review-diff-heading {
+  border-bottom-color: rgba(52, 211, 153, 0.16);
+  color: #86efac;
+  background: transparent;
+}
+
 .quick-review-diff-body {
-  max-height: 240px;
+  width: 100%;
+  max-height: 196px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
   overflow: auto;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+  white-space: normal;
+}
+
+.quick-review-diff-body-action:hover:not(:disabled) {
+  transform: none;
+  background: rgba(255, 255, 255, 0.02);
+  box-shadow: none;
+}
+
+.quick-review-diff-body-action:disabled {
+  cursor: default;
+}
+
+.quick-review-inline-editor {
+  display: block;
+  padding: 5px 6px;
+}
+
+.quick-review-inline-editor textarea {
+  width: 100%;
+  min-height: 64px;
+  resize: none;
+  overflow: hidden;
+  border: 1px solid rgba(244, 244, 245, 0.1);
+  border-radius: 6px;
+  padding: 5px 7px;
+  color: var(--foreground);
+  background: rgba(0, 0, 0, 0.28);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.28;
+  outline: none;
+}
+
+.quick-review-inline-editor textarea:focus {
+  border-color: rgba(52, 211, 153, 0.32);
+  box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.12);
+}
+
+.quick-review-inline-editor-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-self: center;
+  height: 28px;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 5px 2px 0;
+}
+
+.quick-review-inline-editor-actions button {
+  border-radius: 999px;
+  min-height: 22px;
+  padding: 2px 7px;
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: 0.10em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.quick-review-inline-editor-icon-action {
+  display: inline-flex;
+  width: 22px;
+  min-width: 22px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(252, 211, 77, 0.18);
+  color: #fde68a;
+  background: rgba(252, 211, 77, 0.08);
+}
+
+.quick-review-inline-editor-icon-action:hover:not(:disabled) {
+  border-color: rgba(252, 211, 77, 0.34);
+  background: rgba(252, 211, 77, 0.14);
+}
+
+.quick-review-inline-editor-icon-action svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.quick-review-inline-editor-cancel {
+  border: 1px solid rgba(244, 244, 245, 0.1);
+  color: var(--muted-strong);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.quick-review-inline-editor-cancel:hover:not(:disabled) {
+  border-color: rgba(244, 244, 245, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.quick-review-inline-editor-done {
+  border: 1px solid rgba(52, 211, 153, 0.28);
+  color: #dcfce7;
+  background: rgba(52, 211, 153, 0.12);
+}
+
+.quick-review-inline-editor-done:hover:not(:disabled) {
+  border-color: rgba(52, 211, 153, 0.42);
+  background: rgba(52, 211, 153, 0.18);
 }
 
 .quick-review-diff-line {
   display: grid;
   grid-template-columns: 2.25rem minmax(0, 1fr);
-  gap: 8px;
-  padding: 6px 8px;
+  gap: 6px;
+  padding: 4px 7px;
   border-top: 1px solid rgba(244, 244, 245, 0.04);
 }
 
@@ -4456,7 +4653,7 @@ button:disabled {
   color: var(--foreground);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
-  line-height: 1.4;
+  line-height: 1.32;
 }
 
 .quick-review-segment-added {
