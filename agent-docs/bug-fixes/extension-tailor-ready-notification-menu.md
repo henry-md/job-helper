@@ -1,3 +1,0 @@
-- Symptom: the extension rendered an idle readiness card for pages that had no tailoring state, which made the Tailor Resume list feel noisy before the user took an action.
-- Root cause: current-page readiness was promoted into Tailor Resume list UI even though it did not represent a saved resume, active run, error, or confirmation prompt.
-- Fix: do not render readiness-only notifications in the Tailor Resume list. Reserve that surface for real artifacts, in-flight work, failures, and user prompts that need action.
