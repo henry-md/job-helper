@@ -1,4 +1,4 @@
-export type DashboardTabId = "config" | "saved" | "settings";
+export type DashboardTabId = "config" | "saved" | "settings" | "usage";
 
 export type DashboardRouteState = {
   tab: DashboardTabId;
@@ -21,6 +21,8 @@ export function parseDashboardRouteState(input?: {
   const tab =
     input?.tab === "settings"
       ? "settings"
+      : input?.tab === "usage"
+        ? "usage"
       : input?.tab === "saved" ||
           input?.tab === "tailor" ||
           input?.tab === "new"
@@ -56,7 +58,11 @@ export function buildDashboardHref(input: {
   });
   const searchParams = new URLSearchParams();
 
-  if (routeState.tab === "saved" || routeState.tab === "settings") {
+  if (
+    routeState.tab === "saved" ||
+    routeState.tab === "settings" ||
+    routeState.tab === "usage"
+  ) {
     searchParams.set("tab", routeState.tab);
   }
 

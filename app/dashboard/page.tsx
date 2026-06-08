@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 import DashboardWorkspace from "@/components/dashboard-workspace";
 import { authOptions } from "@/auth";
+import { readAiUsageReport } from "@/lib/ai-usage-report";
 import { parseDashboardRouteState } from "@/lib/dashboard-route-state";
 import { createDefaultSystemPromptSettings } from "@/lib/system-prompt-settings";
 import {
@@ -129,6 +130,33 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       };
     }
   })();
+  const aiUsageReport = await (async () => {
+    try {
+      return await readAiUsageReport({
+        userId: session.user.id,
+      });
+    } catch {
+      return {
+        events: [],
+        generatedAt: new Date().toISOString(),
+        period: "all" as const,
+        resumeGroups: [],
+        summary: {
+          archivedCostUsdMicros: "0",
+          deletedCostUsdMicros: "0",
+          eventCount: 0,
+          failedEventCount: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          totalCostUsdMicros: "0",
+          totalTokens: 0,
+          unarchivedCostUsdMicros: "0",
+          urlCount: 0,
+        },
+        urlGroups: [],
+      };
+    }
+  })();
   const initialSyncState = await readUserSyncStateSnapshotForUser(session.user.id);
 
   const testOpenAIResponseEnabled = ["true", "1", "yes"].includes(
@@ -158,6 +186,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         <section className="flex flex-1 flex-col gap-[clamp(0.75rem,1.2vh,1rem)] sm:min-h-0">
           <DashboardWorkspace
             applications={databaseStatus.applications}
+            aiUsageReport={aiUsageReport}
             defaultPromptSettings={createDefaultSystemPromptSettings()}
             statusMessage={statusMessage}
             initialSyncState={initialSyncState}

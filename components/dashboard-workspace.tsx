@@ -11,6 +11,7 @@ import StatusToast from "@/components/status-toast";
 import TailorResumeActiveRuns from "@/components/tailor-resume-active-runs";
 import TailoredResumeReviewModal from "@/components/tailored-resume-review-modal";
 import TailorResumeWorkspace from "@/components/tailor-resume-workspace";
+import UsageWorkspace from "@/components/usage-workspace";
 import UserMarkdownCard, {
   NonTechnologyNamesCard,
   SpareBulletsCard,
@@ -44,6 +45,7 @@ import {
 } from "@/lib/tailored-resume-generation-state";
 import { formatTailoredResumeSidebarName } from "@/lib/tailored-resume-sidebar-name";
 import type { JobApplicationRecord } from "@/lib/job-application-types";
+import type { AiUsageReport } from "@/lib/ai-usage-report-types";
 import type {
   TailorResumeProfile,
   TailorResumeStoredSkillData,
@@ -107,6 +109,10 @@ const dashboardTabs = [
   {
     id: "saved",
     label: "Saved",
+  },
+  {
+    id: "usage",
+    label: "Usage",
   },
   {
     id: "settings",
@@ -427,6 +433,7 @@ function ProfileAvatar({
 
 export default function DashboardWorkspace({
   applications,
+  aiUsageReport,
   defaultPromptSettings,
   initialReviewingTailoredResumeId,
   initialSyncState,
@@ -442,6 +449,7 @@ export default function DashboardWorkspace({
   userName,
 }: {
   applications: JobApplicationRecord[];
+  aiUsageReport: AiUsageReport;
   defaultPromptSettings: TailorResumeProfile["promptSettings"]["values"];
   initialReviewingTailoredResumeId?: string | null;
   initialSyncState: UserSyncStateSnapshot;
@@ -1417,7 +1425,7 @@ export default function DashboardWorkspace({
         </div>
 
         <div className="hidden w-full flex-col gap-3 sm:flex sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-2">
-          <nav className="grid w-full grid-cols-3 items-center gap-2 rounded-[1.4rem] border border-white/10 bg-black/20 p-1 sm:flex sm:w-auto sm:rounded-full">
+          <nav className="grid w-full grid-cols-4 items-center gap-2 rounded-[1.4rem] border border-white/10 bg-black/20 p-1 sm:flex sm:w-auto sm:rounded-full">
             {dashboardTabs.map((tab) => (
               <button
                 key={tab.id}
@@ -1575,6 +1583,13 @@ export default function DashboardWorkspace({
           <section className="sm:app-scrollbar sm:h-full sm:min-h-0 sm:overflow-y-auto sm:pr-1">{configWorkspacePane}</section>
         ) : activeTab === "saved" ? (
           <section className="sm:h-full sm:min-h-0">{savedWorkspacePane}</section>
+        ) : activeTab === "usage" ? (
+          <section className="sm:h-full sm:min-h-0">
+            <UsageWorkspace
+              initialReport={aiUsageReport}
+              onOpenTailoredResume={openTailoredResumeReview}
+            />
+          </section>
         ) : (
           <section className="sm:h-full sm:min-h-0 xl:w-[72%]">
             <div className="h-full overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto">
