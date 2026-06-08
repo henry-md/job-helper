@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { setAiUsageSubjectStatus } from "@/lib/ai-usage";
 import { getApiSession } from "@/lib/api-auth";
 import { normalizeJobApplicationWriteInput } from "@/lib/job-application-form";
 import { getPrismaClient } from "@/lib/prisma";
@@ -72,6 +73,11 @@ export async function PATCH(
 
       await bumpUserSyncState({
         applications: true,
+        userId: session.user.id,
+      });
+      await setAiUsageSubjectStatus({
+        applicationIds: [application.id],
+        status: archived ? "archived" : "unarchived",
         userId: session.user.id,
       });
 

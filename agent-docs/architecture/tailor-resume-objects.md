@@ -96,7 +96,14 @@ Tailor Resume object model:
 - The pending interview stored in the file-backed profile includes the DB `applicationId` and `tailorResumeRunId` so continuing an interview updates the same run row.
 - Duplicate checks for extension tailoring should prefer DB state for the normalized exact job URL/application: active run first, completed linked tailored resume second.
 
-8. Prompt Settings (`TailorResumePromptSettingsState`)
+8. AI Usage Event (`AiUsageEvent`)
+- Files: `prisma/schema.prisma`, `lib/ai-usage.ts`, `lib/ai-usage-report.ts`
+- Model/API spend is tracked as an append-only ledger row per provider call, not as a property of the saved resume artifact.
+- Each usage event denormalizes the owning user, application id, tailoring run id, tailored-resume id when known, job URL/hash, provider/model, pipeline step, attempt/tool round, provider response id, token buckets, pricing snapshot, and calculated USD micros.
+- Usage attaches to the job URL/run before generation finishes, so failed URL generations still have any successful prior model-call spend in the Usage page.
+- Archive/delete actions update `subjectStatus` on matching usage rows (`UNARCHIVED`, `ARCHIVED`, `DELETED`) instead of deleting usage. This keeps spend visible after a resume/application is archived or hard-deleted.
+
+9. Prompt Settings (`TailorResumePromptSettingsState`)
 - Files: `lib/system-prompt-settings.ts`, `lib/tailor-resume-types.ts`
 - Stored under `profile.promptSettings`.
 - This keeps the per-user system-prompt templates that power:
@@ -111,7 +118,7 @@ Tailor Resume object model:
 - The prompt strings may include template tokens such as `{{FEEDBACK_BLOCK}}`, `{{RETRY_INSTRUCTIONS}}`, and `{{MAX_ATTEMPTS}}`; runtime code expands those tokens before sending the final instructions to OpenAI. Step 2 interview prompts intentionally do not use `{{FEEDBACK_BLOCK}}` because Step 2 chat responses are not invalidated or retried for content/schema quality.
 - Missing keys fall back to the shipped defaults so older saved profiles remain forward-compatible when new prompt-controlled flows are added.
 
-9. Generation Settings (`TailorResumeGenerationSettingsState`)
+10. Generation Settings (`TailorResumeGenerationSettingsState`)
 - Files: `lib/tailor-resume-generation-settings.ts`, `lib/tailor-resume-types.ts`
 - Stored under `profile.generationSettings`.
 - This keeps per-user boolean generation guardrails that are not prompt text themselves.
@@ -119,7 +126,7 @@ Tailor Resume object model:
 - Legacy saved `allowTailorResumeFollowUpQuestions` and `preventPageCountIncrease` values may still appear in old profile JSON, but they must not control new runs.
 - These values are editable from `/dashboard?tab=settings`; extension-started behavior-affecting settings must also be visible in the extension settings panel.
 
-10. Skills-Section Keyword, Classification, and Spare Bullet Tables
+11. Skills-Section Keyword, Classification, and Spare Bullet Tables
 - Files: `prisma/schema.prisma`, `lib/tailor-resume-skill-store.ts`, `lib/tailor-resume-resume-experiences.ts`, `lib/tailor-resume-types.ts`
 - `TailorResumeKeywordClassification` stores the user's/backend's durable app-facing classification for each normalized keyword: `SKILLS_SECTION`, `NARRATIVE`, or `NON_SKILL`. The Prisma enum maps the first two onto legacy database enum values for existing local databases.
 - `TailorResumeSkill` stores first-class skills-section keywords. `listInSkillsOnly` means the skill can support the Skills section without forcing a new or modified experience bullet.
@@ -132,7 +139,7 @@ Tailor Resume object model:
 - Resume experiences are not stored as durable rows yet. They are scanned from the current annotated LaTeX so heading edits/order changes do not require maintaining another synchronized object graph.
 - The extension top-level resume chat can create these same durable records through server-side tool calls. Its prompt should treat `skills_section` as "could go in the resume Skills section" first and use tools rather than prose whenever the user asks to save skills-section support.
 
-11. User Memory (`TailorResumeUserMemory`)
+12. User Memory (`TailorResumeUserMemory`)
 - Files: `prisma/schema.prisma`, `lib/tailor-resume-user-memory.ts`
 - Stored in Prisma as a DB-backed Markdown document for the logged-in user, exposed as `USER.md` in settings.
 - USER.md remains editable for future bullet preferences and loose notes, but it no longer stores skills-section support or drives Step 2 blocker resolution.

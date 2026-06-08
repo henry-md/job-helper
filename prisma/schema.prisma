@@ -29,6 +29,7 @@ model User {
   tailorResumeChatMessages TailorResumeChatMessage[]
   tailorResumeRuns        TailorResumeRun[]
   tailoredResumes         TailoredResume[]
+  aiUsageEvents           AiUsageEvent[]
   latexBuildFailures      LatexBuildFailure[]
 }
 
@@ -235,6 +236,22 @@ enum TailorResumeRunStatus {
   CANCELLED
 }
 
+enum AiUsageProvider {
+  OPENAI
+  ANTHROPIC
+}
+
+enum AiUsageStatus {
+  SUCCEEDED
+  FAILED
+}
+
+enum AiUsageSubjectStatus {
+  UNARCHIVED
+  ARCHIVED
+  DELETED
+}
+
 model Company {
   id             String           @id @default(cuid())
   userId         String
@@ -384,6 +401,52 @@ model TailoredResume {
   @@index([applicationId, updatedAt(sort: Desc)])
   @@index([userId, updatedAt(sort: Desc)])
   @@index([userId, jobUrlHash, updatedAt(sort: Desc)])
+}
+
+model AiUsageEvent {
+  id                         String               @id @default(cuid())
+  userId                     String
+  applicationId              String?
+  tailorResumeRunId          String?
+  tailoredResumeId           String?
+  jobUrl                     String?              @db.Text
+  jobUrlHash                 String?
+  subjectStatus              AiUsageSubjectStatus @default(UNARCHIVED)
+  provider                   AiUsageProvider
+  model                      String
+  operation                  String
+  stepNumber                 Int?
+  stepLabel                  String?
+  attempt                    Int?
+  round                      Int?
+  requestStartedAt           DateTime
+  requestFinishedAt          DateTime?
+  durationMs                 Int?
+  status                     AiUsageStatus
+  error                      String?              @db.Text
+  providerResponseId         String?
+  inputTokens                Int                  @default(0)
+  cachedInputTokens          Int                  @default(0)
+  cacheCreationInputTokens   Int                  @default(0)
+  outputTokens               Int                  @default(0)
+  reasoningTokens            Int                  @default(0)
+  totalTokens                Int                  @default(0)
+  inputCostUsdMicros         BigInt               @default(0)
+  cachedInputCostUsdMicros   BigInt               @default(0)
+  cacheCreationCostUsdMicros BigInt               @default(0)
+  outputCostUsdMicros        BigInt               @default(0)
+  totalCostUsdMicros         BigInt               @default(0)
+  pricingSnapshot            Json                 @default("{}")
+  rawUsage                   Json                 @default("{}")
+  createdAt                  DateTime             @default(now())
+  updatedAt                  DateTime             @updatedAt
+  user                       User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, requestStartedAt(sort: Desc)])
+  @@index([userId, subjectStatus, requestStartedAt(sort: Desc)])
+  @@index([userId, jobUrlHash, requestStartedAt(sort: Desc)])
+  @@index([tailorResumeRunId, requestStartedAt(sort: Desc)])
+  @@index([tailoredResumeId, requestStartedAt(sort: Desc)])
 }
 
 model UserSyncState {

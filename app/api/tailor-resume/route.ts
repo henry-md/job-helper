@@ -3,6 +3,11 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import { getApiSession } from "@/lib/api-auth";
+import {
+  attachAiUsageToTailoredResume,
+  setAiUsageSubjectStatus,
+  withAiUsageContext,
+} from "@/lib/ai-usage";
 import { createNdjsonStreamWriter } from "@/lib/ndjson-stream";
 import { getPrismaClient } from "@/lib/prisma";
 import { buildNormalizedJobUrlHash } from "@/lib/job-url-hash";
@@ -2933,6 +2938,12 @@ async function finalizeTailorResumeGeneration(input: {
           });
           const compactionResult = await compactTailoredResumePageCount({
             annotatedLatexCode: tailoringResult.annotatedLatexCode,
+            debugContext: {
+              applicationId: input.applicationId,
+              jobUrl: input.jobUrl,
+              runId: input.runId,
+              userId: input.userId,
+            },
             edits: tailoringResult.edits,
             emphasizedTechnologies:
               tailoringResult.planningResult.emphasizedTechnologies,
@@ -2943,6 +2954,14 @@ async function finalizeTailorResumeGeneration(input: {
               input.onStepEvent?.({
                 ...event,
                 durationMs: precheckDurationMs + event.durationMs,
+              }),
+            onDebugRecord: (record) =>
+              logTailorResumeDebugError({
+                attempt: record.attempt,
+                error: record.detail,
+                latexCode: record.latexCode,
+                source: record.source,
+                userId: input.userId,
               }),
             previewPdf: tailoringResult.previewPdf,
             promptSettings: input.rawProfile.promptSettings.values,
@@ -3269,11 +3288,26 @@ async function finalizeTailorResumeGeneration(input: {
       status: savedTailoredResume.status,
       userId: input.userId,
     });
+    await attachAiUsageToTailoredResume({
+      runId: input.runId,
+      tailoredResumeId: savedTailoredResume.id,
+      userId: input.userId,
+    });
     await Promise.all(
       overwrittenTailoredResumeIds.map((overwrittenTailoredResumeId) =>
         deleteTailoredResumePdf(input.userId, overwrittenTailoredResumeId),
       ),
     );
+    await setAiUsageSubjectStatus({
+      status: "deleted",
+      tailoredResumeIds: uniqueNonEmptyStrings([
+        ...(shouldReplaceOverwrittenTailoredResumes
+          ? (input.overwrittenDbTailoredResumeIds ?? [])
+          : []),
+        ...overwrittenTailoredResumeIds,
+      ]),
+      userId: input.userId,
+    });
     await deleteDbTailoredResumes({
       ids: uniqueNonEmptyStrings([
         ...(shouldReplaceOverwrittenTailoredResumes
@@ -3585,35 +3619,41 @@ async function handleTailorResumeGeneration(
     return preparation.response!;
   }
 
-  logTailorResumeDiagnostic({
-    action: "tailor",
-    message: "Accepted tailoring run.",
-    runId: preparation.runId,
-  });
-
-  let lastStepEvent: TailorResumeGenerationStepEvent | null = null;
-  const handleStepEvent = async (event: TailorResumeGenerationStepEvent) => {
-    lastStepEvent = event;
+  return withAiUsageContext({
+    applicationId: preparation.applicationId,
+    jobUrl: preparation.jobUrl,
+    tailorResumeRunId: preparation.runId,
+    userId,
+  }, async () => {
     logTailorResumeDiagnostic({
       action: "tailor",
-      message: "Tailoring step event.",
+      message: "Accepted tailoring run.",
       runId: preparation.runId,
-      stepEvent: event,
     });
-    await updateTailorResumeRunStep({
-      action: "tailor",
-      event,
+
+    let lastStepEvent: TailorResumeGenerationStepEvent | null = null;
+    const handleStepEvent = async (event: TailorResumeGenerationStepEvent) => {
+      lastStepEvent = event;
+      logTailorResumeDiagnostic({
+        action: "tailor",
+        message: "Tailoring step event.",
+        runId: preparation.runId,
+        stepEvent: event,
+      });
+      await updateTailorResumeRunStep({
+        action: "tailor",
+        event,
+        runId: preparation.runId,
+        userId,
+      });
+      await options.onStepEvent?.(event);
+    };
+    const stopRunHeartbeat = startTailorResumeRunHeartbeat({
       runId: preparation.runId,
       userId,
     });
-    await options.onStepEvent?.(event);
-  };
-  const stopRunHeartbeat = startTailorResumeRunHeartbeat({
-    runId: preparation.runId,
-    userId,
-  });
 
-  try {
+    try {
     const normalizedBaseLatex = normalizeAnnotatedLatexState(
       preparation.rawProfile.latex.code,
       new Date().toISOString(),
@@ -3792,20 +3832,21 @@ async function handleTailorResumeGeneration(
       tailoringStatus: "question_start_pending" as const,
       ...buildUserMemoryResponseFields(userMarkdownForPlanning),
     });
-  } catch (error) {
-    return failTailorResumeRunAfterBackendError({
-      error,
-      fallbackMessage: "Unable to tailor the resume.",
-      fallbackStepNumber: 1,
-      fallbackSummary: "Scrape keywords",
-      lastStepEvent,
-      onStepEvent: handleStepEvent,
-      runId: preparation.runId,
-      userId,
-    });
-  } finally {
-    stopRunHeartbeat();
-  }
+    } catch (error) {
+      return failTailorResumeRunAfterBackendError({
+        error,
+        fallbackMessage: "Unable to tailor the resume.",
+        fallbackStepNumber: 1,
+        fallbackSummary: "Scrape keywords",
+        lastStepEvent,
+        onStepEvent: handleStepEvent,
+        runId: preparation.runId,
+        userId,
+      });
+    } finally {
+      stopRunHeartbeat();
+    }
+  });
 }
 
 async function handleAdvanceTailorResumeInterview(
@@ -4401,38 +4442,44 @@ async function handleCompleteTailorResumeInterview(
     return preparation.response!;
   }
 
-  logTailorResumeDiagnostic({
-    action: "completeTailorResumeInterview",
-    interviewId,
-    message: "Accepted interview completion request.",
-    runId: preparation.runId,
-  });
-
-  let lastStepEvent: TailorResumeGenerationStepEvent | null = null;
-  const handleStepEvent = async (event: TailorResumeGenerationStepEvent) => {
-    lastStepEvent = event;
+  return withAiUsageContext({
+    applicationId: preparation.applicationId,
+    jobUrl: preparation.tailoringInterview.jobUrl,
+    tailorResumeRunId: preparation.runId,
+    userId,
+  }, async () => {
     logTailorResumeDiagnostic({
       action: "completeTailorResumeInterview",
       interviewId,
-      message: "Interview completion step event.",
+      message: "Accepted interview completion request.",
       runId: preparation.runId,
-      stepEvent: event,
     });
-    await updateTailorResumeRunStep({
-      action: "completeTailorResumeInterview",
-      event,
-      interviewId,
+
+    let lastStepEvent: TailorResumeGenerationStepEvent | null = null;
+    const handleStepEvent = async (event: TailorResumeGenerationStepEvent) => {
+      lastStepEvent = event;
+      logTailorResumeDiagnostic({
+        action: "completeTailorResumeInterview",
+        interviewId,
+        message: "Interview completion step event.",
+        runId: preparation.runId,
+        stepEvent: event,
+      });
+      await updateTailorResumeRunStep({
+        action: "completeTailorResumeInterview",
+        event,
+        interviewId,
+        runId: preparation.runId,
+        userId,
+      });
+      await options.onStepEvent?.(event);
+    };
+    const stopRunHeartbeat = startTailorResumeRunHeartbeat({
       runId: preparation.runId,
       userId,
     });
-    await options.onStepEvent?.(event);
-  };
-  const stopRunHeartbeat = startTailorResumeRunHeartbeat({
-    runId: preparation.runId,
-    userId,
-  });
 
-  try {
+    try {
     const userMarkdownSaveResult =
       await persistTailorResumePendingInterviewUserMarkdown({
         tailoringInterview: preparation.tailoringInterview,
@@ -4455,22 +4502,23 @@ async function handleCompleteTailorResumeInterview(
       userId,
       userMarkdown: userMarkdownSaveResult.userMarkdown,
     });
-  } catch (error) {
-    return failTailorResumeRunAfterBackendError({
-      error,
-      fallbackMessage: "Unable to finish the tailored resume.",
-      fallbackStepNumber: 4,
-      fallbackSummary: "Generating block-scoped edits",
-      lastStepEvent,
-      onStepEvent: handleStepEvent,
-      runId: preparation.runId,
-      tailoredResumeDurationMs:
-        preparation.tailoringInterview.accumulatedModelDurationMs,
-      userId,
-    });
-  } finally {
-    stopRunHeartbeat();
-  }
+    } catch (error) {
+      return failTailorResumeRunAfterBackendError({
+        error,
+        fallbackMessage: "Unable to finish the tailored resume.",
+        fallbackStepNumber: 4,
+        fallbackSummary: "Generating block-scoped edits",
+        lastStepEvent,
+        onStepEvent: handleStepEvent,
+        runId: preparation.runId,
+        tailoredResumeDurationMs:
+          preparation.tailoringInterview.accumulatedModelDurationMs,
+        userId,
+      });
+    } finally {
+      stopRunHeartbeat();
+    }
+  });
 }
 
 async function handleCancelTailorResumeInterview(userId: string) {
@@ -6147,6 +6195,11 @@ export async function PATCH(request: Request) {
           userId: session.user.id,
         },
       });
+      await setAiUsageSubjectStatus({
+        status: archived ? "archived" : "unarchived",
+        tailoredResumeIds: [tailoredResumeId],
+        userId: session.user.id,
+      });
     }
 
     return NextResponse.json({
@@ -6217,6 +6270,11 @@ export async function PATCH(request: Request) {
           },
         }),
       ]);
+      await setAiUsageSubjectStatus({
+        status: "archived",
+        tailoredResumeIds: archiveTargetIds,
+        userId: session.user.id,
+      });
     }
 
     return NextResponse.json({
