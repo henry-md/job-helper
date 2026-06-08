@@ -33,9 +33,12 @@ export type TailoredResumeInteractivePreviewProps = {
   focusQuery?: TailoredResumePreviewFocusQuery | null;
   focusRequest?: number;
   highlightQueries: TailoredResumeInteractivePreviewQuery[];
+  loadPdfJsModule?: () => Promise<PdfJsModule>;
   onPageSnapshot?: (input: { dataUrl: string | null; pageNumber: number }) => void;
   onRenderFailure?: () => void;
   pdfUrl: string | null;
+  presentation?: "frameless" | "web";
+  scaleMode?: "fit" | "width";
 };
 
 type HighlightRect = {
@@ -793,6 +796,7 @@ function InteractivePreviewPage({
   focusQuery,
   focusRequest,
   highlightQueries,
+  loadPdfJsModuleForPreview,
   onPageSnapshot,
   onRenderFailure,
   page,
@@ -809,6 +813,7 @@ function InteractivePreviewPage({
   onRenderFailure?: () => void;
   page: LoadedPdfPage;
   scale: number;
+  loadPdfJsModuleForPreview: () => Promise<PdfJsModule>;
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const [focusHighlightRects, setFocusHighlightRects] = useState<HighlightRect[]>([]);
@@ -861,7 +866,7 @@ function InteractivePreviewPage({
       setRenderErrorMessage(null);
 
       try {
-        const pdfJs = await loadPdfJsModule();
+        const pdfJs = await loadPdfJsModuleForPreview();
 
         if (isCancelled) {
           return;
@@ -950,7 +955,7 @@ function InteractivePreviewPage({
       isCancelled = true;
       renderTask?.cancel?.();
     };
-  }, [onRenderFailure, page.page, scale]);
+  }, [loadPdfJsModuleForPreview, onRenderFailure, page.page, scale]);
 
   useEffect(() => {
     if (!pageRef.current || !highlightSource) {
@@ -1107,7 +1112,7 @@ function InteractivePreviewPage({
 
   return (
     <div
-      className="resume-interactive-page relative rounded-[0.35rem] bg-white shadow-[0_30px_80px_rgba(0,0,0,0.24)]"
+      className="resume-interactive-page"
       onPointerLeave={() => {
         setMagnifierState(null);
       }}
@@ -1143,7 +1148,7 @@ function InteractivePreviewPage({
     >
       <canvas ref={canvasRef} />
       {pageHighlightMatches.length > 0 ? (
-        <div className="pointer-events-none absolute inset-0">
+        <div className="resume-interactive-layer">
           {pageHighlightMatches.flatMap((match) =>
             match.rects.map((rect, index) => (
               <div
@@ -1167,7 +1172,7 @@ function InteractivePreviewPage({
       {focusActive &&
       focusHighlightRects.length > 0 &&
       guidedFocusToken === `${focusKey}:${focusRequest}` ? (
-        <div className="pointer-events-none absolute inset-0">
+        <div className="resume-interactive-layer">
           {focusHighlightRects.map((rect, index) => (
             <div
               className="resume-interactive-highlight resume-interactive-highlight--focus resume-interactive-highlight--guided resume-interactive-highlight--animated"
@@ -1254,18 +1259,18 @@ function InteractivePreviewPage({
         </div>
       ) : null}
       {renderState === "loading" ? (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-white/72">
-          <div className="rounded-full border border-zinc-200 bg-white/95 px-4 py-2 text-[10px] uppercase tracking-[0.18em] text-zinc-700 shadow-[0_18px_40px_rgba(15,23,42,0.12)]">
+        <div className="resume-interactive-page-loading">
+          <div className="resume-interactive-pill">
             Building interactive preview...
           </div>
         </div>
       ) : null}
       {renderState === "error" ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-white/88 px-5 text-center text-sm leading-6 text-zinc-600">
-          <div className="max-w-sm space-y-3">
+        <div className="resume-interactive-page-error">
+          <div className="resume-interactive-error-content">
             <p>The interactive renderer could not paint this page.</p>
             {renderErrorMessage ? (
-              <pre className="whitespace-pre-wrap break-words rounded-2xl border border-zinc-200 bg-white/92 px-4 py-3 text-left font-mono text-[11px] leading-5 text-zinc-500 shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
+              <pre>
                 {renderErrorMessage}
               </pre>
             ) : null}
@@ -1283,16 +1288,20 @@ export default function TailoredResumeInteractivePreview({
   focusMatchKey = null,
   focusQuery = null,
   highlightQueries,
+  loadPdfJsModule: loadPdfJsModuleProp,
   onPageSnapshot,
   onRenderFailure,
   pdfUrl,
+  presentation = "web",
+  scaleMode = "width",
 }: TailoredResumeInteractivePreviewProps) {
   const [loadedPages, setLoadedPages] = useState<LoadedPdfPage[]>([]);
   const [documentState, setDocumentState] = useState<
     "error" | "idle" | "loading" | "ready"
   >("idle");
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [containerWidth, setContainerWidth] = useState(0);
+  const [containerSize, setContainerSize] = useState({ height: 0, width: 0 });
+  const resolvedLoadPdfJsModule = loadPdfJsModuleProp ?? loadPdfJsModule;
 
   useEffect(() => {
     const element = containerRef.current;
@@ -1303,7 +1312,10 @@ export default function TailoredResumeInteractivePreview({
 
     const resizeObserver = new ResizeObserver((entries) => {
       const entry = entries[0];
-      setContainerWidth(entry?.contentRect.width ?? 0);
+      setContainerSize({
+        height: entry?.contentRect.height ?? 0,
+        width: entry?.contentRect.width ?? 0,
+      });
     });
 
     resizeObserver.observe(element);
@@ -1326,7 +1338,7 @@ export default function TailoredResumeInteractivePreview({
       setDocumentState("loading");
 
       try {
-        const pdfJs = await loadPdfJsModule();
+        const pdfJs = await resolvedLoadPdfJsModule();
 
         if (isCancelled) {
           return;
@@ -1411,44 +1423,98 @@ export default function TailoredResumeInteractivePreview({
       isCancelled = true;
       loadingTask?.destroy();
     };
-  }, [onRenderFailure, pdfUrl]);
+  }, [onRenderFailure, pdfUrl, resolvedLoadPdfJsModule]);
 
   const pageScale = useMemo(() => {
     const firstPageWidth = loadedPages[0]?.baseWidth;
+    const firstPageHeight = loadedPages[0]?.baseHeight;
 
-    if (!firstPageWidth || !containerWidth) {
+    if (!firstPageWidth || !containerSize.width) {
       return 1;
     }
 
-    return Math.max(0.4, (containerWidth - 8) / firstPageWidth);
-  }, [containerWidth, loadedPages]);
+    if (scaleMode === "fit") {
+      if (!firstPageHeight || !containerSize.height) {
+        return 1;
+      }
+
+      const widthScale = (containerSize.width - 8) / firstPageWidth;
+      const heightScale = (containerSize.height - 8) / firstPageHeight;
+
+      return Math.max(0.15, Math.min(widthScale, heightScale));
+    }
+
+    return Math.max(0.4, (containerSize.width - 8) / firstPageWidth);
+  }, [containerSize, loadedPages, scaleMode]);
 
   if (!pdfUrl) {
     return (
-      <div className="flex h-full min-h-0 items-center justify-center px-6 py-10 text-center text-sm leading-6 text-zinc-500">
+      <div className="resume-interactive-empty">
         This tailored resume does not have a compiled PDF preview yet.
       </div>
     );
   }
 
+  if (presentation === "frameless") {
+    return (
+      <div className="resume-interactive-root resume-interactive-root--frameless">
+        <div className="resume-interactive-scroller" ref={containerRef}>
+          <div className="resume-interactive-stack resume-interactive-stack--fit">
+            {documentState === "loading" ? (
+              <div className="resume-interactive-pill">
+                Loading {displayName}...
+              </div>
+            ) : null}
+
+            {documentState === "error" ? (
+              <div className="resume-interactive-error-card">
+                The interactive preview could not be generated for this resume.
+              </div>
+            ) : null}
+
+            {documentState === "ready"
+              ? loadedPages.map((page) => (
+                  <InteractivePreviewPage
+                    focusActive={Boolean(focusKey)}
+                    focusKey={focusKey}
+                    focusMatchKey={focusMatchKey}
+                    focusQuery={focusQuery}
+                    focusRequest={focusRequest}
+                    highlightQueries={highlightQueries}
+                    key={page.pageNumber}
+                    loadPdfJsModuleForPreview={resolvedLoadPdfJsModule}
+                    onPageSnapshot={onPageSnapshot}
+                    onRenderFailure={onRenderFailure}
+                    page={page}
+                    scale={pageScale}
+                    scrollContainerRef={containerRef}
+                  />
+                ))
+              : null}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[linear-gradient(180deg,#f6f6f7,#ececee)]">
-      <div className="border-b border-zinc-200/80 bg-white/80 px-4 py-2 backdrop-blur-sm">
-        <p className="truncate text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+    <div className="resume-interactive-root resume-interactive-root--web">
+      <div className="resume-interactive-header">
+        <p>
           Interactive render
         </p>
       </div>
 
-      <div className="app-scrollbar min-h-0 flex-1 overflow-auto" ref={containerRef}>
-        <div className="mx-auto flex min-h-full w-full max-w-[860px] flex-col items-center gap-6 px-4 py-6">
+      <div className="app-scrollbar resume-interactive-scroller" ref={containerRef}>
+        <div className="resume-interactive-stack resume-interactive-stack--width">
           {documentState === "loading" ? (
-            <div className="rounded-full border border-zinc-200 bg-white/90 px-4 py-2 text-[10px] uppercase tracking-[0.18em] text-zinc-700 shadow-[0_20px_45px_rgba(15,23,42,0.12)]">
+            <div className="resume-interactive-pill">
               Loading {displayName}...
             </div>
           ) : null}
 
           {documentState === "error" ? (
-            <div className="rounded-[1.1rem] border border-rose-200 bg-white/92 px-5 py-4 text-center text-sm leading-6 text-rose-700 shadow-[0_22px_55px_rgba(15,23,42,0.1)]">
+            <div className="resume-interactive-error-card">
               The interactive preview could not be generated for this resume.
             </div>
           ) : null}
@@ -1463,6 +1529,7 @@ export default function TailoredResumeInteractivePreview({
                   focusRequest={focusRequest}
                   highlightQueries={highlightQueries}
                   key={page.pageNumber}
+                  loadPdfJsModuleForPreview={resolvedLoadPdfJsModule}
                   onPageSnapshot={onPageSnapshot}
                   onRenderFailure={onRenderFailure}
                   page={page}

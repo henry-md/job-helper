@@ -19,6 +19,7 @@ import type { TailoredResumeOpenAiDebugStage } from "../../lib/tailor-resume-typ
 import { buildJobApplicationDisplayParts } from "../../lib/job-application-display.ts";
 import { buildTailoredResumeInteractivePreviewQueries } from "../../lib/tailor-resume-preview-focus.ts";
 import type { TailoredResumeInteractivePreviewQuery } from "../../lib/tailor-resume-preview-focus.ts";
+import TailoredResumeInteractivePreview from "../../components/tailored-resume-interactive-preview";
 import { buildTailoredResumeDownloadFilename } from "../../lib/tailored-resume-download-filename.ts";
 import "./App.css";
 import {
@@ -85,7 +86,7 @@ import {
   formatPageContextErrorMessage,
   isPageContextConnectionError,
 } from "./page-context";
-import TailoredResumeOverlayPreview from "./tailored-resume-overlay-preview";
+import { loadExtensionTailoredPreviewPdfJsModule } from "./tailored-resume-preview-pdfjs";
 import TailoredResumeQuickReview from "./tailored-resume-quick-review";
 import {
   ResizableHandle,
@@ -13637,14 +13638,17 @@ function App() {
             ) : tailoredResumePreviewState.status === "error" ? (
               <p className="preview-error">{tailoredResumePreviewState.error}</p>
             ) : tailoredResumePreviewState.status === "ready" ? (
-              <TailoredResumeOverlayPreview
+              <TailoredResumeInteractivePreview
                 displayName={activeTailoredResumeReviewRecord?.displayName ?? "Resume"}
                 focusKey={tailoredPreviewFocusEditId}
                 focusMatchKey={tailoredPreviewFocusMatchKey}
                 focusQuery={tailoredPreviewFocusQuery}
                 focusRequest={tailoredPreviewFocusRequest}
                 highlightQueries={previewHighlightQueries}
+                loadPdfJsModule={loadExtensionTailoredPreviewPdfJsModule}
                 pdfUrl={tailoredResumePreviewState.objectUrl}
+                presentation="frameless"
+                scaleMode="fit"
               />
             ) : (
               <p className="placeholder preview-placeholder">
