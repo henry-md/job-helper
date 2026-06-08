@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Prisma } from "@/generated/prisma/client";
+import type { Prisma } from "../generated/prisma/client.ts";
 import { buildNormalizedJobUrlHash } from "./job-url-hash.ts";
-import { getPrismaClient } from "./prisma.ts";
 
 type AiUsageProvider = "anthropic" | "openai";
 type AiUsageSubjectStatus = "archived" | "deleted" | "unarchived";
@@ -44,6 +43,11 @@ type PriceSnapshot = {
 };
 
 const aiUsageContextStorage = new AsyncLocalStorage<AiUsageContext>();
+
+async function getAiUsagePrismaClient() {
+  const { getPrismaClient } = await import("./prisma.ts");
+  return getPrismaClient();
+}
 
 function normalizeProvider(value: AiUsageProvider) {
   return value === "anthropic" ? "ANTHROPIC" : "OPENAI";
@@ -303,7 +307,7 @@ async function writeAiUsageEvent(input: {
     cacheCreationCostUsdMicros +
     outputCostUsdMicros;
 
-  await getPrismaClient().aiUsageEvent.create({
+  await (await getAiUsagePrismaClient()).aiUsageEvent.create({
     data: {
       applicationId: input.context.applicationId || null,
       attempt: input.attempt ?? null,
@@ -463,7 +467,7 @@ export async function setAiUsageSubjectStatus(input: {
     return;
   }
 
-  await getPrismaClient().aiUsageEvent.updateMany({
+  await (await getAiUsagePrismaClient()).aiUsageEvent.updateMany({
     data: {
       subjectStatus: normalizeSubjectStatus(input.status),
     },
@@ -483,7 +487,7 @@ export async function attachAiUsageToTailoredResume(input: {
     return;
   }
 
-  await getPrismaClient().aiUsageEvent.updateMany({
+  await (await getAiUsagePrismaClient()).aiUsageEvent.updateMany({
     data: {
       tailoredResumeId: input.tailoredResumeId,
     },
