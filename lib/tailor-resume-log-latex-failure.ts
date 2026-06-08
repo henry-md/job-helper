@@ -1,10 +1,10 @@
-import { getPrismaClient } from "@/lib/prisma";
+import { getPrismaClient } from "./prisma.ts";
 import {
   buildTailorResumeStepFailureDebugSource,
   buildTailorResumeStepFailureLogPayload,
   type TailorResumeStepFailureLogPayload,
-} from "@/lib/tailor-resume-debug-errors";
-import type { TailorResumeGenerationStepEvent } from "@/lib/tailor-resume-types";
+} from "./tailor-resume-debug-errors.ts";
+import type { TailorResumeGenerationStepEvent } from "./tailor-resume-types.ts";
 
 export async function logTailorResumeDebugError(input: {
   userId: string;

@@ -7,6 +7,7 @@ import type {
 
 export const tailorResumeDebugErrorSources = {
   extractionCompileFailure: "extraction-compile-failure",
+  pageCountCompactionTranscript: "page-count-compaction-transcript",
   stepTwoChatServedError: "step-two-chat-served-error",
   tailoringCompileFailure: "tailoring-compile-failure",
   tailoringInvalidReplacement: "tailoring-invalid-replacement",
@@ -14,6 +15,7 @@ export const tailorResumeDebugErrorSources = {
 
 export type TailorResumeDebugErrorCategory =
   | "chat_error"
+  | "tool_transcript"
   | "step_failure"
   | "bad_latex_generation"
   | "invalid_replacement";
@@ -44,6 +46,10 @@ export function classifyTailorResumeDebugErrorSource(
     return "chat_error";
   }
 
+  if (source === tailorResumeDebugErrorSources.pageCountCompactionTranscript) {
+    return "tool_transcript";
+  }
+
   if (source === tailorResumeDebugErrorSources.tailoringInvalidReplacement) {
     return "invalid_replacement";
   }
@@ -61,6 +67,8 @@ export function formatTailorResumeDebugErrorSource(source: string) {
   switch (source) {
     case tailorResumeDebugErrorSources.extractionCompileFailure:
       return "Extraction compile failure";
+    case tailorResumeDebugErrorSources.pageCountCompactionTranscript:
+      return "Page-count compaction transcript";
     case tailorResumeDebugErrorSources.stepTwoChatServedError:
       return "Step 2 chat error";
     case tailorResumeDebugErrorSources.tailoringCompileFailure:
@@ -83,6 +91,10 @@ export function formatTailorResumeDebugPayloadLabel(source: string) {
 
   if (classifyTailorResumeDebugErrorSource(source) === "chat_error") {
     return "Chat context";
+  }
+
+  if (classifyTailorResumeDebugErrorSource(source) === "tool_transcript") {
+    return "Tool-call transcript";
   }
 
   return classifyTailorResumeDebugErrorSource(source) === "invalid_replacement"

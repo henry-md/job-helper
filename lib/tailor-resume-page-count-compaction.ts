@@ -1,10 +1,14 @@
 import OpenAI from "openai";
+import { trackAiModelUsage } from "./ai-usage.ts";
 import {
   buildTailorResumePageCountCompactionInstructions,
   buildTailorResumePageCountCompactionPrompt,
   createDefaultSystemPromptSettings,
   type SystemPromptSettings,
 } from "./system-prompt-settings.ts";
+import {
+  tailorResumeDebugErrorSources,
+} from "./tailor-resume-debug-errors.ts";
 import { validateTailorResumeLatexDocument } from "./tailor-resume-link-validation.ts";
 import { buildTailorResumeKeywordCheckResult } from "./tailor-resume-keyword-coverage.ts";
 import {
@@ -118,6 +122,46 @@ type TailorResumeCompactionAttemptHistoryEntry = {
   pageCountVerification: TailorResumePageCountVerificationToolResult | null;
 };
 
+type TailorResumePageCountCompactionDebugContext = {
+  applicationId?: string | null;
+  jobUrl?: string | null;
+  runId?: string | null;
+  tailoredResumeId?: string | null;
+  userId: string;
+};
+
+type TailorResumePageCountCompactionDebugRecord = {
+  attempt: number;
+  detail: string;
+  latexCode: string;
+  source: string;
+};
+
+type TailorResumeCompactionToolTranscriptEntry = {
+  callId: string | null;
+  input: string | null;
+  output: string | null;
+  responseId: string | null;
+  round: number;
+  toolName: string;
+};
+
+type TailorResumeCompactionAttemptTranscript = {
+  attempt: number;
+  currentPageCount: number;
+  endedAt: string | null;
+  estimatedLinesToRecover: number;
+  finalError: string | null;
+  finalOk: boolean;
+  initialInput: TailorResumeCompactionResponseInput;
+  latestMeasurementResult: TailorResumeLineReductionToolResult | null;
+  latestPageCountVerification: TailorResumePageCountVerificationToolResult | null;
+  model: string;
+  startedAt: string;
+  targetPageCount: number;
+  toolCalls: TailorResumeCompactionToolTranscriptEntry[];
+};
+
 type TailorResumeCompactionSelfCheckResult =
   | {
       candidates: TailorResumeLineReductionCandidate[];
@@ -125,6 +169,7 @@ type TailorResumeCompactionSelfCheckResult =
       pageCountVerification: TailorResumePageCountVerificationToolResult | null;
       model: string;
       ok: true;
+      transcript: TailorResumeCompactionAttemptTranscript;
     }
   | {
       error: string;
@@ -132,6 +177,7 @@ type TailorResumeCompactionSelfCheckResult =
       pageCountVerification: TailorResumePageCountVerificationToolResult | null;
       model: string;
       ok: false;
+      transcript: TailorResumeCompactionAttemptTranscript;
     };
 
 type TailorResumePageCountVerificationToolResult = {
@@ -360,6 +406,108 @@ const knownCompactionToolNames = new Set([
   tailorResumeSingleSkillQueryToolName,
   tailorResumeBatchSkillQueryToolName,
 ]);
+
+function formatCompactionDebugJsonText(value: string) {
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2);
+  } catch {
+    return value;
+  }
+}
+
+function createCompactionAttemptTranscript(input: {
+  attempt: number;
+  currentPageCount: number;
+  estimatedLinesToRecover: number;
+  initialInput: TailorResumeCompactionResponseInput;
+  model: string;
+  targetPageCount: number;
+}): TailorResumeCompactionAttemptTranscript {
+  return {
+    attempt: input.attempt,
+    currentPageCount: input.currentPageCount,
+    endedAt: null,
+    estimatedLinesToRecover: input.estimatedLinesToRecover,
+    finalError: null,
+    finalOk: false,
+    initialInput: input.initialInput,
+    latestMeasurementResult: null,
+    latestPageCountVerification: null,
+    model: input.model,
+    startedAt: new Date().toISOString(),
+    targetPageCount: input.targetPageCount,
+    toolCalls: [],
+  };
+}
+
+function finishCompactionAttemptTranscript(
+  transcript: TailorResumeCompactionAttemptTranscript,
+  input: {
+    error?: string | null;
+    measurementResult: TailorResumeLineReductionToolResult | null;
+    model: string;
+    ok: boolean;
+    pageCountVerification: TailorResumePageCountVerificationToolResult | null;
+  },
+) {
+  transcript.endedAt = new Date().toISOString();
+  transcript.finalError = input.error ?? null;
+  transcript.finalOk = input.ok;
+  transcript.latestMeasurementResult = input.measurementResult;
+  transcript.latestPageCountVerification = input.pageCountVerification;
+  transcript.model = input.model;
+  return transcript;
+}
+
+function pushCompactionToolTranscript(input: {
+  responseId?: string | null;
+  round: number;
+  toolCall: TailorResumeCompactionToolCall;
+  toolOutput: string | null;
+  transcript: TailorResumeCompactionAttemptTranscript;
+}) {
+  input.transcript.toolCalls.push({
+    callId: input.toolCall.call_id,
+    input: formatCompactionDebugJsonText(input.toolCall.arguments),
+    output: input.toolOutput
+      ? formatCompactionDebugJsonText(input.toolOutput)
+      : null,
+    responseId: input.responseId ?? null,
+    round: input.round,
+    toolName: input.toolCall.name,
+  });
+}
+
+async function logTailorResumeCompactionTranscript(input: {
+  context?: TailorResumePageCountCompactionDebugContext | null;
+  detail: string;
+  onDebugRecord?: (
+    record: TailorResumePageCountCompactionDebugRecord,
+  ) => void | Promise<void>;
+  transcript: TailorResumeCompactionAttemptTranscript;
+}) {
+  if (!input.onDebugRecord) {
+    return;
+  }
+
+  await input.onDebugRecord({
+    attempt: input.transcript.attempt,
+    detail: input.detail,
+    latexCode: JSON.stringify(
+      {
+        applicationId: input.context?.applicationId ?? null,
+        jobUrl: input.context?.jobUrl ?? null,
+        kind: "tailor_resume_page_count_compaction_transcript",
+        runId: input.context?.runId ?? null,
+        tailoredResumeId: input.context?.tailoredResumeId ?? null,
+        transcript: input.transcript,
+      },
+      null,
+      2,
+    ),
+    source: tailorResumeDebugErrorSources.pageCountCompactionTranscript,
+  });
+}
 
 function mapCompactionResponse(response: {
   id?: string;
@@ -1357,6 +1505,7 @@ function buildCompactionInput(input: {
 }
 
 async function collectVerifiedCompactionCandidates(input: {
+  attempt: number;
   deadline: ReturnType<typeof createTailorResumeStepTimeout>;
   attemptHistory: TailorResumeCompactionAttemptHistoryEntry[];
   client: OpenAI;
@@ -1385,16 +1534,24 @@ async function collectVerifiedCompactionCandidates(input: {
   let previousResponseId: string | undefined;
   let responseInput: TailorResumeCompactionResponseInput = buildCompactionInput({
     attemptHistory: input.attemptHistory,
-  currentLayout: input.currentLayout,
-  currentPageCount: input.currentPageCount,
-  emphasizedTechnologies: input.emphasizedTechnologies,
-  estimatedLinesToRecover: input.estimatedLinesToRecover,
-  jobDescription: input.jobDescription,
-  promptSettings: input.promptSettings,
+    currentLayout: input.currentLayout,
+    currentPageCount: input.currentPageCount,
+    emphasizedTechnologies: input.emphasizedTechnologies,
+    estimatedLinesToRecover: input.estimatedLinesToRecover,
+    jobDescription: input.jobDescription,
+    promptSettings: input.promptSettings,
     sourceLayout: input.sourceLayout,
     targetPageCount: input.targetPageCount,
     thesis: input.thesis,
     workingEdits: input.workingEdits,
+  });
+  const transcript = createCompactionAttemptTranscript({
+    attempt: input.attempt,
+    currentPageCount: input.currentPageCount,
+    estimatedLinesToRecover: input.estimatedLinesToRecover,
+    initialInput: responseInput,
+    model: input.model,
+    targetPageCount: input.targetPageCount,
   });
 
   for (let round = 1; round <= maxCompactionSelfCheckRounds; round += 1) {
@@ -1404,30 +1561,40 @@ async function collectVerifiedCompactionCandidates(input: {
     const response = mapCompactionResponse(
       await runWithTransientModelRetries({
         operation: () =>
-          input.client.responses.create({
-            input: responseInput,
-            instructions: buildTailorResumePageCountCompactionInstructions({
-              lineReductionSubmissionToolName:
-                tailorResumeLineReductionSubmissionToolName,
-              lineReductionToolName: tailorResumeLineReductionToolName,
-              pageCountVerificationToolName:
-                tailorResumePageCountVerificationToolName,
-            }),
-            max_output_tokens: tailorResumeCompactionMaxOutputTokens,
+          trackAiModelUsage({
+            attempt: input.attempt,
             model: input.model,
-            parallel_tool_calls: false,
-            previous_response_id: previousResponseId,
-            tool_choice: "required",
-            tools: [
-              tailorResumeLineReductionTool,
-              tailorResumePageCountVerificationTool,
-              tailorResumeKeywordUsageTool,
-              tailorResumeMalformedBulletsTool,
-              tailorResumeSingleSkillQueryTool,
-              tailorResumeBatchSkillQueryTool,
-              tailorResumeLineReductionSubmissionTool,
-            ],
-          }, { signal: timeout.signal }),
+            operation: "Step 4B page-count compaction",
+            provider: "openai",
+            request: () =>
+              input.client.responses.create({
+                input: responseInput,
+                instructions: buildTailorResumePageCountCompactionInstructions({
+                  lineReductionSubmissionToolName:
+                    tailorResumeLineReductionSubmissionToolName,
+                  lineReductionToolName: tailorResumeLineReductionToolName,
+                  pageCountVerificationToolName:
+                    tailorResumePageCountVerificationToolName,
+                }),
+                max_output_tokens: tailorResumeCompactionMaxOutputTokens,
+                model: input.model,
+                parallel_tool_calls: false,
+                previous_response_id: previousResponseId,
+                tool_choice: "required",
+                tools: [
+                  tailorResumeLineReductionTool,
+                  tailorResumePageCountVerificationTool,
+                  tailorResumeKeywordUsageTool,
+                  tailorResumeMalformedBulletsTool,
+                  tailorResumeSingleSkillQueryTool,
+                  tailorResumeBatchSkillQueryTool,
+                  tailorResumeLineReductionSubmissionTool,
+                ],
+              }, { signal: timeout.signal }),
+            round,
+            stepLabel: "Step 4B page-count compaction",
+            stepNumber: 5,
+          }),
       }).catch((error) => {
         if (timeout.signal.aborted) {
           const reason = timeout.signal.reason;
@@ -1457,6 +1624,15 @@ async function collectVerifiedCompactionCandidates(input: {
         pageCountVerification: latestPageCountVerification,
         model: latestModel,
         ok: false,
+        transcript: finishCompactionAttemptTranscript(transcript, {
+          error: outputText
+            ? `The model did not call a page-fit compaction tool. It returned: ${outputText}`
+            : "The model did not call a page-fit compaction tool.",
+          measurementResult: latestMeasurementResult,
+          model: latestModel,
+          ok: false,
+          pageCountVerification: latestPageCountVerification,
+        }),
       };
     }
 
@@ -1468,17 +1644,25 @@ async function collectVerifiedCompactionCandidates(input: {
           JSON.parse(toolCall.arguments),
         );
       } catch (error) {
+        const toolOutput = buildCompactionToolRepairOutput({
+          error:
+            error instanceof Error
+              ? error.message
+              : "The model returned an invalid final compaction submission.",
+          editableSegmentIds: input.editableSegmentIds,
+          toolName: toolCall.name,
+        });
+        pushCompactionToolTranscript({
+          responseId: response.id,
+          round,
+          toolCall,
+          toolOutput,
+          transcript,
+        });
         responseInput = [
           {
             call_id: toolCall.call_id,
-            output: buildCompactionToolRepairOutput({
-              error:
-                error instanceof Error
-                  ? error.message
-                  : "The model returned an invalid final compaction submission.",
-              editableSegmentIds: input.editableSegmentIds,
-              toolName: toolCall.name,
-            }),
+            output: toolOutput,
             type: "function_call_output",
           },
         ];
@@ -1486,16 +1670,24 @@ async function collectVerifiedCompactionCandidates(input: {
       }
 
       if (!measuredAtLeastOnce) {
+        const toolOutput = buildCompactionSubmissionToolOutput({
+          accepted: false,
+          message:
+            `Call ${tailorResumeLineReductionToolName} before submitting page-fit candidates.`,
+          nextAction:
+            `Start by calling ${tailorResumeLineReductionToolName} so the candidates are measured for rendered-line reduction first.`,
+        });
+        pushCompactionToolTranscript({
+          responseId: response.id,
+          round,
+          toolCall,
+          toolOutput,
+          transcript,
+        });
         responseInput = [
           {
             call_id: toolCall.call_id,
-            output: buildCompactionSubmissionToolOutput({
-              accepted: false,
-              message:
-                `Call ${tailorResumeLineReductionToolName} before submitting page-fit candidates.`,
-              nextAction:
-                `Start by calling ${tailorResumeLineReductionToolName} so the candidates are measured for rendered-line reduction first.`,
-            }),
+            output: toolOutput,
             type: "function_call_output",
           },
         ];
@@ -1503,16 +1695,24 @@ async function collectVerifiedCompactionCandidates(input: {
       }
 
       if (!latestPageCountVerification || !latestVerifiedCandidateSignature) {
+        const toolOutput = buildCompactionSubmissionToolOutput({
+          accepted: false,
+          message:
+            `Call ${tailorResumePageCountVerificationToolName} on this same candidate set before submitting it.`,
+          nextAction:
+            `Use ${tailorResumePageCountVerificationToolName} so you can read the exact rendered page count for the candidates you want to bank.`,
+        });
+        pushCompactionToolTranscript({
+          responseId: response.id,
+          round,
+          toolCall,
+          toolOutput,
+          transcript,
+        });
         responseInput = [
           {
             call_id: toolCall.call_id,
-            output: buildCompactionSubmissionToolOutput({
-              accepted: false,
-              message:
-                `Call ${tailorResumePageCountVerificationToolName} on this same candidate set before submitting it.`,
-              nextAction:
-                `Use ${tailorResumePageCountVerificationToolName} so you can read the exact rendered page count for the candidates you want to bank.`,
-            }),
+            output: toolOutput,
             type: "function_call_output",
           },
         ];
@@ -1524,16 +1724,24 @@ async function collectVerifiedCompactionCandidates(input: {
       );
 
       if (submittedCandidateSignature !== latestVerifiedCandidateSignature) {
+        const toolOutput = buildCompactionSubmissionToolOutput({
+          accepted: false,
+          message:
+            `The submitted candidate set does not match your latest ${tailorResumePageCountVerificationToolName} call.`,
+          nextAction:
+            `Call ${tailorResumePageCountVerificationToolName} again on the exact candidates you want to submit.`,
+        });
+        pushCompactionToolTranscript({
+          responseId: response.id,
+          round,
+          toolCall,
+          toolOutput,
+          transcript,
+        });
         responseInput = [
           {
             call_id: toolCall.call_id,
-            output: buildCompactionSubmissionToolOutput({
-              accepted: false,
-              message:
-                `The submitted candidate set does not match your latest ${tailorResumePageCountVerificationToolName} call.`,
-              nextAction:
-                `Call ${tailorResumePageCountVerificationToolName} again on the exact candidates you want to submit.`,
-            }),
+            output: toolOutput,
             type: "function_call_output",
           },
         ];
@@ -1541,28 +1749,53 @@ async function collectVerifiedCompactionCandidates(input: {
       }
 
       if (!latestPageCountVerification.canSubmitFinalCandidates) {
+        const toolOutput = buildCompactionSubmissionToolOutput({
+          accepted: false,
+          message:
+            latestPageCountVerification.validationError ??
+            "The latest exact page-count verification did not succeed.",
+          nextAction: latestPageCountVerification.nextAction,
+        });
+        pushCompactionToolTranscript({
+          responseId: response.id,
+          round,
+          toolCall,
+          toolOutput,
+          transcript,
+        });
         responseInput = [
           {
             call_id: toolCall.call_id,
-            output: buildCompactionSubmissionToolOutput({
-              accepted: false,
-              message:
-                latestPageCountVerification.validationError ??
-                "The latest exact page-count verification did not succeed.",
-              nextAction: latestPageCountVerification.nextAction,
-            }),
+            output: toolOutput,
             type: "function_call_output",
           },
         ];
         continue;
       }
 
+      pushCompactionToolTranscript({
+        responseId: response.id,
+        round,
+        toolCall,
+        toolOutput: buildCompactionSubmissionToolOutput({
+          accepted: true,
+          message: "Accepted verified page-fit candidates.",
+          nextAction: "The server will apply and validate this candidate set.",
+        }),
+        transcript,
+      });
       return {
         candidates: submittedCandidates,
         measurementResult: latestMeasurementResult,
         pageCountVerification: latestPageCountVerification,
         model: latestModel,
         ok: true,
+        transcript: finishCompactionAttemptTranscript(transcript, {
+          measurementResult: latestMeasurementResult,
+          model: latestModel,
+          ok: true,
+          pageCountVerification: latestPageCountVerification,
+        }),
       };
     }
 
@@ -1585,23 +1818,38 @@ async function collectVerifiedCompactionCandidates(input: {
                 skillData: input.skillData,
               });
       } catch (error) {
+        const repairOutput = buildCompactionToolRepairOutput({
+          error:
+            error instanceof Error
+              ? error.message
+              : "The model returned an invalid resume skill query tool call.",
+          editableSegmentIds: input.editableSegmentIds,
+          toolName: toolCall.name,
+        });
+        pushCompactionToolTranscript({
+          responseId: response.id,
+          round,
+          toolCall,
+          toolOutput: repairOutput,
+          transcript,
+        });
         responseInput = [
           {
             call_id: toolCall.call_id,
-            output: buildCompactionToolRepairOutput({
-              error:
-                error instanceof Error
-                  ? error.message
-                  : "The model returned an invalid resume skill query tool call.",
-              editableSegmentIds: input.editableSegmentIds,
-              toolName: toolCall.name,
-            }),
+            output: repairOutput,
             type: "function_call_output",
           },
         ];
         continue;
       }
 
+      pushCompactionToolTranscript({
+        responseId: response.id,
+        round,
+        toolCall,
+        toolOutput,
+        transcript,
+      });
       responseInput = [
         {
           call_id: toolCall.call_id,
@@ -1621,17 +1869,25 @@ async function collectVerifiedCompactionCandidates(input: {
       try {
         candidates = parseLineReductionCandidates(JSON.parse(toolCall.arguments));
       } catch (error) {
+        const toolOutput = buildCompactionToolRepairOutput({
+          error:
+            error instanceof Error
+              ? error.message
+              : "The model returned an invalid resume inspection tool call.",
+          editableSegmentIds: input.editableSegmentIds,
+          toolName: toolCall.name,
+        });
+        pushCompactionToolTranscript({
+          responseId: response.id,
+          round,
+          toolCall,
+          toolOutput,
+          transcript,
+        });
         responseInput = [
           {
             call_id: toolCall.call_id,
-            output: buildCompactionToolRepairOutput({
-              error:
-                error instanceof Error
-                  ? error.message
-                  : "The model returned an invalid resume inspection tool call.",
-              editableSegmentIds: input.editableSegmentIds,
-              toolName: toolCall.name,
-            }),
+            output: toolOutput,
             type: "function_call_output",
           },
         ];
@@ -1657,6 +1913,13 @@ async function collectVerifiedCompactionCandidates(input: {
               ),
             });
 
+      pushCompactionToolTranscript({
+        responseId: response.id,
+        round,
+        toolCall,
+        toolOutput,
+        transcript,
+      });
       responseInput = [
         {
           call_id: toolCall.call_id,
@@ -1673,17 +1936,25 @@ async function collectVerifiedCompactionCandidates(input: {
       try {
         candidates = parseCompactionSubmissionCandidates(JSON.parse(toolCall.arguments));
       } catch (error) {
+        const toolOutput = buildCompactionToolRepairOutput({
+          error:
+            error instanceof Error
+              ? error.message
+              : "The model returned an invalid exact page-count verification tool call.",
+          editableSegmentIds: input.editableSegmentIds,
+          toolName: toolCall.name,
+        });
+        pushCompactionToolTranscript({
+          responseId: response.id,
+          round,
+          toolCall,
+          toolOutput,
+          transcript,
+        });
         responseInput = [
           {
             call_id: toolCall.call_id,
-            output: buildCompactionToolRepairOutput({
-              error:
-                error instanceof Error
-                  ? error.message
-                  : "The model returned an invalid exact page-count verification tool call.",
-              editableSegmentIds: input.editableSegmentIds,
-              toolName: toolCall.name,
-            }),
+            output: toolOutput,
             type: "function_call_output",
           },
         ];
@@ -1701,12 +1972,20 @@ async function collectVerifiedCompactionCandidates(input: {
         latestPageCountVerification.canSubmitFinalCandidates
           ? buildCompactionCandidateSignature(candidates)
           : null;
+      const toolOutput = buildPageCountVerificationToolOutput(
+        latestPageCountVerification,
+      );
+      pushCompactionToolTranscript({
+        responseId: response.id,
+        round,
+        toolCall,
+        toolOutput,
+        transcript,
+      });
       responseInput = [
         {
           call_id: toolCall.call_id,
-          output: buildPageCountVerificationToolOutput(
-            latestPageCountVerification,
-          ),
+          output: toolOutput,
           type: "function_call_output",
         },
       ];
@@ -1716,17 +1995,25 @@ async function collectVerifiedCompactionCandidates(input: {
     try {
       candidates = parseLineReductionCandidates(JSON.parse(toolCall.arguments));
     } catch (error) {
+      const toolOutput = buildCompactionToolRepairOutput({
+        error:
+          error instanceof Error
+            ? error.message
+            : "The model returned an invalid line-measurement tool call.",
+        editableSegmentIds: input.editableSegmentIds,
+        toolName: toolCall.name,
+      });
+      pushCompactionToolTranscript({
+        responseId: response.id,
+        round,
+        toolCall,
+        toolOutput,
+        transcript,
+      });
       responseInput = [
         {
           call_id: toolCall.call_id,
-          output: buildCompactionToolRepairOutput({
-            error:
-              error instanceof Error
-                ? error.message
-                : "The model returned an invalid line-measurement tool call.",
-            editableSegmentIds: input.editableSegmentIds,
-            toolName: toolCall.name,
-          }),
+          output: toolOutput,
           type: "function_call_output",
         },
       ];
@@ -1743,13 +2030,21 @@ async function collectVerifiedCompactionCandidates(input: {
     latestPageCountVerification = null;
     latestVerifiedCandidateSignature = null;
     measuredAtLeastOnce = true;
+    const toolOutput = buildLineReductionToolOutput({
+      estimatedLinesToRecover: input.estimatedLinesToRecover,
+      result: latestMeasurementResult,
+    });
+    pushCompactionToolTranscript({
+      responseId: response.id,
+      round,
+      toolCall,
+      toolOutput,
+      transcript,
+    });
     responseInput = [
       {
         call_id: toolCall.call_id,
-        output: buildLineReductionToolOutput({
-          estimatedLinesToRecover: input.estimatedLinesToRecover,
-          result: latestMeasurementResult,
-        }),
+        output: toolOutput,
         type: "function_call_output",
       },
     ];
@@ -1762,6 +2057,14 @@ async function collectVerifiedCompactionCandidates(input: {
     pageCountVerification: latestPageCountVerification,
     model: latestModel,
     ok: false,
+    transcript: finishCompactionAttemptTranscript(transcript, {
+      error:
+        `The model did not submit verified compaction candidates after ${maxCompactionSelfCheckRounds} page-fit tool rounds.`,
+      measurementResult: latestMeasurementResult,
+      model: latestModel,
+      ok: false,
+      pageCountVerification: latestPageCountVerification,
+    }),
   };
 }
 
@@ -1792,6 +2095,7 @@ async function validateFinalCompactedLatex(input: {
 export async function compactTailoredResumePageCount(input: {
   annotatedLatexCode: string;
   client?: OpenAI;
+  debugContext?: TailorResumePageCountCompactionDebugContext | null;
   edits: TailoredResumeBlockEditRecord[];
   emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
   initialPageCount: number;
@@ -1800,6 +2104,9 @@ export async function compactTailoredResumePageCount(input: {
   model?: string;
   onStepEvent?: (
     event: TailorResumeGenerationStepEvent,
+  ) => void | Promise<void>;
+  onDebugRecord?: (
+    record: TailorResumePageCountCompactionDebugRecord,
   ) => void | Promise<void>;
   previewPdf: Buffer;
   promptSettings?: SystemPromptSettings;
@@ -1945,6 +2252,7 @@ export async function compactTailoredResumePageCount(input: {
 
     try {
       selfCheckResult = await collectVerifiedCompactionCandidates({
+        attempt,
         attemptHistory,
         client,
         currentAnnotatedLatexCode,
@@ -1983,6 +2291,15 @@ export async function compactTailoredResumePageCount(input: {
     }
 
     lastModel = selfCheckResult.model;
+
+    await logTailorResumeCompactionTranscript({
+      context: input.debugContext,
+      detail: selfCheckResult.ok
+        ? `Step 4B page-count compaction attempt ${attempt} submitted verified candidates after ${selfCheckResult.transcript.toolCalls.length} tool call(s).`
+        : selfCheckResult.error,
+      onDebugRecord: input.onDebugRecord,
+      transcript: selfCheckResult.transcript,
+    });
 
     if (!selfCheckResult.ok) {
       lastError = selfCheckResult.error;

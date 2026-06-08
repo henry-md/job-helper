@@ -40,6 +40,12 @@ test("classifyTailorResumeDebugErrorSource separates invalid replacements from b
     "chat_error",
   );
   assert.equal(
+    classifyTailorResumeDebugErrorSource(
+      tailorResumeDebugErrorSources.pageCountCompactionTranscript,
+    ),
+    "tool_transcript",
+  );
+  assert.equal(
     classifyTailorResumeDebugErrorSource(buildTailorResumeStepFailureDebugSource(3)),
     "step_failure",
   );
@@ -69,6 +75,18 @@ test("debug error labels stay human readable", () => {
       tailorResumeDebugErrorSources.stepTwoChatServedError,
     ),
     "Chat context",
+  );
+  assert.equal(
+    formatTailorResumeDebugErrorSource(
+      tailorResumeDebugErrorSources.pageCountCompactionTranscript,
+    ),
+    "Page-count compaction transcript",
+  );
+  assert.equal(
+    formatTailorResumeDebugPayloadLabel(
+      tailorResumeDebugErrorSources.pageCountCompactionTranscript,
+    ),
+    "Tool-call transcript",
   );
   assert.equal(formatTailorResumeDebugErrorSource("step-5-failure"), "Step 5 failure");
   assert.equal(

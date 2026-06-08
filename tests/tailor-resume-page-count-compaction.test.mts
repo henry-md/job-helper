@@ -220,6 +220,12 @@ test("line reduction gate accepts candidates with a user-visible rendered line r
 test("page-count compaction keeps verified line-saving edits even when the exact page count still misses the target", async () => {
   const fixture = await buildCompactionOverflowFixture();
   const toolNamesSeen: string[][] = [];
+  const debugRecords: Array<{
+    attempt: number;
+    detail: string;
+    latexCode: string;
+    source: string;
+  }> = [];
   let responseIndex = 0;
   const candidateArguments = JSON.stringify({
     candidates: [fixture.candidate],
@@ -298,6 +304,9 @@ test("page-count compaction keeps verified line-saving edits even when the exact
       initialPageCount: fixture.initialPageCount,
       latexCode: fixture.latexCode,
       model: "test-openai-response",
+      onDebugRecord: (record) => {
+        debugRecords.push(record);
+      },
       previewPdf: fixture.previewPdf,
       sourceAnnotatedLatexCode: fixture.sourceAnnotatedLatexCode,
       targetPageCount: 1,
@@ -317,6 +326,36 @@ test("page-count compaction keeps verified line-saving edits even when the exact
         String.raw`\resumeitem{Built p-hashing ad similarity service across 359K ads and 20 clients.}`,
       ),
       true,
+    );
+    assert.equal(debugRecords.length, 1);
+    assert.equal(debugRecords[0]?.source, "page-count-compaction-transcript");
+    assert.equal(debugRecords[0]?.attempt, 1);
+    const transcriptPayload = JSON.parse(debugRecords[0]?.latexCode ?? "{}");
+    assert.equal(
+      transcriptPayload.kind,
+      "tailor_resume_page_count_compaction_transcript",
+    );
+    assert.equal(transcriptPayload.transcript.estimatedLinesToRecover > 0, true);
+    assert.equal(transcriptPayload.transcript.toolCalls.length, 3);
+    assert.equal(
+      transcriptPayload.transcript.toolCalls[0]?.toolName,
+      "measure_resume_line_reductions",
+    );
+    assert.match(
+      transcriptPayload.transcript.toolCalls[0]?.output ?? "",
+      /acceptedRenderedLineReduction/,
+    );
+    assert.equal(
+      transcriptPayload.transcript.toolCalls[1]?.toolName,
+      "verify_resume_page_count",
+    );
+    assert.match(
+      transcriptPayload.transcript.toolCalls[1]?.output ?? "",
+      /verifiedPageCount/,
+    );
+    assert.equal(
+      transcriptPayload.transcript.toolCalls[2]?.toolName,
+      "submit_verified_line_reductions",
     );
     assert.deepEqual(
       toolNamesSeen,

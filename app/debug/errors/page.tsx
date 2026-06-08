@@ -105,6 +105,11 @@ export default async function DebugErrorsPage() {
     (failure) =>
       classifyTailorResumeDebugErrorSource(failure.source) === "chat_error",
   );
+  const toolTranscriptFailures = failures.filter(
+    (failure) =>
+      classifyTailorResumeDebugErrorSource(failure.source) ===
+      "tool_transcript",
+  );
   const stepFailures = failures.filter(
     (failure) =>
       classifyTailorResumeDebugErrorSource(failure.source) === "step_failure",
@@ -121,6 +126,12 @@ export default async function DebugErrorsPage() {
         "Step 2 chat errors that were returned to the extension, including validation failures that should not disappear after the sidebar closes.",
       failures: chatErrorFailures,
       title: "Chat Errors",
+    },
+    {
+      description:
+        "Verbose model tool-call transcripts captured for guardrail loops, including the model arguments and server tool outputs used to diagnose stuck checks.",
+      failures: toolTranscriptFailures,
+      title: "Tool Transcripts",
     },
     {
       description:
