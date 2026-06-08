@@ -30,31 +30,25 @@ Causes:
      a regression hazard: Tailwind v4's preflight reset clobbers the
      extension's existing custom CSS and the side-panel renders blank.
 
-Fix:
-- Keep two thin component shells, one per app, instead of forcing a single
-  shared rendering component.
-  - Web app: `components/tailored-resume-interactive-preview.tsx` (Tailwind +
-    Next.js conventions, used by the review modal).
-  - Extension: `extension/src/tailored-resume-overlay-preview.tsx` (custom
-    CSS sibling that paints highlights directly on a clean PDF render with
-    no extra UI chrome — matches the iframe-based preview's layout so the
-    toggle only adds highlights, no layout shift).
-- Fix the worker URL once per shell. In the extension shell, after
-  `pdfjs-dist/webpack.mjs` is dynamically imported (and assigns its broken
-  Worker), terminate that worker and replace `GlobalWorkerOptions.workerPort`
-  with a Worker built from `pdfjs-dist/build/pdf.worker.mjs?url`. Vite emits
-  this as a reachable `/@fs/...` URL in dev and a hashed asset in prod.
-- Do NOT add Tailwind to the extension just to make a "shared" component fit.
-  Extension-side custom CSS (`extension/src/App.css` —
-  `.tailored-preview-overlay-highlight*`) is the source of truth for the
-  extension panel and stays decoupled from `app/globals.css`.
+Current fix:
+- Use one shared renderer: `components/tailored-resume-interactive-preview.tsx`.
+  The web app uses its default chrome; the extension passes `presentation="frameless"`
+  and `scaleMode="fit"` so the same highlight geometry renders inside the
+  native side-panel preview shell.
+- Keep the worker URL extension-specific. `extension/src/tailored-resume-preview-pdfjs.ts`
+  dynamically imports `pdfjs-dist/webpack.mjs`, terminates the worker it installs,
+  and replaces `GlobalWorkerOptions.workerPort` with a Worker built from
+  `pdfjs-dist/build/pdf.worker.mjs?url`. Vite emits this as a reachable `/@fs/...`
+  URL in dev and a hashed asset in prod.
+- Do NOT add Tailwind to the extension just to make a shared component fit.
+  The shared component CSS (`components/tailored-resume-interactive-preview.css`)
+  owns the renderer and highlight styles, while the extension keeps only its
+  surrounding side-panel shell in `extension/src/App.css`.
 
 Rules:
 - The extension panel and the web review modal have intentionally different
-  visual chromes. A "shared" component must either: (a) ship zero UI chrome
-  and zero Tailwind classes (rendering primitives only, host-styled), or
-  (b) be duplicated. Don't re-export the web component verbatim into the
-  extension and expect it to fit.
+  visual chromes. Keep shared renderer chrome host-aware and avoid Tailwind-only
+  primitives in the frameless extension mode.
 - Whenever a code path eventually calls `pdfjs.getDocument(...)` from the
   extension, verify the worker URL the extension dev server resolves to is
   reachable (HTTP 200), not just that imports compile. The bare
@@ -65,6 +59,6 @@ Rules:
   without preflight; flipping that on regresses the entire panel.
 - Verify diff-highlighting changes by actually rendering a real PDF inside
   the extension's Vite dev origin (not just a build green or a type-check)
-  and confirming a `.tailored-preview-overlay-highlight` overlay appears
+  and confirming a `.resume-interactive-highlight` overlay appears
   with non-empty CSS background. A green build + green types says nothing
   about whether highlights paint.

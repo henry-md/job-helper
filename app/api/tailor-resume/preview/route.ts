@@ -1,13 +1,10 @@
 import { NextResponse } from "next/server";
 import { getApiSession } from "@/lib/api-auth";
-import { compileTailorResumeLatex } from "@/lib/tailor-resume-latex";
 import { readTailorResumeProfileState } from "@/lib/tailor-resume-profile-state";
-import { buildTailoredResumeReviewHighlightedLatex } from "@/lib/tailor-resume-preview-highlight";
 import { buildTailorResumeSourcePreview } from "@/lib/tailor-resume-source-preview";
 import { readOrCompileTailoredResumePdf } from "@/lib/tailored-resume-preview-pdf";
 import {
   readTailorResumeConfigChatArtifactPdf,
-  readTailorResumeProfile,
   readTailorResumePreviewPdf,
 } from "@/lib/tailor-resume-storage";
 
@@ -26,7 +23,6 @@ export async function GET(request: Request) {
     const configChatArtifactId =
       searchParams.get("configChatArtifactId")?.trim() ?? "";
     const tailoredResumeId = searchParams.get("tailoredResumeId");
-    const withHighlights = searchParams.get("highlights") === "true";
     let previewPdf: Buffer;
 
     if (configChatArtifactId) {
@@ -34,41 +30,6 @@ export async function GET(request: Request) {
         session.user.id,
         configChatArtifactId,
       );
-    } else if (tailoredResumeId && withHighlights) {
-      const profile = await readTailorResumeProfile(session.user.id);
-      const tailoredResume = profile.tailoredResumes.find(
-        (record) => record.id === tailoredResumeId,
-      );
-
-      if (!tailoredResume) {
-        return NextResponse.json(
-          { error: "The tailored resume preview could not be found." },
-          { status: 404 },
-        );
-      }
-
-      try {
-        const highlightedLatex = buildTailoredResumeReviewHighlightedLatex({
-          annotatedLatexCode: tailoredResume.annotatedLatexCode,
-          edits: tailoredResume.edits,
-          sourceAnnotatedLatexCode: tailoredResume.sourceAnnotatedLatexCode,
-        });
-        previewPdf = await compileTailorResumeLatex(highlightedLatex);
-      } catch {
-        const recoveredPreviewPdf = await readOrCompileTailoredResumePdf({
-          tailoredResumeId,
-          userId: session.user.id,
-        });
-
-        if (!recoveredPreviewPdf) {
-          return NextResponse.json(
-            { error: "The tailored resume preview could not be found." },
-            { status: 404 },
-          );
-        }
-
-        previewPdf = recoveredPreviewPdf;
-      }
     } else {
       if (tailoredResumeId) {
         const recoveredPreviewPdf = await readOrCompileTailoredResumePdf({

@@ -7,7 +7,7 @@ import {
   tailorResumeGenerationSettingDefinitions,
   tailorResumePromptFieldDefinitions,
 } from "@/lib/tailor-resume-settings-metadata";
-import { buildTailoredResumeHighlightedPreviewUrl } from "@/lib/tailored-resume-preview-url";
+import { buildTailoredResumePreviewPdfUrl } from "@/lib/tailored-resume-preview-url";
 import type { TailorResumeGenerationSettings } from "@/lib/tailor-resume-generation-settings";
 import type {
   TailorResumeProfile,
@@ -49,7 +49,7 @@ function buildPromptPreviewPdfUrl(record: TailoredResumeRecord | null) {
     return null;
   }
 
-  const baseUrl = buildTailoredResumeHighlightedPreviewUrl(record);
+  const baseUrl = buildTailoredResumePreviewPdfUrl(record);
   return `${baseUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
 }
 
