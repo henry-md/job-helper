@@ -46,6 +46,31 @@ test("buildTechnologyExtractionReasoning keeps Step 1 on low reasoning", () => {
   assert.deepEqual(buildTechnologyExtractionReasoning(), { effort: "low" });
 });
 
+test("extractTailorResumeJobDescriptionTechnologyHints reads Neuralink embedded language requirements", () => {
+  const technologies = extractTailorResumeJobDescriptionTechnologyHints(
+    [
+      "Required Qualifications:",
+      "Fluent in Python and C or Rust (don't get hung up on this--being an exceptional software engineer matters above all)",
+      "Experience (and comfortable) with the Linux/Unix systems and command line",
+    ].join("\n"),
+    { employerName: "Neuralink" },
+  );
+
+  assert.deepEqual(
+    technologies.map((technology) => [
+      technology.name,
+      technology.priority,
+    ]),
+    [
+      ["Python", "high"],
+      ["Linux", "high"],
+      ["Unix", "high"],
+      ["Rust", "high"],
+      ["C", "high"],
+    ],
+  );
+});
+
 test("mergeTailorResumeScrapedKeywordSnapshot preserves reviewed classifications after planning", () => {
   const technologies = mergeTailorResumeScrapedKeywordSnapshot({
     planningTechnologies: [

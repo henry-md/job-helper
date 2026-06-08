@@ -8,6 +8,7 @@ import {
   buildTailorResumeInterviewSystemPrompt,
   buildTailorResumeImplementationSystemPrompt,
   buildTailorResumePlanningSystemPrompt,
+  buildTailorResumeTechnologyExtractionInstructions,
   buildTailorResumeRefinementSystemPrompt,
   createDefaultSystemPromptSettings,
   mergeSystemPromptSettings,
@@ -139,15 +140,16 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /Do not abandon a keyword after one awkward attempt/i);
   assert.match(prompt, /When editing Skills or Technical Skills, add only actual skills/i);
   assert.match(prompt, /dedicated USER\.md sentence\/bullet for that exact technology/i);
-  assert.match(prompt, /Do not add peppering\/capability phrases such as RESTful/i);
-  assert.match(prompt, /cloud infrastructure, data structures, production infrastructure/i);
+  assert.match(prompt, /Do not add peppering\/capability phrases such as broad API/i);
+  assert.match(prompt, /infrastructure, fundamentals, or process wording/i);
   assert.match(prompt, /Skills-only concrete tools like Windsurf/i);
   assert.match(prompt, /Skills-entry gate/i);
   assert.match(prompt, /not for every keyword used to pepper the resume/i);
-  assert.match(prompt, /Those terms may still appear naturally in experience bullets/i);
+  assert.match(prompt, /already provided as job keywords/i);
   assert.match(prompt, /closest existing category/i);
   assert.match(prompt, /Concrete technologies with dedicated source-resume or USER\.md support may go into Skills/i);
-  assert.match(prompt, /capability phrases used to pepper fit/i);
+  assert.match(prompt, /capability phrases used to pepper fit should not be added to Skills/i);
+  assert.doesNotMatch(prompt, /RESTful/i);
   assert.equal(prompt.match(/Available tools:/g)?.length, 1);
   assert.match(prompt, /check_planned_keyword_assignments/i);
   assert.match(prompt, /\{ changes: \[\{ segmentId, editIntent, targetKeywords \}\] \}/i);
@@ -155,6 +157,14 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /pushing high-priority assignments as far as truth, block scope, and layout allow/i);
   assert.match(prompt, /Step 4 writes the actual LaTeX and performs the final resume-text keyword coverage check/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
+});
+
+test("buildTailorResumeTechnologyExtractionInstructions avoids priming specific narrative terms", () => {
+  const prompt = buildTailorResumeTechnologyExtractionInstructions();
+
+  assert.match(prompt, /actually present in the job posting/i);
+  assert.match(prompt, /limited leeway for exact narrative phrases/i);
+  assert.doesNotMatch(prompt, /RESTful/i);
 });
 
 test("buildTailorResumePlanningSystemPrompt only changes for Ludicrous Mode missing terms", () => {
@@ -188,10 +198,8 @@ test("buildTailorResumePlanningSystemPrompt appends skills keyword coverage to s
   assert.match(prompt, /Custom planning prompt\./);
   assert.match(prompt, /Skills-entry gate/i);
   assert.match(prompt, /Windsurf can be listed in a skills category/i);
-  assert.match(
-    prompt,
-    /RESTful, RESTful APIs, cloud infrastructure, data structures/i,
-  );
+  assert.match(prompt, /broad API, infrastructure, fundamentals, or process wording/i);
+  assert.doesNotMatch(prompt, /RESTful/i);
   assert.match(prompt, /Available tools:/);
   assert.match(prompt, /check_planned_keyword_assignments/i);
   assert.match(prompt, /list_current_resume_keyword_usage/i);
@@ -327,7 +335,9 @@ test("buildTailorResumeImplementationSystemPrompt injects retry feedback", () =>
   assert.match(prompt, /dedicated USER\.md sentence\/bullet for that exact technology/i);
   assert.match(prompt, /Do not add capability phrases to Skills merely for keyword peppering/i);
   assert.match(prompt, /If the accepted plan adds actual skills to a skills section/i);
-  assert.match(prompt, /Do not add extra capability phrases such as RESTful/i);
+  assert.match(prompt, /Do not introduce new capability keywords that are absent/i);
+  assert.match(prompt, /Do not add extra capability phrases to Skills/i);
+  assert.doesNotMatch(prompt, /RESTful/i);
   assert.match(prompt, /USER\.md-to-LaTeX formatting/i);
   assert.match(prompt, /Markdown bold emphasis/i);
   assert.match(prompt, /\\textbf\{word\}/);

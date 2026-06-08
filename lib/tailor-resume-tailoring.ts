@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { trackAiModelUsage } from "./ai-usage.ts";
 import {
   buildTailorResumeInterviewSystemPrompt,
   buildTailorResumeImplementationSystemPrompt,
@@ -185,6 +186,8 @@ const tailorResumePlanningKeywordCheckToolName =
   "check_planned_keyword_assignments";
 const tailorResumeImplementationKeywordCheckToolName =
   "check_implemented_resume_keyword_coverage";
+const tailorResumeImplementationKeywordWaiverToolName =
+  "waive_implemented_resume_keyword_requirement";
 const tailorResumeKeywordUsageToolName = "list_current_resume_keyword_usage";
 const tailorResumeMalformedBulletsToolName = "list_malformed_resume_bullets";
 const tailorResumeSingleSkillQueryToolName = "query_single_resume_skill";
@@ -257,6 +260,36 @@ const tailorResumeImplementationKeywordCheckTool = {
       },
     },
     required: ["changes", "lineCountSegmentIds"],
+  },
+} as const;
+
+const tailorResumeImplementationKeywordWaiverTool = {
+  type: "function",
+  name: tailorResumeImplementationKeywordWaiverToolName,
+  description:
+    "Explicitly remove one currently missing keyword from Step 4's required coverage list when including it would be unsupported, awkward, too long, or worse than preserving stronger content.",
+  strict: true,
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      keyword: {
+        type: "string",
+        description:
+          "The exact keyword name to waive, matching the missing keyword reported by check_implemented_resume_keyword_coverage.",
+      },
+      reason: {
+        type: "string",
+        description:
+          "A concise explanation of why the final resume should not force this keyword into the planned replacements.",
+      },
+      tradeoff: {
+        type: "string",
+        description:
+          "What would get worse if this keyword were forced in, such as unsupported experience, awkward wording, page growth, or losing a stronger claim.",
+      },
+    },
+    required: ["keyword", "reason", "tradeoff"],
   },
 } as const;
 
@@ -429,6 +462,7 @@ type TailorResumeInspectionToolCall = {
   arguments: string;
   call_id: string;
   name:
+    | typeof tailorResumeImplementationKeywordWaiverToolName
     | typeof tailorResumeKeywordUsageToolName
     | typeof tailorResumeMalformedBulletsToolName
     | typeof tailorResumeSingleSkillQueryToolName
@@ -457,6 +491,7 @@ type TailoredResumeResponse = {
     type?: unknown;
   }>;
   output_text?: unknown;
+  usage?: unknown;
 };
 
 export type PlanTailoredResumeResult =
@@ -807,7 +842,8 @@ function findInspectionToolCalls(
   for (const outputItem of response.output ?? []) {
     if (
       outputItem.type === "function_call" &&
-      (outputItem.name === tailorResumeKeywordUsageToolName ||
+      (outputItem.name === tailorResumeImplementationKeywordWaiverToolName ||
+        outputItem.name === tailorResumeKeywordUsageToolName ||
         outputItem.name === tailorResumeMalformedBulletsToolName ||
         outputItem.name === tailorResumeSingleSkillQueryToolName ||
         outputItem.name === tailorResumeBatchSkillQueryToolName) &&
@@ -1102,6 +1138,38 @@ function parseResumeInspectionPayload(value: unknown): {
         segmentId,
       };
     }),
+  };
+}
+
+function parseImplementationKeywordWaiverPayload(value: unknown): {
+  keyword: string;
+  reason: string;
+  tradeoff: string;
+} {
+  if (!value || typeof value !== "object") {
+    throw new Error("The keyword-waiver tool call must be an object.");
+  }
+
+  const keyword = "keyword" in value ? readTrimmedString(value.keyword) : "";
+  const reason = "reason" in value ? readTrimmedString(value.reason) : "";
+  const tradeoff = "tradeoff" in value ? readTrimmedString(value.tradeoff) : "";
+
+  if (!keyword) {
+    throw new Error("The keyword-waiver tool call must include a keyword.");
+  }
+
+  if (!reason) {
+    throw new Error("The keyword-waiver tool call must include a reason.");
+  }
+
+  if (!tradeoff) {
+    throw new Error("The keyword-waiver tool call must include a tradeoff.");
+  }
+
+  return {
+    keyword,
+    reason,
+    tradeoff,
   };
 }
 
@@ -1563,8 +1631,10 @@ const tailorResumeJobTechnologyHintNames = [
   "Linux",
   "Unix",
   "Bash",
+  "Rust",
   "C++",
   "C#",
+  "C",
   "Java",
   "Go",
 ] as const;
@@ -1884,6 +1954,11 @@ export type TailorResumePlanningKeywordAssignmentCheckResult = {
   missingHighPriority: string[];
   missingLowPriority: string[];
   nextAction: string;
+  overloadedBulletSegments: Array<{
+    segmentId: string;
+    targetKeywordCount: number;
+    targetKeywords: string[];
+  }>;
   satisfiedHighPriority: string[];
   satisfiedLowPriority: string[];
   terms: Array<{
@@ -1912,6 +1987,17 @@ function buildTailorResumePlanningKeywordAssignmentCheckResult(input: {
   const changedSegmentIds = new Set(
     input.changes.map((change) => change.segmentId),
   );
+  const overloadedBulletSegments = input.changes
+    .filter(
+      (change) =>
+        isTailorResumeBulletSegmentId(change.segmentId) &&
+        change.targetKeywords.length > maxTailorResumeBulletTargetKeywords,
+    )
+    .map((change) => ({
+      segmentId: change.segmentId,
+      targetKeywordCount: change.targetKeywords.length,
+      targetKeywords: change.targetKeywords,
+    }));
   const assignedSegmentIdsByKeyword = new Map<string, string[]>();
   const unrecognizedTargetKeywords = new Set<string>();
 
@@ -1974,9 +2060,12 @@ function buildTailorResumePlanningKeywordAssignmentCheckResult(input: {
     missingHighPriority,
     missingLowPriority,
     nextAction:
-      missingHighPriority.length > 0 || missingLowPriority.length > 0
+      overloadedBulletSegments.length > 0
+        ? `Revise Step 3 so each bullet segment targets at most ${maxTailorResumeBulletTargetKeywords} keywords. Move extra keywords to Skills/Technical Skills when valid, a separate supported block, or leave them unassigned if they cannot fit truthfully.`
+        : missingHighPriority.length > 0 || missingLowPriority.length > 0
         ? "Revise Step 3 by assigning missing keywords to specific segmentIds with compact editIntent instructions, or leave them preserved in unchanged original blocks."
         : "Assignments are complete enough for final Step 3 JSON; Step 4 will write the LaTeX replacements.",
+    overloadedBulletSegments,
     satisfiedHighPriority: terms
       .filter((term) => term.priority === "high" && isSatisfied(term))
       .map((term) => term.name),
@@ -2036,9 +2125,188 @@ function buildKeywordCheckToolOutput(
   return JSON.stringify(result, null, 2);
 }
 
+const maxTailorResumeBulletTargetKeywords = 2;
+
+function isTailorResumeBulletSegmentId(segmentId: string) {
+  return /(?:^|\.)bullet-\d+(?:$|\.)/.test(segmentId);
+}
+
+function truncateTailorResumeToolText(value: string, maxLength = 240) {
+  const normalizedValue = value.replace(/\s+/g, " ").trim();
+
+  return normalizedValue.length > maxLength
+    ? `${normalizedValue.slice(0, maxLength)}...`
+    : normalizedValue;
+}
+
+function buildImplementationMissingKeywordPlacementGuidance(input: {
+  keywordCheckResult: TailorResumeKeywordCheckResult;
+  plannedChanges: TailoredResumePlanningChange[];
+  planningSnapshot: TailorResumePlanningSnapshot;
+}) {
+  const missingKeywords = [
+    ...input.keywordCheckResult.missingHighPriority.map((keyword) => ({
+      keyword,
+      priority: "high" as const,
+    })),
+    ...input.keywordCheckResult.missingLowPriority.map((keyword) => ({
+      keyword,
+      priority: "low" as const,
+    })),
+  ];
+
+  if (missingKeywords.length === 0) {
+    return [];
+  }
+
+  return missingKeywords.map(({ keyword, priority }) => {
+    const normalizedKeyword = normalizeTechnologyName(keyword);
+    const plannedTargets = input.plannedChanges.filter((change) =>
+      change.targetKeywords.some(
+        (targetKeyword) => normalizeTechnologyName(targetKeyword) === normalizedKeyword,
+      ),
+    );
+    const originalSegmentsWithKeyword = input.planningSnapshot.blocks.filter((block) =>
+      resumeTextIncludesKeyword({
+        term: keyword,
+        text: block.plainText,
+      }),
+    );
+    const changedSegmentIds = new Set(
+      input.plannedChanges.map((change) => change.segmentId),
+    );
+    const changedOriginalSegmentsWithKeyword = originalSegmentsWithKeyword.filter((block) =>
+      changedSegmentIds.has(block.segmentId),
+    );
+    const targetSegments = (plannedTargets.length > 0
+      ? plannedTargets
+      : input.plannedChanges.filter((change) =>
+          changedOriginalSegmentsWithKeyword.some(
+            (block) => block.segmentId === change.segmentId,
+          ),
+        )
+    ).map((change) => {
+      const block = input.planningSnapshot.blocks.find(
+        (candidate) => candidate.segmentId === change.segmentId,
+      );
+
+      return {
+        command: block?.command ?? null,
+        currentText: block
+          ? truncateTailorResumeToolText(block.plainText)
+          : "[missing planning block]",
+        editIntent: truncateTailorResumeToolText(change.editIntent),
+        segmentId: change.segmentId,
+        targetKeywords: change.targetKeywords,
+      };
+    });
+
+    return {
+      keyword,
+      originalPresence:
+        originalSegmentsWithKeyword.length > 0
+          ? {
+              changedSegmentIds: changedOriginalSegmentsWithKeyword.map(
+                (block) => block.segmentId,
+              ),
+              segmentIds: originalSegmentsWithKeyword.map((block) => block.segmentId),
+            }
+          : null,
+      placementInstruction:
+        targetSegments.length > 0
+          ? `Add the exact term "${keyword}" inside one of the listed targetSegments, preserving the accepted Step 3 intent and block scope.`
+          : `No Step 3 target segment explicitly carried "${keyword}". Add it only if one planned replacement can truthfully support the exact term without violating block scope; otherwise revise Step 3 rather than forcing it here.`,
+      priority,
+      targetSegments,
+    };
+  });
+}
+
+function filterWaivedImplementationTechnologies(input: {
+  requiredTechnologies: TailoredResumeEmphasizedTechnology[];
+  waivedKeywordNames: ReadonlySet<string>;
+}) {
+  if (input.waivedKeywordNames.size === 0) {
+    return input.requiredTechnologies;
+  }
+
+  return input.requiredTechnologies.filter(
+    (technology) =>
+      !input.waivedKeywordNames.has(normalizeTechnologyName(technology.name)),
+  );
+}
+
+function buildImplementationKeywordWaiverToolOutput(input: {
+  latestKeywordCheckResult: TailorResumeKeywordCheckResult | null;
+  requiredTechnologies: TailoredResumeEmphasizedTechnology[];
+  waivedKeywordNames: Set<string>;
+  waiver: {
+    keyword: string;
+    reason: string;
+    tradeoff: string;
+  };
+}) {
+  const normalizedKeyword = normalizeTechnologyName(input.waiver.keyword);
+  const requiredTechnology = input.requiredTechnologies.find(
+    (technology) => normalizeTechnologyName(technology.name) === normalizedKeyword,
+  );
+
+  if (!requiredTechnology) {
+    return JSON.stringify(
+      {
+        accepted: false,
+        error: `Keyword "${input.waiver.keyword}" is not in the current Step 4 required keyword list.`,
+        nextAction:
+          "Do not waive this term. Continue with the current implementation candidate or inspect the current keyword ledger.",
+      },
+      null,
+      2,
+    );
+  }
+
+  const missingKeywords = new Set([
+    ...(input.latestKeywordCheckResult?.missingHighPriority ?? []),
+    ...(input.latestKeywordCheckResult?.missingLowPriority ?? []),
+  ].map(normalizeTechnologyName));
+
+  if (!missingKeywords.has(normalizedKeyword)) {
+    return JSON.stringify(
+      {
+        accepted: false,
+        error: `Keyword "${requiredTechnology.name}" was not missing in the latest keyword coverage check.`,
+        nextAction:
+          "Only waive a keyword after check_implemented_resume_keyword_coverage reports it missing for the current candidate.",
+      },
+      null,
+      2,
+    );
+  }
+
+  input.waivedKeywordNames.add(normalizedKeyword);
+
+  return JSON.stringify(
+    {
+      accepted: true,
+      keyword: requiredTechnology.name,
+      nextAction:
+        "The keyword has been removed from Step 4's required coverage list for this run. Call check_implemented_resume_keyword_coverage again with the revised or current candidate so the remaining required keywords can be checked.",
+      reason: input.waiver.reason,
+      remainingRequiredKeywords: filterWaivedImplementationTechnologies({
+        requiredTechnologies: input.requiredTechnologies,
+        waivedKeywordNames: input.waivedKeywordNames,
+      }).map((technology) => technology.name),
+      tradeoff: input.waiver.tradeoff,
+    },
+    null,
+    2,
+  );
+}
+
 async function buildImplementationCheckToolOutput(input: {
   changedSegmentIds: ReadonlySet<string>;
   keywordCheckResult: TailorResumeKeywordCheckResult;
+  plannedChanges: TailoredResumePlanningChange[];
+  planningSnapshot: TailorResumePlanningSnapshot;
   renderedAnnotatedLatexCode: string;
   requestedLineCountSegmentIds: ReadonlySet<string>;
 }) {
@@ -2054,6 +2322,11 @@ async function buildImplementationCheckToolOutput(input: {
   return JSON.stringify(
     {
       keywordCoverage: input.keywordCheckResult,
+      missingKeywordPlacement: buildImplementationMissingKeywordPlacementGuidance({
+        keywordCheckResult: input.keywordCheckResult,
+        plannedChanges: input.plannedChanges,
+        planningSnapshot: input.planningSnapshot,
+      }),
       renderedBulletLineCheck: {
         malformedBullets: renderedBulletHealth.malformedBullets,
         pageCount: renderedBulletHealth.pageCount,
@@ -2946,6 +3219,19 @@ export function validateTailoredResumePlanningKeywordCoverage(input: {
 export function validateTailoredResumePlanningKeywordAssignments(input: {
   keywordAssignmentCheckResult: TailorResumePlanningKeywordAssignmentCheckResult;
 }) {
+  if (input.keywordAssignmentCheckResult.overloadedBulletSegments.length > 0) {
+    throw new Error(
+      [
+        `The Step 3 plan assigned more than ${maxTailorResumeBulletTargetKeywords} target keywords to a single bullet segment.`,
+        "Split the keyword coverage across separate supported blocks, move concrete skills into Skills/Technical Skills when valid, or leave lower-value terms unassigned.",
+        ...input.keywordAssignmentCheckResult.overloadedBulletSegments.map(
+          (segment) =>
+            `- ${segment.segmentId}: ${segment.targetKeywords.join(", ")}`,
+        ),
+      ].join("\n"),
+    );
+  }
+
   if (input.keywordAssignmentCheckResult.unrecognizedTargetKeywords.length > 0) {
     throw new Error(
       [
@@ -3078,6 +3364,7 @@ async function extractTailorResumeJobDescriptionTechnologiesWithDebug(input: {
   const instructions = buildTechnologyExtractionInstructions();
   const response = await runTailorResumeStepModelRequest({
     attempt: 1,
+    model: input.model,
     onStepEvent: input.onStepEvent,
     operation: (signal) =>
       input.client.responses.create({
@@ -3096,6 +3383,7 @@ async function extractTailorResumeJobDescriptionTechnologiesWithDebug(input: {
           },
         },
       }, { signal }),
+    provider: "openai",
     readDurationMs: input.readDurationMs ?? (() => 0),
     stepLabel: "Step 1 keyword extraction",
     stepNumber: 1,
@@ -3195,6 +3483,7 @@ type AnthropicMessagesResponse = {
   content?: AnthropicContentBlock[];
   id?: string;
   model?: string;
+  usage?: unknown;
 };
 
 function buildAnthropicRequestMessages(input: {
@@ -3287,6 +3576,7 @@ function normalizeAnthropicPlanningResponse(input: {
     model: `anthropic:${model}`,
     output,
     output_text: textChunks.join("").trim(),
+    usage: input.response.usage,
   };
 }
 
@@ -3434,10 +3724,13 @@ function createTailorResumePlanningModelRequester(input: {
 
 async function runTailorResumeStepModelRequest<T>(input: {
   attempt: number;
+  model: string;
   onStepEvent:
     | ((event: TailorResumeGenerationStepEvent) => void | Promise<void>)
     | undefined;
   operation: (signal: AbortSignal) => Promise<T>;
+  provider: TailorResumeModelProvider;
+  round?: number | null;
   readDurationMs: () => number;
   stepLabel: string;
   stepNumber: number;
@@ -3448,7 +3741,16 @@ async function runTailorResumeStepModelRequest<T>(input: {
       const timeout = createTailorResumeStepAttemptTimeout(input.stepLabel);
 
       try {
-        return await input.operation(timeout.signal);
+        return await trackAiModelUsage({
+          attempt: input.attempt,
+          model: input.model,
+          operation: input.stepLabel,
+          provider: input.provider,
+          request: () => input.operation(timeout.signal),
+          round: input.round,
+          stepLabel: input.stepLabel,
+          stepNumber: input.stepNumber,
+        });
       } catch (error) {
         throw normalizeTailorResumeStepTimeoutError({
           error,
@@ -4259,9 +4561,12 @@ export async function planTailoredResume(input: {
       ) {
         const roundResponse = (await runTailorResumeStepModelRequest({
           attempt,
+          model: planningModelRef.model,
           onStepEvent: input.onStepEvent,
           operation: (signal) => planningModelRequester.create(responseInput, signal),
+          provider: planningModelRef.provider,
           readDurationMs: () => Math.max(0, Date.now() - startedAt),
+          round: toolRound,
           stepLabel: "Step 3 planning",
           stepNumber: 3,
           summary: "Generating edit intent outline",
@@ -4643,6 +4948,12 @@ export async function implementTailoredResumePlan(input: {
     planningResult: input.planningResult,
     planningSnapshot,
   });
+  const waivedImplementationKeywordNames = new Set<string>();
+  const readRequiredImplementationTechnologies = () =>
+    filterWaivedImplementationTechnologies({
+      requiredTechnologies: implementationRequiredTechnologies,
+      waivedKeywordNames: waivedImplementationKeywordNames,
+    });
   const planningBlocksById = new Map(
     planningSnapshot.blocks.map((block) => [block.segmentId, block]),
   );
@@ -4811,6 +5122,7 @@ export async function implementTailoredResumePlan(input: {
       let responseInput: TailorResumeStepResponseInput = implementationInput;
       let finalResponse: TailoredResumeResponse | null = null;
       let keywordCheckCalled = false;
+      let latestKeywordCheckResult: TailorResumeKeywordCheckResult | null = null;
 
       for (
         let toolRound = 1;
@@ -4819,6 +5131,7 @@ export async function implementTailoredResumePlan(input: {
       ) {
         const roundResponse = (await runTailorResumeStepModelRequest({
           attempt,
+          model,
           onStepEvent: input.onStepEvent,
           operation: (signal) =>
             client.responses.create({
@@ -4836,6 +5149,7 @@ export async function implementTailoredResumePlan(input: {
                   },
               tools: [
                 tailorResumeImplementationKeywordCheckTool,
+                tailorResumeImplementationKeywordWaiverTool,
                 tailorResumeKeywordUsageTool,
                 tailorResumeMalformedBulletsTool,
                 tailorResumeSingleSkillQueryTool,
@@ -4851,7 +5165,9 @@ export async function implementTailoredResumePlan(input: {
                 },
               },
             }, { signal }),
+          provider: "openai",
           readDurationMs: () => Math.max(0, Date.now() - startedAt),
+          round: toolRound,
           stepLabel: "Step 4 implementation",
           stepNumber: 4,
           summary: "Generating block-scoped edits",
@@ -4868,7 +5184,17 @@ export async function implementTailoredResumePlan(input: {
             try {
               const inspectionArguments = JSON.parse(inspectionToolCall.arguments);
 
-              if (inspectionToolCall.name === tailorResumeSingleSkillQueryToolName) {
+              if (
+                inspectionToolCall.name ===
+                tailorResumeImplementationKeywordWaiverToolName
+              ) {
+                inspectionToolOutput = buildImplementationKeywordWaiverToolOutput({
+                  latestKeywordCheckResult,
+                  requiredTechnologies: implementationRequiredTechnologies,
+                  waivedKeywordNames: waivedImplementationKeywordNames,
+                  waiver: parseImplementationKeywordWaiverPayload(inspectionArguments),
+                });
+              } else if (inspectionToolCall.name === tailorResumeSingleSkillQueryToolName) {
                 inspectionToolOutput =
                   buildTailorResumeSingleSkillQueryToolOutput({
                     ...parseTailorResumeSingleSkillQuery(inspectionArguments),
@@ -4894,7 +5220,8 @@ export async function implementTailoredResumePlan(input: {
                   inspectionToolCall.name === tailorResumeKeywordUsageToolName
                     ? buildResumeKeywordUsageToolOutput({
                         annotatedLatexCode: candidateAnnotatedLatex,
-                        emphasizedTechnologies: implementationRequiredTechnologies,
+                        emphasizedTechnologies:
+                          readRequiredImplementationTechnologies(),
                       })
                     : await buildResumeMalformedBulletsToolOutput({
                         annotatedLatexCode: candidateAnnotatedLatex,
@@ -4970,14 +5297,17 @@ export async function implementTailoredResumePlan(input: {
               changes: candidateBlockChanges,
             }).annotatedLatex;
             const keywordCheckResult = buildTailorResumeKeywordCheckResult({
-              emphasizedTechnologies: implementationRequiredTechnologies,
+              emphasizedTechnologies: readRequiredImplementationTechnologies(),
               text: renderTailoredResumeLatexToPlainText(candidateAnnotatedLatex),
             });
+            latestKeywordCheckResult = keywordCheckResult;
             implementationCheckToolOutput = await buildImplementationCheckToolOutput({
               changedSegmentIds: new Set(
                 candidateBlockChanges.map((change) => change.segmentId),
               ),
               keywordCheckResult,
+              plannedChanges: input.planningResult.changes,
+              planningSnapshot,
               renderedAnnotatedLatexCode: candidateAnnotatedLatex,
               requestedLineCountSegmentIds: new Set(
                 implementationCheckPayload.lineCountSegmentIds,
@@ -5154,7 +5484,7 @@ export async function implementTailoredResumePlan(input: {
       });
       validateTailoredResumeImplementationKeywordCoverage({
         keywordCheckResult: buildTailorResumeKeywordCheckResult({
-          emphasizedTechnologies: implementationRequiredTechnologies,
+          emphasizedTechnologies: readRequiredImplementationTechnologies(),
           text: renderTailoredResumeLatexToPlainText(appliedCandidate.annotatedLatex),
         }),
       });

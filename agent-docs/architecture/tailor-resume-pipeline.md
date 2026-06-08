@@ -31,6 +31,7 @@ Step 3. Generate targeted edit intent
 - It returns a tailoring thesis plus block-level edit intent: target `segmentId`, exact `targetKeywords`, concise `editIntent`, and reason.
 - This stage decides which block is the best place to try each supported high- and low-priority keyword, but it does not write final prose or LaTeX yet.
 - Before final JSON, Step 3 calls `check_planned_keyword_assignments`, which verifies keywords are either assigned to planned segment edits or already preserved in unchanged original blocks.
+- Step 3 may assign at most two target keywords to any one bullet segment. Extra keyword coverage should move to a separate supported block, a valid Skills/Technical Skills edit, or be left unassigned instead of overloading one bullet.
 - When a spare bullet has `replacesQuote`, the server fuzzily searches the chosen resume experience's current bullet segments and passes the top replacement candidate, confidence, and current text as deterministic evidence. The durable source of truth is the quoted text plus required resume experience, not a long-lived source segment id.
 - When a skills/technical-skills block is editable, Step 3 should add only skills-section keywords or skills-only support. Narrative keywords may influence phrasing in experience bullets but should not be forced into Skills.
 
@@ -42,6 +43,8 @@ Step 4A. Generate block-scoped edits
 - The goal is segment-safe replacements that preserve local LaTeX structure.
 - Block replacements should not polish unrelated details such as punctuation, dates of experience, employers, titles, metrics, separators, capitalization, or links.
 - Before final JSON submission, the implementation model must call the Step 4A health-check tool. That tool reports keyword coverage, the rendered page count, every malformed rendered resume bullet, and exact line counts only for explicitly requested segment ids. A changed malformed bullet is a retryable Step 4A rejection; pre-existing malformed bullets elsewhere are surfaced as warnings.
+- When Step 4A keyword coverage is missing, the health-check tool also returns placement guidance that points each missing keyword back to the Step 3 target segments or original changed segments that should carry it.
+- Step 4A may intentionally waive a missing keyword only through the keyword-waiver tool, which records the exact term, reason, and tradeoff. Accepted waivers remove that term from the remaining required coverage list; silent omission should still fail.
 
 Step 4B. Keep the original page count
 - Page-count growth is always invalid. If the tailored preview exceeds the source resume's page count, run a compaction/refinement loop over the edited blocks only.
