@@ -17,7 +17,7 @@ export const aiUsagePeriods: {
   { label: "Last day", value: "day" },
   { label: "7 days", value: "7d" },
   { label: "14 days", value: "14d" },
-  { label: "Month", value: "month" },
+  { label: "30 days", value: "month" },
   { label: "6 mos", value: "6mo" },
   { label: "1 yr", value: "1y" },
   { label: "All time", value: "all" },

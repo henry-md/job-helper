@@ -309,20 +309,20 @@ async function buildAiUsageResumeGroups(input: {
         totalTokens: 0,
       },
     );
-    const inferredStatus =
-      tailoredResume?.archivedAt || events.some((event) => event.subjectStatus === "archived")
-        ? "archived"
-        : "unarchived";
+    const inferredStatus = events.some(
+      (event) => event.subjectStatus === "archived",
+    )
+      ? "archived"
+      : "unarchived";
 
     resumeGroups.push({
-      applicationId: tailoredResume?.applicationId ?? lastEvent.applicationId,
-      companyName: tailoredResume?.companyName ?? null,
-      displayName: tailoredResume?.displayName?.trim() || "Tailored resume",
+      applicationId: lastEvent.applicationId,
+      companyName: null,
+      displayName: "Tailored resume",
       firstSeenAt: firstEvent.requestStartedAt,
-      jobUrl: tailoredResume?.jobUrl ?? lastEvent.jobUrl,
-      lastSeenAt:
-        tailoredResume?.updatedAt.toISOString() ?? lastEvent.requestStartedAt,
-      positionTitle: tailoredResume?.positionTitle ?? null,
+      jobUrl: lastEvent.jobUrl,
+      lastSeenAt: lastEvent.requestStartedAt,
+      positionTitle: null,
       status: inferredStatus,
       tailoredResumeId,
       ...aggregate,
@@ -350,7 +350,7 @@ function resolveAiUsagePeriodStart(period: AiUsagePeriod) {
   } else if (period === "14d") {
     startedAfter.setDate(startedAfter.getDate() - 14);
   } else if (period === "month") {
-    startedAfter.setMonth(startedAfter.getMonth() - 1);
+    startedAfter.setDate(startedAfter.getDate() - 30);
   } else if (period === "6mo") {
     startedAfter.setMonth(startedAfter.getMonth() - 6);
   } else {
