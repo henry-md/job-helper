@@ -64,10 +64,14 @@ import {
 import { repairTailoredResumeForCompile } from "@/lib/tailored-resume-repair";
 import {
   deleteTailoredResumePdf,
+  deleteTailoredResumeVersionPdf,
   deleteTailorResumePreviewPdf,
+  readTailoredResumePdf,
+  readTailoredResumeVersionPdf,
   readTailorResumePreviewPdf,
   withTailorResumeProfileLock,
   writeTailoredResumePdf,
+  writeTailoredResumeVersionPdf,
   writeTailorResumePreviewPdf,
   writeTailorResumeProfile,
 } from "@/lib/tailor-resume-storage";
@@ -80,6 +84,11 @@ import {
   type TailorResumeInterviewStreamEvent,
 } from "@/lib/tailor-resume-questioning";
 import { refineTailoredResume } from "@/lib/tailor-resume-refinement";
+import {
+  appendTailoredResumeReviewChatMessages,
+  attachTailoredResumeReviewChatsToProfile,
+  readTailoredResumeReviewChatMessages,
+} from "@/lib/tailored-resume-review-chat";
 import {
   buildTailorResumeRunStepUpdate,
   buildTailorResumeTerminalFailureStepEvent,
@@ -3118,6 +3127,7 @@ async function finalizeTailorResumeGeneration(input: {
   }
 
   const tailoredResumeId = randomUUID();
+  const initialVersionId = randomUUID();
   const tailoredResumeUpdatedAt = new Date().toISOString();
   const tailoredResumeCreatedAt =
     (await readTailorResumeRunCreatedAt({
@@ -3177,6 +3187,12 @@ async function finalizeTailorResumeGeneration(input: {
         tailoredResumeId,
         tailoringResult.previewPdf,
       );
+      await writeTailoredResumeVersionPdf(
+        input.userId,
+        tailoredResumeId,
+        initialVersionId,
+        tailoringResult.previewPdf,
+      );
     } else {
       await deleteTailoredResumePdf(input.userId, tailoredResumeId);
     }
@@ -3209,6 +3225,22 @@ async function finalizeTailorResumeGeneration(input: {
         status: tailoringResult.previewPdf ? "ready" : "failed",
         thesis: tailoringResult.thesis,
         updatedAt: tailoredResumeUpdatedAt,
+        versions: [
+          {
+            annotatedLatexCode: tailoringResult.annotatedLatexCode,
+            assistantMessage: null,
+            createdAt: tailoredResumeUpdatedAt,
+            edits: tailoringResult.edits,
+            error: tailoringResult.validationError,
+            id: initialVersionId,
+            latexCode: tailoringResult.latexCode,
+            pdfUpdatedAt: tailoringResult.previewPdf ? tailoredResumeUpdatedAt : null,
+            source: "initial",
+            sourceAnnotatedLatexCode: input.generationSourceAnnotatedLatex,
+            status: tailoringResult.previewPdf ? "ready" : "failed",
+            userPrompt: null,
+          },
+        ],
       },
     });
     const overwrittenTailoredResumeIdSet = new Set(overwrittenTailoredResumeIds);
@@ -4839,6 +4871,227 @@ function buildTailorResumeGenerationStreamResponse(
   });
 }
 
+async function handleRefineTailoredResumeAction(input: {
+  body: Record<string, unknown>;
+  onStreamEvent?: (event: TailorResumeInterviewStreamEvent) => void | Promise<void>;
+  userId: string;
+}) {
+  return withTailorResumeProfileLock(input.userId, async () => {
+    const { lockedLinks, rawProfile } = await readTailorResumeProfileState(
+      input.userId,
+    );
+    const tailoredResumeId =
+      typeof input.body.tailoredResumeId === "string"
+        ? input.body.tailoredResumeId.trim()
+        : "";
+    const userPrompt =
+      typeof input.body.userPrompt === "string" ? input.body.userPrompt.trim() : "";
+    const previewImageDataUrls = readRefinementPreviewImageDataUrls(
+      "previewImageDataUrls" in input.body ? input.body.previewImageDataUrls : null,
+    );
+
+    if (!tailoredResumeId || !userPrompt) {
+      return NextResponse.json(
+        { error: "Provide the tailored resume and how you want the edits changed." },
+        { status: 400 },
+      );
+    }
+
+    if (userPrompt.length > maxTailoredResumeRefinementPromptLength) {
+      return NextResponse.json(
+        {
+          error: `Keep the AI follow-up request under ${maxTailoredResumeRefinementPromptLength.toLocaleString()} characters.`,
+        },
+        { status: 413 },
+      );
+    }
+
+    const tailoredResumeIndex = rawProfile.tailoredResumes.findIndex(
+      (record) => record.id === tailoredResumeId,
+    );
+
+    if (tailoredResumeIndex === -1) {
+      return NextResponse.json(
+        { error: "The tailored resume could not be found." },
+        { status: 404 },
+      );
+    }
+
+    const tailoredResume = rawProfile.tailoredResumes[tailoredResumeIndex];
+
+    const sourceAnnotatedLatexCode = resolveTailoredResumeSourceAnnotatedLatex({
+      annotatedLatexCode: tailoredResume.annotatedLatexCode,
+      edits: tailoredResume.edits,
+      sourceAnnotatedLatexCode: tailoredResume.sourceAnnotatedLatexCode,
+    });
+
+    try {
+      const previousMessages = await readTailoredResumeReviewChatMessages({
+        displayName: tailoredResume.displayName,
+        fallbackVersions: tailoredResume.versions ?? [],
+        tailoredResumeId,
+        userId: input.userId,
+      });
+      const refinementResult = await refineTailoredResume({
+        edits: tailoredResume.edits,
+        onStreamEvent: input.onStreamEvent,
+        previousMessages,
+        previewImageDataUrls,
+        promptSettings: rawProfile.promptSettings.values,
+        sourceAnnotatedLatexCode,
+        thesis: tailoredResume.thesis,
+        userPrompt,
+      });
+      const nextUpdatedAt = new Date().toISOString();
+      const seededVersionId = randomUUID();
+      const refinementVersionId = randomUUID();
+      const existingVersions = tailoredResume.versions ?? [];
+      const seededVersions =
+        existingVersions.length > 0
+          ? existingVersions
+          : [
+              {
+                annotatedLatexCode: tailoredResume.annotatedLatexCode,
+                assistantMessage: null,
+                createdAt: tailoredResume.createdAt,
+                edits: tailoredResume.edits,
+                error: tailoredResume.error,
+                id: seededVersionId,
+                latexCode: tailoredResume.latexCode,
+                pdfUpdatedAt: tailoredResume.pdfUpdatedAt,
+                source: "initial" as const,
+                sourceAnnotatedLatexCode: tailoredResume.sourceAnnotatedLatexCode,
+                status: tailoredResume.status,
+                userPrompt: null,
+              },
+            ];
+
+      if (!refinementResult.changed) {
+        await appendTailoredResumeReviewChatMessages({
+          assistantContent: refinementResult.summary,
+          displayName: tailoredResume.displayName,
+          model: refinementResult.model,
+          tailoredResumeId,
+          userContent: userPrompt,
+          userId: input.userId,
+        });
+        const responseProfile = await attachTailoredResumeReviewChatsToProfile({
+          profile: mergeTailorResumeProfileWithLockedLinks(rawProfile, lockedLinks, {
+            includeLockedOnly: true,
+          }),
+          userId: input.userId,
+        });
+
+        return NextResponse.json({
+          assistantMessage: refinementResult.summary,
+          profile: responseProfile,
+          tailoredResumeDurationMs: refinementResult.generationDurationMs,
+          tailoredResumeId,
+        });
+      }
+
+      if (existingVersions.length === 0 && tailoredResume.pdfUpdatedAt) {
+        try {
+          await writeTailoredResumeVersionPdf(
+            input.userId,
+            tailoredResumeId,
+            seededVersionId,
+            await readTailoredResumePdf(input.userId, tailoredResumeId),
+          );
+        } catch (error) {
+          if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+            throw error;
+          }
+        }
+      }
+      await writeTailoredResumePdf(
+        input.userId,
+        tailoredResumeId,
+        refinementResult.previewPdf,
+      );
+      await writeTailoredResumeVersionPdf(
+        input.userId,
+        tailoredResumeId,
+        refinementVersionId,
+        refinementResult.previewPdf,
+      );
+
+      const nextRawProfile: TailorResumeProfile = {
+        ...rawProfile,
+        tailoredResumes: rawProfile.tailoredResumes.map((record, index) =>
+          index === tailoredResumeIndex
+            ? {
+                ...record,
+                annotatedLatexCode: refinementResult.annotatedLatexCode,
+                edits: refinementResult.edits,
+                error: null,
+                latexCode: refinementResult.latexCode,
+                pdfUpdatedAt: nextUpdatedAt,
+                sourceAnnotatedLatexCode,
+                status: "ready",
+                updatedAt: nextUpdatedAt,
+                versions: [
+                  ...seededVersions,
+                  {
+                    annotatedLatexCode: refinementResult.annotatedLatexCode,
+                    assistantMessage: refinementResult.summary,
+                    createdAt: nextUpdatedAt,
+                    edits: refinementResult.edits,
+                    error: null,
+                    id: refinementVersionId,
+                    latexCode: refinementResult.latexCode,
+                    pdfUpdatedAt: nextUpdatedAt,
+                    source: "refinement",
+                    sourceAnnotatedLatexCode,
+                    status: "ready",
+                    userPrompt,
+                  },
+                ],
+              }
+            : record,
+        ),
+      };
+
+      await writeTailorResumeProfileAndMarkChanged(input.userId, nextRawProfile);
+      await appendTailoredResumeReviewChatMessages({
+        assistantContent: refinementResult.summary,
+        displayName: tailoredResume.displayName,
+        model: refinementResult.model,
+        tailoredResumeId,
+        userContent: userPrompt,
+        userId: input.userId,
+      });
+      const responseProfile = await attachTailoredResumeReviewChatsToProfile({
+        profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
+          includeLockedOnly: true,
+        }),
+        userId: input.userId,
+      });
+
+      return NextResponse.json({
+        assistantMessage: refinementResult.summary,
+        profile: responseProfile,
+        tailoredResumeDiff: {
+          endVersionId: refinementVersionId,
+          startVersionId: seededVersions[seededVersions.length - 1]?.id ?? null,
+        },
+        tailoredResumeDurationMs: refinementResult.generationDurationMs,
+        tailoredResumeId,
+      });
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unable to refine the tailored resume edits.",
+        },
+        { status: 422 },
+      );
+    }
+  });
+}
+
 function buildSourceLatexLinkRecords(
   latexCode: string,
   currentLinks: TailorResumeProfile["links"],
@@ -5261,6 +5514,10 @@ export async function GET(request: Request) {
     sourceAnnotatedLatexCode: rawProfile.annotatedLatex.code,
     userId: session.user.id,
   }).catch(() => null);
+  const profileWithReviewChats = await attachTailoredResumeReviewChatsToProfile({
+    profile,
+    userId: session.user.id,
+  });
   const activeTailoringInterviews = readTailorResumeWorkspaceInterviews(
     rawProfile.workspace,
   );
@@ -5276,7 +5533,7 @@ export async function GET(request: Request) {
     activeTailorings,
     ...(applicationSummary ?? {}),
     existingTailoring,
-    profile,
+    profile: profileWithReviewChats,
     skillData,
     syncState,
     ...buildUserMemoryResponseFields(userMarkdown),
@@ -5713,6 +5970,24 @@ export async function PATCH(request: Request) {
         { status: 400 },
       );
     }
+  }
+
+  if ("action" in body && body.action === "refineTailoredResume") {
+    if (wantsTailorResumeStream(request)) {
+      return buildTailorResumeGenerationStreamResponse(
+        (_onStepEvent, onInterviewStreamEvent) =>
+          handleRefineTailoredResumeAction({
+            body: body as Record<string, unknown>,
+            onStreamEvent: onInterviewStreamEvent,
+            userId: session.user.id,
+          }),
+      );
+    }
+
+    return handleRefineTailoredResumeAction({
+      body: body as Record<string, unknown>,
+      userId: session.user.id,
+    });
   }
 
   return withTailorResumeProfileLock(session.user.id, async () => {
@@ -6896,13 +7171,6 @@ export async function PATCH(request: Request) {
 
     const tailoredResume = rawProfile.tailoredResumes[tailoredResumeIndex];
 
-    if (tailoredResume.edits.length === 0) {
-      return NextResponse.json(
-        { error: "This tailored resume does not have model edits to refine yet." },
-        { status: 400 },
-      );
-    }
-
     const sourceAnnotatedLatexCode = resolveTailoredResumeSourceAnnotatedLatex({
       annotatedLatexCode: tailoredResume.annotatedLatexCode,
       edits: tailoredResume.edits,
@@ -6910,8 +7178,15 @@ export async function PATCH(request: Request) {
     });
 
     try {
+      const previousMessages = await readTailoredResumeReviewChatMessages({
+        displayName: tailoredResume.displayName,
+        fallbackVersions: tailoredResume.versions ?? [],
+        tailoredResumeId,
+        userId: session.user.id,
+      });
       const refinementResult = await refineTailoredResume({
         edits: tailoredResume.edits,
+        previousMessages,
         previewImageDataUrls,
         promptSettings: rawProfile.promptSettings.values,
         sourceAnnotatedLatexCode,
@@ -6919,10 +7194,76 @@ export async function PATCH(request: Request) {
         userPrompt,
       });
       const nextUpdatedAt = new Date().toISOString();
+      const seededVersionId = randomUUID();
+      const refinementVersionId = randomUUID();
+      const existingVersions = tailoredResume.versions ?? [];
+      const seededVersions =
+        existingVersions.length > 0
+          ? existingVersions
+          : [
+              {
+                annotatedLatexCode: tailoredResume.annotatedLatexCode,
+                assistantMessage: null,
+                createdAt: tailoredResume.createdAt,
+                edits: tailoredResume.edits,
+                error: tailoredResume.error,
+                id: seededVersionId,
+                latexCode: tailoredResume.latexCode,
+                pdfUpdatedAt: tailoredResume.pdfUpdatedAt,
+                source: "initial" as const,
+                sourceAnnotatedLatexCode: tailoredResume.sourceAnnotatedLatexCode,
+                status: tailoredResume.status,
+                userPrompt: null,
+              },
+            ];
 
+      if (!refinementResult.changed) {
+        await appendTailoredResumeReviewChatMessages({
+          assistantContent: refinementResult.summary,
+          displayName: tailoredResume.displayName,
+          model: refinementResult.model,
+          tailoredResumeId,
+          userContent: userPrompt,
+          userId: session.user.id,
+        });
+        const responseProfile = await attachTailoredResumeReviewChatsToProfile({
+          profile: mergeTailorResumeProfileWithLockedLinks(rawProfile, lockedLinks, {
+            includeLockedOnly: true,
+          }),
+          userId: session.user.id,
+        });
+
+        return NextResponse.json({
+          assistantMessage: refinementResult.summary,
+          profile: responseProfile,
+          tailoredResumeDurationMs: refinementResult.generationDurationMs,
+          tailoredResumeId,
+        });
+      }
+
+      if (existingVersions.length === 0 && tailoredResume.pdfUpdatedAt) {
+        try {
+          await writeTailoredResumeVersionPdf(
+            session.user.id,
+            tailoredResumeId,
+            seededVersionId,
+            await readTailoredResumePdf(session.user.id, tailoredResumeId),
+          );
+        } catch (error) {
+          if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+            throw error;
+          }
+        }
+      }
       await writeTailoredResumePdf(
         session.user.id,
         tailoredResumeId,
+        refinementResult.previewPdf,
+      );
+      await writeTailoredResumeVersionPdf(
+        session.user.id,
+        tailoredResumeId,
+        refinementVersionId,
         refinementResult.previewPdf,
       );
 
@@ -6940,18 +7281,51 @@ export async function PATCH(request: Request) {
                 sourceAnnotatedLatexCode,
                 status: "ready",
                 updatedAt: nextUpdatedAt,
+                versions: [
+                  ...seededVersions,
+                  {
+                    annotatedLatexCode: refinementResult.annotatedLatexCode,
+                    assistantMessage: refinementResult.summary,
+                    createdAt: nextUpdatedAt,
+                    edits: refinementResult.edits,
+                    error: null,
+                    id: refinementVersionId,
+                    latexCode: refinementResult.latexCode,
+                    pdfUpdatedAt: nextUpdatedAt,
+                    source: "refinement",
+                    sourceAnnotatedLatexCode: sourceAnnotatedLatexCode,
+                    status: "ready",
+                    userPrompt,
+                  },
+                ],
               }
             : record,
         ),
       };
 
       await writeTailorResumeProfileAndMarkChanged(session.user.id, nextRawProfile);
-
-      return NextResponse.json({
-        assistantMessage: refinementResult.summary,
+      await appendTailoredResumeReviewChatMessages({
+        assistantContent: refinementResult.summary,
+        displayName: tailoredResume.displayName,
+        model: refinementResult.model,
+        tailoredResumeId,
+        userContent: userPrompt,
+        userId: session.user.id,
+      });
+      const responseProfile = await attachTailoredResumeReviewChatsToProfile({
         profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
           includeLockedOnly: true,
         }),
+        userId: session.user.id,
+      });
+
+      return NextResponse.json({
+        assistantMessage: refinementResult.summary,
+        profile: responseProfile,
+        tailoredResumeDiff: {
+          endVersionId: refinementVersionId,
+          startVersionId: seededVersions[seededVersions.length - 1]?.id ?? null,
+        },
         tailoredResumeDurationMs: refinementResult.generationDurationMs,
         tailoredResumeId,
       });
@@ -6966,6 +7340,259 @@ export async function PATCH(request: Request) {
         { status: 422 },
       );
     }
+  }
+
+  if ("action" in body && body.action === "undoTailoredResumeRefinement") {
+    const tailoredResumeId =
+      "tailoredResumeId" in body && typeof body.tailoredResumeId === "string"
+        ? body.tailoredResumeId.trim()
+        : "";
+
+    if (!tailoredResumeId) {
+      return NextResponse.json(
+        { error: "Provide the tailored resume to undo." },
+        { status: 400 },
+      );
+    }
+
+    const tailoredResumeIndex = rawProfile.tailoredResumes.findIndex(
+      (record) => record.id === tailoredResumeId,
+    );
+
+    if (tailoredResumeIndex === -1) {
+      return NextResponse.json(
+        { error: "The tailored resume could not be found." },
+        { status: 404 },
+      );
+    }
+
+    const tailoredResume = rawProfile.tailoredResumes[tailoredResumeIndex];
+    const versions = tailoredResume.versions ?? [];
+
+    if (versions.length < 2) {
+      return NextResponse.json(
+        { error: "There is no previous chat edit to undo." },
+        { status: 400 },
+      );
+    }
+
+    const previousVersion = versions[versions.length - 2];
+    const nextUpdatedAt = new Date().toISOString();
+    let nextPdfUpdatedAt = previousVersion.pdfUpdatedAt;
+    let nextStatus = previousVersion.status;
+    let nextError = previousVersion.error;
+
+    if (previousVersion.status === "ready") {
+      try {
+        await writeTailoredResumePdf(
+          session.user.id,
+          tailoredResumeId,
+          await readTailoredResumeVersionPdf(
+            session.user.id,
+            tailoredResumeId,
+            previousVersion.id,
+          ),
+        );
+      } catch (error) {
+        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+          throw error;
+        }
+
+        try {
+          const previewPdf = await compileTailorResumeLatex(previousVersion.latexCode);
+
+          await writeTailoredResumePdf(session.user.id, tailoredResumeId, previewPdf);
+          await writeTailoredResumeVersionPdf(
+            session.user.id,
+            tailoredResumeId,
+            previousVersion.id,
+            previewPdf,
+          );
+          nextPdfUpdatedAt = nextUpdatedAt;
+          nextStatus = "ready";
+          nextError = null;
+        } catch (compileError) {
+          await deleteTailoredResumePdf(session.user.id, tailoredResumeId);
+          nextPdfUpdatedAt = null;
+          nextStatus = "failed";
+          nextError =
+            compileError instanceof Error
+              ? compileError.message
+              : "Unable to compile the restored tailored resume preview.";
+        }
+      }
+    } else {
+      await deleteTailoredResumePdf(session.user.id, tailoredResumeId);
+    }
+
+    const nextRawProfile: TailorResumeProfile = {
+      ...rawProfile,
+      tailoredResumes: rawProfile.tailoredResumes.map((record, index) =>
+        index === tailoredResumeIndex
+          ? {
+              ...record,
+              annotatedLatexCode: previousVersion.annotatedLatexCode,
+              edits: previousVersion.edits,
+              error: nextError,
+              latexCode: previousVersion.latexCode,
+              pdfUpdatedAt: nextPdfUpdatedAt,
+              sourceAnnotatedLatexCode: previousVersion.sourceAnnotatedLatexCode,
+              status: nextStatus,
+              updatedAt: nextUpdatedAt,
+              versions: versions.slice(0, -1),
+            }
+          : record,
+      ),
+    };
+
+    await writeTailorResumeProfileAndMarkChanged(session.user.id, nextRawProfile);
+
+    return NextResponse.json({
+      assistantMessage: "Undid the latest chat edit.",
+      profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
+        includeLockedOnly: true,
+      }),
+      tailoredResumeId,
+    });
+  }
+
+  if ("action" in body && body.action === "deleteTailoredResumeVersion") {
+    const tailoredResumeId =
+      "tailoredResumeId" in body && typeof body.tailoredResumeId === "string"
+        ? body.tailoredResumeId.trim()
+        : "";
+    const versionId =
+      "versionId" in body && typeof body.versionId === "string"
+        ? body.versionId.trim()
+        : "";
+
+    if (!tailoredResumeId || !versionId) {
+      return NextResponse.json(
+        { error: "Provide the tailored resume output to delete." },
+        { status: 400 },
+      );
+    }
+
+    const tailoredResumeIndex = rawProfile.tailoredResumes.findIndex(
+      (record) => record.id === tailoredResumeId,
+    );
+
+    if (tailoredResumeIndex === -1) {
+      return NextResponse.json(
+        { error: "The tailored resume could not be found." },
+        { status: 404 },
+      );
+    }
+
+    const tailoredResume = rawProfile.tailoredResumes[tailoredResumeIndex];
+    const versions = tailoredResume.versions ?? [];
+    const deleteFromIndex = versions.findIndex((version) => version.id === versionId);
+
+    if (deleteFromIndex <= 0) {
+      return NextResponse.json(
+        { error: "The base output cannot be deleted." },
+        { status: 400 },
+      );
+    }
+
+    const remainingVersions = versions.slice(0, deleteFromIndex);
+    const deletedVersions = versions.slice(deleteFromIndex);
+    const restoredVersion = remainingVersions[remainingVersions.length - 1];
+
+    if (!restoredVersion) {
+      return NextResponse.json(
+        { error: "There is no remaining output to restore." },
+        { status: 400 },
+      );
+    }
+
+    const nextUpdatedAt = new Date().toISOString();
+    let nextPdfUpdatedAt = restoredVersion.pdfUpdatedAt;
+    let nextStatus = restoredVersion.status;
+    let nextError = restoredVersion.error;
+
+    await Promise.all(
+      deletedVersions.map((version) =>
+        deleteTailoredResumeVersionPdf(session.user.id, tailoredResumeId, version.id),
+      ),
+    );
+
+    if (restoredVersion.status === "ready") {
+      try {
+        await writeTailoredResumePdf(
+          session.user.id,
+          tailoredResumeId,
+          await readTailoredResumeVersionPdf(
+            session.user.id,
+            tailoredResumeId,
+            restoredVersion.id,
+          ),
+        );
+      } catch (error) {
+        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+          throw error;
+        }
+
+        try {
+          const previewPdf = await compileTailorResumeLatex(restoredVersion.latexCode);
+
+          await writeTailoredResumePdf(session.user.id, tailoredResumeId, previewPdf);
+          await writeTailoredResumeVersionPdf(
+            session.user.id,
+            tailoredResumeId,
+            restoredVersion.id,
+            previewPdf,
+          );
+          nextPdfUpdatedAt = nextUpdatedAt;
+          nextStatus = "ready";
+          nextError = null;
+        } catch (compileError) {
+          await deleteTailoredResumePdf(session.user.id, tailoredResumeId);
+          nextPdfUpdatedAt = null;
+          nextStatus = "failed";
+          nextError =
+            compileError instanceof Error
+              ? compileError.message
+              : "Unable to compile the restored tailored resume preview.";
+        }
+      }
+    } else {
+      await deleteTailoredResumePdf(session.user.id, tailoredResumeId);
+    }
+
+    const nextRawProfile: TailorResumeProfile = {
+      ...rawProfile,
+      tailoredResumes: rawProfile.tailoredResumes.map((record, index) =>
+        index === tailoredResumeIndex
+          ? {
+              ...record,
+              annotatedLatexCode: restoredVersion.annotatedLatexCode,
+              edits: restoredVersion.edits,
+              error: nextError,
+              latexCode: restoredVersion.latexCode,
+              pdfUpdatedAt: nextPdfUpdatedAt,
+              sourceAnnotatedLatexCode: restoredVersion.sourceAnnotatedLatexCode,
+              status: nextStatus,
+              updatedAt: nextUpdatedAt,
+              versions: remainingVersions,
+            }
+          : record,
+      ),
+    };
+
+    await writeTailorResumeProfileAndMarkChanged(session.user.id, nextRawProfile);
+
+    return NextResponse.json({
+      assistantMessage:
+        deletedVersions.length > 1
+          ? `Deleted ${deletedVersions.length} outputs and restored the previous resume.`
+          : "Deleted the selected output and restored the previous resume.",
+      deletedTailoredResumeVersionCount: deletedVersions.length,
+      profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
+        includeLockedOnly: true,
+      }),
+      tailoredResumeId,
+    });
   }
 
   const nextRawProfile: TailorResumeProfile = {
