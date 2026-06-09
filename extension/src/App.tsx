@@ -1,6 +1,8 @@
 import {
+  type CSSProperties,
   type FormEvent as ReactFormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -24,6 +26,7 @@ import { buildTailoredResumeDownloadFilename } from "../../lib/tailored-resume-d
 import "./App.css";
 import {
   AUTH_SESSION_STORAGE_KEY,
+  DEFAULT_AI_USAGE_ENDPOINT,
   buildTailorResumePreparationMessage,
   buildTailorResumePreparationState,
   buildTailorResumeApplicationContext,
@@ -186,6 +189,14 @@ import {
   readTailorResumeSpareBulletLineTone,
   type TailorResumeSpareBulletLineMeasurement,
 } from "../../lib/tailor-resume-spare-bullet-line-display.ts";
+import type {
+  AiUsageEventRecord,
+  AiUsagePeriod,
+  AiUsageReport,
+  AiUsageResumeGroup,
+  AiUsageSubjectStatus,
+} from "../../lib/ai-usage-report-types.ts";
+import { aiUsagePeriods } from "../../lib/ai-usage-report-types.ts";
 
 type PanelState =
   | { status: "idle"; snapshot: null }
@@ -211,8 +222,44 @@ type AuthState =
 type AuthActionState = "idle" | "running";
 type DashboardOpenActionState = "idle" | "running";
 
-type PanelTab = "applications" | "debug" | "settings" | "tailor";
+type PanelTab = "applications" | "debug" | "settings" | "tailor" | "usage";
 type TailoredResumeArchiveFilter = "archived" | "unarchived";
+type AiUsageReportState =
+  | { error: string | null; report: null; status: "idle" | "loading" }
+  | { error: null; report: AiUsageReport; status: "ready" }
+  | { error: string; report: null; status: "error" };
+type AiUsageDailySpendStep = {
+  costUsdMicros: string;
+  eventCount: number;
+  label: string;
+  stepKey: string;
+};
+type AiUsageDailySpendBucket = {
+  axisDateLabel: string;
+  costUsdMicros: string;
+  displayDate: string;
+  eventCount: number;
+  hasUsageData: boolean;
+  bucketKey: string;
+  resumeGroups: AiUsageResumeGroup[];
+  resumeCount: number;
+  stepBreakdown: AiUsageDailySpendStep[];
+  tokenCount: number;
+  urlCount: number;
+};
+type AiUsageChartDayInput = {
+  events: AiUsageEventRecord[];
+  generatedAt: string;
+  period: AiUsagePeriod;
+  resumeGroups: AiUsageResumeGroup[];
+};
+type AiUsageBucketDescriptor = {
+  axisDateLabel: string;
+  bucketKey: string;
+  displayDate: string;
+  end: Date;
+  start: Date;
+};
 
 function splitFuzzySearchTokens(value: string | null | undefined) {
   return normalizeFuzzySearchText(value)
@@ -486,6 +533,413 @@ function readErrorMessage(value: unknown, fallbackMessage: string) {
   return isRecord(value) && typeof value.error === "string"
     ? value.error
     : fallbackMessage;
+}
+
+function readAiUsageReportPayload(value: unknown): AiUsageReport | null {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.events) ||
+    !Array.isArray(value.resumeGroups) ||
+    !isRecord(value.summary) ||
+    typeof value.generatedAt !== "string"
+  ) {
+    return null;
+  }
+
+  return value as AiUsageReport;
+}
+
+function formatAiUsageUsd(micros: string) {
+  const value = Number(BigInt(micros)) / 1_000_000;
+
+  return new Intl.NumberFormat(undefined, {
+    currency: "USD",
+    maximumFractionDigits: value < 1 ? 4 : 2,
+    minimumFractionDigits: 2,
+    style: "currency",
+  }).format(value);
+}
+
+function formatAiUsageCompactSpendLabel(micros: string) {
+  const value = Number(BigInt(micros)) / 1_000_000;
+
+  if (value <= 0) {
+    return "$0";
+  }
+
+  if (value < 0.01) {
+    return `${Math.round(value * 1000) / 10}¢`;
+  }
+
+  if (value < 1) {
+    return `${Math.round(value * 100)}¢`;
+  }
+
+  return new Intl.NumberFormat(undefined, {
+    currency: "USD",
+    maximumFractionDigits: 0,
+    style: "currency",
+  }).format(value);
+}
+
+function formatAiUsageInteger(value: number) {
+  return Number.isFinite(value)
+    ? Math.max(0, Math.floor(value)).toLocaleString()
+    : "0";
+}
+
+function formatAiUsageUrl(value: string | null) {
+  if (!value) {
+    return "Unknown URL";
+  }
+
+  try {
+    const url = new URL(value);
+    return `${url.hostname}${url.pathname}`;
+  } catch {
+    return value;
+  }
+}
+
+function sumAiUsageCost(events: AiUsageEventRecord[]) {
+  return events
+    .reduce(
+      (total, event) => total + BigInt(event.totalCostUsdMicros),
+      BigInt(0),
+    )
+    .toString();
+}
+
+function countAiUsageResumeGroupUrls(groups: AiUsageResumeGroup[]) {
+  return new Set(
+    groups.map(
+      (group) => group.jobUrl || group.applicationId || group.tailoredResumeId,
+    ),
+  ).size;
+}
+
+function formatAiUsageDate(value: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+  }).format(new Date(value));
+}
+
+function formatAiUsageDateFromDate(date: Date) {
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+  }).format(date);
+}
+
+function formatAiUsageDateKeyFromDate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function getAiUsagePeriodStart(period: AiUsagePeriod, generatedAt: string) {
+  if (period === "all") {
+    return null;
+  }
+
+  const date = new Date(generatedAt);
+
+  if (period === "hour") {
+    date.setHours(date.getHours() - 1);
+  } else if (period === "day") {
+    date.setDate(date.getDate() - 1);
+  } else if (period === "7d") {
+    date.setDate(date.getDate() - 7);
+  } else if (period === "14d") {
+    date.setDate(date.getDate() - 14);
+  } else if (period === "month") {
+    date.setDate(date.getDate() - 30);
+  } else if (period === "6mo") {
+    date.setDate(date.getDate() - 182);
+  } else {
+    date.setDate(date.getDate() - 364);
+  }
+
+  return date;
+}
+
+function isAiUsageRecordInPeriod(
+  value: string,
+  period: AiUsagePeriod,
+  generatedAt: string,
+) {
+  const periodStart = getAiUsagePeriodStart(period, generatedAt);
+
+  return !periodStart || new Date(value) >= periodStart;
+}
+
+function getAiUsageStepKey(event: AiUsageEventRecord) {
+  return event.stepNumber ? String(event.stepNumber) : "other";
+}
+
+function formatAiUsageStepLabel(stepKey: string) {
+  return stepKey === "other" ? "Other" : `Step ${stepKey}`;
+}
+
+function compareAiUsageStepKeys(leftKey: string, rightKey: string) {
+  if (leftKey === "other") {
+    return 1;
+  }
+
+  if (rightKey === "other") {
+    return -1;
+  }
+
+  return Number(leftKey) - Number(rightKey);
+}
+
+function getAiUsagePeriodBucketConfig(period: AiUsagePeriod) {
+  if (period === "hour") {
+    return { bucketMs: 10 * 60 * 1000, windowMs: 60 * 60 * 1000 };
+  }
+
+  if (period === "day") {
+    return { bucketMs: 60 * 60 * 1000, windowMs: 24 * 60 * 60 * 1000 };
+  }
+
+  if (period === "7d") {
+    return { bucketMs: 24 * 60 * 60 * 1000, windowMs: 7 * 24 * 60 * 60 * 1000 };
+  }
+
+  if (period === "14d") {
+    return { bucketMs: 24 * 60 * 60 * 1000, windowMs: 14 * 24 * 60 * 60 * 1000 };
+  }
+
+  if (period === "month") {
+    return { bucketMs: 3 * 24 * 60 * 60 * 1000, windowMs: 30 * 24 * 60 * 60 * 1000 };
+  }
+
+  if (period === "6mo") {
+    return { bucketMs: 14 * 24 * 60 * 60 * 1000, windowMs: 182 * 24 * 60 * 60 * 1000 };
+  }
+
+  if (period === "1y") {
+    return { bucketMs: 28 * 24 * 60 * 60 * 1000, windowMs: 364 * 24 * 60 * 60 * 1000 };
+  }
+
+  return null;
+}
+
+function ceilAiUsageTime(value: Date, bucketMs: number) {
+  return new Date(Math.ceil(value.getTime() / bucketMs) * bucketMs);
+}
+
+function startOfAiUsageLocalDay(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+function addAiUsageDateDays(value: Date, dayCount: number) {
+  const date = new Date(value);
+  date.setDate(date.getDate() + dayCount);
+  return date;
+}
+
+function formatAiUsageBucketAxisLabel(start: Date, bucketMs: number) {
+  if (bucketMs < 60 * 60 * 1000) {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(start);
+  }
+
+  if (bucketMs < 24 * 60 * 60 * 1000) {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+    }).format(start);
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "numeric",
+  }).format(start);
+}
+
+function formatAiUsageBucketDisplayLabel(start: Date, end: Date, bucketMs: number) {
+  if (bucketMs < 24 * 60 * 60 * 1000) {
+    return new Intl.DateTimeFormat(undefined, {
+      day: "numeric",
+      hour: "numeric",
+      minute: bucketMs < 60 * 60 * 1000 ? "2-digit" : undefined,
+      month: "short",
+    }).format(start);
+  }
+
+  const inclusiveEnd = new Date(end.getTime() - 1);
+  const startLabel = formatAiUsageDateFromDate(start);
+  const endLabel = formatAiUsageDateFromDate(inclusiveEnd);
+
+  return startLabel === endLabel ? startLabel : `${startLabel} - ${endLabel}`;
+}
+
+function formatAiUsageLongRangeAxisLabel(bucketKey: string) {
+  const date = new Date(bucketKey.replace(/^fixed:/, ""));
+
+  return Number.isNaN(date.getTime())
+    ? ""
+    : new Intl.DateTimeFormat(undefined, { month: "short" }).format(date);
+}
+
+function buildAiUsageSpendBucket(input: {
+  axisDateLabel: string;
+  bucketEvents: AiUsageEventRecord[];
+  bucketKey: string;
+  bucketResumeGroups: AiUsageResumeGroup[];
+  displayDate: string;
+}): AiUsageDailySpendBucket {
+  const stepEventsByKey = new Map<string, AiUsageEventRecord[]>();
+
+  for (const event of input.bucketEvents) {
+    const stepKey = getAiUsageStepKey(event);
+    stepEventsByKey.set(stepKey, [
+      ...(stepEventsByKey.get(stepKey) ?? []),
+      event,
+    ]);
+  }
+
+  return {
+    axisDateLabel: input.axisDateLabel,
+    costUsdMicros: sumAiUsageCost(input.bucketEvents),
+    bucketKey: input.bucketKey,
+    displayDate: input.displayDate,
+    eventCount: input.bucketEvents.length,
+    hasUsageData: input.bucketEvents.length > 0,
+    resumeGroups: input.bucketResumeGroups,
+    resumeCount: input.bucketResumeGroups.length,
+    stepBreakdown: [...stepEventsByKey.entries()]
+      .sort(([leftKey], [rightKey]) =>
+        compareAiUsageStepKeys(leftKey, rightKey),
+      )
+      .map(([stepKey, stepEvents]) => ({
+        costUsdMicros: sumAiUsageCost(stepEvents),
+        eventCount: stepEvents.length,
+        label: formatAiUsageStepLabel(stepKey),
+        stepKey,
+      })),
+    tokenCount: input.bucketEvents.reduce(
+      (total, event) => total + event.totalTokens,
+      0,
+    ),
+    urlCount: countAiUsageResumeGroupUrls(input.bucketResumeGroups),
+  };
+}
+
+function buildAiUsageDailySpendBuckets(
+  input: AiUsageChartDayInput,
+): AiUsageDailySpendBucket[] {
+  const generatedAt = new Date(input.generatedAt);
+  const bucketConfig = getAiUsagePeriodBucketConfig(input.period);
+  const recordDates = [
+    ...input.events.map((event) => new Date(event.requestStartedAt)),
+    ...input.resumeGroups.map((group) => new Date(group.firstSeenAt)),
+  ];
+  const earliestRecordDate =
+    recordDates.length > 0
+      ? new Date(Math.min(...recordDates.map((date) => date.getTime())))
+      : null;
+  const descriptors: AiUsageBucketDescriptor[] = [];
+
+  if (!bucketConfig) {
+    const start = earliestRecordDate
+      ? new Date(earliestRecordDate.getFullYear(), earliestRecordDate.getMonth(), 1)
+      : new Date(generatedAt.getFullYear(), generatedAt.getMonth(), 1);
+    let currentStart = start;
+
+    while (currentStart <= generatedAt) {
+      const nextStart = new Date(
+        currentStart.getFullYear(),
+        currentStart.getMonth() + 1,
+        1,
+      );
+      descriptors.push({
+        axisDateLabel: new Intl.DateTimeFormat(undefined, {
+          month: "short",
+        }).format(currentStart),
+        bucketKey: `month:${formatAiUsageDateKeyFromDate(currentStart)}`,
+        displayDate: formatAiUsageBucketDisplayLabel(
+          currentStart,
+          nextStart,
+          31 * 24 * 60 * 60 * 1000,
+        ),
+        end: nextStart,
+        start: currentStart,
+      });
+      currentStart = nextStart;
+    }
+  } else {
+    const dayMs = 24 * 60 * 60 * 1000;
+    const usesLocalDayBuckets = bucketConfig.bucketMs >= dayMs;
+    const bucketDayCount = Math.round(bucketConfig.bucketMs / dayMs);
+    const windowDayCount = Math.round(bucketConfig.windowMs / dayMs);
+    const currentWindowEnd = usesLocalDayBuckets
+      ? addAiUsageDateDays(startOfAiUsageLocalDay(generatedAt), 1)
+      : ceilAiUsageTime(generatedAt, bucketConfig.bucketMs);
+    const currentWindowStart = usesLocalDayBuckets
+      ? addAiUsageDateDays(currentWindowEnd, -windowDayCount)
+      : new Date(currentWindowEnd.getTime() - bucketConfig.windowMs);
+    let currentStart = currentWindowStart;
+
+    if (
+      earliestRecordDate &&
+      input.period !== "hour" &&
+      input.period !== "day"
+    ) {
+      while (currentStart > earliestRecordDate) {
+        currentStart = usesLocalDayBuckets
+          ? addAiUsageDateDays(currentStart, -bucketDayCount)
+          : new Date(currentStart.getTime() - bucketConfig.bucketMs);
+      }
+    }
+
+    while (currentStart < currentWindowEnd) {
+      const nextStart = usesLocalDayBuckets
+        ? addAiUsageDateDays(currentStart, bucketDayCount)
+        : new Date(currentStart.getTime() + bucketConfig.bucketMs);
+      descriptors.push({
+        axisDateLabel: formatAiUsageBucketAxisLabel(
+          currentStart,
+          bucketConfig.bucketMs,
+        ),
+        bucketKey: `fixed:${currentStart.toISOString()}`,
+        displayDate: formatAiUsageBucketDisplayLabel(
+          currentStart,
+          nextStart,
+          bucketConfig.bucketMs,
+        ),
+        end: nextStart,
+        start: currentStart,
+      });
+      currentStart = nextStart;
+    }
+  }
+
+  return descriptors.map((descriptor) => {
+    const bucketEvents = input.events.filter((event) => {
+      const eventDate = new Date(event.requestStartedAt);
+
+      return eventDate >= descriptor.start && eventDate < descriptor.end;
+    });
+    const bucketResumeGroups = input.resumeGroups.filter((group) => {
+      const groupDate = new Date(group.firstSeenAt);
+
+      return groupDate >= descriptor.start && groupDate < descriptor.end;
+    });
+
+    return buildAiUsageSpendBucket({
+      axisDateLabel: descriptor.axisDateLabel,
+      bucketEvents,
+      bucketKey: descriptor.bucketKey,
+      bucketResumeGroups,
+      displayDate: descriptor.displayDate,
+    });
+  });
 }
 
 function shouldIgnoreSyncRefreshError(error: unknown) {
@@ -3932,12 +4386,45 @@ function TailorRunDebugStepCard({ step }: { step: TailorRunDebugStep }) {
 
 function App() {
   const [activePanelTab, setActivePanelTab] = useState<PanelTab>(() =>
-    readDebugPreviewFlag("settings") ? "settings" : "tailor",
+    readDebugPreviewFlag("usage")
+      ? "usage"
+      : readDebugPreviewFlag("settings")
+        ? "settings"
+        : "tailor",
   );
   const [tailoredResumeArchiveFilter, setTailoredResumeArchiveFilter] =
     useState<TailoredResumeArchiveFilter>("unarchived");
   const [tailoredResumeSearchQuery, setTailoredResumeSearchQuery] =
     useState("");
+  const [aiUsageReportState, setAiUsageReportState] =
+    useState<AiUsageReportState>({
+      error: null,
+      report: null,
+      status: "idle",
+    });
+  const [aiUsagePeriod, setAiUsagePeriod] = useState<AiUsagePeriod>("all");
+  const [selectedUsageBucketKey, setSelectedUsageBucketKey] = useState<
+    string | null
+  >(null);
+  const [activeUsageTooltipBucketKey, setActiveUsageTooltipBucketKey] = useState<
+    string | null
+  >(null);
+  const [usageTooltipStyle, setUsageTooltipStyle] = useState<CSSProperties>({});
+  const [isAiUsageFiltersOpen, setIsAiUsageFiltersOpen] = useState(false);
+  const [isUnarchivedUsageSectionOpen, setIsUnarchivedUsageSectionOpen] =
+    useState(true);
+  const [isArchivedUsageSectionOpen, setIsArchivedUsageSectionOpen] =
+    useState(true);
+  const [aiUsageStatusFilters, setAiUsageStatusFilters] = useState<
+    Record<AiUsageSubjectStatus, boolean>
+  >({
+    archived: true,
+    deleted: true,
+    unarchived: true,
+  });
+  const [aiUsageStepFilters, setAiUsageStepFilters] = useState<
+    Record<string, boolean>
+  >({});
   const [state, setState] = useState<PanelState>({
     status: "loading",
     snapshot: null,
@@ -4178,11 +4665,13 @@ function App() {
   const dismissedTailorInterviewFinishRequestRef = useRef<string | null>(null);
   const lastAutoFocusedTailorArtifactKeyRef = useRef<string | null>(null);
   const lastAutoScrolledTailoredResumeKeyRef = useRef<string | null>(null);
+  const usageBarChartRef = useRef<HTMLDivElement | null>(null);
   const activeTailorRequestAbortControllerRef =
     useRef<AbortController | null>(null);
   const availablePanelTabs = [
     { id: "tailor" as const, label: "Tailor", title: "Tailor Resume" },
     { id: "applications" as const, label: "Applications", title: "Applications" },
+    { id: "usage" as const, label: "Usage", title: "Usage" },
     { id: "settings" as const, label: "Settings", title: "Settings" },
     ...(EXTENSION_DEBUG_UI_ENABLED
       ? [{ id: "debug" as const, label: "Debug", title: "Debug" }]
@@ -4197,6 +4686,18 @@ function App() {
   );
   const tailoringRunsRefreshKey =
     buildTailoringRunsRefreshKey(tailoringRunsByKey);
+  const aiUsageStatusFilterKey = Object.entries(aiUsageStatusFilters)
+    .sort(([leftStatus], [rightStatus]) => leftStatus.localeCompare(rightStatus))
+    .map(([status, isEnabled]) => `${status}:${isEnabled ? "1" : "0"}`)
+    .join("|");
+  const aiUsageStepFilterKey = Object.entries(aiUsageStepFilters)
+    .sort(([leftStep], [rightStep]) => leftStep.localeCompare(rightStep))
+    .map(([step, isEnabled]) => `${step}:${isEnabled ? "1" : "0"}`)
+    .join("|");
+  const aiUsageReportGeneratedAt =
+    aiUsageReportState.status === "ready"
+      ? aiUsageReportState.report.generatedAt
+      : null;
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(TAILOR_RUN_DETAIL_WIDE_LAYOUT_QUERY);
@@ -4260,6 +4761,76 @@ function App() {
       console.error("Could not clear the Job Helper auth session.", error);
     }
   }, []);
+
+  const loadAiUsageReport = useCallback(
+    async (options: { preserveCurrent?: boolean } = {}) => {
+      if (authState.status !== "signedIn") {
+        setAiUsageReportState({
+          error: null,
+          report: null,
+          status: "idle",
+        });
+        return;
+      }
+
+      setAiUsageReportState((currentState) =>
+        options.preserveCurrent && currentState.status === "ready"
+          ? currentState
+          : {
+              error: null,
+              report: null,
+              status: "loading",
+            },
+      );
+
+      try {
+        const url = new URL(DEFAULT_AI_USAGE_ENDPOINT);
+        url.searchParams.set("limit", "2000");
+        url.searchParams.set("period", "all");
+
+        const response = await fetch(url.toString(), {
+          credentials: "include",
+          headers: {
+            Authorization: `Bearer ${authState.session.sessionToken}`,
+          },
+        });
+        const payload = await response.json().catch(() => ({}));
+
+        if (response.status === 401) {
+          await invalidateAuthSession();
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error(
+            readErrorMessage(payload, "Could not load usage data."),
+          );
+        }
+
+        const report = readAiUsageReportPayload(payload);
+
+        if (!report) {
+          throw new Error("Usage data came back in an unexpected shape.");
+        }
+
+        setAiUsageReportState({
+          error: null,
+          report,
+          status: "ready",
+        });
+      } catch (error) {
+        setAiUsageReportState({
+          error:
+            error instanceof Error
+              ? error.message
+              : "Could not load usage data.",
+          report: null,
+          status: "error",
+        });
+      }
+    },
+    [authState, invalidateAuthSession],
+  );
 
   const applyStoppedTailoringFilter = useCallback(
     (nextPersonalInfo: PersonalInfoSummary) =>
@@ -7444,6 +8015,11 @@ function App() {
 
   useEffect(() => {
     if (authState.status !== "signedIn") {
+      setAiUsageReportState({
+        error: null,
+        report: null,
+        status: "idle",
+      });
       setPersonalInfoState({ personalInfo: null, status: "idle" });
       setPendingPersonalDelete(null);
       setPersonalDeleteActionState("idle");
@@ -7484,6 +8060,46 @@ function App() {
     loadCachedPersonalInfo,
     loadPersonalInfo,
     tailoringRunsRefreshKey,
+  ]);
+
+  useEffect(() => {
+    if (activePanelTab !== "usage") {
+      return;
+    }
+
+    void loadAiUsageReport({ preserveCurrent: true });
+  }, [activePanelTab, loadAiUsageReport]);
+
+  useEffect(() => {
+    if (activePanelTab !== "usage") {
+      return;
+    }
+
+    setSelectedUsageBucketKey(null);
+  }, [activePanelTab, aiUsagePeriod, aiUsageStatusFilterKey, aiUsageStepFilterKey]);
+
+  useEffect(() => {
+    if (activePanelTab !== "usage") {
+      return;
+    }
+
+    const animationFrameId = window.requestAnimationFrame(() => {
+      const chart = usageBarChartRef.current;
+
+      if (!chart) {
+        return;
+      }
+
+      chart.scrollLeft = Math.max(0, chart.scrollWidth - chart.clientWidth);
+    });
+
+    return () => window.cancelAnimationFrame(animationFrameId);
+  }, [
+    activePanelTab,
+    aiUsagePeriod,
+    aiUsageReportGeneratedAt,
+    aiUsageStatusFilterKey,
+    aiUsageStepFilterKey,
   ]);
 
   useEffect(() => {
@@ -13928,6 +14544,559 @@ function App() {
     );
   }
 
+  function renderUsageSurface() {
+    const statusLabels: Record<AiUsageSubjectStatus, string> = {
+      archived: "Archived",
+      deleted: "Deleted",
+      unarchived: "Live",
+    };
+    const usageReportGeneratedAt =
+      aiUsageReportState.status === "ready"
+        ? aiUsageReportState.report.generatedAt
+        : new Date().toISOString();
+    const filteredByControlUsageEvents =
+      aiUsageReportState.status === "ready"
+        ? aiUsageReportState.report.events.filter(
+            (event) =>
+              aiUsageStatusFilters[event.subjectStatus] &&
+              (aiUsageStepFilters[getAiUsageStepKey(event)] ?? true),
+          )
+        : [];
+    const visibleUsageEvents = filteredByControlUsageEvents.filter((event) =>
+      isAiUsageRecordInPeriod(
+        event.requestStartedAt,
+        aiUsagePeriod,
+        usageReportGeneratedAt,
+      ),
+    );
+    const usageStepOptions =
+      aiUsageReportState.status === "ready"
+        ? [
+            ...new Map(
+              aiUsageReportState.report.events.map((event) => {
+                const stepKey = getAiUsageStepKey(event);
+                return [stepKey, formatAiUsageStepLabel(stepKey)] as const;
+              }),
+            ).entries(),
+          ].sort(([leftKey], [rightKey]) =>
+            compareAiUsageStepKeys(leftKey, rightKey),
+          )
+        : [];
+    const filteredUsageSpend = sumAiUsageCost(visibleUsageEvents);
+    const filteredUsageTokens = visibleUsageEvents.reduce(
+      (total, event) => total + event.totalTokens,
+      0,
+    );
+    const chartUsageEventResumeIds = new Set(
+      filteredByControlUsageEvents
+        .map((event) => event.tailoredResumeId)
+        .filter((tailoredResumeId): tailoredResumeId is string =>
+          Boolean(tailoredResumeId),
+        ),
+    );
+    const allUsageEventResumeIds = new Set(
+      aiUsageReportState.status === "ready"
+        ? aiUsageReportState.report.events
+            .map((event) => event.tailoredResumeId)
+            .filter((tailoredResumeId): tailoredResumeId is string =>
+              Boolean(tailoredResumeId),
+            )
+        : [],
+    );
+    const filteredByControlResumeGroups =
+      aiUsageReportState.status === "ready"
+        ? aiUsageReportState.report.resumeGroups.filter(
+            (group) =>
+              aiUsageStatusFilters[group.status] &&
+              (!allUsageEventResumeIds.has(group.tailoredResumeId) ||
+                chartUsageEventResumeIds.has(group.tailoredResumeId)),
+          )
+        : [];
+    const visibleResumeGroups = filteredByControlResumeGroups.filter((group) =>
+      isAiUsageRecordInPeriod(
+        group.firstSeenAt,
+        aiUsagePeriod,
+        usageReportGeneratedAt,
+      ),
+    );
+    const filteredUsageUrlCount = countAiUsageResumeGroupUrls(visibleResumeGroups);
+    const filteredUsageResumeCount = visibleResumeGroups.length;
+    const hasSelectedPeriodUsage =
+      visibleUsageEvents.length > 0 || visibleResumeGroups.length > 0;
+    const usageDailySpendBuckets = buildAiUsageDailySpendBuckets({
+      events: filteredByControlUsageEvents,
+      generatedAt: usageReportGeneratedAt,
+      period: aiUsagePeriod,
+      resumeGroups: filteredByControlResumeGroups,
+    });
+    const selectedUsageBucket =
+      usageDailySpendBuckets.find(
+        (bucket) => bucket.bucketKey === selectedUsageBucketKey,
+      ) ?? null;
+    const activeUsageTooltipBucket =
+      usageDailySpendBuckets.find(
+        (bucket) => bucket.bucketKey === activeUsageTooltipBucketKey,
+      ) ?? null;
+    const maxUsageDailySpend = usageDailySpendBuckets.reduce(
+      (maxSpend, bucket) =>
+        BigInt(bucket.costUsdMicros) > maxSpend
+          ? BigInt(bucket.costUsdMicros)
+          : maxSpend,
+      BigInt(0),
+    );
+    const yAxisMaxSpend =
+      maxUsageDailySpend > BigInt(0) ? maxUsageDailySpend : BigInt(1);
+    const isDenseUsageBarChart =
+      aiUsagePeriod === "14d" ||
+      aiUsagePeriod === "month" ||
+      aiUsagePeriod === "6mo" ||
+      aiUsagePeriod === "1y" ||
+      aiUsagePeriod === "all";
+    const unarchivedResumeGroups = visibleResumeGroups.filter(
+      (group) => group.status === "unarchived",
+    );
+    const archivedResumeGroups = visibleResumeGroups.filter(
+      (group) => group.status === "archived",
+    );
+    const toggleUsageStatusFilter = (status: AiUsageSubjectStatus) => {
+      setAiUsageStatusFilters((currentFilters) => ({
+        ...currentFilters,
+        [status]: !currentFilters[status],
+      }));
+    };
+    const toggleUsageStepFilter = (stepKey: string) => {
+      setAiUsageStepFilters((currentFilters) => ({
+        ...currentFilters,
+        [stepKey]: !(currentFilters[stepKey] ?? true),
+      }));
+    };
+    const showUsageTooltip = (
+      barElement: HTMLButtonElement,
+      bucketKey: string,
+    ) => {
+      const barRect = barElement.getBoundingClientRect();
+      const barCenterX = barRect.left + barRect.width / 2;
+      const tooltipWidth = Math.min(230, window.innerWidth - 36);
+      const tooltipLeft = Math.min(
+        window.innerWidth - 18 - tooltipWidth,
+        Math.max(18, barCenterX - tooltipWidth / 2),
+      );
+      const tooltipTop = Math.min(
+        window.innerHeight - 140,
+        Math.max(18, barRect.top + 8),
+      );
+
+      setActiveUsageTooltipBucketKey(bucketKey);
+      setUsageTooltipStyle({
+        "--usage-tooltip-left": `${tooltipLeft}px`,
+        "--usage-tooltip-top": `${tooltipTop}px`,
+        "--usage-tooltip-width": `${tooltipWidth}px`,
+      } as CSSProperties);
+    };
+    const handleUsageBarMouseEnter = (
+      event: ReactMouseEvent<HTMLButtonElement>,
+      bucketKey: string,
+    ) => {
+      showUsageTooltip(event.currentTarget, bucketKey);
+    };
+    const hideUsageTooltip = () => setActiveUsageTooltipBucketKey(null);
+    const selectUsagePeriod = (nextPeriod: AiUsagePeriod) => {
+      setAiUsagePeriod(nextPeriod);
+    };
+    const renderUsageResumeRow = (group: AiUsageResumeGroup) => {
+      const displayName = group.displayName.trim() || "Tailored resume";
+      const subtitle =
+        group.companyName ||
+        group.positionTitle ||
+        (group.jobUrl ? formatAiUsageUrl(group.jobUrl) : "Tailored resume");
+
+      return (
+        <button
+          className="tailored-resume-row usage-resume-row"
+          key={group.tailoredResumeId}
+          type="button"
+          onClick={() =>
+            openTailoredResumeDetailView(group.tailoredResumeId, "quickReview")
+          }
+        >
+          <span className="tailored-resume-main">
+            <span className="tailored-resume-title">{displayName}</span>
+            <span className="tailored-resume-meta">{subtitle}</span>
+          </span>
+          <span className="usage-resume-spend">
+            <strong>{formatAiUsageUsd(group.totalCostUsdMicros)}</strong>
+            <span>{formatAiUsageDate(group.lastSeenAt)}</span>
+          </span>
+        </button>
+      );
+    };
+    const renderUsageResumeSection = (input: {
+      groups: AiUsageResumeGroup[];
+      isOpen: boolean;
+      label: string;
+      onToggle: () => void;
+    }) => (
+      <section className="usage-resume-section">
+        <button
+          aria-expanded={input.isOpen}
+          className="usage-resume-section-toggle"
+          type="button"
+          onClick={input.onToggle}
+        >
+          <span aria-hidden="true">{input.isOpen ? "▾" : "▸"}</span>
+          <span>{input.label}</span>
+          <strong>{formatAiUsageInteger(input.groups.length)}</strong>
+        </button>
+        {input.isOpen ? (
+          input.groups.length === 0 ? (
+            <p className="usage-empty-copy">No tailored resumes match these filters.</p>
+          ) : (
+            <div className="usage-resume-list">
+              {input.groups.map((group) => renderUsageResumeRow(group))}
+            </div>
+          )
+        ) : null}
+      </section>
+    );
+
+    if (authState.status !== "signedIn") {
+      return (
+        <section className="snapshot-card usage-page">
+          <div className="card-heading-row">
+            <h2>Usage</h2>
+          </div>
+          <p className="usage-empty-copy">
+            Sign in to review API spend and token usage.
+          </p>
+          <button
+            className="primary-action compact-action"
+            disabled={authActionState === "running"}
+            type="button"
+            onClick={() => void handleSignIn()}
+          >
+            {authActionState === "running" ? "Signing in..." : "Sign in"}
+          </button>
+        </section>
+      );
+    }
+
+    return (
+      <section className="usage-page" aria-label="Usage">
+        <section className="snapshot-card usage-summary-card">
+          <div className="card-heading-row">
+            <h2>Usage</h2>
+            <div className="usage-heading-actions">
+              <button
+                className="secondary-action compact-action usage-refresh-action"
+                disabled={aiUsageReportState.status === "loading"}
+                type="button"
+                onClick={() => void loadAiUsageReport({ preserveCurrent: true })}
+              >
+                {aiUsageReportState.status === "loading" ? "Loading" : "Refresh"}
+              </button>
+              <button
+                aria-expanded={isAiUsageFiltersOpen}
+                className="secondary-action compact-action usage-filter-toggle"
+                type="button"
+                onClick={() => setIsAiUsageFiltersOpen((isOpen) => !isOpen)}
+              >
+                <span aria-hidden="true">🔎</span>
+                Filters
+              </button>
+            </div>
+          </div>
+
+          {isAiUsageFiltersOpen ? (
+            <div className="usage-filter-panel">
+              <fieldset className="usage-filter-group">
+                <legend>Time period</legend>
+                <div className="usage-filter-row" aria-label="Usage time period">
+                  {aiUsagePeriods.map((option) => (
+                    <button
+                      className={`usage-period-pill ${
+                        aiUsagePeriod === option.value
+                          ? "usage-period-pill-active"
+                          : ""
+                      }`}
+                      disabled={aiUsageReportState.status === "loading"}
+                      key={option.value}
+                      type="button"
+                      onClick={() => selectUsagePeriod(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
+
+              <fieldset className="usage-filter-group">
+                <legend>Status</legend>
+                <div className="usage-filter-row" aria-label="Usage statuses">
+                  {(["unarchived", "archived", "deleted"] as AiUsageSubjectStatus[]).map(
+                    (status) => (
+                      <label
+                        className={`usage-filter-pill usage-filter-pill-${status}`}
+                        key={status}
+                      >
+                        <input
+                          checked={aiUsageStatusFilters[status]}
+                          onChange={() => toggleUsageStatusFilter(status)}
+                          type="checkbox"
+                        />
+                        {statusLabels[status]}
+                      </label>
+                    ),
+                  )}
+                </div>
+              </fieldset>
+
+              <fieldset className="usage-filter-group">
+                <legend>Steps</legend>
+                <div className="usage-filter-row" aria-label="Usage steps">
+                  {usageStepOptions.length === 0 ? (
+                    <span className="usage-filter-empty">No steps yet</span>
+                  ) : (
+                    usageStepOptions.map(([stepKey, label]) => (
+                      <label className="usage-filter-pill" key={stepKey}>
+                        <input
+                          checked={aiUsageStepFilters[stepKey] ?? true}
+                          onChange={() => toggleUsageStepFilter(stepKey)}
+                          type="checkbox"
+                        />
+                        {label}
+                      </label>
+                    ))
+                  )}
+                </div>
+              </fieldset>
+            </div>
+          ) : null}
+
+          {aiUsageReportState.status === "error" ? (
+            <p className="preview-error">{aiUsageReportState.error}</p>
+          ) : null}
+
+          <div className="usage-spend-chart" aria-label="Daily AI spend">
+            <div className="usage-spend-chart-summary">
+              <span>Total spend</span>
+              <strong>{formatAiUsageUsd(filteredUsageSpend)}</strong>
+              <small>
+                {formatAiUsageInteger(visibleUsageEvents.length)} calls ·{" "}
+                {formatAiUsageInteger(filteredUsageTokens)} tokens ·{" "}
+                {formatAiUsageInteger(filteredUsageResumeCount)} resumes ·{" "}
+                {formatAiUsageInteger(filteredUsageUrlCount)} URLs
+              </small>
+            </div>
+            {!hasSelectedPeriodUsage && usageDailySpendBuckets.length > 0 ? (
+              <p className="usage-empty-copy">
+                No usage in this period. Scroll for older tracked history.
+              </p>
+            ) : null}
+
+            {usageDailySpendBuckets.length === 0 ? (
+              <p className="usage-empty-copy">No usage matches these filters.</p>
+            ) : (
+              <div
+                className="usage-chart-frame"
+                style={
+                  {
+                    "--usage-y-axis-max": `"${formatAiUsageUsd(
+                      yAxisMaxSpend.toString(),
+                    )}"`,
+                    "--usage-y-axis-mid": `"${formatAiUsageUsd(
+                      (yAxisMaxSpend / BigInt(2)).toString(),
+                    )}"`,
+                  } as CSSProperties
+                }
+              >
+                <div className="usage-y-axis" aria-hidden="true">
+                  <span>{formatAiUsageUsd(yAxisMaxSpend.toString())}</span>
+                  <span>{formatAiUsageUsd((yAxisMaxSpend / BigInt(2)).toString())}</span>
+                  <span>$0</span>
+                </div>
+                <div
+                  className={`usage-bar-chart usage-bar-chart-period-${aiUsagePeriod}`}
+                  ref={usageBarChartRef}
+                  role="list"
+                >
+                  {usageDailySpendBuckets.map((bucket, bucketIndex) => {
+                    const hasSpend = BigInt(bucket.costUsdMicros) > BigInt(0);
+                    const barHeight =
+                      hasSpend
+                        ? Math.max(
+                            8,
+                            Math.round(
+                              (Number(BigInt(bucket.costUsdMicros)) /
+                                Number(yAxisMaxSpend)) *
+                                100,
+                            ),
+                          )
+                        : 0;
+                    const barValueLabel = hasSpend
+                      ? formatAiUsageCompactSpendLabel(bucket.costUsdMicros)
+                      : bucket.resumeCount > 0
+                        ? isDenseUsageBarChart
+                          ? `${formatAiUsageInteger(bucket.resumeCount)}r`
+                          : `${formatAiUsageInteger(bucket.resumeCount)} res`
+                        : "";
+                    const axisDateLabel =
+                      (aiUsagePeriod === "6mo" || aiUsagePeriod === "1y") &&
+                      bucketIndex % 2 === 1 &&
+                      bucketIndex !== usageDailySpendBuckets.length - 1
+                        ? ""
+                        : aiUsagePeriod === "6mo" || aiUsagePeriod === "1y"
+                          ? formatAiUsageLongRangeAxisLabel(bucket.bucketKey)
+                          : isDenseUsageBarChart && bucket.axisDateLabel.includes("/")
+                            ? bucket.axisDateLabel.split("/").at(-1) ??
+                              bucket.axisDateLabel
+                            : bucket.axisDateLabel;
+
+                    return (
+                      <button
+                        aria-label={`${bucket.displayDate}: ${formatAiUsageUsd(
+                          bucket.costUsdMicros,
+                        )}, ${formatAiUsageInteger(
+                          bucket.resumeCount,
+                        )} resumes, ${formatAiUsageInteger(bucket.urlCount)} URLs`}
+                        className={`usage-bar-item ${
+                          bucket.hasUsageData ? "" : "usage-bar-item-empty-spend"
+                        }`}
+                        aria-pressed={selectedUsageBucketKey === bucket.bucketKey}
+                        key={bucket.bucketKey}
+                        type="button"
+                        onClick={() => setSelectedUsageBucketKey(bucket.bucketKey)}
+                        onBlur={hideUsageTooltip}
+                        onFocus={(event) =>
+                          showUsageTooltip(event.currentTarget, bucket.bucketKey)
+                        }
+                        onMouseEnter={(event) =>
+                          handleUsageBarMouseEnter(event, bucket.bucketKey)
+                        }
+                        onMouseLeave={hideUsageTooltip}
+                      >
+                        <span className="usage-bar-track" aria-hidden="true">
+                          <span
+                            className="usage-bar-fill"
+                            style={{ height: `${barHeight}%` }}
+                          />
+                        </span>
+                        <span className="usage-bar-value">{barValueLabel}</span>
+                        <span className="usage-bar-date">{axisDateLabel}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {activeUsageTooltipBucket
+                  ? createPortal(
+                      <span
+                        className="usage-tooltip usage-tooltip-floating"
+                        role="tooltip"
+                        style={usageTooltipStyle}
+                      >
+                        <strong className="usage-tooltip-date">
+                          {activeUsageTooltipBucket.displayDate}
+                        </strong>
+                        <span className="usage-tooltip-metrics">
+                          <span>
+                            <strong>
+                              {formatAiUsageUsd(activeUsageTooltipBucket.costUsdMicros)}
+                            </strong>
+                            Spend
+                          </span>
+                          <span>
+                            <strong>
+                              {formatAiUsageInteger(activeUsageTooltipBucket.resumeCount)}
+                            </strong>
+                            Resumes
+                          </span>
+                          <span>
+                            <strong>
+                              {formatAiUsageInteger(activeUsageTooltipBucket.urlCount)}
+                            </strong>
+                            URLs
+                          </span>
+                        </span>
+                        <span className="usage-tooltip-breakdown">
+                          {activeUsageTooltipBucket.stepBreakdown.length === 0 ? (
+                            <span>
+                              <span>No spend tracked</span>
+                              <strong>$0</strong>
+                            </span>
+                          ) : (
+                            activeUsageTooltipBucket.stepBreakdown.map((step) => (
+                              <span key={step.stepKey}>
+                                <span>{step.label}</span>
+                                <strong>{formatAiUsageUsd(step.costUsdMicros)}</strong>
+                              </span>
+                            ))
+                          )}
+                        </span>
+                      </span>,
+                      document.body,
+                    )
+                  : null}
+                {selectedUsageBucket ? (
+                  <section className="usage-bucket-panel" aria-label="Resumes generated in selected usage bucket">
+                    <header>
+                      <div>
+                        <span>{selectedUsageBucket.displayDate}</span>
+                        <strong>
+                          {formatAiUsageInteger(selectedUsageBucket.resumeGroups.length)}{" "}
+                          resumes
+                        </strong>
+                      </div>
+                      <button
+                        aria-label="Close selected usage bucket"
+                        type="button"
+                        onClick={() => setSelectedUsageBucketKey(null)}
+                      >
+                        ×
+                      </button>
+                    </header>
+                    {selectedUsageBucket.resumeGroups.length === 0 ? (
+                      <p className="usage-empty-copy">
+                        No stored, non-deleted resumes for this bucket.
+                      </p>
+                    ) : (
+                      <div className="usage-bucket-resume-list">
+                        {selectedUsageBucket.resumeGroups.map((group) =>
+                          renderUsageResumeRow(group),
+                        )}
+                      </div>
+                    )}
+                  </section>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <div className="usage-resume-sections" aria-label="Tailored resume usage">
+          {aiUsageReportState.status === "loading" ? (
+            <p className="usage-empty-copy">Loading usage...</p>
+          ) : (
+            <>
+              {renderUsageResumeSection({
+                groups: unarchivedResumeGroups,
+                isOpen: isUnarchivedUsageSectionOpen,
+                label: "Unarchived",
+                onToggle: () =>
+                  setIsUnarchivedUsageSectionOpen((isOpen) => !isOpen),
+              })}
+              {renderUsageResumeSection({
+                groups: archivedResumeGroups,
+                isOpen: isArchivedUsageSectionOpen,
+                label: "Archived",
+                onToggle: () =>
+                  setIsArchivedUsageSectionOpen((isOpen) => !isOpen),
+              })}
+            </>
+          )}
+        </div>
+      </section>
+    );
+  }
+
   function renderSettingsSurface() {
     const accountSummary =
       authState.status === "loading"
@@ -15544,6 +16713,8 @@ function App() {
         </>
       ) : activePanelTab === "settings" ? (
         renderSettingsSurface()
+      ) : activePanelTab === "usage" ? (
+        renderUsageSurface()
       ) : activePanelTab === "applications" ? (
         shouldRenderApplicationsEmptySurface ? (
           <DocumentEmptySurface
