@@ -1,0 +1,3 @@
+- Symptom: the saved tailored-resume overflow menu could stay open after clicking elsewhere in the extension panel.
+- Root cause: the fixed-position row menu is rendered through a portal, so outside-click handling needs to be robust to both the trigger shell and the floating popover and should run before other click handlers can change focus/state.
+- Fix: listen for document-level `pointerdown` in the capture phase, classify clicks with the event composed path against both menu elements, and reset the row menu id, error, and position when dismissing.

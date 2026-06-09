@@ -18,6 +18,7 @@ import {
   type TailoredResumeReviewRecord,
 } from "../../lib/tailored-resume-review-record.ts";
 import type { TailoredResumeOpenAiDebugStage } from "../../lib/tailor-resume-types.ts";
+import { buildTailoredResumeSnapshotComparisonEdits } from "../../lib/tailor-resume-edit-history.ts";
 import { buildJobApplicationDisplayParts } from "../../lib/job-application-display.ts";
 import { buildTailoredResumeInteractivePreviewQueries } from "../../lib/tailor-resume-preview-focus.ts";
 import type { TailoredResumeInteractivePreviewQuery } from "../../lib/tailor-resume-preview-focus.ts";
@@ -425,6 +426,20 @@ type FloatingMenuPosition = {
   top: number;
 };
 
+function eventIncludesElement(event: Event, element: HTMLElement | null) {
+  if (!element) {
+    return false;
+  }
+
+  const eventPath = event.composedPath();
+
+  if (eventPath.includes(element)) {
+    return true;
+  }
+
+  return event.target instanceof Node && element.contains(event.target);
+}
+
 const TAILOR_RESUME_SHORTCUT_KEYS = ["⌘", "⇧", "S"] as const;
 const TAILOR_RESUME_SHORTCUT_ARIA_LABEL = "Command Shift S";
 const STALE_TAILORING_RUN_MAX_AGE_MS = 1000 * 60 * 2;
@@ -717,14 +732,6 @@ function getAiUsagePeriodBucketConfig(period: AiUsagePeriod) {
     return { bucketMs: 3 * 24 * 60 * 60 * 1000, windowMs: 30 * 24 * 60 * 60 * 1000 };
   }
 
-  if (period === "6mo") {
-    return { bucketMs: 14 * 24 * 60 * 60 * 1000, windowMs: 182 * 24 * 60 * 60 * 1000 };
-  }
-
-  if (period === "1y") {
-    return { bucketMs: 28 * 24 * 60 * 60 * 1000, windowMs: 364 * 24 * 60 * 60 * 1000 };
-  }
-
   return null;
 }
 
@@ -780,7 +787,15 @@ function formatAiUsageBucketDisplayLabel(start: Date, end: Date, bucketMs: numbe
 }
 
 function formatAiUsageLongRangeAxisLabel(bucketKey: string) {
-  const date = new Date(bucketKey.replace(/^fixed:/, ""));
+  const dateInput = bucketKey.replace(/^(fixed|month):/, "");
+  const localDateMatch = dateInput.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const date = localDateMatch
+    ? new Date(
+        Number(localDateMatch[1]),
+        Number(localDateMatch[2]) - 1,
+        Number(localDateMatch[3]),
+      )
+    : new Date(dateInput);
 
   return Number.isNaN(date.getTime())
     ? ""
@@ -847,12 +862,27 @@ function buildAiUsageDailySpendBuckets(
   const descriptors: AiUsageBucketDescriptor[] = [];
 
   if (!bucketConfig) {
-    const start = earliestRecordDate
-      ? new Date(earliestRecordDate.getFullYear(), earliestRecordDate.getMonth(), 1)
-      : new Date(generatedAt.getFullYear(), generatedAt.getMonth(), 1);
-    let currentStart = start;
+    const calendarStart =
+      input.period === "1y" || input.period === "6mo"
+        ? new Date(
+            generatedAt.getFullYear(),
+            generatedAt.getMonth() - (input.period === "1y" ? 12 : 6),
+            1,
+          )
+        : earliestRecordDate
+          ? new Date(
+              earliestRecordDate.getFullYear(),
+              earliestRecordDate.getMonth(),
+              1,
+            )
+          : new Date(generatedAt.getFullYear(), generatedAt.getMonth(), 1);
+    const calendarEnd =
+      input.period === "1y" || input.period === "6mo"
+        ? new Date(generatedAt.getFullYear(), generatedAt.getMonth() + 1, 1)
+        : generatedAt;
+    let currentStart = calendarStart;
 
-    while (currentStart <= generatedAt) {
+    while (currentStart < calendarEnd) {
       const nextStart = new Date(
         currentStart.getFullYear(),
         currentStart.getMonth() + 1,
@@ -2942,6 +2972,36 @@ function buildActiveTailorRunCardFromPreparation(input: {
   };
 }
 
+function shouldPreferServerCurrentPageTailoring(input: {
+  localRun: TailorResumeRunRecord | null;
+  serverTailoring: TailorResumeExistingTailoringState | null;
+}) {
+  const serverTailoring = input.serverTailoring;
+
+  if (!serverTailoring || serverTailoring.kind === "completed") {
+    return false;
+  }
+
+  if (!input.localRun || !isTransientTailoringRun(input.localRun)) {
+    return true;
+  }
+
+  if (serverTailoring.kind === "pending_interview") {
+    const localStepNumber = input.localRun.generationStep?.stepNumber ?? 0;
+
+    return localStepNumber <= 2;
+  }
+
+  if (serverTailoring.status === "FAILED") {
+    return true;
+  }
+
+  const localStepNumber = input.localRun.generationStep?.stepNumber ?? 0;
+  const serverStepNumber = serverTailoring.lastStep?.stepNumber ?? 0;
+
+  return serverStepNumber > localStepNumber;
+}
+
 function buildCurrentActiveTailorRunCard(input: {
   hasCurrentPageCompletedTailoring: boolean;
   currentPageApplicationContext: TailorResumeApplicationContext | null;
@@ -2975,6 +3035,25 @@ function buildCurrentActiveTailorRunCard(input: {
       input.currentPageUrl,
   };
   const cardId = `current:${input.currentPageRegistryKey ?? titleFallback.url ?? "active"}`;
+  const shouldUseServerTailoring = shouldPreferServerCurrentPageTailoring({
+    localRun: input.currentPageStoredTailoringRun,
+    serverTailoring: input.currentPagePersonalInfoTailoring,
+  });
+
+  if (
+    shouldUseServerTailoring &&
+    input.currentPagePersonalInfoTailoring &&
+    input.currentPagePersonalInfoTailoring.kind !== "completed"
+  ) {
+    return buildActiveTailorRunCardFromExistingTailoring({
+      existingTailoring: input.currentPagePersonalInfoTailoring,
+      id: cardId,
+      isCurrentPage: true,
+      pageKey: input.currentPageRegistryKey,
+      previousRun: input.currentPageStoredTailoringRun,
+      titleFallback,
+    });
+  }
 
   // Keep the current page on the local stream so server polling cannot reset live timers.
   if (
@@ -4027,6 +4106,16 @@ function SearchIcon() {
   );
 }
 
+function FilterIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M5 7h14" />
+      <path d="M8 12h8" />
+      <path d="M10 17h4" />
+    </svg>
+  );
+}
+
 function CloseIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -4049,6 +4138,16 @@ function ArrowUpRightIcon() {
     <svg aria-hidden="true" viewBox="0 0 24 24">
       <path d="M7 17 17 7" />
       <path d="M9 7h8v8" />
+    </svg>
+  );
+}
+
+function DownloadIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 4v11" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M5 20h14" />
     </svg>
   );
 }
@@ -4411,6 +4510,9 @@ function App() {
   >(null);
   const [usageTooltipStyle, setUsageTooltipStyle] = useState<CSSProperties>({});
   const [isAiUsageFiltersOpen, setIsAiUsageFiltersOpen] = useState(false);
+  const aiUsageFilterPopoverRef = useRef<HTMLDivElement | null>(null);
+  const aiUsageFilterCloseTimerRef = useRef<number | null>(null);
+  const aiUsageFilterPointerRef = useRef({ x: 0, y: 0 });
   const [isUnarchivedUsageSectionOpen, setIsUnarchivedUsageSectionOpen] =
     useState(true);
   const [isArchivedUsageSectionOpen, setIsArchivedUsageSectionOpen] =
@@ -4521,6 +4623,14 @@ function App() {
     useState(0);
   const [tailoredResumeReviewState, setTailoredResumeReviewState] =
     useState<TailoredResumeReviewState>({ record: null, status: "idle" });
+  const [
+    tailoredReviewActionPortalElement,
+    setTailoredReviewActionPortalElement,
+  ] = useState<HTMLDivElement | null>(null);
+  const [
+    tailoredReviewChatPortalElement,
+    setTailoredReviewChatPortalElement,
+  ] = useState<HTMLDivElement | null>(null);
   const [pendingTailoredResumeReviewEditId, setPendingTailoredResumeReviewEditId] =
     useState<string | null>(null);
   const [activeTailorRunDetailView, setActiveTailorRunDetailView] =
@@ -4557,6 +4667,8 @@ function App() {
   const [tailoredResumeMenuActionState, setTailoredResumeMenuActionState] =
     useState<TailoredResumeMenuActionState>("idle");
   const [tailoredResumeMenuActionResumeId, setTailoredResumeMenuActionResumeId] =
+    useState<string | null>(null);
+  const [tailoredPreviewDownloadError, setTailoredPreviewDownloadError] =
     useState<string | null>(null);
   const [tailoredResumeMenuError, setTailoredResumeMenuError] =
     useState<string | null>(null);
@@ -4656,6 +4768,7 @@ function App() {
   const tailoredResumeMenuRef = useRef<HTMLDivElement | null>(null);
   const tailoredResumeMenuPopoverRef = useRef<HTMLDivElement | null>(null);
   const currentPageTailoredResumeRowRef = useRef<HTMLDivElement | null>(null);
+  const currentPageActiveTailorRunCardRef = useRef<HTMLElement | null>(null);
   const lastReadyPersonalInfoRef = useRef<PersonalInfoSummary | null>(null);
   const lastSeenSyncStateRef = useRef<UserSyncStateSnapshot | null>(null);
   const stoppedTailoringsByKeyRef = useRef<StoppedTailoringRegistry>({});
@@ -4665,6 +4778,7 @@ function App() {
   const dismissedTailorInterviewFinishRequestRef = useRef<string | null>(null);
   const lastAutoFocusedTailorArtifactKeyRef = useRef<string | null>(null);
   const lastAutoScrolledTailoredResumeKeyRef = useRef<string | null>(null);
+  const lastAutoScrolledActiveTailorRunKeyRef = useRef<string | null>(null);
   const usageBarChartRef = useRef<HTMLDivElement | null>(null);
   const activeTailorRequestAbortControllerRef =
     useRef<AbortController | null>(null);
@@ -5835,6 +5949,19 @@ function App() {
     ...(currentActiveTailorRunCard ? [currentActiveTailorRunCard] : []),
     ...parallelTailorRunCards,
   ]);
+  const currentPageActiveTailorRunAutoScrollKey = currentActiveTailorRunCard
+    ? [
+        currentActiveTailorRunCard.existingTailoringId ?? currentActiveTailorRunCard.id,
+        currentActiveTailorRunCard.pageKey,
+        normalizeComparableUrl(currentActiveTailorRunCard.url),
+        normalizeComparableUrl(currentPageUrl),
+        normalizeComparableUrl(currentPageIdentity?.jobUrl),
+        normalizeComparableUrl(currentPageIdentity?.canonicalUrl),
+        normalizeComparableUrl(currentPageIdentity?.pageUrl),
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join(":")
+    : null;
   const isCurrentPageActiveTailoringVisible = Boolean(
     currentActiveTailorRunCard &&
       currentActiveTailorRunCard.statusDisplayState !== "error",
@@ -6358,6 +6485,12 @@ function App() {
     tailoredResumeReviewState.record?.id === focusedTailoredResumeId
       ? tailoredResumeReviewState.record
       : null;
+  const activeTailoredResumeDownloadRecord =
+    focusedTailoredResumeId && personalInfo
+      ? personalInfo.tailoredResumes.find(
+          (tailoredResume) => tailoredResume.id === focusedTailoredResumeId,
+        ) ?? activeTailoredResumeReviewRecord
+      : activeTailoredResumeReviewRecord;
   const activeTailoredResumeError =
     activeTailoredResumeReviewRecord?.error?.trim() || null;
   const tailoredPreviewInteractiveQueries = useMemo(() => {
@@ -6691,21 +6824,29 @@ function App() {
 
     updateTailoredResumeMenuPosition();
 
-    const handleMouseDown = (event: MouseEvent) => {
+    const closeTailoredResumeMenu = () => {
+      setTailoredResumeMenuId(null);
+      setTailoredResumeMenuError(null);
+      setTailoredResumeMenuErrorResumeId(null);
+      setTailoredResumeMenuPosition(null);
+    };
+
+    const handlePointerDown = (event: PointerEvent) => {
       if (tailoredResumeMenuActionState !== "idle") {
         return;
       }
 
-      const clickedNode = event.target as Node;
-      const clickedInsideShell = tailoredResumeMenuRef.current?.contains(
-        clickedNode,
+      const clickedInsideShell = eventIncludesElement(
+        event,
+        tailoredResumeMenuRef.current,
       );
-      const clickedInsidePopover = tailoredResumeMenuPopoverRef.current?.contains(
-        clickedNode,
+      const clickedInsidePopover = eventIncludesElement(
+        event,
+        tailoredResumeMenuPopoverRef.current,
       );
 
       if (!clickedInsideShell && !clickedInsidePopover) {
-        setTailoredResumeMenuId(null);
+        closeTailoredResumeMenu();
       }
     };
 
@@ -6715,7 +6856,7 @@ function App() {
       }
 
       if (event.key === "Escape") {
-        setTailoredResumeMenuId(null);
+        closeTailoredResumeMenu();
       }
     };
 
@@ -6723,13 +6864,13 @@ function App() {
       updateTailoredResumeMenuPosition();
     };
 
-    window.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("pointerdown", handlePointerDown, true);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("resize", handleViewportChange);
     window.addEventListener("scroll", handleViewportChange, true);
 
     return () => {
-      window.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("resize", handleViewportChange);
       window.removeEventListener("scroll", handleViewportChange, true);
@@ -8071,6 +8212,45 @@ function App() {
   }, [activePanelTab, loadAiUsageReport]);
 
   useEffect(() => {
+    return () => {
+      if (aiUsageFilterCloseTimerRef.current !== null) {
+        window.clearTimeout(aiUsageFilterCloseTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isAiUsageFiltersOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const shell = aiUsageFilterPopoverRef.current;
+
+      if (
+        shell &&
+        event.target instanceof Node &&
+        shell.contains(event.target)
+      ) {
+        return;
+      }
+
+      if (aiUsageFilterCloseTimerRef.current !== null) {
+        window.clearTimeout(aiUsageFilterCloseTimerRef.current);
+        aiUsageFilterCloseTimerRef.current = null;
+      }
+
+      setIsAiUsageFiltersOpen(false);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [isAiUsageFiltersOpen]);
+
+  useEffect(() => {
     if (activePanelTab !== "usage") {
       return;
     }
@@ -8684,6 +8864,10 @@ function App() {
   }, [focusedTailoredResumeId]);
 
   useEffect(() => {
+    setTailoredPreviewDownloadError(null);
+  }, [focusedTailoredResumeId]);
+
+  useEffect(() => {
     const autoScrollKey = currentPageCompletedTailoredResumeAutoScrollKey;
 
     if (!autoScrollKey || showFullscreenTailorRunDetail) {
@@ -8725,6 +8909,53 @@ function App() {
   }, [
     activePanelTab,
     currentPageCompletedTailoredResumeAutoScrollKey,
+    showFullscreenTailorRunDetail,
+    state.status,
+    tailoredResumeArchiveFilter,
+  ]);
+
+  useEffect(() => {
+    const autoScrollKey = currentPageActiveTailorRunAutoScrollKey;
+
+    if (!autoScrollKey || showFullscreenTailorRunDetail) {
+      if (state.status === "ready" && !autoScrollKey) {
+        lastAutoScrolledActiveTailorRunKeyRef.current = null;
+      }
+      return;
+    }
+
+    if (lastAutoScrolledActiveTailorRunKeyRef.current === autoScrollKey) {
+      return;
+    }
+
+    if (activePanelTab !== "tailor") {
+      setActivePanelTab("tailor");
+    }
+
+    if (tailoredResumeArchiveFilter !== "unarchived") {
+      setTailoredResumeArchiveFilter("unarchived");
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      const targetCard = currentPageActiveTailorRunCardRef.current;
+
+      if (!targetCard) {
+        return;
+      }
+
+      targetCard.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      lastAutoScrolledActiveTailorRunKeyRef.current = autoScrollKey;
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [
+    activePanelTab,
+    currentPageActiveTailorRunAutoScrollKey,
     showFullscreenTailorRunDetail,
     state.status,
     tailoredResumeArchiveFilter,
@@ -10356,6 +10587,45 @@ function App() {
         error instanceof Error ? error.message : "Could not download that resume.",
       );
       setTailoredResumeMenuErrorResumeId(tailoredResume.id);
+    } finally {
+      setTailoredResumeMenuActionState("idle");
+      setTailoredResumeMenuActionResumeId(null);
+    }
+  }
+
+  async function handleDownloadActiveTailoredResume() {
+    if (!activeTailoredResumeDownloadRecord) {
+      return;
+    }
+
+    if (tailoredResumeMenuActionState !== "idle") {
+      return;
+    }
+
+    setTailoredResumeMenuActionState("downloading");
+    setTailoredResumeMenuActionResumeId(activeTailoredResumeDownloadRecord.id);
+    setTailoredPreviewDownloadError(null);
+    setTailoredResumeMenuError(null);
+    setTailoredResumeMenuErrorResumeId(null);
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        payload: {
+          companyName: activeTailoredResumeDownloadRecord.companyName,
+          displayName: activeTailoredResumeDownloadRecord.displayName,
+          downloadName: buildTailoredResumeDownloadFilename(
+            activeTailoredResumeDownloadRecord,
+            personalInfo?.generationSettings,
+          ),
+          tailoredResumeId: activeTailoredResumeDownloadRecord.id,
+        },
+        type: "JOB_HELPER_DOWNLOAD_TAILORED_RESUME",
+      });
+      assertRuntimeResponseOk(response, "Could not download that resume.");
+    } catch (error) {
+      setTailoredPreviewDownloadError(
+        error instanceof Error ? error.message : "Could not download that resume.",
+      );
     } finally {
       setTailoredResumeMenuActionState("idle");
       setTailoredResumeMenuActionResumeId(null);
@@ -12093,6 +12363,7 @@ function App() {
           isMenuOpen ? "tailor-run-shell-menu-open" : ""
         }`.trim()}
         key={card.id}
+        ref={isCurrentCard ? currentPageActiveTailorRunCardRef : undefined}
       >
         <div className="tailor-run-shell-body">
           <div className="tailor-run-meta">
@@ -14190,6 +14461,202 @@ function App() {
     }
   }
 
+  async function refineTailoredResumeReviewWithChat(
+    prompt: string,
+    handlers?: {
+      onTextDelta?: (delta: string) => void;
+      onTextStart?: () => void;
+    },
+  ) {
+    if (
+      authState.status !== "signedIn" ||
+      !activeTailoredResumeReviewRecord ||
+      pendingTailoredResumeReviewEditId
+    ) {
+      return null;
+    }
+
+    const previousRecord = activeTailoredResumeReviewRecord;
+    setPendingTailoredResumeReviewEditId("ai-refinement");
+
+    try {
+      const result = await patchTailorResume(
+        {
+          action: "refineTailoredResume",
+          previewImageDataUrls: [],
+          tailoredResumeId: previousRecord.id,
+          userPrompt: prompt,
+        },
+        {
+          onInterviewStreamEvent: (event) => {
+            if (event.kind === "reset") {
+              handlers?.onTextStart?.();
+              return;
+            }
+
+            if (event.field !== "assistantMessage") {
+              return;
+            }
+
+            if (event.kind === "text-start") {
+              handlers?.onTextStart?.();
+              return;
+            }
+
+            handlers?.onTextDelta?.(event.delta);
+          },
+        },
+      );
+
+      if (!result.ok) {
+        throw new Error(
+          readTailorResumePayloadError(
+            result.payload,
+            "Unable to update the tailored resume edits.",
+          ),
+        );
+      }
+
+      const reviewRecord =
+        resolveTailoredResumeReviewRecordFromPayload(
+          result.payload,
+          previousRecord.id,
+        ) ?? null;
+
+      if (!reviewRecord) {
+        throw new Error("The tailored resume review could not be refreshed.");
+      }
+
+      setTailoredResumeReviewState({
+        record: reviewRecord,
+        status: "ready",
+      });
+      syncTailoredResumeSummariesFromPayload(result.payload);
+
+      const payloadRecord =
+        result.payload && typeof result.payload === "object"
+          ? (result.payload as Record<string, unknown>)
+          : {};
+      const rawDiff = payloadRecord.tailoredResumeDiff;
+      const comparison =
+        rawDiff && typeof rawDiff === "object"
+          ? (() => {
+              const diff = rawDiff as Record<string, unknown>;
+              const startVersionId =
+                typeof diff.startVersionId === "string" ? diff.startVersionId : "";
+              const endVersionId =
+                typeof diff.endVersionId === "string" ? diff.endVersionId : "";
+
+              if (!startVersionId || !endVersionId) {
+                return undefined;
+              }
+
+              const startVersion = reviewRecord.versions.find(
+                (version) => version.id === startVersionId,
+              );
+              const endVersion = reviewRecord.versions.find(
+                (version) => version.id === endVersionId,
+              );
+              const comparisonEditCount =
+                startVersion && endVersion
+                  ? buildTailoredResumeSnapshotComparisonEdits({
+                      endAnnotatedLatexCode: endVersion.annotatedLatexCode,
+                      startAnnotatedLatexCode: startVersion.annotatedLatexCode,
+                    }).length
+                  : 0;
+
+              return comparisonEditCount > 0
+                ? {
+                    endVersionId,
+                    startVersionId,
+                  }
+                : undefined;
+            })()
+          : undefined;
+      const assistantMessage =
+        typeof payloadRecord.assistantMessage === "string" &&
+        payloadRecord.assistantMessage.trim()
+          ? payloadRecord.assistantMessage.trim()
+          : "Updated the tailored resume blocks.";
+
+      return {
+        comparison,
+        message: assistantMessage,
+      };
+    } catch (error) {
+      setTailoredResumeReviewState({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to update the tailored resume edits.",
+        record: previousRecord,
+        status: "error",
+      });
+      throw error;
+    } finally {
+      setPendingTailoredResumeReviewEditId(null);
+    }
+  }
+
+  async function deleteTailoredResumeReviewVersion(versionId: string) {
+    if (
+      authState.status !== "signedIn" ||
+      !activeTailoredResumeReviewRecord ||
+      pendingTailoredResumeReviewEditId
+    ) {
+      return false;
+    }
+
+    const previousRecord = activeTailoredResumeReviewRecord;
+    setPendingTailoredResumeReviewEditId(`version:${versionId}`);
+
+    try {
+      const result = await patchTailorResume({
+        action: "deleteTailoredResumeVersion",
+        tailoredResumeId: previousRecord.id,
+        versionId,
+      });
+
+      if (!result.ok) {
+        throw new Error(
+          readTailorResumePayloadError(
+            result.payload,
+            "Unable to delete the selected output.",
+          ),
+        );
+      }
+
+      const reviewRecord =
+        resolveTailoredResumeReviewRecordFromPayload(
+          result.payload,
+          previousRecord.id,
+        ) ?? null;
+
+      if (!reviewRecord) {
+        throw new Error("The tailored resume review could not be refreshed.");
+      }
+
+      setTailoredResumeReviewState({
+        record: reviewRecord,
+        status: "ready",
+      });
+      syncTailoredResumeSummariesFromPayload(result.payload);
+      return true;
+    } catch (error) {
+      setTailoredResumeReviewState({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to delete the selected output.",
+        record: previousRecord,
+        status: "error",
+      });
+      return false;
+    } finally {
+      setPendingTailoredResumeReviewEditId(null);
+    }
+  }
+
   async function patchTailorResume(
     body: Record<string, unknown>,
     options: {
@@ -14210,6 +14677,7 @@ function App() {
       action === "tailor" ||
       action === "advanceTailorResumeInterview" ||
       action === "completeTailorResumeInterview" ||
+      action === "refineTailoredResume" ||
       action === "startTailorResumeInterview";
     const response = await fetch(DEFAULT_TAILOR_RESUME_ENDPOINT, {
       body: JSON.stringify(body),
@@ -14326,6 +14794,7 @@ function App() {
 
       if (!isTailorRunDetailWideLayout) {
         setActiveTailorRunDetailView("preview");
+        return;
       }
     },
     [isTailorRunDetailWideLayout],
@@ -14350,6 +14819,11 @@ function App() {
               <pre>{activeTailoredResumeError}</pre>
             </div>
           ) : null}
+          {tailoredPreviewDownloadError ? (
+            <div className="tailored-preview-error-banner" role="alert">
+              <p>{tailoredPreviewDownloadError}</p>
+            </div>
+          ) : null}
           <div className="resume-preview-shell tailored-preview-shell tailor-run-fullscreen-preview">
             {tailoredResumePreviewState.status === "loading" ? (
               <p className="placeholder">Rendering tailored preview...</p>
@@ -14364,6 +14838,7 @@ function App() {
                 focusRequest={tailoredPreviewFocusRequest}
                 highlightQueries={previewHighlightQueries}
                 loadPdfJsModule={loadExtensionTailoredPreviewPdfJsModule}
+                magnifierMaxWidthRatio={null}
                 pdfUrl={tailoredResumePreviewState.objectUrl}
                 presentation="frameless"
                 scaleMode="fit"
@@ -14430,6 +14905,33 @@ function App() {
     );
   }
 
+  function renderTailoredPreviewDownloadAction() {
+    const isDownloadingActiveResume =
+      tailoredResumeMenuActionState === "downloading" &&
+      tailoredResumeMenuActionResumeId === activeTailoredResumeDownloadRecord?.id;
+
+    return (
+      <button
+        aria-label={
+          isDownloadingActiveResume
+            ? "Downloading tailored resume"
+            : "Download tailored resume"
+        }
+        className="tailored-preview-header-action"
+        disabled={!activeTailoredResumeDownloadRecord || isDownloadingActiveResume}
+        onClick={() => void handleDownloadActiveTailoredResume()}
+        title={
+          isDownloadingActiveResume
+            ? "Downloading tailored resume"
+            : "Download tailored resume"
+        }
+        type="button"
+      >
+        <DownloadIcon />
+      </button>
+    );
+  }
+
   function renderTailoredQuickReviewSurface() {
     if (
       tailoredResumeReviewState.status === "loading" &&
@@ -14446,9 +14948,13 @@ function App() {
       return (
         <div className="tailor-run-detail-page-body tailor-run-detail-page-body-review">
           <TailoredResumeQuickReview
+            actionPortalTarget={tailoredReviewActionPortalElement}
+            chatPortalTarget={tailoredReviewChatPortalElement}
             error={tailoredResumeReviewError}
             isUpdating={pendingTailoredResumeReviewEditId !== null}
+            onDeleteVersion={deleteTailoredResumeReviewVersion}
             onFocusEdit={focusTailoredPreviewEdit}
+            onRefineWithChat={refineTailoredResumeReviewWithChat}
             record={activeTailoredResumeReviewRecord}
             variant="fullscreen"
             onSaveUserEdit={saveTailoredResumeReviewUserEdit}
@@ -14703,6 +15209,42 @@ function App() {
     const selectUsagePeriod = (nextPeriod: AiUsagePeriod) => {
       setAiUsagePeriod(nextPeriod);
     };
+    const clearAiUsageFilterCloseTimer = () => {
+      if (aiUsageFilterCloseTimerRef.current === null) {
+        return;
+      }
+
+      window.clearTimeout(aiUsageFilterCloseTimerRef.current);
+      aiUsageFilterCloseTimerRef.current = null;
+    };
+    const openAiUsageFilters = () => {
+      clearAiUsageFilterCloseTimer();
+      setIsAiUsageFiltersOpen(true);
+    };
+    const scheduleAiUsageFiltersClose = () => {
+      clearAiUsageFilterCloseTimer();
+      aiUsageFilterCloseTimerRef.current = window.setTimeout(() => {
+        aiUsageFilterCloseTimerRef.current = null;
+
+        const shell = aiUsageFilterPopoverRef.current;
+        const hoverTarget = document.elementFromPoint(
+          aiUsageFilterPointerRef.current.x,
+          aiUsageFilterPointerRef.current.y,
+        );
+
+        if (shell && hoverTarget && shell.contains(hoverTarget)) {
+          return;
+        }
+
+        setIsAiUsageFiltersOpen(false);
+      }, 120);
+    };
+    const trackAiUsageFilterPointer = (event: ReactMouseEvent<HTMLDivElement>) => {
+      aiUsageFilterPointerRef.current = {
+        x: event.clientX,
+        y: event.clientY,
+      };
+    };
     const renderUsageResumeRow = (group: AiUsageResumeGroup) => {
       const displayName = group.displayName.trim() || "Tailored resume";
       const subtitle =
@@ -14786,6 +15328,24 @@ function App() {
           <div className="card-heading-row">
             <h2>Usage</h2>
             <div className="usage-heading-actions">
+              <label className="usage-period-select-label">
+                <span>Time period</span>
+                <select
+                  aria-label="Usage time period"
+                  className="usage-period-select"
+                  disabled={aiUsageReportState.status === "loading"}
+                  value={aiUsagePeriod}
+                  onChange={(event) =>
+                    selectUsagePeriod(event.currentTarget.value as AiUsagePeriod)
+                  }
+                >
+                  {aiUsagePeriods.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button
                 className="secondary-action compact-action usage-refresh-action"
                 disabled={aiUsageReportState.status === "loading"}
@@ -14794,83 +15354,76 @@ function App() {
               >
                 {aiUsageReportState.status === "loading" ? "Loading" : "Refresh"}
               </button>
-              <button
-                aria-expanded={isAiUsageFiltersOpen}
-                className="secondary-action compact-action usage-filter-toggle"
-                type="button"
-                onClick={() => setIsAiUsageFiltersOpen((isOpen) => !isOpen)}
+              <div
+                className="usage-filter-popover-shell"
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget)) {
+                    scheduleAiUsageFiltersClose();
+                  }
+                }}
+                onFocus={openAiUsageFilters}
+                onMouseEnter={openAiUsageFilters}
+                onMouseLeave={scheduleAiUsageFiltersClose}
+                onMouseMove={trackAiUsageFilterPointer}
+                ref={aiUsageFilterPopoverRef}
               >
-                <span aria-hidden="true">🔎</span>
-                Filters
-              </button>
+                <button
+                  aria-label="Filters"
+                  aria-expanded={isAiUsageFiltersOpen}
+                  className="compact-action usage-filter-toggle"
+                  type="button"
+                  onClick={openAiUsageFilters}
+                  title="Filters"
+                >
+                  <FilterIcon />
+                </button>
+                {isAiUsageFiltersOpen ? (
+                  <div className="usage-filter-panel" role="tooltip">
+                    <fieldset className="usage-filter-group">
+                      <legend>Status</legend>
+                      <div className="usage-filter-row" aria-label="Usage statuses">
+                        {(
+                          ["unarchived", "archived", "deleted"] as AiUsageSubjectStatus[]
+                        ).map((status) => (
+                          <label
+                            className={`usage-filter-pill usage-filter-pill-${status}`}
+                            key={status}
+                          >
+                            <input
+                              checked={aiUsageStatusFilters[status]}
+                              onChange={() => toggleUsageStatusFilter(status)}
+                              type="checkbox"
+                            />
+                            {statusLabels[status]}
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
+
+                    <fieldset className="usage-filter-group">
+                      <legend>Steps</legend>
+                      <div className="usage-filter-row" aria-label="Usage steps">
+                        {usageStepOptions.length === 0 ? (
+                          <span className="usage-filter-empty">No steps yet</span>
+                        ) : (
+                          usageStepOptions.map(([stepKey, label]) => (
+                            <label className="usage-filter-pill" key={stepKey}>
+                              <input
+                                checked={aiUsageStepFilters[stepKey] ?? true}
+                                onChange={() => toggleUsageStepFilter(stepKey)}
+                                type="checkbox"
+                              />
+                              {label}
+                            </label>
+                          ))
+                        )}
+                      </div>
+                    </fieldset>
+                  </div>
+                ) : null}
+              </div>
             </div>
           </div>
-
-          {isAiUsageFiltersOpen ? (
-            <div className="usage-filter-panel">
-              <fieldset className="usage-filter-group">
-                <legend>Time period</legend>
-                <div className="usage-filter-row" aria-label="Usage time period">
-                  {aiUsagePeriods.map((option) => (
-                    <button
-                      className={`usage-period-pill ${
-                        aiUsagePeriod === option.value
-                          ? "usage-period-pill-active"
-                          : ""
-                      }`}
-                      disabled={aiUsageReportState.status === "loading"}
-                      key={option.value}
-                      type="button"
-                      onClick={() => selectUsagePeriod(option.value)}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              </fieldset>
-
-              <fieldset className="usage-filter-group">
-                <legend>Status</legend>
-                <div className="usage-filter-row" aria-label="Usage statuses">
-                  {(["unarchived", "archived", "deleted"] as AiUsageSubjectStatus[]).map(
-                    (status) => (
-                      <label
-                        className={`usage-filter-pill usage-filter-pill-${status}`}
-                        key={status}
-                      >
-                        <input
-                          checked={aiUsageStatusFilters[status]}
-                          onChange={() => toggleUsageStatusFilter(status)}
-                          type="checkbox"
-                        />
-                        {statusLabels[status]}
-                      </label>
-                    ),
-                  )}
-                </div>
-              </fieldset>
-
-              <fieldset className="usage-filter-group">
-                <legend>Steps</legend>
-                <div className="usage-filter-row" aria-label="Usage steps">
-                  {usageStepOptions.length === 0 ? (
-                    <span className="usage-filter-empty">No steps yet</span>
-                  ) : (
-                    usageStepOptions.map(([stepKey, label]) => (
-                      <label className="usage-filter-pill" key={stepKey}>
-                        <input
-                          checked={aiUsageStepFilters[stepKey] ?? true}
-                          onChange={() => toggleUsageStepFilter(stepKey)}
-                          type="checkbox"
-                        />
-                        {label}
-                      </label>
-                    ))
-                  )}
-                </div>
-              </fieldset>
-            </div>
-          ) : null}
 
           {aiUsageReportState.status === "error" ? (
             <p className="preview-error">{aiUsageReportState.error}</p>
@@ -14919,7 +15472,7 @@ function App() {
                   ref={usageBarChartRef}
                   role="list"
                 >
-                  {usageDailySpendBuckets.map((bucket, bucketIndex) => {
+                  {usageDailySpendBuckets.map((bucket) => {
                     const hasSpend = BigInt(bucket.costUsdMicros) > BigInt(0);
                     const barHeight =
                       hasSpend
@@ -14940,16 +15493,12 @@ function App() {
                           : `${formatAiUsageInteger(bucket.resumeCount)} res`
                         : "";
                     const axisDateLabel =
-                      (aiUsagePeriod === "6mo" || aiUsagePeriod === "1y") &&
-                      bucketIndex % 2 === 1 &&
-                      bucketIndex !== usageDailySpendBuckets.length - 1
-                        ? ""
-                        : aiUsagePeriod === "6mo" || aiUsagePeriod === "1y"
-                          ? formatAiUsageLongRangeAxisLabel(bucket.bucketKey)
-                          : isDenseUsageBarChart && bucket.axisDateLabel.includes("/")
-                            ? bucket.axisDateLabel.split("/").at(-1) ??
-                              bucket.axisDateLabel
-                            : bucket.axisDateLabel;
+                      aiUsagePeriod === "6mo" || aiUsagePeriod === "1y"
+                        ? formatAiUsageLongRangeAxisLabel(bucket.bucketKey)
+                        : isDenseUsageBarChart && bucket.axisDateLabel.includes("/")
+                          ? bucket.axisDateLabel.split("/").at(-1) ??
+                            bucket.axisDateLabel
+                          : bucket.axisDateLabel;
 
                     return (
                       <button
@@ -16308,9 +16857,6 @@ function App() {
               {activeTailorRunDetailIdentity}
             </p>
           ) : null}
-          <div className="panel-detail-meta-actions">
-            {renderTailoredPreviewHighlightToggle()}
-          </div>
           {!isTailorRunDetailWideLayout || EXTENSION_DEBUG_UI_ENABLED ? (
             <div
               className="panel-detail-toggle-group"
@@ -16384,6 +16930,17 @@ function App() {
               ) : null}
             </div>
           ) : null}
+          <div className="panel-detail-meta-actions">
+            {activeTailoredResumeReviewRecord &&
+            activeTailorRunDetailView !== "debug" ? (
+              <div
+                className="panel-detail-review-actions"
+                ref={setTailoredReviewActionPortalElement}
+              />
+            ) : null}
+            {renderTailoredPreviewHighlightToggle()}
+            {renderTailoredPreviewDownloadAction()}
+          </div>
         </div>
 
         <section
@@ -16393,46 +16950,79 @@ function App() {
         >
           {activeTailorRunDetailView === "debug" ? (
             renderTailorRunDebugSurface()
-          ) : isTailorRunDetailWideLayout ? (
+          ) : (
             <ResizablePanelGroup
-              className="tailor-run-detail-resizable"
-              orientation="horizontal"
+              className="tailor-run-detail-chat-resizable"
+              orientation="vertical"
             >
               <ResizablePanel
-                collapsedSize={0}
-                collapsible
-                className="tailor-run-detail-split-pane tailor-run-detail-split-pane-review"
-                defaultSize={48}
-                id="tailored-resume-review-edits"
-                minSize={24}
+                className="tailor-run-detail-top-pane"
+                defaultSize="100%"
+                id="tailored-resume-detail-main"
+                minSize="34%"
               >
-                <section aria-label="Block edits">
-                  {renderTailoredQuickReviewSurface()}
-                </section>
+                {isTailorRunDetailWideLayout ? (
+                  <ResizablePanelGroup
+                    className="tailor-run-detail-resizable"
+                    orientation="horizontal"
+                  >
+                    <ResizablePanel
+                      collapsedSize={0}
+                      collapsible
+                      className="tailor-run-detail-split-pane tailor-run-detail-split-pane-review"
+                      defaultSize={48}
+                      id="tailored-resume-review-edits"
+                      minSize={24}
+                    >
+                      <section aria-label="Block edits">
+                        {renderTailoredQuickReviewSurface()}
+                      </section>
+                    </ResizablePanel>
+
+                    <ResizableHandle
+                      className="tailor-run-detail-resize-handle"
+                      withHandle
+                    />
+
+                    <ResizablePanel
+                      collapsedSize={0}
+                      collapsible
+                      className="tailor-run-detail-split-pane tailor-run-detail-split-pane-preview"
+                      defaultSize={52}
+                      id="tailored-resume-preview"
+                      minSize={24}
+                    >
+                      <section aria-label="Tailored resume preview">
+                        {renderTailoredPreviewSurface()}
+                      </section>
+                    </ResizablePanel>
+                  </ResizablePanelGroup>
+                ) : activeTailorRunDetailView === "quickReview" ? (
+                  renderTailoredQuickReviewSurface()
+                ) : (
+                  renderTailoredPreviewSurface()
+                )}
               </ResizablePanel>
 
               <ResizableHandle
-                className="tailor-run-detail-resize-handle"
+                className="quick-review-chat-resize-handle"
                 withHandle
               />
 
               <ResizablePanel
                 collapsedSize={0}
                 collapsible
-                className="tailor-run-detail-split-pane tailor-run-detail-split-pane-preview"
-                defaultSize={52}
-                id="tailored-resume-preview"
-                minSize={24}
+                className="quick-review-chat-pane tailor-run-detail-chat-pane"
+                defaultSize="0%"
+                id="tailored-resume-review-chat"
+                minSize="18%"
               >
-                <section aria-label="Tailored resume preview">
-                  {renderTailoredPreviewSurface()}
-                </section>
+                <div
+                  className="tailor-run-detail-chat-portal"
+                  ref={setTailoredReviewChatPortalElement}
+                />
               </ResizablePanel>
             </ResizablePanelGroup>
-          ) : activeTailorRunDetailView === "quickReview" ? (
-            renderTailoredQuickReviewSurface()
-          ) : (
-            renderTailoredPreviewSurface()
           )}
         </section>
       </main>
