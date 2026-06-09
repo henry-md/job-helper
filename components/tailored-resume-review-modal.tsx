@@ -8,6 +8,7 @@ import {
   Highlighter,
   Lightbulb,
   Pencil,
+  Undo2,
   X,
 } from "lucide-react";
 import { createPortal } from "react-dom";
@@ -181,6 +182,10 @@ type TailoredResumeMutationResponse = {
     changed: boolean;
     editId: string;
     tailoredResumeId: string;
+  };
+  tailoredResumeDiff?: {
+    endVersionId: string | null;
+    startVersionId: string | null;
   };
   tailoredResumeEditId?: string;
   tailoredResumeId?: string;
@@ -626,6 +631,8 @@ export default function TailoredResumeReviewModal({
   const [isDiffHighlightingEnabled, setIsDiffHighlightingEnabled] = useState(true);
   const [isAiRefinementOpen, setIsAiRefinementOpen] = useState(false);
   const [isRefiningTailoredResume, setIsRefiningTailoredResume] = useState(false);
+  const [isUndoingTailoredResumeRefinement, setIsUndoingTailoredResumeRefinement] =
+    useState(false);
   const [isSavingDisplayName, setIsSavingDisplayName] = useState(false);
   const [isSourceResumeEditDialogOpen, setIsSourceResumeEditDialogOpen] =
     useState(false);
@@ -729,6 +736,7 @@ export default function TailoredResumeReviewModal({
   const generationFailureLabel = record
     ? getTailoredResumeGenerationFailureLabel(record)
     : null;
+  const canUndoTailoredResumeRefinement = (record?.versions?.length ?? 0) > 1;
   const previewSnapshotDataUrls = useMemo(
     () =>
       Object.entries(previewSnapshotDataUrlByPage)
@@ -1366,7 +1374,7 @@ export default function TailoredResumeReviewModal({
   }
 
   async function submitAiRefinementPrompt() {
-    if (!record || isRefiningTailoredResume) {
+    if (!record || isRefiningTailoredResume || isUndoingTailoredResumeRefinement) {
       return;
     }
 
@@ -1440,6 +1448,63 @@ export default function TailoredResumeReviewModal({
       toast.error(errorMessage);
     } finally {
       setIsRefiningTailoredResume(false);
+    }
+  }
+
+  async function undoLatestAiRefinement() {
+    if (!record || isRefiningTailoredResume || isUndoingTailoredResumeRefinement) {
+      return;
+    }
+
+    setIsUndoingTailoredResumeRefinement(true);
+
+    try {
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({
+          action: "undoTailoredResumeRefinement",
+          tailoredResumeId: record.id,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
+      const payload = (await response.json()) as TailoredResumeMutationResponse;
+
+      if (!response.ok || !payload.profile) {
+        throw new Error(payload.error ?? "Unable to undo the latest chat edit.");
+      }
+
+      onTailoredResumesChange(payload.profile.tailoredResumes);
+      setIsEditingLatexSegment(false);
+      setSuppressedAcceptedBlockChoiceEditId(null);
+      setInteractivePreviewFocusRequest((currentRequest) => currentRequest + 1);
+      setAiRefinementMessages((currentMessages) => [
+        ...currentMessages,
+        createTailoredResumeAiChatMessage({
+          role: "assistant",
+          status: "ready",
+          text: payload.assistantMessage ?? "Undid the latest chat edit.",
+        }),
+      ]);
+      toast.success("Undid the latest chat edit.");
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Unable to undo the latest chat edit.";
+
+      setAiRefinementMessages((currentMessages) => [
+        ...currentMessages,
+        createTailoredResumeAiChatMessage({
+          role: "assistant",
+          status: "error",
+          text: errorMessage,
+        }),
+      ]);
+      toast.error(errorMessage);
+    } finally {
+      setIsUndoingTailoredResumeRefinement(false);
     }
   }
 
@@ -2178,7 +2243,7 @@ export default function TailoredResumeReviewModal({
         </div>
       </div>
 
-      {reviewEdits.length > 0 || diffViewMode === "full" ? (
+      {(reviewEdits.length > 0 || diffViewMode === "full") && !isAiRefinementOpen ? (
         <div className="shrink-0 bg-zinc-950/96 px-4 py-1.5 sm:px-5">
           <div className="flex justify-center">
             <button
@@ -2213,14 +2278,36 @@ export default function TailoredResumeReviewModal({
               the original LaTeX, and the latest model edits.
             </p>
           </div>
-          <button
-            className="shrink-0 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={isRefiningTailoredResume}
-            onClick={closeAiRefinementPane}
-            type="button"
-          >
-            Close
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={
+                isRefiningTailoredResume ||
+                isUndoingTailoredResumeRefinement ||
+                !canUndoTailoredResumeRefinement
+              }
+              onClick={() => void undoLatestAiRefinement()}
+              title={
+                canUndoTailoredResumeRefinement
+                  ? "Undo the latest chat edit"
+                  : "No chat edit is available to undo"
+              }
+              type="button"
+            >
+              <Undo2 aria-hidden="true" className="h-3.5 w-3.5" />
+              <span>
+                {isUndoingTailoredResumeRefinement ? "Undoing..." : "Undo"}
+              </span>
+            </button>
+            <button
+              className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isRefiningTailoredResume}
+              onClick={closeAiRefinementPane}
+              type="button"
+            >
+              Collapse
+            </button>
+          </div>
         </div>
       </div>
 
@@ -2307,7 +2394,9 @@ export default function TailoredResumeReviewModal({
             <button
               className="rounded-full border border-emerald-300/30 bg-emerald-400/10 px-3.5 py-1.5 text-[10px] uppercase tracking-[0.18em] text-emerald-100 transition hover:border-emerald-200/45 hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={
-                isRefiningTailoredResume || draftAiRefinementPrompt.trim().length === 0
+                isRefiningTailoredResume ||
+                isUndoingTailoredResumeRefinement ||
+                draftAiRefinementPrompt.trim().length === 0
               }
               type="submit"
             >
@@ -2575,7 +2664,32 @@ export default function TailoredResumeReviewModal({
                 defaultSize={defaultReviewDetailsPaneSize}
                 minSize={isWideLayout ? 40 : 55}
               >
-                {isAiRefinementOpen ? aiRefinementPane : reviewDetailsPane}
+                {isAiRefinementOpen ? (
+                  <ResizablePanelGroup
+                    className="min-h-0 bg-zinc-950/96"
+                    orientation="vertical"
+                  >
+                    <ResizablePanel
+                      className="min-h-0 min-w-0 overflow-hidden"
+                      defaultSize={64}
+                      minSize={34}
+                    >
+                      {reviewDetailsPane}
+                    </ResizablePanel>
+
+                    <ResizableHandle className="group relative bg-transparent after:hidden before:absolute before:bg-white/8 before:content-[''] before:transition-colors focus-visible:ring-0 hover:before:bg-white/15 aria-[orientation=horizontal]:h-4 aria-[orientation=horizontal]:before:inset-x-0 aria-[orientation=horizontal]:before:top-1/2 aria-[orientation=horizontal]:before:h-px aria-[orientation=horizontal]:before:-translate-y-1/2" />
+
+                    <ResizablePanel
+                      className="min-h-0 min-w-0 overflow-hidden"
+                      defaultSize={36}
+                      minSize={18}
+                    >
+                      {aiRefinementPane}
+                    </ResizablePanel>
+                  </ResizablePanelGroup>
+                ) : (
+                  reviewDetailsPane
+                )}
               </ResizablePanel>
 
               <ResizableHandle className="group relative bg-transparent after:hidden before:absolute before:bg-white/8 before:content-[''] before:transition-colors focus-visible:ring-0 hover:before:bg-white/15 aria-[orientation=vertical]:w-4 aria-[orientation=vertical]:before:inset-y-0 aria-[orientation=vertical]:before:left-1/2 aria-[orientation=vertical]:before:w-px aria-[orientation=vertical]:before:-translate-x-1/2 aria-[orientation=horizontal]:h-4 aria-[orientation=horizontal]:before:inset-x-0 aria-[orientation=horizontal]:before:top-1/2 aria-[orientation=horizontal]:before:h-px aria-[orientation=horizontal]:before:-translate-y-1/2" />
