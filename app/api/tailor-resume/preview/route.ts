@@ -6,6 +6,7 @@ import { readOrCompileTailoredResumePdf } from "@/lib/tailored-resume-preview-pd
 import {
   readTailorResumeConfigChatArtifactPdf,
   readTailorResumePreviewPdf,
+  readTailoredResumeVersionPdf,
 } from "@/lib/tailor-resume-storage";
 
 export async function GET(request: Request) {
@@ -23,6 +24,8 @@ export async function GET(request: Request) {
     const configChatArtifactId =
       searchParams.get("configChatArtifactId")?.trim() ?? "";
     const tailoredResumeId = searchParams.get("tailoredResumeId");
+    const tailoredResumeVersionId =
+      searchParams.get("tailoredResumeVersionId")?.trim() ?? "";
     let previewPdf: Buffer;
 
     if (configChatArtifactId) {
@@ -32,10 +35,16 @@ export async function GET(request: Request) {
       );
     } else {
       if (tailoredResumeId) {
-        const recoveredPreviewPdf = await readOrCompileTailoredResumePdf({
-          tailoredResumeId,
-          userId: session.user.id,
-        });
+        const recoveredPreviewPdf = tailoredResumeVersionId
+          ? await readTailoredResumeVersionPdf(
+              session.user.id,
+              tailoredResumeId,
+              tailoredResumeVersionId,
+            )
+          : await readOrCompileTailoredResumePdf({
+              tailoredResumeId,
+              userId: session.user.id,
+            });
 
         if (!recoveredPreviewPdf) {
           return NextResponse.json(

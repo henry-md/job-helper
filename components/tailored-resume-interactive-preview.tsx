@@ -11,6 +11,7 @@ import type {
   TextItem,
 } from "pdfjs-dist/types/src/display/api";
 import type {
+  TailoredResumeInteractivePreviewSegmentQuery,
   TailoredResumeInteractivePreviewQuery,
   TailoredResumePreviewFocusQuery,
   TailoredResumePreviewHighlightTone,
@@ -19,6 +20,7 @@ import {
   dedupeTailoredResumePreviewHighlightRanges,
   resolveTailoredResumePreviewFocusRanges,
 } from "@/lib/tailor-resume-preview-focus";
+import { resolveLastMeaningfulPdfPageNumber } from "@/lib/pdf-preview-page-filter";
 
 type PdfJsModule = typeof import("pdfjs-dist/webpack.mjs");
 type PdfPageViewport = ReturnType<PDFPageProxy["getViewport"]>;
@@ -34,11 +36,17 @@ export type TailoredResumeInteractivePreviewProps = {
   focusRequest?: number;
   highlightQueries: TailoredResumeInteractivePreviewQuery[];
   loadPdfJsModule?: () => Promise<PdfJsModule>;
+  magnifierMaxWidthRatio?: number | null;
+  onFocusViewportRectChange?: (
+    rect: { height: number; top: number } | null,
+  ) => void;
   onPageSnapshot?: (input: { dataUrl: string | null; pageNumber: number }) => void;
   onRenderFailure?: () => void;
+  onSegmentClick?: (segmentId: string) => void;
   pdfUrl: string | null;
   presentation?: "frameless" | "web";
   scaleMode?: "fit" | "width";
+  segmentQueries?: TailoredResumeInteractivePreviewSegmentQuery[];
 };
 
 type HighlightRect = {
@@ -70,23 +78,29 @@ type PageHighlightMatch = {
   rects: HighlightRect[];
 };
 
+type PageSegmentMatch = {
+  key: string;
+  rects: HighlightRect[];
+  segmentId: string;
+};
+
 type PageHighlightSource = {
   pageMatchIndex: PageMatchIndex;
 };
 
 type PreviewMagnifierState = {
+  height: number;
   left: number;
   top: number;
   width: number;
   x: number;
   y: number;
+  zoom: number;
 };
 
 let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
 const interactivePreviewLoadRetryDelays = [150, 400];
 const interactivePreviewGuidedFocusDurationMs = 320;
-const interactivePreviewMagnifierHeight = 136;
-const interactivePreviewMagnifierViewportInset = 6;
 const interactivePreviewMagnifierZoom = 1.35;
 const maxPreviewSnapshotWidth = 1200;
 
@@ -618,10 +632,14 @@ function summarizeHighlightRectGroup(rects: HighlightRect[]) {
 
   const top = Math.min(...rects.map((rect) => rect.top));
   const bottom = Math.max(...rects.map((rect) => rect.top + rect.height));
+  const left = Math.min(...rects.map((rect) => rect.left));
+  const right = Math.max(...rects.map((rect) => rect.left + rect.width));
 
   return {
     height: bottom - top,
+    left,
     top,
+    width: right - left,
   };
 }
 
@@ -671,46 +689,191 @@ function resolveInteractivePreviewCenteredScrollTop(input: {
 }
 
 function resolvePreviewMagnifierState(input: {
-  horizontalBleed: number;
+  maxWidthRatio: number | null;
   pageHeight: number;
-  pageViewportLeft: number;
   pageViewportTop: number;
   pageWidth: number;
   pointerX: number;
   pointerY: number;
+  targetGroup: { height: number; left: number; top: number; width: number } | null;
 }) {
-  const width = input.pageWidth + input.horizontalBleed * 2;
+  const viewportWidth =
+    typeof window === "undefined" ? input.pageWidth : window.innerWidth;
+  const width =
+    input.maxWidthRatio === null
+      ? viewportWidth
+      : Math.min(
+          viewportWidth,
+          Math.max(320, viewportWidth * input.maxWidthRatio),
+        );
+  const targetGroup = input.targetGroup;
+  const targetCenterY = targetGroup
+    ? targetGroup.top + targetGroup.height / 2
+    : input.pointerY;
+  const horizontalInset = 12;
+  const safeTargetWidth =
+    targetGroup && Number.isFinite(targetGroup.width) && targetGroup.width > 0
+      ? targetGroup.width
+      : input.pageWidth;
+  const safeTargetHeight =
+    targetGroup && Number.isFinite(targetGroup.height) && targetGroup.height > 0
+      ? targetGroup.height
+      : 12;
+  const zoom = Math.max(
+    interactivePreviewMagnifierZoom,
+    Math.min(4.8, (width - horizontalInset * 2) / Math.max(1, safeTargetWidth)),
+  );
   const height = Math.min(
-    interactivePreviewMagnifierHeight,
     Math.max(96, input.pageHeight - 24),
+    Math.max(172, Math.min(300, safeTargetHeight * zoom * 6.5)),
   );
   const top = Math.max(
     12,
-    Math.min(input.pointerY - height / 2, input.pageHeight - height - 12),
+    Math.min(targetCenterY - height / 2, input.pageHeight - height - 12),
   );
 
   return {
-    left: input.pageViewportLeft - input.horizontalBleed,
+    height,
+    left: Math.max(0, (viewportWidth - width) / 2),
     top: input.pageViewportTop + top,
     width,
-    x: Math.max(0, Math.min(input.pointerX, input.pageWidth)),
-    y: Math.max(0, Math.min(input.pointerY, input.pageHeight)),
+    x: Math.max(
+      0,
+      Math.min(
+        targetGroup ? targetGroup.left + targetGroup.width / 2 : input.pointerX,
+        input.pageWidth,
+      ),
+    ),
+    y: Math.max(0, Math.min(targetCenterY, input.pageHeight)),
+    zoom,
   } satisfies PreviewMagnifierState;
 }
 
-function resolvePreviewMagnifierHorizontalBleed(input: {
-  pageRect: DOMRect;
-  scrollContainer: HTMLDivElement | null;
+function resolvePreviewFocusMagnifierState(input: {
+  focusGroup: { height: number; left: number; top: number; width: number };
+  maxWidthRatio: number | null;
+  pageHeight: number;
+  pageViewportTop: number;
+  pageWidth: number;
 }) {
-  const viewportRight =
-    typeof window === "undefined"
-      ? input.scrollContainer?.getBoundingClientRect().right ?? input.pageRect.right
-      : window.innerWidth;
-
-  return Math.max(
-    0,
-    viewportRight - input.pageRect.right - interactivePreviewMagnifierViewportInset,
+  const viewportWidth =
+    typeof window === "undefined" ? input.pageWidth : window.innerWidth;
+  const width =
+    input.maxWidthRatio === null
+      ? viewportWidth
+      : Math.min(
+          viewportWidth,
+          Math.max(320, viewportWidth * input.maxWidthRatio),
+        );
+  const horizontalInset = 12;
+  const safeFocusWidth =
+    Number.isFinite(input.focusGroup.width) && input.focusGroup.width > 0
+      ? input.focusGroup.width
+      : input.pageWidth;
+  const safeFocusHeight =
+    Number.isFinite(input.focusGroup.height) && input.focusGroup.height > 0
+      ? input.focusGroup.height
+      : 12;
+  const safePageHeight =
+    Number.isFinite(input.pageHeight) && input.pageHeight > 0
+      ? input.pageHeight
+      : 792;
+  const zoom = Math.max(
+    interactivePreviewMagnifierZoom,
+    Math.min(4.8, (width - horizontalInset * 2) / safeFocusWidth),
   );
+  const contextHeight = Math.max(172, Math.min(300, safeFocusHeight * zoom * 6.5));
+  const height = Math.min(
+    Math.max(96, safePageHeight - 24),
+    contextHeight,
+  );
+  const focusCenterY = input.focusGroup.top + input.focusGroup.height / 2;
+  const top = Math.max(
+    12,
+    Math.min(focusCenterY - height / 2, input.pageHeight - height - 12),
+  );
+
+  return {
+    height,
+    left: Math.max(0, (viewportWidth - width) / 2),
+    top: input.pageViewportTop + top,
+    width,
+    x: Math.max(
+      0,
+      Math.min(input.focusGroup.left + input.focusGroup.width / 2, input.pageWidth),
+    ),
+    y: Math.max(0, Math.min(focusCenterY, input.pageHeight)),
+    zoom,
+  } satisfies PreviewMagnifierState;
+}
+
+function summarizePageTextLineNearY(input: {
+  pageMatchIndex: PageMatchIndex | null;
+  pointerY: number;
+}) {
+  if (!input.pageMatchIndex) {
+    return null;
+  }
+
+  const allRects = input.pageMatchIndex.positions.flatMap((position) =>
+    position.rect ? [position.rect] : [],
+  );
+  const pageTextGroup = summarizeHighlightRectGroup(allRects);
+
+  if (!pageTextGroup) {
+    return null;
+  }
+
+  const lineTolerance = 4;
+  const nearestPosition = input.pageMatchIndex.positions.reduce<{
+    distance: number;
+    rect: HighlightRect;
+  } | null>((nearest, position) => {
+    if (!position.rect) {
+      return nearest;
+    }
+
+    const centerY = position.rect.top + position.rect.height / 2;
+    const distance = Math.abs(centerY - input.pointerY);
+
+    if (!nearest || distance < nearest.distance) {
+      return { distance, rect: position.rect };
+    }
+
+    return nearest;
+  }, null);
+
+  if (!nearestPosition) {
+    return null;
+  }
+
+  const nearestCenterY =
+    nearestPosition.rect.top + nearestPosition.rect.height / 2;
+  const lineRects = input.pageMatchIndex.positions.flatMap((position) => {
+    if (!position.rect) {
+      return [];
+    }
+
+    const centerY = position.rect.top + position.rect.height / 2;
+
+    return Math.abs(centerY - nearestCenterY) <=
+      Math.max(lineTolerance, position.rect.height * 0.65)
+      ? [position.rect]
+      : [];
+  });
+
+  const lineGroup = summarizeHighlightRectGroup(lineRects);
+
+  if (!lineGroup) {
+    return pageTextGroup;
+  }
+
+  return {
+    height: lineGroup.height,
+    left: pageTextGroup.left,
+    top: lineGroup.top,
+    width: pageTextGroup.width,
+  };
 }
 
 function buildFocusRects(input: {
@@ -776,6 +939,39 @@ function buildPageHighlightMatches(input: {
   );
 }
 
+function buildPageSegmentMatches(input: {
+  pageMatchIndex: PageMatchIndex;
+  queries: TailoredResumeInteractivePreviewSegmentQuery[];
+}) {
+  return input.queries.flatMap((entry) => {
+    const resolvedRanges = resolveTailoredResumePreviewFocusRanges({
+      pageText: input.pageMatchIndex.normalizedText,
+      query: entry.query,
+    });
+    const rects = resolvedRanges.flatMap((range) => {
+      const rangeRects = buildHighlightRectsForNormalizedSlice({
+        end: range.end,
+        pageMatchIndex: input.pageMatchIndex,
+        start: range.start,
+      });
+
+      return rangeRects ?? [];
+    });
+
+    if (rects.length === 0) {
+      return [];
+    }
+
+    return [
+      {
+        key: entry.key,
+        rects,
+        segmentId: entry.segmentId,
+      } satisfies PageSegmentMatch,
+    ];
+  });
+}
+
 function buildFocusRectsFromPageHighlightMatches(input: {
   focusMatchKey: string | null;
   pageHighlightMatches: PageHighlightMatch[];
@@ -797,11 +993,15 @@ function InteractivePreviewPage({
   focusRequest,
   highlightQueries,
   loadPdfJsModuleForPreview,
+  magnifierMaxWidthRatio,
+  onFocusViewportRectChange,
   onPageSnapshot,
   onRenderFailure,
+  onSegmentClick,
   page,
   scale,
   scrollContainerRef,
+  segmentQueries,
 }: {
   focusActive: boolean;
   focusKey: string | null;
@@ -809,17 +1009,25 @@ function InteractivePreviewPage({
   focusQuery: TailoredResumePreviewFocusQuery | null;
   focusRequest: number;
   highlightQueries: TailoredResumeInteractivePreviewQuery[];
+  onFocusViewportRectChange?: (
+    rect: { height: number; top: number } | null,
+  ) => void;
   onPageSnapshot?: (input: { dataUrl: string | null; pageNumber: number }) => void;
   onRenderFailure?: () => void;
+  onSegmentClick?: (segmentId: string) => void;
   page: LoadedPdfPage;
   scale: number;
   loadPdfJsModuleForPreview: () => Promise<PdfJsModule>;
+  magnifierMaxWidthRatio: number | null;
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
+  segmentQueries: TailoredResumeInteractivePreviewSegmentQuery[];
 }) {
   const [focusHighlightRects, setFocusHighlightRects] = useState<HighlightRect[]>([]);
   const [pageHighlightMatches, setPageHighlightMatches] = useState<PageHighlightMatch[]>(
     [],
   );
+  const [hoveredSegmentKey, setHoveredSegmentKey] = useState<string | null>(null);
+  const [pageSegmentMatches, setPageSegmentMatches] = useState<PageSegmentMatch[]>([]);
   const [guidedFocusToken, setGuidedFocusToken] = useState<string | null>(null);
   const [highlightSource, setHighlightSource] = useState<PageHighlightSource | null>(
     null,
@@ -861,6 +1069,7 @@ function InteractivePreviewPage({
       setFocusHighlightRects([]);
       setHighlightSource(null);
       setPageHighlightMatches([]);
+      setPageSegmentMatches([]);
       setMagnifierCanvasDataUrl(null);
       setMagnifierState(null);
       setRenderErrorMessage(null);
@@ -939,6 +1148,7 @@ function InteractivePreviewPage({
         setFocusHighlightRects([]);
         setHighlightSource(null);
         setPageHighlightMatches([]);
+        setPageSegmentMatches([]);
         setMagnifierCanvasDataUrl(null);
         setMagnifierState(null);
         setRenderErrorMessage(
@@ -961,6 +1171,7 @@ function InteractivePreviewPage({
     if (!pageRef.current || !highlightSource) {
       setFocusHighlightRects([]);
       setPageHighlightMatches([]);
+      setPageSegmentMatches([]);
       return;
     }
 
@@ -976,6 +1187,14 @@ function InteractivePreviewPage({
         });
 
       setPageHighlightMatches(nextPageHighlightMatches);
+      setPageSegmentMatches(
+        onSegmentClick
+          ? buildPageSegmentMatches({
+              pageMatchIndex: highlightSource.pageMatchIndex,
+              queries: segmentQueries,
+            })
+          : [],
+      );
       setFocusHighlightRects(
         nextFocusHighlightRects.length > 0
           ? nextFocusHighlightRects
@@ -991,8 +1210,16 @@ function InteractivePreviewPage({
       );
       setFocusHighlightRects([]);
       setPageHighlightMatches([]);
+      setPageSegmentMatches([]);
     }
-  }, [focusMatchKey, focusQuery, highlightQueries, highlightSource]);
+  }, [
+    focusMatchKey,
+    focusQuery,
+    highlightQueries,
+    highlightSource,
+    onSegmentClick,
+    segmentQueries,
+  ]);
 
   useEffect(() => {
     const shouldIncludeFocusHighlight =
@@ -1110,6 +1337,60 @@ function InteractivePreviewPage({
     };
   }, [focusActive, focusHighlightRects, focusKey, focusRequest, scrollContainerRef]);
 
+  useEffect(() => {
+    if (
+      !focusActive ||
+      !focusKey ||
+      focusHighlightRects.length === 0 ||
+      renderState !== "ready" ||
+      !magnifierCanvasDataUrl
+    ) {
+      return;
+    }
+
+    const focusGroup = summarizeHighlightRectGroup(focusHighlightRects);
+    const pageElement = pageRef.current;
+
+    if (!focusGroup || !pageElement) {
+      return;
+    }
+
+    const pageRect = pageElement.getBoundingClientRect();
+    onFocusViewportRectChange?.({
+      height: focusGroup.height,
+      top: pageRect.top + focusGroup.top,
+    });
+    setMagnifierState(
+      resolvePreviewFocusMagnifierState({
+        focusGroup,
+        maxWidthRatio: magnifierMaxWidthRatio,
+        pageHeight,
+        pageViewportTop: pageRect.top,
+        pageWidth,
+      }),
+    );
+
+    const clearMagnifierTimer = window.setTimeout(() => {
+      setMagnifierState(null);
+    }, 950);
+
+    return () => {
+      window.clearTimeout(clearMagnifierTimer);
+      onFocusViewportRectChange?.(null);
+    };
+  }, [
+    focusActive,
+    focusHighlightRects,
+    focusKey,
+    focusRequest,
+    magnifierCanvasDataUrl,
+    magnifierMaxWidthRatio,
+    onFocusViewportRectChange,
+    pageHeight,
+    pageWidth,
+    renderState,
+  ]);
+
   return (
     <div
       className="resume-interactive-page"
@@ -1122,20 +1403,21 @@ function InteractivePreviewPage({
         }
 
         const pageRect = event.currentTarget.getBoundingClientRect();
-        const horizontalBleed = resolvePreviewMagnifierHorizontalBleed({
-          pageRect,
-          scrollContainer: scrollContainerRef.current,
-        });
+        const pointerX = event.clientX - pageRect.left;
+        const pointerY = event.clientY - pageRect.top;
 
         setMagnifierState(
           resolvePreviewMagnifierState({
-            horizontalBleed,
+            maxWidthRatio: magnifierMaxWidthRatio,
             pageHeight,
-            pageViewportLeft: pageRect.left,
             pageViewportTop: pageRect.top,
             pageWidth,
-            pointerX: event.clientX - pageRect.left,
-            pointerY: event.clientY - pageRect.top,
+            pointerX,
+            pointerY,
+            targetGroup: summarizePageTextLineNearY({
+              pageMatchIndex: highlightSource?.pageMatchIndex ?? null,
+              pointerY,
+            }),
           }),
         );
       }}
@@ -1169,6 +1451,38 @@ function InteractivePreviewPage({
           )}
         </div>
       ) : null}
+      {pageSegmentMatches.length > 0 ? (
+        <div className="resume-interactive-layer resume-interactive-layer--segments">
+          {pageSegmentMatches.flatMap((match) =>
+            match.rects.map((rect, index) => (
+              <button
+                aria-label={`Edit resume segment ${match.segmentId}`}
+                className={`resume-interactive-segment-target ${
+                  hoveredSegmentKey === match.key
+                    ? "resume-interactive-segment-target--hovered"
+                    : ""
+                }`}
+                key={`segment-${match.key}-${page.pageNumber}-${index}`}
+                onClick={() => onSegmentClick?.(match.segmentId)}
+                onMouseEnter={() => setHoveredSegmentKey(match.key)}
+                onMouseLeave={() => {
+                  setHoveredSegmentKey((currentKey) =>
+                    currentKey === match.key ? null : currentKey,
+                  );
+                }}
+                style={{
+                  height: `${rect.height}px`,
+                  left: `${rect.left}px`,
+                  top: `${rect.top}px`,
+                  width: `${rect.width}px`,
+                }}
+                title="Edit this resume block"
+                type="button"
+              />
+            )),
+          )}
+        </div>
+      ) : null}
       {focusActive &&
       focusHighlightRects.length > 0 &&
       guidedFocusToken === `${focusKey}:${focusRequest}` ? (
@@ -1194,17 +1508,14 @@ function InteractivePreviewPage({
           className="resume-interactive-magnifier"
           style={{
             backgroundImage: `url(${magnifierCanvasDataUrl})`,
-            backgroundPosition: `${magnifierState.width / 2 - magnifierState.x * interactivePreviewMagnifierZoom}px ${
-              interactivePreviewMagnifierHeight / 2 -
-              magnifierState.y * interactivePreviewMagnifierZoom
+            backgroundPosition: `${magnifierState.width / 2 - magnifierState.x * magnifierState.zoom}px ${
+              magnifierState.height / 2 -
+              magnifierState.y * magnifierState.zoom
             }px`,
-            backgroundSize: `${pageWidth * interactivePreviewMagnifierZoom}px ${
-              pageHeight * interactivePreviewMagnifierZoom
+            backgroundSize: `${pageWidth * magnifierState.zoom}px ${
+              pageHeight * magnifierState.zoom
             }px`,
-            height: `${Math.min(
-              interactivePreviewMagnifierHeight,
-              Math.max(96, pageHeight - 24),
-            )}px`,
+            height: `${magnifierState.height}px`,
             left: `${magnifierState.left}px`,
             top: `${magnifierState.top}px`,
             width: `${magnifierState.width}px`,
@@ -1214,10 +1525,10 @@ function InteractivePreviewPage({
             className="resume-interactive-magnifier-highlight-layer"
             style={{
               height: `${pageHeight}px`,
-              transform: `translate(${magnifierState.width / 2 - magnifierState.x * interactivePreviewMagnifierZoom}px, ${
-                interactivePreviewMagnifierHeight / 2 -
-                magnifierState.y * interactivePreviewMagnifierZoom
-              }px) scale(${interactivePreviewMagnifierZoom})`,
+              transform: `translate(${magnifierState.width / 2 - magnifierState.x * magnifierState.zoom}px, ${
+                magnifierState.height / 2 -
+                magnifierState.y * magnifierState.zoom
+              }px) scale(${magnifierState.zoom})`,
               width: `${pageWidth}px`,
             }}
           >
@@ -1289,11 +1600,15 @@ export default function TailoredResumeInteractivePreview({
   focusQuery = null,
   highlightQueries,
   loadPdfJsModule: loadPdfJsModuleProp,
+  magnifierMaxWidthRatio = 0.6,
+  onFocusViewportRectChange,
   onPageSnapshot,
   onRenderFailure,
+  onSegmentClick,
   pdfUrl,
   presentation = "web",
   scaleMode = "width",
+  segmentQueries = [],
 }: TailoredResumeInteractivePreviewProps) {
   const [loadedPages, setLoadedPages] = useState<LoadedPdfPage[]>([]);
   const [documentState, setDocumentState] = useState<
@@ -1359,11 +1674,16 @@ export default function TailoredResumeInteractivePreview({
           try {
             loadingTask = pdfJs.getDocument(resolvedPdfUrl);
             const pdfDocument = (await loadingTask.promise) as PDFDocumentProxy;
+            const lastMeaningfulPageNumber =
+              await resolveLastMeaningfulPdfPageNumber({
+                getPage: (pageNumber) => pdfDocument.getPage(pageNumber),
+                pageCount: pdfDocument.numPages,
+              });
             const nextLoadedPages: LoadedPdfPage[] = [];
 
             for (
               let pageNumber = 1;
-              pageNumber <= pdfDocument.numPages;
+              pageNumber <= lastMeaningfulPageNumber;
               pageNumber += 1
             ) {
               const page = await pdfDocument.getPage(pageNumber);
@@ -1483,11 +1803,15 @@ export default function TailoredResumeInteractivePreview({
                     highlightQueries={highlightQueries}
                     key={page.pageNumber}
                     loadPdfJsModuleForPreview={resolvedLoadPdfJsModule}
+                    magnifierMaxWidthRatio={magnifierMaxWidthRatio}
+                    onFocusViewportRectChange={onFocusViewportRectChange}
                     onPageSnapshot={onPageSnapshot}
                     onRenderFailure={onRenderFailure}
+                    onSegmentClick={onSegmentClick}
                     page={page}
                     scale={pageScale}
                     scrollContainerRef={containerRef}
+                    segmentQueries={segmentQueries}
                   />
                 ))
               : null}
@@ -1530,11 +1854,15 @@ export default function TailoredResumeInteractivePreview({
                   highlightQueries={highlightQueries}
                   key={page.pageNumber}
                   loadPdfJsModuleForPreview={resolvedLoadPdfJsModule}
+                  magnifierMaxWidthRatio={magnifierMaxWidthRatio}
+                  onFocusViewportRectChange={onFocusViewportRectChange}
                   onPageSnapshot={onPageSnapshot}
                   onRenderFailure={onRenderFailure}
+                  onSegmentClick={onSegmentClick}
                   page={page}
                   scale={pageScale}
                   scrollContainerRef={containerRef}
+                  segmentQueries={segmentQueries}
                 />
               ))
             : null}

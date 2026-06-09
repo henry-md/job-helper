@@ -100,6 +100,11 @@
   inset: 0;
 }
 
+.resume-interactive-layer--segments {
+  pointer-events: none;
+  z-index: 5;
+}
+
 .resume-interactive-page-loading {
   pointer-events: none;
   position: absolute;
@@ -226,17 +231,51 @@
   animation: resume-preview-focus-pulse 420ms cubic-bezier(0.22, 1, 0.36, 1) 1;
 }
 
+.resume-interactive-segment-target {
+  appearance: none;
+  pointer-events: auto;
+  position: absolute;
+  z-index: 5;
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: 0.28rem;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    opacity 140ms ease;
+}
+
+.resume-interactive-segment-target:hover,
+.resume-interactive-segment-target--hovered,
+.resume-interactive-segment-target:focus-visible {
+  border-color: rgba(37, 99, 235, 0.55);
+  background: rgba(59, 130, 246, 0.055);
+  box-shadow:
+    0 0 0 2px rgba(59, 130, 246, 0.13),
+    0 8px 24px rgba(37, 99, 235, 0.1);
+}
+
+.resume-interactive-segment-target:focus-visible {
+  outline: none;
+}
+
 .resume-interactive-magnifier {
   position: fixed;
-  z-index: 5;
+  z-index: 40;
   pointer-events: none;
-  border: 1px solid rgba(15, 23, 42, 0.18);
-  border-radius: 0.65rem;
+  border-block: 1px solid rgba(96, 165, 250, 0.36);
+  border-inline: 0;
+  border-radius: 0;
   background-color: #ffffff;
   background-repeat: no-repeat;
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.88),
-    0 20px 52px rgba(15, 23, 42, 0.34);
+    0 0 0 1px rgba(255, 255, 255, 0.24),
+    0 18px 44px rgba(15, 23, 42, 0.34),
+    0 0 36px rgba(37, 99, 235, 0.18);
   overflow: hidden;
 }
 
