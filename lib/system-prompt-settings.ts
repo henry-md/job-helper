@@ -595,9 +595,10 @@ const defaultSystemPromptSettings = {
     "- Keep the final document pdflatex-compatible after your replacements are applied.\n" +
     "- Special character escaping: in plain text content, the characters }, {, #, %, &, $, _, ^, ~, and \\ are special in LaTeX and must be escaped (e.g., \\}, \\{, \\#, \\%, \\&, \\$, \\_, \\^{}, \\~{}, \\textbackslash{}). A bare } or { in text content is the most common cause of 'Extra }' or 'Missing $' compile errors. Only leave these characters unescaped inside LaTeX command arguments where they serve a structural role (e.g., \\textbf{...}, \\href{...}{...}).\n",
   tailorResumeRefinement:
-    "{{FEEDBACK_BLOCK}}Revise the existing tailored resume block edits in response to the user's follow-up request.\n\n" +
+    "{{FEEDBACK_BLOCK}}Revise the tailored resume in response to the user's follow-up request.\n\n" +
     "You will receive:\n" +
     "- The raw original resume LaTeX before any tailoring edits.\n" +
+    "- A document-ordered list of all editable resume segments with stable segmentIds.\n" +
     "- The latest model-generated block edits, including the original block, the model block, and the currently rendered block.\n" +
     "- Screenshot images of the current rendered PDF preview when available. These screenshots include the same review highlights shown to the user, so use them to judge both layout and how the edited regions look visually.\n" +
     "- The current tailoring thesis when available.\n" +
@@ -607,16 +608,19 @@ const defaultSystemPromptSettings = {
     "- Green highlight = newly added text in an edited block.\n" +
     "- Blue highlight = the currently focused block when a focus pulse is visible.\n\n" +
     "Return a strict JSON object with:\n" +
-    "- summary: one short paragraph describing what you changed.\n" +
-    "- changes: exactly one replacement for every segmentId from the existing model edit list.\n\n" +
+    "- summary: one short paragraph. If you did not change the resume, say what you clarified or why no edit was applied. Do not tell the user to view a diff unless you returned at least one change or insertion.\n" +
+    "- changes: replacements for any listed editable segmentId that should change. Use [] when the user is discussing possibilities or no resume edit should be applied yet.\n" +
+    "- insertions: new blocks to insert before or after an existing anchorSegmentId. Use [] unless the user explicitly asks to add a bullet/block.\n\n" +
     "Refinement rules:\n" +
-    "- Keep the exact same set of segmentIds. Do not add new segments, drop segments, or touch unedited blocks.\n" +
-    "- latexCode must contain only the replacement for that one segment.\n" +
+    "- Chat may be conversational. If the user is talking through options, asking a question, or has not asked you to apply an edit, return empty changes and insertions.\n" +
+    "- You may edit any listed editable segment, including segments that were not changed by the first tailoring pass. Do not say a requested resume block is outside the editable set when its segmentId appears in the editable segment list.\n" +
+    "- For changes, latexCode must contain only the replacement for that one listed segment.\n" +
+    "- For insertions, set anchorSegmentId to an existing segment id, position to before or after, and latexCode to the new block only. Do not write JOBHELPER_SEGMENT_ID comments; the server creates stable ids.\n" +
     "- Preserve each block's local structure and style. A replacement may contain multiple bullets when the revision calls for it, but do not spill into neighboring source blocks.\n" +
     "- Use the screenshots as a layout guardrail: prefer tighter, cleaner phrasing when the preview suggests the resume is too long, cramped, or wrapping awkwardly.\n" +
     "- Preserve factual accuracy. Never invent achievements, employers, dates, titles, technologies, metrics, degrees, or certifications.\n" +
     "- Keep the tailored resume pdflatex-compatible.\n" +
-    "- If a block is already good, you may return it unchanged, but you must still include it in changes.\n" +
+    "- If a block is already good, omit it from changes.\n" +
     "- Each returned reason fully replaces the old saved reason for that block, so it must stand on its own. Restate why the final wording is better for the role or better for the visible resume, and do not make the reason just say that the block was shortened, compressed, or made shorter.\n" +
     "- If helpful, a reason may mention a stronger but longer discarded option in this pattern: \"A stronger version could look like the following, but was not chosen because it would add an extra line: ...\" Use that only when it adds real explanatory value.\n" +
     "- When the request is about page count, overflow, or saving space, use the rendered PDF screenshots to judge whether an edit actually removes a full rendered line. Avoid edits that make a two-line bullet merely a little shorter while keeping the same vertical footprint.\n" +
