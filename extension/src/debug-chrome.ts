@@ -1,6 +1,8 @@
 import {
   AUTH_SESSION_STORAGE_KEY,
+  DEFAULT_AI_USAGE_ENDPOINT,
   DEFAULT_TAILOR_RESUME_ENDPOINT,
+  DEFAULT_TAILOR_RESUME_PREVIEW_ENDPOINT,
   DEFAULT_TAILOR_RESUME_SUPPORT_CHAT_ENDPOINT,
   defaultExtensionPreferences,
   EXISTING_TAILORING_STORAGE_KEY,
@@ -41,6 +43,12 @@ type DebugChatMessage = {
     name: string;
   }>;
 };
+
+declare global {
+  interface Window {
+    __JOB_HELPER_DEBUG_PREVIEW_PDF_BYTES__?: ArrayBuffer | Uint8Array;
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -115,6 +123,260 @@ const mockPageContext: JobPageContext = {
   ],
   url: "https://jobs.example.com/acme-ai/senior-product-engineer",
 };
+
+const mockPdfBytes = Uint8Array.from(
+  atob(
+    "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA0IDAgUiA+PiA+PiAvQ29udGVudHMgNSAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggMjcwID4+CnN0cmVhbQpCVAovRjEgMTIgVGYKNDAgNzM1IFRkCihIZW5yeSBEZXV0c2NoIC0gU29mdHdhcmUgRW5naW5lZXIpIFRqCjAgLTE4IFRkCihXb3JrIEV4cGVyaWVuY2UpIFRqCjAgLTE2IFRkCihTaGlwcGVkIEt1YmVybmV0ZXMgZGVwbG95bWVudCBhdXRvbWF0aW9uIHdpdGggUG9zdGdyZVNRTCBwZXJzaXN0ZW5jZS4pIFRqCjAgLTE2IFRkCihCdWlsdCBiYWNrZW5kIHJldmlldyB3b3JrZmxvd3Mgd2l0aCBwZXJzaXN0ZW50IHN0b3JhZ2UgYW5kIGxvdy1sYXRlbmN5IEFQSXMuKSBUagpFVAplbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCA2CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMTUgMDAwMDAgbiAKMDAwMDAwMDI0MSAwMDAwMCBuIAowMDAwMDAwMzExIDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgNiAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKNjMxCiUlRU9GCg==",
+  ),
+  (character) => character.charCodeAt(0),
+);
+
+function createMockAiUsageReport() {
+  const now = new Date("2026-05-25T23:35:00.000Z").toISOString();
+  const events = [
+    {
+      applicationId: "debug-application-acme",
+      attempt: 2,
+      cachedInputTokens: 900,
+      cacheCreationInputTokens: 0,
+      durationMs: 18400,
+      error: null,
+      id: "debug-usage-implementation",
+      inputTokens: 4200,
+      jobUrl: mockPageContext.url,
+      model: "gpt-5-mini",
+      operation: "tailor-resume.step-4a.implementation",
+      outputTokens: 760,
+      provider: "openai",
+      providerResponseId: "debug-response-implementation",
+      reasoningTokens: 0,
+      requestStartedAt: now,
+      round: 1,
+      status: "succeeded",
+      stepLabel: "Step 4A implementation",
+      stepNumber: 4,
+      subjectStatus: "unarchived",
+      tailoredResumeId: "debug-tailored-resume-current",
+      tailorResumeRunId: "debug-tailor-run-current",
+      totalCostUsdMicros: "18500",
+      totalTokens: 4960,
+    },
+    {
+      applicationId: "debug-application-acme",
+      attempt: 1,
+      cachedInputTokens: 300,
+      cacheCreationInputTokens: 0,
+      durationMs: 8600,
+      error: null,
+      id: "debug-usage-keywords",
+      inputTokens: 3100,
+      jobUrl: mockPageContext.url,
+      model: "gpt-5-mini",
+      operation: "tailor-resume.step-1.keywords",
+      outputTokens: 520,
+      provider: "openai",
+      providerResponseId: "debug-response-keywords",
+      reasoningTokens: 0,
+      requestStartedAt: new Date("2026-05-25T20:05:00.000Z").toISOString(),
+      round: 1,
+      status: "succeeded",
+      stepLabel: "Step 1 keyword extraction",
+      stepNumber: 1,
+      subjectStatus: "unarchived",
+      tailoredResumeId: "debug-tailored-resume-current",
+      tailorResumeRunId: "debug-tailor-run-current",
+      totalCostUsdMicros: "8400",
+      totalTokens: 3640,
+    },
+    {
+      applicationId: "debug-application-product",
+      attempt: 1,
+      cachedInputTokens: 0,
+      cacheCreationInputTokens: 1200,
+      durationMs: 12100,
+      error: null,
+      id: "debug-usage-planning",
+      inputTokens: 5600,
+      jobUrl: "https://jobs.example.com/product-engineer",
+      model: "claude-sonnet-4-6",
+      operation: "tailor-resume.step-3.planning",
+      outputTokens: 1020,
+      provider: "anthropic",
+      providerResponseId: "debug-response-planning",
+      reasoningTokens: 0,
+      requestStartedAt: new Date("2026-05-25T23:21:00.000Z").toISOString(),
+      round: 1,
+      status: "succeeded",
+      stepLabel: "Step 3 planning",
+      stepNumber: 3,
+      subjectStatus: "archived",
+      tailoredResumeId: "debug-tailored-resume-archived",
+      tailorResumeRunId: "debug-tailor-run-archived",
+      totalCostUsdMicros: "12200",
+      totalTokens: 6620,
+    },
+    {
+      applicationId: "debug-application-data",
+      attempt: 1,
+      cachedInputTokens: 0,
+      cacheCreationInputTokens: 800,
+      durationMs: 10200,
+      error: null,
+      id: "debug-usage-data-planning",
+      inputTokens: 3800,
+      jobUrl: "https://jobs.example.com/data-platform",
+      model: "claude-sonnet-4-6",
+      operation: "tailor-resume.step-3.planning",
+      outputTokens: 640,
+      provider: "anthropic",
+      providerResponseId: "debug-response-data-planning",
+      reasoningTokens: 0,
+      requestStartedAt: new Date("2026-05-24T19:48:00.000Z").toISOString(),
+      round: 1,
+      status: "succeeded",
+      stepLabel: "Step 3 planning",
+      stepNumber: 3,
+      subjectStatus: "unarchived",
+      tailoredResumeId: "debug-tailored-resume-data",
+      tailorResumeRunId: "debug-tailor-run-data",
+      totalCostUsdMicros: "9800",
+      totalTokens: 4440,
+    },
+    {
+      applicationId: null,
+      attempt: 1,
+      cachedInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      durationMs: 3200,
+      error: "Provider request failed after URL capture.",
+      id: "debug-usage-failed",
+      inputTokens: 1600,
+      jobUrl: "https://jobs.example.com/data-platform",
+      model: "gpt-5-mini",
+      operation: "tailor-resume.step-1.keywords",
+      outputTokens: 360,
+      provider: "openai",
+      providerResponseId: null,
+      reasoningTokens: 0,
+      requestStartedAt: new Date("2026-05-25T22:58:00.000Z").toISOString(),
+      round: 1,
+      status: "failed",
+      stepLabel: "Step 1 keyword extraction",
+      stepNumber: 1,
+      subjectStatus: "deleted",
+      tailoredResumeId: null,
+      tailorResumeRunId: "debug-tailor-run-deleted",
+      totalCostUsdMicros: "2100",
+      totalTokens: 1960,
+    },
+  ];
+
+  return {
+    events,
+    generatedAt: now,
+    period: "all",
+    resumeGroups: [
+      {
+        applicationId: "debug-application-acme",
+        companyName: "Acme AI",
+        displayName: "Senior Product Engineer",
+        eventCount: 2,
+        failedEventCount: 0,
+        firstSeenAt: new Date("2026-05-25T20:05:00.000Z").toISOString(),
+        inputTokens: 7300,
+        jobUrl: mockPageContext.url,
+        lastSeenAt: now,
+        outputTokens: 1280,
+        positionTitle: "Senior Product Engineer",
+        status: "unarchived",
+        tailoredResumeId: "debug-tailored-resume-current",
+        totalCostUsdMicros: "27000",
+        totalTokens: 8600,
+      },
+      {
+        applicationId: "debug-application-product",
+        companyName: "Product Co",
+        displayName: "Product Engineer",
+        eventCount: 1,
+        failedEventCount: 0,
+        firstSeenAt: new Date("2026-05-25T23:21:00.000Z").toISOString(),
+        inputTokens: 5600,
+        jobUrl: "https://jobs.example.com/product-engineer",
+        lastSeenAt: new Date("2026-05-25T23:21:00.000Z").toISOString(),
+        outputTokens: 1020,
+        positionTitle: "Product Engineer",
+        status: "archived",
+        tailoredResumeId: "debug-tailored-resume-archived",
+        totalCostUsdMicros: "12200",
+        totalTokens: 6620,
+      },
+      {
+        applicationId: "debug-application-data",
+        companyName: "Data Platform Co",
+        displayName: "Data Platform Engineer",
+        eventCount: 1,
+        failedEventCount: 0,
+        firstSeenAt: new Date("2026-05-24T19:48:00.000Z").toISOString(),
+        inputTokens: 3800,
+        jobUrl: "https://jobs.example.com/data-platform",
+        lastSeenAt: new Date("2026-05-24T19:48:00.000Z").toISOString(),
+        outputTokens: 640,
+        positionTitle: "Data Platform Engineer",
+        status: "unarchived",
+        tailoredResumeId: "debug-tailored-resume-data",
+        totalCostUsdMicros: "9800",
+        totalTokens: 4440,
+      },
+      {
+        applicationId: "debug-application-legacy-security",
+        companyName: "Security Co",
+        displayName: "Security Engineer",
+        eventCount: 0,
+        failedEventCount: 0,
+        firstSeenAt: new Date("2026-05-20T16:30:00.000Z").toISOString(),
+        inputTokens: 0,
+        jobUrl: "https://jobs.example.com/security-engineer",
+        lastSeenAt: new Date("2026-05-20T16:30:00.000Z").toISOString(),
+        outputTokens: 0,
+        positionTitle: "Security Engineer",
+        status: "unarchived",
+        tailoredResumeId: "debug-tailored-resume-legacy-security",
+        totalCostUsdMicros: "0",
+        totalTokens: 0,
+      },
+      {
+        applicationId: "debug-application-legacy-design",
+        companyName: "Design Systems Co",
+        displayName: "Design Systems Engineer",
+        eventCount: 0,
+        failedEventCount: 0,
+        firstSeenAt: new Date("2026-05-12T15:15:00.000Z").toISOString(),
+        inputTokens: 0,
+        jobUrl: "https://jobs.example.com/design-systems",
+        lastSeenAt: new Date("2026-05-12T15:15:00.000Z").toISOString(),
+        outputTokens: 0,
+        positionTitle: "Design Systems Engineer",
+        status: "archived",
+        tailoredResumeId: "debug-tailored-resume-legacy-design",
+        totalCostUsdMicros: "0",
+        totalTokens: 0,
+      },
+    ],
+    summary: {
+      archivedCostUsdMicros: "12200",
+      deletedCostUsdMicros: "2100",
+      eventCount: events.length,
+      failedEventCount: 1,
+      inputTokens: 19300,
+      outputTokens: 3300,
+      totalCostUsdMicros: "47000",
+      totalTokens: 23300,
+      unarchivedCostUsdMicros: "36700",
+      urlCount: 3,
+    },
+    urlGroups: [],
+  };
+}
 
 const mockStep2EmphasizedTechnologies = [
   {
@@ -401,14 +663,73 @@ function createMockTailoringRun(
 }
 
 function createMockTailoredResumes() {
+  const sourceAnnotatedLatexCode = [
+    "% JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-1",
+    "\\resumeItem{Supported backend platform work across consumer analytics and ads tooling.}",
+    "% JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-2",
+    "\\resumeItem{Refactored backend services and maintained internal account management workflows.}",
+  ].join("\n");
+  const initialAnnotatedLatexCode = [
+    "% JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-1",
+    "\\resumeItem{Led major refactor enabling \\$50K+/mo in TikTok ad spend by incorporating TikTok support for our entire suite of software.}",
+    "% JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-2",
+    "\\resumeItem{Built and migrated 100\\% of internal account managers and external clients to a streamlined messaging and reporting system.}",
+  ].join("\n");
+  const refinedAnnotatedLatexCode = [
+    "% JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-1",
+    "\\resumeItem{Led major refactor enabling \\$50K+/mo in TikTok ad spend by incorporating TikTok support for our entire suite of software.}",
+    "% JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-2",
+    "\\resumeItem{Built and migrated 100\\% of internal account managers and external clients to a streamlined messaging and reporting system.}",
+    "% JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-2.inserted-debug",
+    "\\resumeItem{Refactored 31K+ LOC in 365 files, reworking 140+ tRPC endpoints \\& Bayesian inference engine for platform-agnostic objectives.}",
+  ].join("\n");
+  const initialEdit = {
+    afterLatexCode:
+      "\\resumeItem{Led major refactor enabling \\$50K+/mo in TikTok ad spend by incorporating TikTok support for our entire suite of software.}",
+    beforeLatexCode:
+      "\\resumeItem{Supported backend platform work across consumer analytics and ads tooling.}",
+    command: null,
+    customLatexCode: null,
+    editId: "debug-edit-tiktok-refactor",
+    generatedByStep: 4 as const,
+    reason: "Highlights the NewForm AI platform refactor from the rendered resume.",
+    segmentId: "work-experience.entry-1.bullet-1",
+    state: "applied" as const,
+  };
+  const refinedEdits = [
+    {
+      ...initialEdit,
+      afterLatexCode:
+        "\\resumeItem{Led major refactor enabling \\$50K+/mo in TikTok ad spend by incorporating TikTok support for our entire suite of software.}",
+      editId: "debug-edit-tiktok-refactor",
+      reason:
+        "Highlights the NewForm AI platform refactor from the rendered resume.",
+    },
+    {
+      afterLatexCode:
+        "\\resumeItem{Refactored 31K+ LOC in 365 files, reworking 140+ tRPC endpoints \\& Bayesian inference engine for platform-agnostic objectives.}",
+      beforeLatexCode: "",
+      command: null,
+      customLatexCode: null,
+      editId: "debug-edit-inserted-bullet",
+      generatedByStep: 4 as const,
+      reason: "Shows another rendered NewForm AI bullet in the review timeline.",
+      segmentId: "work-experience.entry-1.bullet-2.inserted-debug",
+      state: "applied" as const,
+    },
+  ];
+
   return [
     {
+      annotatedLatexCode: refinedAnnotatedLatexCode,
       applicationId: null,
       archivedAt: null as string | null,
       companyName: "Microsoft",
       createdAt: new Date("2026-04-21T23:17:00.000Z").toISOString(),
       displayName: "Microsoft - Software Engineer",
+      edits: refinedEdits,
       emphasizedTechnologies: [],
+      error: null,
       id: "debug-tailored-resume",
       jobIdentifier: null,
       jobUrl: "https://careers.microsoft.com/jobs/debug-tailored-resume",
@@ -464,9 +785,36 @@ function createMockTailoredResumes() {
           ],
         },
       },
+      pdfUpdatedAt: new Date("2026-04-21T23:19:00.000Z").toISOString(),
       positionTitle: "Software Engineer",
+      sourceAnnotatedLatexCode,
       status: "ready",
       updatedAt: new Date("2026-04-21T23:17:00.000Z").toISOString(),
+      versions: [
+        {
+          annotatedLatexCode: initialAnnotatedLatexCode,
+          assistantMessage: "Generated the first tailored resume output.",
+          createdAt: new Date("2026-04-21T23:17:00.000Z").toISOString(),
+          edits: [initialEdit],
+          id: "debug-version-initial",
+          latexCode: initialAnnotatedLatexCode,
+          pdfUpdatedAt: new Date("2026-04-21T23:17:00.000Z").toISOString(),
+          source: "initial" as const,
+          userPrompt: null,
+        },
+        {
+          annotatedLatexCode: refinedAnnotatedLatexCode,
+          assistantMessage:
+            "Updated the Kubernetes bullet and added a timeline verification bullet. [[see_diff:debug-version-initial..debug-version-chat-1]]",
+          createdAt: new Date("2026-04-21T23:19:00.000Z").toISOString(),
+          edits: refinedEdits,
+          id: "debug-version-chat-1",
+          latexCode: refinedAnnotatedLatexCode,
+          pdfUpdatedAt: new Date("2026-04-21T23:19:00.000Z").toISOString(),
+          source: "refinement" as const,
+          userPrompt: "Add PostgreSQL and one extra implementation bullet.",
+        },
+      ],
     },
   ];
 }
@@ -720,6 +1068,7 @@ export function installDebugChromeRuntime() {
   const initialExtensionPreferences =
     readInitialExtensionPreferences(searchParams);
   const initialPromptSettings = readInitialPromptSettings(searchParams);
+  const debugPreviewPdfUrl = searchParams.get("previewPdfUrl")?.trim() ?? "";
 
   if (mockTailoringRun) {
     storage.set(LAST_TAILORING_STORAGE_KEY, mockTailoringRun);
@@ -1068,6 +1417,47 @@ export function installDebugChromeRuntime() {
           ? input.toString()
           : input.url;
     const method = (init?.method ?? "GET").toUpperCase();
+
+    if (
+      (url === DEFAULT_AI_USAGE_ENDPOINT ||
+        url.startsWith(`${DEFAULT_AI_USAGE_ENDPOINT}?`)) &&
+      method === "GET"
+    ) {
+      return new Response(JSON.stringify(createMockAiUsageReport()), {
+        headers: {
+          "Content-Type": "application/json",
+        },
+        status: authSession ? 200 : 401,
+      });
+    }
+
+    if (
+      (url === DEFAULT_TAILOR_RESUME_PREVIEW_ENDPOINT ||
+        url.startsWith(`${DEFAULT_TAILOR_RESUME_PREVIEW_ENDPOINT}?`)) &&
+      method === "GET"
+    ) {
+      if (debugPreviewPdfUrl && authSession) {
+        const injectedPdfBytes = window.__JOB_HELPER_DEBUG_PREVIEW_PDF_BYTES__;
+
+        if (injectedPdfBytes) {
+          return new Response(injectedPdfBytes.slice(0), {
+            headers: {
+              "Content-Type": "application/pdf",
+            },
+            status: 200,
+          });
+        }
+
+        return nativeFetch(debugPreviewPdfUrl);
+      }
+
+      return new Response(mockPdfBytes, {
+        headers: {
+          "Content-Type": "application/pdf",
+        },
+        status: authSession ? 200 : 401,
+      });
+    }
 
     if (url === DEFAULT_TAILOR_RESUME_SUPPORT_CHAT_ENDPOINT && method === "GET") {
       return new Response(
@@ -1486,6 +1876,242 @@ export function installDebugChromeRuntime() {
               tailoringInterview: null,
             },
             tailoredResumeIds: deletedResumeIds,
+          }),
+          {
+            headers: {
+              "Content-Type": "application/json",
+            },
+            status: 200,
+          },
+        );
+      }
+
+      if (action === "refineTailoredResume") {
+        const tailoredResumeId = readBodyString(body, "tailoredResumeId");
+        const userPrompt = readBodyString(body, "userPrompt");
+        const updatedAt = new Date().toISOString();
+        let tailoredResumeDiff: {
+          endVersionId: string;
+          startVersionId: string;
+        } | null = null;
+        let assistantMessage =
+          "I can talk through the changes without changing the resume yet.";
+        const shouldLeaveUnchanged =
+          /\b(header|name|henry|deutsch|test)\b/i.test(userPrompt) ||
+          /\b(no change|talk through|question)\b/i.test(userPrompt);
+        const debugRefinementDelayMs = Math.min(
+          Math.max(Number(searchParams.get("chatDelayMs") ?? "0") || 0, 0),
+          10_000,
+        );
+
+        if (shouldLeaveUnchanged) {
+          assistantMessage =
+            "The requested change is outside the current editable block set, so I left the tailored resume unchanged.";
+
+          if (debugRefinementDelayMs > 0) {
+            await waitForDebugDelay(debugRefinementDelayMs);
+          }
+
+          return createDebugNdjsonResponse([
+            {
+              event: {
+                delta: "The requested change is outside ",
+                field: "assistantMessage",
+                kind: "text-delta",
+              },
+              type: "interview-stream",
+            },
+            {
+              event: {
+                delta: "the current editable block set, ",
+                field: "assistantMessage",
+                kind: "text-delta",
+              },
+              type: "interview-stream",
+            },
+            {
+              event: {
+                delta: "so I left the tailored resume unchanged.",
+                field: "assistantMessage",
+                kind: "text-delta",
+              },
+              type: "interview-stream",
+            },
+            {
+              ok: true,
+              payload: {
+                assistantMessage,
+                profile: {
+                  tailoredResumes: mockTailoredResumes,
+                  tailoringInterview: null,
+                },
+                tailoredResumeDiff: null,
+                tailoredResumeId: tailoredResumeId || null,
+              },
+              status: 200,
+              type: "done",
+            },
+          ]);
+        }
+
+        mockTailoredResumes = mockTailoredResumes.map((record) => {
+          if (record.id !== tailoredResumeId) {
+            return record;
+          }
+
+          const versions = Array.isArray(record.versions) ? record.versions : [];
+          const lastVersion = versions[versions.length - 1];
+
+          if (!lastVersion) {
+            return record;
+          }
+
+          const nextVersionId = `debug-version-chat-${String(versions.length)}`;
+          const nextInsertedSegmentId =
+            "work-experience.entry-1.bullet-2.inserted-debug-chat";
+          const nextAnnotatedLatexCode = [
+            "% JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-1",
+            "\\resumeItem{Shipped Kubernetes deployment automation for production services with PostgreSQL persistence, observability, and low-latency APIs.}",
+            "% JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-2",
+            "\\resumeItem{Developed React interfaces for reviewing resume changes and PDF previews.}",
+            "% JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-2.inserted-debug",
+            "\\resumeItem{Added a debug-mode timeline bullet to verify inserted segments keep downstream IDs stable.}",
+            `% JOBHELPER_SEGMENT_ID: ${nextInsertedSegmentId}`,
+            "\\resumeItem{Captured a chat-generated output so the inline assistant message can expose a See Diff action.}",
+          ].join("\n");
+          const nextEdits = [
+            ...(Array.isArray(record.edits) ? record.edits : []),
+            {
+              afterLatexCode:
+                "\\resumeItem{Captured a chat-generated output so the inline assistant message can expose a See Diff action.}",
+              beforeLatexCode: "",
+              command: null,
+              customLatexCode: null,
+              editId: "debug-edit-chat-see-diff",
+              generatedByStep: 4 as const,
+              reason: "Adds a chat-generated output for diff-mode verification.",
+              segmentId: nextInsertedSegmentId,
+              state: "applied" as const,
+            },
+          ];
+
+          tailoredResumeDiff = {
+            endVersionId: nextVersionId,
+            startVersionId: lastVersion.id,
+          };
+          assistantMessage =
+            "Applied the chat changes. Use See Diff to compare this output against the previous one.";
+
+          return {
+            ...record,
+            annotatedLatexCode: nextAnnotatedLatexCode,
+            edits: nextEdits,
+            pdfUpdatedAt: updatedAt,
+            updatedAt,
+            versions: [
+              ...versions,
+              {
+                annotatedLatexCode: nextAnnotatedLatexCode,
+                assistantMessage,
+                createdAt: updatedAt,
+                edits: nextEdits,
+                id: nextVersionId,
+                latexCode: nextAnnotatedLatexCode,
+                pdfUpdatedAt: updatedAt,
+                source: "refinement" as const,
+                userPrompt: userPrompt || "Debug chat refinement.",
+              },
+            ],
+          };
+        });
+
+        if (debugRefinementDelayMs > 0) {
+          await waitForDebugDelay(debugRefinementDelayMs);
+        }
+
+        return createDebugNdjsonResponse([
+          {
+            event: {
+              delta: "Applied the chat changes. ",
+              field: "assistantMessage",
+              kind: "text-delta",
+            },
+            type: "interview-stream",
+          },
+          {
+            event: {
+              delta: "Use See Diff to compare this output ",
+              field: "assistantMessage",
+              kind: "text-delta",
+            },
+            type: "interview-stream",
+          },
+          {
+            event: {
+              delta: "against the previous one.",
+              field: "assistantMessage",
+              kind: "text-delta",
+            },
+            type: "interview-stream",
+          },
+          {
+            ok: true,
+            payload: {
+            assistantMessage,
+            profile: {
+              tailoredResumes: mockTailoredResumes,
+              tailoringInterview: null,
+            },
+            tailoredResumeDiff,
+            tailoredResumeId: tailoredResumeId || null,
+            },
+          },
+        ]);
+      }
+
+      if (action === "deleteTailoredResumeVersion") {
+        const tailoredResumeId = readBodyString(body, "tailoredResumeId");
+        const versionId = readBodyString(body, "versionId");
+        const updatedAt = new Date().toISOString();
+
+        mockTailoredResumes = mockTailoredResumes.map((record) => {
+          if (record.id !== tailoredResumeId) {
+            return record;
+          }
+
+          const versions = Array.isArray(record.versions) ? record.versions : [];
+          const deleteIndex = versions.findIndex(
+            (version) => version.id === versionId,
+          );
+
+          if (deleteIndex <= 0) {
+            return record;
+          }
+
+          const nextVersions = versions.slice(0, deleteIndex);
+          const restoredVersion = nextVersions[nextVersions.length - 1];
+
+          return {
+            ...record,
+            annotatedLatexCode:
+              restoredVersion?.annotatedLatexCode ?? record.annotatedLatexCode,
+            edits: Array.isArray(restoredVersion?.edits)
+              ? restoredVersion.edits
+              : record.edits,
+            pdfUpdatedAt: updatedAt,
+            updatedAt,
+            versions: nextVersions,
+          };
+        });
+
+        return new Response(
+          JSON.stringify({
+            deletedVersionId: versionId || null,
+            profile: {
+              tailoredResumes: mockTailoredResumes,
+              tailoringInterview: null,
+            },
+            tailoredResumeId: tailoredResumeId || null,
           }),
           {
             headers: {
