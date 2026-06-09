@@ -31,6 +31,20 @@ function getTailoredResumePdfPath(userId: string, tailoredResumeId: string) {
   );
 }
 
+function getTailoredResumeVersionPdfPath(
+  userId: string,
+  tailoredResumeId: string,
+  versionId: string,
+) {
+  return path.join(
+    getTailorResumePrivateDir(userId),
+    "tailored",
+    tailoredResumeId,
+    "versions",
+    `${versionId}.pdf`,
+  );
+}
+
 function getTailorResumeConfigChatArtifactPdfPath(
   userId: string,
   artifactId: string,
@@ -168,6 +182,40 @@ export async function deleteTailoredResumePdf(
   tailoredResumeId: string,
 ) {
   await rm(getTailoredResumePdfPath(userId, tailoredResumeId), { force: true });
+}
+
+export async function readTailoredResumeVersionPdf(
+  userId: string,
+  tailoredResumeId: string,
+  versionId: string,
+) {
+  return readFile(getTailoredResumeVersionPdfPath(userId, tailoredResumeId, versionId));
+}
+
+export async function writeTailoredResumeVersionPdf(
+  userId: string,
+  tailoredResumeId: string,
+  versionId: string,
+  pdfBuffer: Buffer,
+) {
+  const versionPdfPath = getTailoredResumeVersionPdfPath(
+    userId,
+    tailoredResumeId,
+    versionId,
+  );
+
+  await mkdir(path.dirname(versionPdfPath), { recursive: true });
+  await writeFileAtomically(versionPdfPath, pdfBuffer);
+}
+
+export async function deleteTailoredResumeVersionPdf(
+  userId: string,
+  tailoredResumeId: string,
+  versionId: string,
+) {
+  await rm(getTailoredResumeVersionPdfPath(userId, tailoredResumeId, versionId), {
+    force: true,
+  });
 }
 
 export async function readTailorResumeConfigChatArtifactPdf(

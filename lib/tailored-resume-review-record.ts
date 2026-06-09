@@ -3,6 +3,7 @@ import {
   type TailoredResumeBlockEditRecord,
   type TailoredResumeOpenAiDebugTrace,
   type TailoredResumeRecord,
+  type TailoredResumeVersionSnapshot,
 } from "./tailor-resume-types.ts";
 
 export type TailoredResumeReviewEdit = Pick<
@@ -14,6 +15,7 @@ export type TailoredResumeReviewEdit = Pick<
   | "editId"
   | "generatedByStep"
   | "reason"
+  | "source"
   | "segmentId"
   | "state"
 >;
@@ -26,7 +28,29 @@ export type TailoredResumeReviewRecord = Pick<
   companyName: string | null;
   edits: TailoredResumeReviewEdit[];
   positionTitle: string | null;
+  reviewChatMessages: TailoredResumeReviewChatMessage[];
   sourceAnnotatedLatexCode: string | null;
+  versions: TailoredResumeReviewVersion[];
+};
+
+export type TailoredResumeReviewVersion = Pick<
+  TailoredResumeVersionSnapshot,
+  | "annotatedLatexCode"
+  | "assistantMessage"
+  | "createdAt"
+  | "id"
+  | "pdfUpdatedAt"
+  | "source"
+  | "userPrompt"
+> & {
+  editCount: number;
+};
+
+export type TailoredResumeReviewChatMessage = {
+  content: string;
+  createdAt: string;
+  id: string;
+  role: "assistant" | "user";
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -88,6 +112,7 @@ function readTailoredResumeReviewEdit(
   const editId = readString(value.editId);
   const reason = readString(value.reason);
   const segmentId = readString(value.segmentId);
+  const source = value.source === "user" ? "user" : "model";
   const generatedByStep = value.generatedByStep === 5 ? 5 : value.generatedByStep === 4 ? 4 : null;
   const state =
     value.state === "rejected"
@@ -116,8 +141,61 @@ function readTailoredResumeReviewEdit(
     editId,
     generatedByStep,
     reason,
+    source,
     segmentId,
     state,
+  };
+}
+
+function readTailoredResumeReviewVersion(
+  value: unknown,
+): TailoredResumeReviewVersion | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = readString(value.id);
+  const annotatedLatexCode = readNullableRawString(value.annotatedLatexCode);
+  const createdAt = readString(value.createdAt);
+
+  if (!id || !annotatedLatexCode || !createdAt) {
+    return null;
+  }
+
+  return {
+    annotatedLatexCode,
+    assistantMessage: readNullableString(value.assistantMessage),
+    createdAt,
+    editCount: Array.isArray(value.edits) ? value.edits.length : 0,
+    id,
+    pdfUpdatedAt: readNullableString(value.pdfUpdatedAt),
+    source: value.source === "initial" ? "initial" : "refinement",
+    userPrompt: readNullableString(value.userPrompt),
+  };
+}
+
+function readTailoredResumeReviewChatMessage(
+  value: unknown,
+): TailoredResumeReviewChatMessage | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = readString(value.id);
+  const content = readString(value.content);
+  const createdAt = readString(value.createdAt);
+  const role =
+    value.role === "assistant" ? "assistant" : value.role === "user" ? "user" : null;
+
+  if (!id || !content || !createdAt || !role) {
+    return null;
+  }
+
+  return {
+    content,
+    createdAt,
+    id,
+    role,
   };
 }
 
@@ -139,6 +217,20 @@ export function readTailoredResumeReviewRecord(
         .map(readTailoredResumeReviewEdit)
         .filter((edit): edit is TailoredResumeReviewEdit => Boolean(edit))
     : [];
+  const versions = Array.isArray(value.versions)
+    ? value.versions
+        .map(readTailoredResumeReviewVersion)
+        .filter((version): version is TailoredResumeReviewVersion =>
+          Boolean(version),
+        )
+    : [];
+  const reviewChatMessages = Array.isArray(value.reviewChatMessages)
+    ? value.reviewChatMessages
+        .map(readTailoredResumeReviewChatMessage)
+        .filter((message): message is TailoredResumeReviewChatMessage =>
+          Boolean(message),
+        )
+    : [];
 
   if (!id || !displayName || !updatedAt) {
     return null;
@@ -154,8 +246,10 @@ export function readTailoredResumeReviewRecord(
     openAiDebug,
     pdfUpdatedAt: readNullableString(value.pdfUpdatedAt),
     positionTitle: readNullableString(value.positionTitle),
+    reviewChatMessages,
     sourceAnnotatedLatexCode: readNullableRawString(value.sourceAnnotatedLatexCode),
     updatedAt,
+    versions,
   };
 }
 

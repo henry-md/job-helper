@@ -29,6 +29,20 @@ test("resolveTailoredResumeReviewRecordFromPayload returns the requested record"
             id: "tailored-resume-1",
             pdfUpdatedAt: "2026-04-24T18:00:00.000Z",
             positionTitle: "Software Engineer",
+            reviewChatMessages: [
+              {
+                content: "Turn the first bullet to test 1.",
+                createdAt: "2026-06-09T21:19:00.000Z",
+                id: "chat-message-1",
+                role: "user",
+              },
+              {
+                content: "Updated the first bullet.",
+                createdAt: "2026-06-09T21:20:00.000Z",
+                id: "chat-message-2",
+                role: "assistant",
+              },
+            ],
             updatedAt: "2026-04-24T18:00:00.000Z",
           },
           {
@@ -55,5 +69,12 @@ test("resolveTailoredResumeReviewRecordFromPayload returns the requested record"
   assert.equal(
     record.edits[0]?.segmentId,
     "work-experience.entry-1.bullet-1",
+  );
+  assert.deepEqual(
+    record.reviewChatMessages.map((message) => [message.role, message.content]),
+    [
+      ["user", "Turn the first bullet to test 1."],
+      ["assistant", "Updated the first bullet."],
+    ],
   );
 });

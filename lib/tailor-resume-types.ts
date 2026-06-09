@@ -251,8 +251,24 @@ export type TailoredResumeBlockEditRecord = {
   editId: string;
   generatedByStep: TailoredResumeBlockGeneratedByStep;
   reason: string;
+  source?: "model" | "user";
   state: "applied" | "rejected";
   segmentId: string;
+};
+
+export type TailoredResumeVersionSnapshot = {
+  annotatedLatexCode: string;
+  assistantMessage: string | null;
+  createdAt: string;
+  edits: TailoredResumeBlockEditRecord[];
+  error: string | null;
+  id: string;
+  latexCode: string;
+  pdfUpdatedAt: string | null;
+  source: "initial" | "refinement";
+  sourceAnnotatedLatexCode: string | null;
+  status: TailorResumeLatexStatus;
+  userPrompt: string | null;
 };
 
 export type TailoredResumeThesis = {
@@ -404,6 +420,7 @@ export type TailoredResumeRecord = {
   status: TailorResumeLatexStatus;
   thesis: TailoredResumeThesis | null;
   updatedAt: string;
+  versions: TailoredResumeVersionSnapshot[];
 };
 
 export type TailorResumeProfile = {
@@ -781,6 +798,7 @@ function normalizeTailoredResumeBlockEditRecords(
         editId: edit.editId,
         generatedByStep: edit.generatedByStep,
         reason: edit.reason,
+        source: edit.source,
         state: edit.state,
         segmentId: edit.segmentId,
       });
@@ -796,6 +814,7 @@ function normalizeTailoredResumeBlockEditRecords(
         editId: edit.editId,
         generatedByStep: edit.generatedByStep,
         reason: edit.reason,
+        source: edit.source,
         state: edit.state,
         segmentId: edit.segmentId,
       });
@@ -806,6 +825,7 @@ function normalizeTailoredResumeBlockEditRecords(
       ...currentEdit,
       command: edit.command ?? currentEdit.command,
       customLatexCode: edit.state === "applied" ? edit.afterLatexCode : null,
+      source: "user",
     });
   }
 
@@ -826,6 +846,72 @@ function parseTailoredResumeBlockEditRecords(value: unknown) {
   });
 
   return normalizeTailoredResumeBlockEditRecords(parsedEdits);
+}
+
+function parseTailoredResumeVersionSource(
+  value: unknown,
+): TailoredResumeVersionSnapshot["source"] {
+  return value === "initial" ? "initial" : "refinement";
+}
+
+function parseTailoredResumeVersionSnapshot(
+  value: unknown,
+): TailoredResumeVersionSnapshot | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = readNullableString(value.id);
+  const annotatedLatexCode = readNullableString(value.annotatedLatexCode);
+  const latexCode = readNullableString(value.latexCode);
+  const createdAt = readNullableString(value.createdAt);
+  const sourceAnnotatedLatexCode =
+    value.sourceAnnotatedLatexCode === null
+      ? null
+      : readNullableString(value.sourceAnnotatedLatexCode);
+  const rawStatus = value.status;
+  const status =
+    rawStatus === "compiling" ||
+    rawStatus === "ready" ||
+    rawStatus === "failed" ||
+    rawStatus === "idle"
+      ? rawStatus
+      : "ready";
+
+  if (!id || annotatedLatexCode === null || latexCode === null || !createdAt) {
+    return null;
+  }
+
+  return {
+    annotatedLatexCode,
+    assistantMessage:
+      value.assistantMessage === null
+        ? null
+        : readNullableString(value.assistantMessage),
+    createdAt,
+    edits: parseTailoredResumeBlockEditRecords(value.edits),
+    error: value.error === null ? null : readNullableString(value.error),
+    id,
+    latexCode,
+    pdfUpdatedAt:
+      value.pdfUpdatedAt === null ? null : readNullableString(value.pdfUpdatedAt),
+    source: parseTailoredResumeVersionSource(value.source),
+    sourceAnnotatedLatexCode,
+    status,
+    userPrompt:
+      value.userPrompt === null ? null : readNullableString(value.userPrompt),
+  };
+}
+
+function parseTailoredResumeVersionSnapshots(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailoredResumeVersionSnapshot[];
+  }
+
+  return value.flatMap((entry) => {
+    const parsedSnapshot = parseTailoredResumeVersionSnapshot(entry);
+    return parsedSnapshot ? [parsedSnapshot] : [];
+  });
 }
 
 function parseTailoredResumeThesis(value: unknown): TailoredResumeThesis | null {
@@ -1706,6 +1792,7 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
     status,
     thesis,
     updatedAt,
+    versions: parseTailoredResumeVersionSnapshots(value.versions),
   };
 }
 

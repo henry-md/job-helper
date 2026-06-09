@@ -81,6 +81,84 @@ function stripAnnotatedLine(value: string) {
   return value.replace(/^[ \t]*% JOBHELPER_SEGMENT_ID:[^\n]*\n?/gm, "");
 }
 
+function readExistingSegmentIds(latexCode: string) {
+  const segmentIds = new Set<string>();
+
+  for (const match of latexCode.matchAll(
+    /^[ \t]*% JOBHELPER_SEGMENT_ID:\s*([^\n]+)\s*(?:\n|$)/gm,
+  )) {
+    const segmentId = match[1]?.trim();
+
+    if (segmentId) {
+      segmentIds.add(segmentId);
+    }
+  }
+
+  return segmentIds;
+}
+
+function readCandidateExistingMarker(input: {
+  candidateLineStart: number;
+  cursor: number;
+  latexCode: string;
+}) {
+  const prelude = input.latexCode.slice(input.cursor, input.candidateLineStart);
+  let latestMarker:
+    | {
+        end: number;
+        id: string;
+        start: number;
+      }
+    | null = null;
+
+  for (const match of prelude.matchAll(
+    /^[ \t]*% JOBHELPER_SEGMENT_ID:\s*([^\n]+)\s*(?:\n|$)/gm,
+  )) {
+    const markerText = match[0] ?? "";
+    const segmentId = match[1]?.trim() ?? "";
+
+    if (!segmentId || match.index === undefined) {
+      continue;
+    }
+
+    latestMarker = {
+      end: input.cursor + match.index + markerText.length,
+      id: segmentId,
+      start: input.cursor + match.index,
+    };
+  }
+
+  if (!latestMarker) {
+    return null;
+  }
+
+  const afterMarker = input.latexCode.slice(
+    latestMarker.end,
+    input.candidateLineStart,
+  );
+
+  if (stripAnnotatedLine(afterMarker).trim().length > 0) {
+    return null;
+  }
+
+  return latestMarker;
+}
+
+function buildNewStableSegmentId(input: {
+  baseId: string;
+  reservedSegmentIds: Set<string>;
+  usedSegmentIds: Set<string>;
+}) {
+  const seenSegmentIds = new Set([
+    ...input.reservedSegmentIds,
+    ...input.usedSegmentIds,
+  ]);
+  const segmentId = buildUniqueTailorResumeSegmentId(input.baseId, seenSegmentIds);
+
+  input.usedSegmentIds.add(segmentId);
+  return segmentId;
+}
+
 function skipWhitespace(value: string, index: number) {
   let nextIndex = index;
 
@@ -449,13 +527,14 @@ function findNextSegmentCandidate(
 }
 
 export function normalizeTailorResumeLatex(latexCode: string): NormalizeTailorResumeLatexResult {
-  const cleanLatex = stripTailorResumeSegmentIds(latexCode);
+  const sourceLatex = latexCode;
   const state = createInitialSegmentState();
-  const seenSegmentIds = new Set<string>();
+  const reservedSegmentIds = readExistingSegmentIds(sourceLatex);
+  const usedSegmentIds = new Set<string>();
   const segments: TailorResumeSegment[] = [];
   const chunks: string[] = [];
   let cursor = 0;
-  let candidate = findNextSegmentCandidate(cleanLatex, 0);
+  let candidate = findNextSegmentCandidate(sourceLatex, 0);
 
   while (candidate) {
     const parsedStart =
@@ -466,7 +545,7 @@ export function normalizeTailorResumeLatex(latexCode: string): NormalizeTailorRe
       candidate.kind === "command"
         ? candidate.parsedCommand.end
         : candidate.parsedBlock.end;
-    const segmentId = buildUniqueTailorResumeSegmentId(
+    const baseSegmentId =
       candidate.kind === "command"
         ? nextSegmentId(
             candidate.parsedCommand.command,
@@ -474,30 +553,48 @@ export function normalizeTailorResumeLatex(latexCode: string): NormalizeTailorRe
             candidate.parsedCommand.args,
             candidate.parsedCommand.optionalArgs,
           )
-        : nextBraceBlockSegmentId(state, candidate.parsedBlock.content),
-      seenSegmentIds,
-    );
+        : nextBraceBlockSegmentId(state, candidate.parsedBlock.content);
+    const existingMarker = readCandidateExistingMarker({
+      candidateLineStart: candidate.lineStart,
+      cursor,
+      latexCode: sourceLatex,
+    });
+    const segmentId =
+      existingMarker && !usedSegmentIds.has(existingMarker.id)
+        ? existingMarker.id
+        : buildNewStableSegmentId({
+            baseId: baseSegmentId,
+            reservedSegmentIds,
+            usedSegmentIds,
+          });
+
+    if (existingMarker && !usedSegmentIds.has(existingMarker.id)) {
+      usedSegmentIds.add(existingMarker.id);
+    }
 
     chunks.push(
-      cleanLatex.slice(
+      stripAnnotatedLine(
+        sourceLatex.slice(
         cursor,
-        candidate.lineIndentation ? candidate.lineStart : parsedStart,
+          existingMarker?.start ??
+            (candidate.lineIndentation ? candidate.lineStart : parsedStart),
+        ),
       ),
     );
     chunks.push(`${candidate.lineIndentation}${segmentMarkerPrefix}${segmentId}\n`);
     if (candidate.lineIndentation) {
       chunks.push(candidate.lineIndentation);
     }
-    chunks.push(cleanLatex.slice(parsedStart, parsedEnd));
+    chunks.push(stripAnnotatedLine(sourceLatex.slice(parsedStart, parsedEnd)));
     segments.push({
       command: candidate.kind === "command" ? candidate.parsedCommand.command : "block",
       id: segmentId,
     });
     cursor = parsedEnd;
-    candidate = findNextSegmentCandidate(cleanLatex, parsedEnd);
+    candidate = findNextSegmentCandidate(sourceLatex, parsedEnd);
   }
 
-  chunks.push(cleanLatex.slice(cursor));
+  chunks.push(stripAnnotatedLine(sourceLatex.slice(cursor)));
 
   return {
     annotatedLatex: chunks.join(""),

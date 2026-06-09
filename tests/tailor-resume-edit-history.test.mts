@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyTailoredResumeEditToSourceLatex,
+  buildTailoredResumeSnapshotComparisonEdits,
   buildTailoredResumeReviewEdits,
   buildTailoredResumeCombinedActiveEdits,
   rebuildTailoredResumeAnnotatedLatex,
@@ -241,6 +242,38 @@ test("applying a tailored edit to source latex replaces the matching source bloc
   assert.doesNotMatch(
     result.latexCode,
     /Created full-stack dashboard for project management/,
+  );
+});
+
+test("snapshot comparison treats inserted bullets as one added block", () => {
+  const source = normalizeTailorResumeLatex(String.raw`
+\resumeSection{WORK EXPERIENCE}
+\entryheading{Example Co}{Engineer}{2024}
+\begin{resumebullets}
+  \resumeitem{First bullet}
+  \resumeitem{Second bullet}
+\end{resumebullets}
+`);
+  const end = normalizeTailorResumeLatex(
+    source.annotatedLatex.replace(
+      "  % JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-2",
+      "  % JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-added-a1b2c3\n  \\resumeitem{Inserted bullet}\n  % JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-2",
+    ),
+  );
+  const comparisonEdits = buildTailoredResumeSnapshotComparisonEdits({
+    endAnnotatedLatexCode: end.annotatedLatex,
+    startAnnotatedLatexCode: source.annotatedLatex,
+  });
+
+  assert.equal(comparisonEdits.length, 1);
+  assert.equal(
+    comparisonEdits[0]?.segmentId,
+    "work-experience.entry-1.bullet-added-a1b2c3",
+  );
+  assert.equal(comparisonEdits[0]?.beforeLatexCode, "");
+  assert.equal(
+    comparisonEdits[0]?.afterLatexCode.trim(),
+    "\\resumeitem{Inserted bullet}",
   );
 });
 

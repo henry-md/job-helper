@@ -263,6 +263,65 @@ export function buildTailoredResumeFinalBlockDiffs(
   });
 }
 
+export function buildTailoredResumeSnapshotComparisonEdits(input: {
+  endAnnotatedLatexCode: string;
+  startAnnotatedLatexCode: string;
+}) {
+  const startAnnotatedLatexCode = readNormalizedAnnotatedLatex(
+    input.startAnnotatedLatexCode,
+  );
+  const endAnnotatedLatexCode = readNormalizedAnnotatedLatex(input.endAnnotatedLatexCode);
+  const startBlocks = readAnnotatedTailorResumeBlocks(startAnnotatedLatexCode);
+  const endBlocks = readAnnotatedTailorResumeBlocks(endAnnotatedLatexCode);
+  const startBlocksById = new Map(startBlocks.map((block) => [block.id, block]));
+  const endBlocksById = new Map(endBlocks.map((block) => [block.id, block]));
+  const orderedSegmentIds: string[] = [];
+  const seenSegmentIds = new Set<string>();
+
+  for (const block of startBlocks) {
+    orderedSegmentIds.push(block.id);
+    seenSegmentIds.add(block.id);
+  }
+
+  for (const block of endBlocks) {
+    if (!seenSegmentIds.has(block.id)) {
+      orderedSegmentIds.push(block.id);
+      seenSegmentIds.add(block.id);
+    }
+  }
+
+  return orderedSegmentIds.flatMap<TailoredResumeBlockEditRecord>((segmentId) => {
+    const startBlock = startBlocksById.get(segmentId);
+    const endBlock = endBlocksById.get(segmentId);
+    const beforeLatexCode = normalizeStoredBlockLatex(startBlock?.latexCode ?? "");
+    const afterLatexCode = normalizeStoredBlockLatex(endBlock?.latexCode ?? "");
+
+    if (beforeLatexCode === afterLatexCode) {
+      return [];
+    }
+
+    const changeKind = startBlock
+      ? endBlock
+        ? "Modified"
+        : "Removed"
+      : "Added";
+
+    return [
+      {
+        afterLatexCode,
+        beforeLatexCode,
+        command: endBlock?.command ?? startBlock?.command ?? null,
+        customLatexCode: null,
+        editId: `${segmentId}:comparison`,
+        generatedByStep: 4,
+        reason: `${changeKind} in the selected output comparison.`,
+        state: "applied",
+        segmentId,
+      },
+    ];
+  });
+}
+
 export function rebuildTailoredResumeAnnotatedLatex(
   record: Pick<
     TailoredResumeRecord,

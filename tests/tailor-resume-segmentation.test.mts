@@ -88,6 +88,55 @@ test("normalizeTailorResumeLatex keeps adjacent resumeitem commands in separate 
   assert.equal(bulletBlocks[1]?.latexCode.trim(), "\\resumeitem{Second bullet}");
 });
 
+test("normalizeTailorResumeLatex preserves downstream segment ids when inserting a bullet", () => {
+  const latex = String.raw`
+\resumeSection{WORK EXPERIENCE}
+\entryheading{Example Co}{Engineer}{2024}
+\begin{resumebullets}
+  \resumeitem{First bullet}
+  \resumeitem{Second bullet}
+\end{resumebullets}
+`;
+  const firstPass = normalizeTailorResumeLatex(latex);
+  const withInsertedBullet = firstPass.annotatedLatex.replace(
+    "  % JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-2",
+    "  \\resumeitem{Inserted bullet}\n  % JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-2",
+  );
+  const normalized = normalizeTailorResumeLatex(withInsertedBullet);
+  const bulletBlocks = readAnnotatedTailorResumeBlocks(
+    normalized.annotatedLatex,
+  ).filter((block) => block.command === "resumeitem");
+
+  assert.equal(bulletBlocks.length, 3);
+  assert.equal(bulletBlocks[0]?.id, "work-experience.entry-1.bullet-1");
+  assert.equal(bulletBlocks[0]?.latexCode.trim(), "\\resumeitem{First bullet}");
+  assert.notEqual(bulletBlocks[1]?.id, "work-experience.entry-1.bullet-2");
+  assert.equal(bulletBlocks[1]?.latexCode.trim(), "\\resumeitem{Inserted bullet}");
+  assert.equal(bulletBlocks[2]?.id, "work-experience.entry-1.bullet-2");
+  assert.equal(bulletBlocks[2]?.latexCode.trim(), "\\resumeitem{Second bullet}");
+});
+
+test("normalizeTailorResumeLatex preserves server-assigned inserted segment ids", () => {
+  const latex = String.raw`
+\resumeSection{WORK EXPERIENCE}
+\entryheading{Example Co}{Engineer}{2024}
+\begin{resumebullets}
+  % JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-added-a1b2c3
+  \resumeitem{Inserted bullet}
+  \resumeitem{Existing bullet}
+\end{resumebullets}
+`;
+  const normalized = normalizeTailorResumeLatex(latex);
+  const secondPass = normalizeTailorResumeLatex(normalized.annotatedLatex);
+  const bulletBlocks = readAnnotatedTailorResumeBlocks(
+    secondPass.annotatedLatex,
+  ).filter((block) => block.command === "resumeitem");
+
+  assert.equal(bulletBlocks[0]?.id, "work-experience.entry-1.bullet-added-a1b2c3");
+  assert.equal(bulletBlocks[0]?.latexCode.trim(), "\\resumeitem{Inserted bullet}");
+  assert.equal(secondPass.annotatedLatex, normalized.annotatedLatex);
+});
+
 test("buildUniqueTailorResumeSegmentId appends numeric suffixes on conflict", () => {
   const seenSegmentIds = new Set<string>();
 

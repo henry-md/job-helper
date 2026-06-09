@@ -15,14 +15,44 @@ export type TailorResumeInterviewStreamEvent =
 
 const interviewTextKeys = ["assistantMessage", "completionMessage"] as const;
 
-export class TailorResumeInterviewArgsStreamer {
+type JsonStringField<TField extends string> = {
+  field: TField;
+  key: string;
+};
+
+export class TailorResumeJsonStringFieldStreamer<TField extends string> {
   private buffer = "";
   private emittedTextLength = 0;
-  private emittedTextKey: (typeof interviewTextKeys)[number] | null = null;
+  private emittedTextKey: TField | null = null;
+  private readonly fields: JsonStringField<TField>[];
 
-  feed(chunk: string): InterviewStreamEmittedEvent[] {
+  constructor(fields: JsonStringField<TField>[]) {
+    this.fields = fields;
+  }
+
+  feed(chunk: string): Array<
+    | {
+        field: TField;
+        kind: "text-start";
+      }
+    | {
+        delta: string;
+        field: TField;
+        kind: "text-delta";
+      }
+  > {
     this.buffer += chunk;
-    const events: InterviewStreamEmittedEvent[] = [];
+    const events: Array<
+      | {
+          field: TField;
+          kind: "text-start";
+        }
+      | {
+          delta: string;
+          field: TField;
+          kind: "text-delta";
+        }
+    > = [];
 
     const streamingText = this.extractStreamingText();
     if (streamingText !== null && streamingText.key !== this.emittedTextKey) {
@@ -136,20 +166,28 @@ export class TailorResumeInterviewArgsStreamer {
   }
 
   private extractStreamingText(): {
-    key: (typeof interviewTextKeys)[number];
+    key: TField;
     text: string;
   } | null {
-    for (const key of interviewTextKeys) {
+    for (const { field, key } of this.fields) {
       const valueStart = this.findKeyValueStart(key);
 
       if (valueStart >= 0) {
         const text = this.extractStringValueFrom(valueStart);
 
-        return text === null ? null : { key, text };
+        return text === null ? null : { key: field, text };
       }
     }
 
     return null;
   }
 
+}
+
+export class TailorResumeInterviewArgsStreamer extends TailorResumeJsonStringFieldStreamer<
+  (typeof interviewTextKeys)[number]
+> {
+  constructor() {
+    super(interviewTextKeys.map((key) => ({ field: key, key })));
+  }
 }

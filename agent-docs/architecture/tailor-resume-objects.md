@@ -71,6 +71,7 @@ Tailor Resume object model:
     - `resumeChanges`: the broad resume strategy used to match those themes
 - The review modal surfaces this thesis from saved profile data; it is not recomputed client-side.
 - When `DEBUG_UI` is enabled, the tailored-resume review exposes those four saved stage transcripts in collapsible sections so developers can inspect the exact prompts and outputs without rerunning tailoring.
+- The tailored-resume review chat is durable, not just component state. Review follow-up messages are stored in `TailorResumeChatThread` / `TailorResumeChatMessage` with a stable `tailored-resume-review:<profileRecordId>` thread key, and refinement calls include recent previous review-chat turns. Legacy `versions[].userPrompt` / `versions[].assistantMessage` are used as a fallback transcript when a persisted chat thread does not exist yet.
 
 6. Preview PDF (`Buffer`)
 - Files: `lib/tailor-resume-storage.ts`, `app/api/tailor-resume/preview/route.ts`
