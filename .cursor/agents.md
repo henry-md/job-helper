@@ -17,5 +17,7 @@ See canonical documentation:
 - ../agent-docs/bug-fixes/  
   Short records of important bugs that occurred that might break again easily if we don't document it. Example files: bug-fixes/oauth-loop.md, bug-fixes/race-condition-cache.md. Documenting what the bug was and what approach was taken to solving it. This is equally for the developer's reference as your own.
 
-When modifying code, follow the rules defined in these documents. The /agent-docs folder is for you to keep yourself updated as you work on the project on past context. Be concise so that you can continue to maintain it for a while and not have the files blow up in size.
+- ../agent-docs/regression-tests/
+  Targeted regression notes for behavior that has broken repeatedly. Before making edits, skim relevant files when your touched area is close enough that the behavior may regress. You do not need to re-test every regression note for unrelated changes or new features. Add or update concise entries when an issue regresses often, describing the functionality to preserve, common failure modes, and focused checks that would catch it.
 
+When modifying code, follow the rules defined in these documents. The /agent-docs folder is for you to keep yourself updated as you work on the project on past context. Be concise so that you can continue to maintain it for a while and not have the files blow up in size.
