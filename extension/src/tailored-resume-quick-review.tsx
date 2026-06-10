@@ -39,6 +39,7 @@ type TailoredResumeQuickReviewProps = {
   onFocusEdit?: (editId: string) => void;
   record: TailoredResumeReviewRecord;
   variant?: "card" | "embedded" | "fullscreen";
+  onClearChat?: () => Promise<boolean>;
   onDeleteVersion?: (versionId: string) => Promise<boolean>;
   onRefineWithChat?: (
     prompt: string,
@@ -581,6 +582,7 @@ export default function TailoredResumeQuickReview({
   closeEditRequest = 0,
   openEditRequest = 0,
   openEditingEditId = null,
+  onClearChat,
   onDeleteEdit,
   onRefineWithChat,
   onSaveUserEdit,
@@ -598,6 +600,7 @@ export default function TailoredResumeQuickReview({
     () => buildInitialChatMessages(record),
   );
   const [isChatSubmitting, setIsChatSubmitting] = useState(false);
+  const [isClearingChat, setIsClearingChat] = useState(false);
   const chatMessagesRef = useRef<HTMLDivElement | null>(null);
   const hydratedChatRecordIdRef = useRef(record.id);
   const acceptedEditCount = record.edits.filter((edit) => edit.state === "applied").length;
@@ -618,7 +621,10 @@ export default function TailoredResumeQuickReview({
   }, [diffEnd, diffStart]);
   const displayedEdits = isDiffMode ? diffComparisonEdits : record.edits;
   const canOpenDiff = diffEndpoints.length >= 2;
-  const chatDisabled = isDiffMode || isUpdating || isChatSubmitting || !onRefineWithChat;
+  const chatDisabled =
+    isDiffMode || isUpdating || isChatSubmitting || isClearingChat || !onRefineWithChat;
+  const canClearChat =
+    chatMessages.length > 0 && !isDiffMode && !isUpdating && !isChatSubmitting;
   const shouldRenderInlineActions = variant !== "fullscreen" || !actionPortalTarget;
 
   useEffect(() => {
@@ -822,6 +828,24 @@ export default function TailoredResumeQuickReview({
     }
   }
 
+  async function clearChat() {
+    if (!onClearChat || !canClearChat || isClearingChat) {
+      return;
+    }
+
+    setIsClearingChat(true);
+
+    try {
+      const didClear = await onClearChat();
+
+      if (didClear) {
+        setChatMessages([]);
+      }
+    } finally {
+      setIsClearingChat(false);
+    }
+  }
+
   const diffPickerAction = (
     <div className="quick-review-diff-picker">
       <button
@@ -991,6 +1015,19 @@ export default function TailoredResumeQuickReview({
 
   const chatContent = (
     <div className="quick-review-chat-panel">
+      <div className="quick-review-chat-actions">
+        <button
+          aria-label="Clear tailored resume chat history"
+          className="quick-review-chat-clear-action"
+          disabled={!onClearChat || !canClearChat || isClearingChat}
+          onClick={() => void clearChat()}
+          title="Clear chat history"
+          type="button"
+        >
+          <TrashIcon />
+        </button>
+      </div>
+
       {isDiffMode ? (
         <p className="quick-review-chat-disabled">
           Exit diff mode before asking for more edits.

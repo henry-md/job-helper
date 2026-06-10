@@ -4693,12 +4693,52 @@ button:disabled {
   display: grid;
   height: 100%;
   min-height: 0;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 6px;
 }
 
-.quick-review-chat-disabled {
+.quick-review-chat-actions {
   grid-row: 1;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.quick-review-chat-clear-action {
+  display: inline-flex;
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(251, 113, 133, 0.16);
+  border-radius: 999px;
+  color: #fecdd3;
+  background: rgba(251, 113, 133, 0.07);
+}
+
+.quick-review-chat-clear-action:hover:not(:disabled) {
+  transform: none;
+  border-color: rgba(251, 113, 133, 0.3);
+  background: rgba(251, 113, 133, 0.13);
+}
+
+.quick-review-chat-clear-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.quick-review-chat-clear-action svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.quick-review-chat-disabled {
+  grid-row: 2;
   margin: 0;
   border: 1px solid rgba(56, 189, 248, 0.18);
   border-radius: 9px;
@@ -4710,7 +4750,7 @@ button:disabled {
 }
 
 .quick-review-chat-messages {
-  grid-row: 2;
+  grid-row: 3;
   display: grid;
   min-height: 0;
   align-content: start;
@@ -4720,7 +4760,7 @@ button:disabled {
 }
 
 .quick-review-chat-panel > .quick-review-placeholder {
-  grid-row: 2;
+  grid-row: 3;
   min-height: 0;
   align-self: start;
 }
@@ -4833,7 +4873,7 @@ button:disabled {
 }
 
 .quick-review-chat-form {
-  grid-row: 3;
+  grid-row: 4;
   display: flex;
   gap: 8px;
   align-items: flex-end;

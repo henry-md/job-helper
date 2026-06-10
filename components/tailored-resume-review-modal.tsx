@@ -8,6 +8,7 @@ import {
   Highlighter,
   Lightbulb,
   Pencil,
+  Trash2,
   Undo2,
   X,
 } from "lucide-react";
@@ -638,6 +639,8 @@ export default function TailoredResumeReviewModal({
   const [isDiffHighlightingEnabled, setIsDiffHighlightingEnabled] = useState(true);
   const [isAiRefinementOpen, setIsAiRefinementOpen] = useState(false);
   const [isRefiningTailoredResume, setIsRefiningTailoredResume] = useState(false);
+  const [isClearingAiRefinementChat, setIsClearingAiRefinementChat] =
+    useState(false);
   const [isUndoingTailoredResumeRefinement, setIsUndoingTailoredResumeRefinement] =
     useState(false);
   const [isSavingDisplayName, setIsSavingDisplayName] = useState(false);
@@ -1159,6 +1162,7 @@ export default function TailoredResumeReviewModal({
     setDraftAiRefinementPrompt("");
     setIsAiRefinementOpen(false);
     setIsRefiningTailoredResume(false);
+    setIsClearingAiRefinementChat(false);
     setOptimisticEditStateById({});
     setPreviewSnapshotDataUrlByPage({});
     setExpandedEditReasonEditId(null);
@@ -1567,6 +1571,50 @@ export default function TailoredResumeReviewModal({
       toast.error(errorMessage);
     } finally {
       setIsUndoingTailoredResumeRefinement(false);
+    }
+  }
+
+  async function clearAiRefinementChat() {
+    if (
+      !record ||
+      isRefiningTailoredResume ||
+      isUndoingTailoredResumeRefinement ||
+      isClearingAiRefinementChat ||
+      aiRefinementMessages.length === 0
+    ) {
+      return;
+    }
+
+    setIsClearingAiRefinementChat(true);
+
+    try {
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({
+          action: "clearTailoredResumeReviewChat",
+          tailoredResumeId: record.id,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
+      const payload = (await response.json()) as TailoredResumeMutationResponse;
+
+      if (!response.ok || !payload.profile) {
+        throw new Error(payload.error ?? "Unable to clear the chat history.");
+      }
+
+      setAiRefinementMessages([]);
+      onTailoredResumesChange(payload.profile.tailoredResumes);
+      toast.error("Cleared the AI chat history.", {
+        description: "Tailored resume edit blocks were left unchanged.",
+      });
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Unable to clear the chat history.",
+      );
+    } finally {
+      setIsClearingAiRefinementChat(false);
     }
   }
 
@@ -2435,6 +2483,21 @@ export default function TailoredResumeReviewModal({
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            <button
+              className="inline-flex items-center gap-1.5 rounded-full border border-rose-300/20 bg-rose-400/10 px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-rose-100 transition hover:border-rose-200/35 hover:bg-rose-400/15 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={
+                isRefiningTailoredResume ||
+                isUndoingTailoredResumeRefinement ||
+                isClearingAiRefinementChat ||
+                aiRefinementMessages.length === 0
+              }
+              onClick={() => void clearAiRefinementChat()}
+              title="Clear AI chat history"
+              type="button"
+            >
+              <Trash2 aria-hidden="true" className="h-3.5 w-3.5" />
+              <span>{isClearingAiRefinementChat ? "Clearing..." : "Clear"}</span>
+            </button>
             <button
               className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={

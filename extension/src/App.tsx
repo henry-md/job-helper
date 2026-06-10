@@ -15089,6 +15089,64 @@ function App() {
     }
   }
 
+  async function clearTailoredResumeReviewChat() {
+    if (
+      authState.status !== "signedIn" ||
+      !activeTailoredResumeReviewRecord ||
+      pendingTailoredResumeReviewEditId
+    ) {
+      return false;
+    }
+
+    const previousRecord = activeTailoredResumeReviewRecord;
+    setPendingTailoredResumeReviewEditId("ai-chat-clear");
+
+    try {
+      const result = await patchTailorResume({
+        action: "clearTailoredResumeReviewChat",
+        tailoredResumeId: previousRecord.id,
+      });
+
+      if (!result.ok) {
+        throw new Error(
+          readTailorResumePayloadError(
+            result.payload,
+            "Unable to clear the tailored resume chat.",
+          ),
+        );
+      }
+
+      const reviewRecord =
+        resolveTailoredResumeReviewRecordFromPayload(
+          result.payload,
+          previousRecord.id,
+        ) ?? null;
+
+      if (!reviewRecord) {
+        throw new Error("The tailored resume review could not be refreshed.");
+      }
+
+      setTailoredResumeReviewState({
+        record: reviewRecord,
+        status: "ready",
+      });
+      syncTailoredResumeSummariesFromPayload(result.payload);
+      return true;
+    } catch (error) {
+      setTailoredResumeReviewState({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to clear the tailored resume chat.",
+        record: previousRecord,
+        status: "error",
+      });
+      return false;
+    } finally {
+      setPendingTailoredResumeReviewEditId(null);
+    }
+  }
+
   async function deleteTailoredResumeReviewVersion(versionId: string) {
     if (
       authState.status !== "signedIn" ||
@@ -15473,6 +15531,7 @@ function App() {
             isUpdating={pendingTailoredResumeReviewEditId !== null}
             onDeleteVersion={deleteTailoredResumeReviewVersion}
             onCancelUserEditDraft={cancelTailoredResumeReviewUserEditDraft}
+            onClearChat={clearTailoredResumeReviewChat}
             onDeleteEdit={deleteTailoredResumeReviewEdit}
             onFocusEdit={focusTailoredPreviewEdit}
             onRefineWithChat={refineTailoredResumeReviewWithChat}
