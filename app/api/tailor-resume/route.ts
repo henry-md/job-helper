@@ -6974,7 +6974,13 @@ export async function PATCH(request: Request) {
     });
   }
 
-  if ("action" in body && body.action === "saveTailoredResumeUserEdit") {
+  if (
+    "action" in body &&
+    (body.action === "editExistingTailoredResumeUserEdit" ||
+      body.action === "saveTailoredResumeUserEdit" ||
+      body.action === "createTailoredResumeUserEdit")
+  ) {
+    const isCreatingUserEdit = body.action === "createTailoredResumeUserEdit";
     const tailoredResumeId =
       "tailoredResumeId" in body && typeof body.tailoredResumeId === "string"
         ? body.tailoredResumeId.trim()
@@ -7051,14 +7057,29 @@ export async function PATCH(request: Request) {
 
     const existingEdit = tailoredResume.edits.find((edit) => edit.segmentId === segmentId);
 
-    if (!existingEdit) {
+    if (!existingEdit && !isCreatingUserEdit) {
       return NextResponse.json(
         { error: "The selected LaTeX block could not be found in the review timeline." },
         { status: 404 },
       );
     }
 
-    const nextEdits: TailoredResumeBlockEditRecord[] = tailoredResume.edits.map((edit) => {
+    if (existingEdit && isCreatingUserEdit) {
+      return NextResponse.json(
+        { error: "This block already has a review edit." },
+        { status: 409 },
+      );
+    }
+
+    if (isCreatingUserEdit && normalizedReplacementLatexCode === resolvedSegment.latexCode) {
+      return NextResponse.json(
+        { error: "Change the LaTeX block before saving a user edit." },
+        { status: 400 },
+      );
+    }
+
+    const nextEdits: TailoredResumeBlockEditRecord[] = existingEdit
+      ? tailoredResume.edits.map((edit) => {
       if (edit.editId !== existingEdit.editId) {
         return edit;
       }
@@ -7084,7 +7105,22 @@ export async function PATCH(request: Request) {
         command: resolvedSegment.command,
         customLatexCode: normalizedReplacementLatexCode,
       };
-    });
+      })
+      : [
+          ...tailoredResume.edits,
+          {
+            afterLatexCode: normalizedReplacementLatexCode,
+            beforeLatexCode: resolvedSegment.latexCode,
+            command: resolvedSegment.command,
+            customLatexCode: null,
+            editId: `${segmentId}:user`,
+            generatedByStep: 4,
+            reason: "User edit",
+            source: "user",
+            state: "applied",
+            segmentId,
+          },
+        ];
     const rebuiltAnnotatedLatexCode = rebuildTailoredResumeAnnotatedLatex({
       annotatedLatexCode: tailoredResume.annotatedLatexCode,
       edits: nextEdits,
@@ -7124,7 +7160,7 @@ export async function PATCH(request: Request) {
       profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
         includeLockedOnly: true,
       }),
-      tailoredResumeEditId: existingEdit.editId,
+      tailoredResumeEditId: existingEdit?.editId ?? `${segmentId}:user`,
       tailoredResumeId,
     });
   }

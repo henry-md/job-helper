@@ -467,7 +467,11 @@ function TailoredResumeEditSummaryCard({
                 {formatTailoredResumeEditLabel(edit)}
               </p>
               <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-zinc-500">
-                {edit.customLatexCode !== null ? "Custom" : "Model"}
+                {edit.source === "user"
+                  ? "User edit"
+                  : edit.customLatexCode !== null
+                    ? "Custom"
+                    : "Model"}
               </span>
               {displayedEditState === "rejected" ? (
                 <span className="shrink-0 rounded-full border border-rose-300/20 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-rose-200">
@@ -626,6 +630,9 @@ export default function TailoredResumeReviewModal({
     () => record?.displayName ?? "",
   );
   const [draftEditedLatexCode, setDraftEditedLatexCode] = useState("");
+  const [draftUserEditSegmentId, setDraftUserEditSegmentId] = useState<string | null>(
+    null,
+  );
   const [draftAiRefinementPrompt, setDraftAiRefinementPrompt] = useState("");
   const [isDownloadingPreviewPdf, setIsDownloadingPreviewPdf] = useState(false);
   const [isDiffHighlightingEnabled, setIsDiffHighlightingEnabled] = useState(true);
@@ -697,6 +704,10 @@ export default function TailoredResumeReviewModal({
       focusButton?: boolean;
     } = {},
   ) {
+    if (editId !== draftUserEdit?.editId) {
+      setDraftUserEditSegmentId(null);
+    }
+
     setSelectedEditId(editId);
     setIsEditingLatexSegment(false);
     setInteractivePreviewFocusRequest((currentRequest) => currentRequest + 1);
@@ -729,10 +740,48 @@ export default function TailoredResumeReviewModal({
     setIsAiRefinementOpen(false);
   }
 
-  const reviewEdits = useMemo(
+  const resolvedSegmentMap = useMemo(
+    () => (record ? buildTailoredResumeResolvedSegmentMap(record) : null),
+    [record],
+  );
+  const savedReviewEdits = useMemo(
     () => (record ? buildTailoredResumeReviewEdits(record) : []),
     [record],
   );
+  const draftUserEdit = useMemo(() => {
+    if (!draftUserEditSegmentId) {
+      return null;
+    }
+
+    const segment = resolvedSegmentMap?.get(draftUserEditSegmentId);
+
+    if (!segment) {
+      return null;
+    }
+
+    return {
+      afterLatexCode: segment.latexCode,
+      beforeLatexCode: segment.latexCode,
+      command: segment.command,
+      customLatexCode: segment.latexCode,
+      editId: `${draftUserEditSegmentId}:user`,
+      generatedByStep: 4,
+      reason: "User edit",
+      source: "user",
+      state: "applied",
+      segmentId: draftUserEditSegmentId,
+    } satisfies TailoredResumeBlockEditRecord;
+  }, [draftUserEditSegmentId, resolvedSegmentMap]);
+  const reviewEdits = useMemo(() => {
+    if (
+      !draftUserEdit ||
+      savedReviewEdits.some((edit) => edit.segmentId === draftUserEdit.segmentId)
+    ) {
+      return savedReviewEdits;
+    }
+
+    return [...savedReviewEdits, draftUserEdit];
+  }, [draftUserEdit, savedReviewEdits]);
   const generationFailureLabel = record
     ? getTailoredResumeGenerationFailureLabel(record)
     : null;
@@ -750,6 +799,8 @@ export default function TailoredResumeReviewModal({
       ? selectedEditId
       : reviewEdits[0]?.editId ?? null;
   const selectedEdit = resolveSelectedEdit(reviewEdits, resolvedSelectedEditId);
+  const isSelectedDraftUserEdit =
+    Boolean(draftUserEdit) && selectedEdit?.editId === draftUserEdit?.editId;
   const selectedEditOptimisticState = selectedEdit
     ? optimisticEditStateById[selectedEdit.editId]
     : undefined;
@@ -892,10 +943,6 @@ export default function TailoredResumeReviewModal({
     };
   }, [record]);
 
-  const resolvedSegmentMap = useMemo(
-    () => (record ? buildTailoredResumeResolvedSegmentMap(record) : null),
-    [record],
-  );
   const selectedSegmentSnapshot = useMemo(
     () => resolvedSegmentMap?.get(selectedEdit?.segmentId ?? "") ?? null,
     [resolvedSegmentMap, selectedEdit],
@@ -907,8 +954,15 @@ export default function TailoredResumeReviewModal({
     [selectedEdit, selectedSegmentSnapshot],
   );
   const interactivePreviewQueries = useMemo(
-    () => (record ? buildTailoredResumeInteractivePreviewQueries(record) : null),
-    [record],
+    () =>
+      record
+        ? buildTailoredResumeInteractivePreviewQueries({
+            annotatedLatexCode: record.annotatedLatexCode,
+            edits: reviewEdits,
+            sourceAnnotatedLatexCode: record.sourceAnnotatedLatexCode,
+          })
+        : null,
+    [record, reviewEdits],
   );
   const diffRows = useMemo(
     () =>
@@ -966,6 +1020,10 @@ export default function TailoredResumeReviewModal({
       suppressedAcceptedBlockChoiceEditId,
     ],
   );
+  const trimmedDraftEditedLatexCode = draftEditedLatexCode.replace(/\n+$/, "");
+  const canSaveEditedLatexSegment =
+    Boolean(selectedEdit) &&
+    trimmedDraftEditedLatexCode !== (currentSelectedLatexCode ?? "").replace(/\n+$/, "");
   // Plain PDF URL for the interactive renderer and external PDF link.
   const plainPdfUrl = record ? buildTailoredResumePreviewPdfUrl(record) : null;
   const interactivePreviewUrl = plainPdfUrl;
@@ -1071,6 +1129,7 @@ export default function TailoredResumeReviewModal({
     setDraftDisplayName(record?.displayName ?? "");
     setIsRenamingDisplayName(false);
     setIsThesisOpen(false);
+    setDraftUserEditSegmentId(null);
   }, [record?.displayName, record?.id]);
 
   useEffect(() => {
@@ -1340,7 +1399,9 @@ export default function TailoredResumeReviewModal({
     try {
       const response = await fetch("/api/tailor-resume", {
         body: JSON.stringify({
-          action: "saveTailoredResumeUserEdit",
+          action: isSelectedDraftUserEdit
+            ? "createTailoredResumeUserEdit"
+            : "editExistingTailoredResumeUserEdit",
           latexCode: draftEditedLatexCode,
           segmentId: selectedEdit.segmentId,
           tailoredResumeId: record.id,
@@ -1358,7 +1419,8 @@ export default function TailoredResumeReviewModal({
 
       onTailoredResumesChange(payload.profile.tailoredResumes);
       setIsEditingLatexSegment(false);
-      setSelectedEditId(selectedEdit.editId);
+      setDraftUserEditSegmentId(null);
+      setSelectedEditId(payload.tailoredResumeEditId ?? selectedEdit.editId);
       setSuppressedAcceptedBlockChoiceEditId(null);
       setInteractivePreviewFocusRequest((currentRequest) => currentRequest + 1);
       toast.success("Saved your block edit.");
@@ -1634,8 +1696,56 @@ export default function TailoredResumeReviewModal({
     setIsEditingLatexSegment(true);
   }
 
+  function handlePreviewSegmentClick(segmentId: string) {
+    const existingEdit = reviewEdits.find((edit) => edit.segmentId === segmentId);
+
+    setSuppressedAcceptedBlockChoiceEditId(null);
+    setIsAiRefinementOpen(false);
+
+    if (existingEdit) {
+      selectEdit(existingEdit.editId, {
+        behavior: "smooth",
+        focusButton: true,
+      });
+      setDraftEditedLatexCode(
+        resolveTailoredResumeCurrentEditLatexCode(existingEdit),
+      );
+      setIsEditingLatexSegment(true);
+      return;
+    }
+
+    const segment = resolvedSegmentMap?.get(segmentId);
+
+    if (!segment) {
+      return;
+    }
+
+    const editId = `${segmentId}:user`;
+
+    setDraftUserEditSegmentId(segmentId);
+    setSelectedEditId(editId);
+    setDraftEditedLatexCode(segment.latexCode);
+    setIsEditingLatexSegment(true);
+    setInteractivePreviewFocusRequest((currentRequest) => currentRequest + 1);
+
+    window.requestAnimationFrame(() => {
+      scrollTailoredResumeEditRailIntoView({
+        behavior: "smooth",
+        editButtonElements: editButtonRefs.current,
+        editId,
+        edits: reviewEdits,
+        railElement: editRailRef.current,
+      });
+    });
+  }
+
   function handleAcceptedBlockChoice(choice: TailoredResumeAcceptedBlockChoice) {
-    if (!selectedEdit || isEditingLatexSegment || isSavingTailoredResumeEdit) {
+    if (
+      !selectedEdit ||
+      isSelectedDraftUserEdit ||
+      isEditingLatexSegment ||
+      isSavingTailoredResumeEdit
+    ) {
       return;
     }
 
@@ -2058,7 +2168,11 @@ export default function TailoredResumeReviewModal({
                       ? selectedReviewSurfaceClassName
                       : "hover:bg-white/[0.03]"
                   } ${isSavingTailoredResumeEdit || isEditingLatexSegment ? "cursor-not-allowed" : ""}`}
-                  disabled={isSavingTailoredResumeEdit || isEditingLatexSegment}
+                  disabled={
+                    isSavingTailoredResumeEdit ||
+                    isEditingLatexSegment ||
+                    isSelectedDraftUserEdit
+                  }
                   onClick={() => handleAcceptedBlockChoice("original")}
                   type="button"
                 >
@@ -2115,7 +2229,11 @@ export default function TailoredResumeReviewModal({
                       ? selectedReviewSurfaceClassName
                       : "hover:bg-white/[0.03]"
                   } ${isSavingTailoredResumeEdit || isEditingLatexSegment ? "cursor-not-allowed" : ""}`}
-                  disabled={isSavingTailoredResumeEdit || isEditingLatexSegment}
+                  disabled={
+                    isSavingTailoredResumeEdit ||
+                    isEditingLatexSegment ||
+                    isSelectedDraftUserEdit
+                  }
                   onClick={() => handleAcceptedBlockChoice("tailored")}
                   type="button"
                 >
@@ -2186,9 +2304,44 @@ export default function TailoredResumeReviewModal({
 
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       <button
+                        aria-label={
+                          selectedEdit?.source === "user"
+                            ? "Reset to original block"
+                            : "Reset to model suggestion"
+                        }
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:border-white/20 hover:bg-white/10 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={
+                          isSavingTailoredResumeEdit ||
+                          draftEditedLatexCode ===
+                            (selectedEdit?.source === "user"
+                              ? selectedEdit.beforeLatexCode
+                              : selectedEdit?.afterLatexCode)
+                        }
+                        onClick={() => {
+                          setDraftEditedLatexCode(
+                            selectedEdit?.source === "user"
+                              ? selectedEdit.beforeLatexCode
+                              : selectedEdit?.afterLatexCode ?? "",
+                          );
+                          editedLatexTextareaRef.current?.focus();
+                        }}
+                        title={
+                          selectedEdit?.source === "user"
+                            ? "Reset to the original block"
+                            : "Reset to the model suggestion"
+                        }
+                        type="button"
+                      >
+                        <Undo2 aria-hidden="true" className="h-3.5 w-3.5" />
+                      </button>
+                      <button
                         className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1.5 text-[10px] uppercase tracking-[0.18em] text-zinc-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
                         disabled={isSavingTailoredResumeEdit}
                         onClick={() => {
+                          if (isSelectedDraftUserEdit) {
+                            setDraftUserEditSegmentId(null);
+                            setSelectedEditId(savedReviewEdits[0]?.editId ?? null);
+                          }
                           setIsEditingLatexSegment(false);
                           setDraftEditedLatexCode(
                             selectedSegmentSnapshot?.latexCode ?? "",
@@ -2200,7 +2353,10 @@ export default function TailoredResumeReviewModal({
                       </button>
                       <button
                         className="rounded-full border border-emerald-300/30 bg-emerald-400/10 px-2.5 py-1.5 text-[10px] uppercase tracking-[0.18em] text-emerald-100 transition hover:border-emerald-200/45 hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={isSavingTailoredResumeEdit}
+                        disabled={
+                          isSavingTailoredResumeEdit ||
+                          !canSaveEditedLatexSegment
+                        }
                         onClick={() => void saveUserEditedLatexSegment()}
                         type="button"
                       >
@@ -2610,7 +2766,9 @@ export default function TailoredResumeReviewModal({
                 };
               });
             }}
+            onSegmentClick={handlePreviewSegmentClick}
             pdfUrl={interactivePreviewUrl}
+            segmentQueries={interactivePreviewQueries?.segmentQueries ?? []}
           />
         ) : (
           <div className="flex flex-1 items-center justify-center px-6 py-10 text-center text-sm leading-6 text-zinc-400">
@@ -2863,7 +3021,11 @@ export default function TailoredResumeReviewModal({
                 </h2>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <span className="rounded-full border border-white/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-zinc-400">
-                    {expandedEditReason.customLatexCode !== null ? "Custom" : "Model"}
+                    {expandedEditReason.source === "user"
+                      ? "User edit"
+                      : expandedEditReason.customLatexCode !== null
+                        ? "Custom"
+                        : "Model"}
                   </span>
                   {expandedEditReason.state === "rejected" ? (
                     <span className="rounded-full border border-rose-300/20 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-rose-200">

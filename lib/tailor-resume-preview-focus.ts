@@ -27,6 +27,11 @@ export type TailoredResumeInteractivePreviewQuery = {
   query: TailoredResumePreviewFocusQuery;
 };
 
+export type TailoredResumeInteractivePreviewSegmentQuery =
+  TailoredResumeInteractivePreviewQuery & {
+    segmentId: string;
+  };
+
 type CompactPreviewTextIndex = {
   compactPositions: number[];
   compactText: string;
@@ -881,6 +886,7 @@ export function buildTailoredResumeInteractivePreviewQueries(
   const resolvedSegmentMap = buildTailoredResumeResolvedSegmentMap(record);
   const focusQueryByEditId = new Map<string, TailoredResumePreviewFocusQuery | null>();
   const highlightQueries: TailoredResumeInteractivePreviewQuery[] = [];
+  const segmentQueries: TailoredResumeInteractivePreviewSegmentQuery[] = [];
 
   for (const edit of steadyHighlightEdits) {
     const query = buildTailoredResumePreviewFocusQuery({
@@ -918,8 +924,27 @@ export function buildTailoredResumeInteractivePreviewQueries(
     focusQueryByEditId.set(edit.editId, query);
   }
 
+  for (const [segmentId, block] of resolvedSegmentMap) {
+    const plainText = renderTailoredResumeLatexToPlainText(block.latexCode);
+
+    if (!plainText) {
+      continue;
+    }
+
+    segmentQueries.push({
+      key: `segment:${segmentId}`,
+      query: {
+        anchorText: plainText,
+        highlightRanges: [],
+        mode: "focus",
+      },
+      segmentId,
+    });
+  }
+
   return {
     focusQueryByEditId,
     highlightQueries,
+    segmentQueries,
   };
 }
