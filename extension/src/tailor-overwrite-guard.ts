@@ -47,6 +47,7 @@ function buildCompletedExistingTailoringState(
     displayName: tailoredResume.displayName,
     emphasizedTechnologies: tailoredResume.emphasizedTechnologies,
     error: null,
+    generationStepTimings: tailoredResume.generationStepTimings ?? [],
     id: tailoredResume.id,
     jobIdentifier: tailoredResume.jobIdentifier,
     jobUrl: tailoredResume.jobUrl,

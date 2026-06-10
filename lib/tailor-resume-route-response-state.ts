@@ -37,6 +37,7 @@ export type TailorResumeDbRunRecord = {
   createdAt: Date;
   error: string | null;
   id: string;
+  generationStepTimings: unknown;
   jobDescription: string;
   jobUrl: string | null;
   status: "CANCELLED" | "FAILED" | "NEEDS_INPUT" | "RUNNING" | "SUCCEEDED";
@@ -130,6 +131,7 @@ export async function findActiveTailorResumeRun(input: {
       createdAt: true,
       error: true,
       id: true,
+      generationStepTimings: true,
       jobDescription: true,
       jobUrl: true,
       status: true,
@@ -172,6 +174,7 @@ export async function findActiveTailorResumeRunsForUser(input: {
       createdAt: true,
       error: true,
       id: true,
+      generationStepTimings: true,
       jobDescription: true,
       jobUrl: true,
       status: true,

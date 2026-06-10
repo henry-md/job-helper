@@ -1,6 +1,7 @@
 import {
   createDefaultTailorResumeGenerationSettings,
   currentTailorResumeGenerationSettingsVersion,
+  defaultTailorResumeModelSettings,
   mergeTailorResumeGenerationSettings,
   type TailorResumeGenerationSettings,
 } from "./tailor-resume-generation-settings.ts";
@@ -288,6 +289,7 @@ export type TailorResumeGenerationStepEvent = {
   detail: string | null;
   durationMs: number;
   emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
+  model?: string | null;
   retrying: boolean;
   status: TailorResumeGenerationStepStatus;
   stepCount: number;
@@ -416,6 +418,7 @@ export type TailoredResumeRecord = {
   pdfUpdatedAt: string | null;
   planningResult: TailoredResumePlanningResult;
   positionTitle: string;
+  generationStepTimings: TailorResumeGenerationStepEvent[];
   sourceAnnotatedLatexCode: string | null;
   status: TailorResumeLatexStatus;
   thesis: TailoredResumeThesis | null;
@@ -446,6 +449,10 @@ function readNullableString(value: unknown) {
 
 function readString(value: unknown, fallback = "") {
   return typeof value === "string" ? value : fallback;
+}
+
+function readNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 export function emptyTailorResumeExtractionState(): TailorResumeExtractionState {
@@ -716,6 +723,28 @@ function parseTailorResumeGenerationSettingsState(
 
   if (version < currentTailorResumeGenerationSettingsVersion) {
     values.ludicrousMode = true;
+  }
+
+  if (version < 7) {
+    if (values.step1Model === "gpt-5.5") {
+      values.step1Model = defaultTailorResumeModelSettings.step1Model;
+    }
+
+    if (values.step3Model === "gpt-5-mini") {
+      values.step3Model = defaultTailorResumeModelSettings.step3Model;
+    }
+
+    if (values.step4Model === "gpt-5-mini") {
+      values.step4Model = defaultTailorResumeModelSettings.step4Model;
+    }
+
+    if (values.step4bModel === "gpt-5-mini") {
+      values.step4bModel = defaultTailorResumeModelSettings.step4bModel;
+    }
+
+    if (values.masterChatModel === "gpt-5-mini") {
+      values.masterChatModel = defaultTailorResumeModelSettings.masterChatModel;
+    }
   }
 
   return {
@@ -1035,6 +1064,62 @@ function parseTailoredResumeEmphasizedTechnologies(
       return parsedTechnology ? [parsedTechnology] : [];
     }),
   );
+}
+
+function parseTailorResumeGenerationStepStatus(value: unknown) {
+  return value === "failed" ||
+    value === "running" ||
+    value === "skipped" ||
+    value === "succeeded"
+    ? value
+    : null;
+}
+
+function parseTailorResumeGenerationStepEvent(
+  value: unknown,
+): TailorResumeGenerationStepEvent | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const stepNumber = readNumber(value.stepNumber);
+  const stepCount = readNumber(value.stepCount);
+  const status = parseTailorResumeGenerationStepStatus(value.status);
+  const summary = readString(value.summary);
+
+  if (!stepNumber || !stepCount || !status || !summary) {
+    return null;
+  }
+
+  const attempt = readNumber(value.attempt);
+
+  return {
+    attempt: attempt > 0 ? Math.floor(attempt) : null,
+    blockingTechnologies: parseTailoredResumeEmphasizedTechnologies(
+      value.blockingTechnologies,
+    ),
+    detail: readNullableString(value.detail),
+    durationMs: Math.max(0, Math.floor(readNumber(value.durationMs))),
+    emphasizedTechnologies: parseTailoredResumeEmphasizedTechnologies(
+      value.emphasizedTechnologies,
+    ),
+    model: readNullableString(value.model),
+    retrying: value.retrying === true,
+    status,
+    stepCount: Math.max(1, Math.floor(stepCount)),
+    stepNumber: Math.max(1, Math.floor(stepNumber)),
+    summary,
+  };
+}
+
+function parseTailorResumeGenerationStepEvents(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailorResumeGenerationStepEvent[];
+  }
+
+  return value
+    .map(parseTailorResumeGenerationStepEvent)
+    .filter((event): event is TailorResumeGenerationStepEvent => Boolean(event));
 }
 
 function readPercentage(value: unknown) {
@@ -1788,6 +1873,9 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
     pdfUpdatedAt,
     planningResult,
     positionTitle,
+    generationStepTimings: parseTailorResumeGenerationStepEvents(
+      value.generationStepTimings,
+    ),
     sourceAnnotatedLatexCode,
     status,
     thesis,

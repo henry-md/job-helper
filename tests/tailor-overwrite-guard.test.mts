@@ -72,6 +72,7 @@ function buildTailoredResumeSummary(
       name: string;
       priority: "high" | "low";
     }>;
+    generationStepTimings: [];
     id: string;
     jobIdentifier: string | null;
     jobUrl: string | null;
@@ -88,6 +89,7 @@ function buildTailoredResumeSummary(
     createdAt: "2026-04-25T15:10:00.000Z",
     displayName: "Example Corp - Software Engineer",
     emphasizedTechnologies: [],
+    generationStepTimings: [],
     id: "tailored-123",
     jobIdentifier: "Software Engineer",
     jobUrl: matchingJobUrl,
@@ -124,6 +126,7 @@ test("returns a completed overwrite prompt when a saved tailored resume matches"
     displayName: "Example Corp - Software Engineer",
     emphasizedTechnologies: [],
     error: null,
+    generationStepTimings: [],
     id: "tailored-123",
     jobIdentifier: "Software Engineer",
     jobUrl: matchingJobUrl,

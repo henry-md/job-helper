@@ -25,6 +25,7 @@ export type TailorResumeExistingTailoringState =
       jobIdentifier: string | null;
       jobUrl: string | null;
       emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
+      generationStepTimings: TailorResumeGenerationStepEvent[];
       kind: "active_generation";
       lastStep: TailorResumeGenerationStepEvent | null;
       positionTitle: string | null;
@@ -41,6 +42,7 @@ export type TailorResumeExistingTailoringState =
       jobIdentifier: string | null;
       jobUrl: string | null;
       kind: "pending_interview";
+      generationStepTimings: TailorResumeGenerationStepEvent[];
       emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
       interviewStatus: "deciding" | "pending" | "ready";
       positionTitle: string | null;
@@ -55,6 +57,7 @@ export type TailorResumeExistingTailoringState =
       error: string | null;
       id: string;
       emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+      generationStepTimings: TailorResumeGenerationStepEvent[];
       jobIdentifier: string | null;
       jobUrl: string | null;
       keywordCoverage: TailoredResumeKeywordCoverage | null;
@@ -280,6 +283,9 @@ export function buildActiveRunExistingTailoringState(
     jobDescription: run.jobDescription,
     jobIdentifier: null,
     jobUrl: run.jobUrl,
+    generationStepTimings: readTailorResumeGenerationStepTimings(
+      run.generationStepTimings,
+    ),
     kind: "active_generation",
     lastStep: buildTailorResumeRunStepEvent(run),
     positionTitle: run.application.title,
@@ -309,6 +315,9 @@ export function buildPendingInterviewExistingTailoringState(
     jobDescription: tailoringInterview.jobDescription,
     jobIdentifier: tailoringInterview.planningResult.jobIdentifier || null,
     jobUrl: tailoringInterview.jobUrl,
+    generationStepTimings: readTailorResumeGenerationStepTimings(
+      run?.generationStepTimings,
+    ),
     kind: "pending_interview",
     positionTitle: tailoringInterview.planningResult.positionTitle || null,
     questionCount: questioningSummary?.askedQuestionCount ?? null,
@@ -402,12 +411,23 @@ function readTailorResumeGenerationStepEvent(
     detail: readNullableString(value.detail),
     durationMs: readNumber(value.durationMs),
     emphasizedTechnologies: readEmphasizedTechnologies(value.emphasizedTechnologies),
+    model: readNullableString(value.model),
     retrying: value.retrying === true,
     status,
     stepCount: Math.max(1, Math.floor(stepCount)),
     stepNumber: Math.max(1, Math.floor(stepNumber)),
     summary,
   };
+}
+
+function readTailorResumeGenerationStepTimings(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailorResumeGenerationStepEvent[];
+  }
+
+  return value
+    .map(readTailorResumeGenerationStepEvent)
+    .filter((event): event is TailorResumeGenerationStepEvent => Boolean(event));
 }
 
 function readExistingTailoringQuestionCount(value: unknown) {
@@ -471,6 +491,9 @@ export function readTailorResumeExistingTailoringState(
         existingTailoring.emphasizedTechnologies,
       ),
       error: readNullableString(existingTailoring.error),
+      generationStepTimings: readTailorResumeGenerationStepTimings(
+        existingTailoring.generationStepTimings,
+      ),
       id,
       jobDescription,
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
@@ -516,6 +539,9 @@ export function readTailorResumeExistingTailoringState(
       jobDescription: readString(existingTailoring.jobDescription),
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
       jobUrl: readNullableString(existingTailoring.jobUrl),
+      generationStepTimings: readTailorResumeGenerationStepTimings(
+        existingTailoring.generationStepTimings,
+      ),
       kind,
       positionTitle: readNullableString(existingTailoring.positionTitle),
       questionCount: readExistingTailoringQuestionCount(
@@ -543,6 +569,9 @@ export function readTailorResumeExistingTailoringState(
         existingTailoring.emphasizedTechnologies,
       ),
       error: readNullableString(existingTailoring.error),
+      generationStepTimings: readTailorResumeGenerationStepTimings(
+        existingTailoring.generationStepTimings,
+      ),
       id,
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
       jobUrl: readNullableString(existingTailoring.jobUrl),

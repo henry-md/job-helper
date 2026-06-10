@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { NextResponse } from "next/server";
+import { Prisma } from "@/generated/prisma/client";
 import { getApiSession } from "@/lib/api-auth";
 import {
   attachAiUsageToTailoredResume,
@@ -94,6 +95,8 @@ import {
 import {
   buildTailorResumeRunStepUpdate,
   buildTailorResumeTerminalFailureStepEvent,
+  mergeTailorResumeGenerationStepTimingHistory,
+  readTailorResumeGenerationStepTimingHistory,
 } from "@/lib/tailor-resume-run-step";
 import {
   buildTailorResumeAttemptFailureMessage,
@@ -709,6 +712,29 @@ function buildPageCountLimitLabel(pageCount: number) {
   return `${pageCount} page${pageCount === 1 ? "" : "s"}`;
 }
 
+// Snapshots the configured model onto each persisted generation step event.
+function attachTailorResumeGenerationStepModel(input: {
+  event: TailorResumeGenerationStepEvent;
+  generationSettings: TailorResumeProfile["generationSettings"]["values"];
+}) {
+  const model =
+    input.event.model ??
+    (input.event.stepNumber === 1
+      ? input.generationSettings.step1Model
+      : input.event.stepNumber === 3
+        ? input.generationSettings.step3Model
+        : input.event.stepNumber === 4
+          ? input.generationSettings.step4Model
+          : input.event.stepNumber === 5
+            ? input.generationSettings.step4bModel
+            : null);
+
+  return {
+    ...input.event,
+    model,
+  } satisfies TailorResumeGenerationStepEvent;
+}
+
 function buildTailorResumeConversationMessage(input: {
   role: "assistant" | "user";
   technologyContexts?: TailorResumeTechnologyContext[];
@@ -806,6 +832,7 @@ type TailoredResumeDbRecord = {
   createdAt: Date;
   displayName: string;
   error: string | null;
+  generationStepTimings: Prisma.JsonValue;
   id: string;
   jobUrl: string | null;
   positionTitle: string | null;
@@ -883,7 +910,8 @@ async function completeTailorResumeInterviewAndFinalize(input: {
     ludicrousMissingSkillsSectionTerms:
       input.ludicrousMissingSkillsSectionTerms?.map(
         (technology) => technology.name,
-      ),
+    ),
+    model: input.rawProfile.generationSettings.values.step3Model,
     onStepEvent: input.onStepEvent,
     precomputedEmphasizedTechnologies:
       input.tailoringInterview.planningResult.emphasizedTechnologies,
@@ -925,6 +953,7 @@ async function completeTailorResumeInterviewAndFinalize(input: {
       input.rawProfile.links,
       input.lockedLinks,
     ),
+    model: input.rawProfile.generationSettings.values.step4Model,
     onBuildFailure: (latexCode, error, attempt) =>
       logLatexBuildFailure({
         userId: input.userId,
@@ -1457,15 +1486,19 @@ async function handleStartTailorResumeInterview(
 
   let lastStepEvent: TailorResumeGenerationStepEvent | null = null;
   const handleStepEvent = async (event: TailorResumeGenerationStepEvent) => {
-    lastStepEvent = event;
+    const stepEvent = attachTailorResumeGenerationStepModel({
+      event,
+      generationSettings: claimed.rawProfile.generationSettings.values,
+    });
+    lastStepEvent = stepEvent;
     await updateTailorResumeRunStep({
       action: "startTailorResumeInterview",
-      event,
+      event: stepEvent,
       interviewId: claimed.interview.id,
       runId: claimed.interview.tailorResumeRunId,
       userId,
     });
-    await options.onStepEvent?.(event);
+    await options.onStepEvent?.(stepEvent);
   };
   const stopRunHeartbeat = startTailorResumeRunHeartbeat({
     runId: claimed.interview.tailorResumeRunId,
@@ -2150,6 +2183,7 @@ function buildCompletedExistingTailoringState(
     positionTitle: tailoredResume.positionTitle,
     status: tailoredResume.status,
     tailoredResumeId: tailoredResume.id,
+    generationStepTimings: tailoredResume.generationStepTimings,
     updatedAt: tailoredResume.updatedAt,
   };
 }
@@ -2164,6 +2198,9 @@ function buildDbCompletedExistingTailoringState(
     displayName: tailoredResume.displayName,
     emphasizedTechnologies: [],
     error: tailoredResume.error,
+    generationStepTimings: readTailorResumeGenerationStepTimingHistory(
+      tailoredResume.generationStepTimings,
+    ),
     id: tailoredResume.id,
     jobIdentifier: null,
     jobUrl: tailoredResume.jobUrl,
@@ -2336,6 +2373,29 @@ async function readTailorResumeRunCreatedAt(input: {
   });
 
   return run?.createdAt.toISOString() ?? null;
+}
+
+async function readTailorResumeRunStepTimings(input: {
+  runId: string | null;
+  userId: string;
+}) {
+  if (!input.runId) {
+    return [] as TailorResumeGenerationStepEvent[];
+  }
+
+  const run = await getPrismaClient().tailorResumeRun.findFirst({
+    select: {
+      generationStepTimings: true,
+    },
+    where: {
+      id: input.runId,
+      userId: input.userId,
+    },
+  });
+
+  return readTailorResumeGenerationStepTimingHistory(
+    run?.generationStepTimings,
+  );
 }
 
 function readTailorResumeFailureStepNumberFromMessage(error: string | null | undefined) {
@@ -2540,8 +2600,33 @@ async function updateTailorResumeRunStep(input: {
     return;
   }
 
+  const run = await getPrismaClient().tailorResumeRun.findFirst({
+    select: {
+      generationStepTimings: true,
+    },
+    where: {
+      id: input.runId,
+      status: {
+        in: ["RUNNING", "NEEDS_INPUT"],
+      },
+      userId: input.userId,
+    },
+  });
+
+  if (!run) {
+    return;
+  }
+
+  const generationStepTimings = mergeTailorResumeGenerationStepTimingHistory({
+    event: input.event,
+    previousTimings: run.generationStepTimings,
+  });
   const updatedRuns = await getPrismaClient().tailorResumeRun.updateMany({
-    data: buildTailorResumeRunStepUpdate(input.event),
+    data: {
+      ...buildTailorResumeRunStepUpdate(input.event),
+      generationStepTimings:
+        generationStepTimings as unknown as Prisma.InputJsonValue,
+    },
     where: {
       id: input.runId,
       status: {
@@ -2825,6 +2910,7 @@ async function upsertDbTailoredResume(input: {
   createdAt: string;
   displayName: string;
   error: string | null;
+  generationStepTimings: TailorResumeGenerationStepEvent[];
   id: string;
   jobUrl: string | null;
   positionTitle: string | null;
@@ -2848,6 +2934,8 @@ async function upsertDbTailoredResume(input: {
       createdAt: new Date(input.createdAt),
       displayName: input.displayName,
       error: input.error,
+      generationStepTimings:
+        input.generationStepTimings as unknown as Prisma.InputJsonValue,
       id: input.id,
       jobUrl: input.jobUrl,
       jobUrlHash,
@@ -2862,6 +2950,8 @@ async function upsertDbTailoredResume(input: {
       companyName: input.companyName,
       displayName: input.displayName,
       error: input.error,
+      generationStepTimings:
+        input.generationStepTimings as unknown as Prisma.InputJsonValue,
       jobUrl: input.jobUrl,
       jobUrlHash,
       positionTitle: input.positionTitle,
@@ -2961,6 +3051,7 @@ async function finalizeTailorResumeGeneration(input: {
             initialPageCount: generatedPageCount,
             jobDescription: input.jobDescription,
             latexCode: tailoringResult.latexCode,
+            model: input.rawProfile.generationSettings.values.step4bModel,
             onStepEvent: (event) =>
               input.onStepEvent?.({
                 ...event,
@@ -3136,6 +3227,10 @@ async function finalizeTailorResumeGeneration(input: {
       runId: input.runId,
       userId: input.userId,
     })) ?? tailoredResumeUpdatedAt;
+  const generationStepTimings = await readTailorResumeRunStepTimings({
+    runId: input.runId,
+    userId: input.userId,
+  });
   const keywordCoverage = buildTailoredResumeKeywordCoverage({
     emphasizedTechnologies: tailoringResult.planningResult.emphasizedTechnologies,
     originalLatexCode: input.generationSourceAnnotatedLatex,
@@ -3217,6 +3312,7 @@ async function finalizeTailorResumeGeneration(input: {
         jobDescription: input.jobDescription,
         jobIdentifier: tailoringResult.jobIdentifier,
         jobUrl: input.jobUrl,
+        generationStepTimings,
         keywordCoverage,
         latexCode: tailoringResult.latexCode,
         openAiDebug: tailoringResult.openAiDebug,
@@ -3315,6 +3411,7 @@ async function finalizeTailorResumeGeneration(input: {
       createdAt: savedTailoredResume.createdAt,
       displayName: savedTailoredResume.displayName,
       error: savedTailoredResume.error,
+      generationStepTimings: savedTailoredResume.generationStepTimings,
       id: savedTailoredResume.id,
       jobUrl: savedTailoredResume.jobUrl,
       positionTitle: savedTailoredResume.positionTitle,
@@ -3667,20 +3764,24 @@ async function handleTailorResumeGeneration(
 
     let lastStepEvent: TailorResumeGenerationStepEvent | null = null;
     const handleStepEvent = async (event: TailorResumeGenerationStepEvent) => {
-      lastStepEvent = event;
+      const stepEvent = attachTailorResumeGenerationStepModel({
+        event,
+        generationSettings: preparation.rawProfile.generationSettings.values,
+      });
+      lastStepEvent = stepEvent;
       logTailorResumeDiagnostic({
         action: "tailor",
         message: "Tailoring step event.",
         runId: preparation.runId,
-        stepEvent: event,
+        stepEvent,
       });
       await updateTailorResumeRunStep({
         action: "tailor",
-        event,
+        event: stepEvent,
         runId: preparation.runId,
         userId,
       });
-      await options.onStepEvent?.(event);
+      await options.onStepEvent?.(stepEvent);
     };
     const stopRunHeartbeat = startTailorResumeRunHeartbeat({
       runId: preparation.runId,
@@ -3714,6 +3815,7 @@ async function handleTailorResumeGeneration(
       await extractTailorResumeEmphasizedTechnologiesForQuestioning({
         employerName: preparation.companyName,
         jobDescription: preparation.jobDescription,
+        model: preparation.rawProfile.generationSettings.values.step1Model,
         nonTechnologies: [
           ...userMarkdownForPlanning.nonTechnologies,
           ...storedNonSkillNames,
@@ -3967,22 +4069,26 @@ async function handleAdvanceTailorResumeInterview(
 
   let lastStepEvent: TailorResumeGenerationStepEvent | null = null;
   const handleStepEvent = async (event: TailorResumeGenerationStepEvent) => {
-    lastStepEvent = event;
+    const stepEvent = attachTailorResumeGenerationStepModel({
+      event,
+      generationSettings: preparation.rawProfile.generationSettings.values,
+    });
+    lastStepEvent = stepEvent;
     logTailorResumeDiagnostic({
       action: "advanceTailorResumeInterview",
       interviewId,
       message: "Interview step event.",
       runId: preparation.runId,
-      stepEvent: event,
+      stepEvent,
     });
     await updateTailorResumeRunStep({
       action: "advanceTailorResumeInterview",
-      event,
+      event: stepEvent,
       interviewId,
       runId: preparation.runId,
       userId,
     });
-    await options.onStepEvent?.(event);
+    await options.onStepEvent?.(stepEvent);
   };
   const stopRunHeartbeat = startTailorResumeRunHeartbeat({
     runId: preparation.runId,
@@ -4491,22 +4597,26 @@ async function handleCompleteTailorResumeInterview(
 
     let lastStepEvent: TailorResumeGenerationStepEvent | null = null;
     const handleStepEvent = async (event: TailorResumeGenerationStepEvent) => {
-      lastStepEvent = event;
+      const stepEvent = attachTailorResumeGenerationStepModel({
+        event,
+        generationSettings: preparation.rawProfile.generationSettings.values,
+      });
+      lastStepEvent = stepEvent;
       logTailorResumeDiagnostic({
         action: "completeTailorResumeInterview",
         interviewId,
         message: "Interview completion step event.",
         runId: preparation.runId,
-        stepEvent: event,
+        stepEvent,
       });
       await updateTailorResumeRunStep({
         action: "completeTailorResumeInterview",
-        event,
+        event: stepEvent,
         interviewId,
         runId: preparation.runId,
         userId,
       });
-      await options.onStepEvent?.(event);
+      await options.onStepEvent?.(stepEvent);
     };
     const stopRunHeartbeat = startTailorResumeRunHeartbeat({
       runId: preparation.runId,

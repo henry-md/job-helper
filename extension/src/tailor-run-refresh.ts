@@ -47,6 +47,7 @@ export function buildTailoringRunsRefreshKey(
           timing.status,
           timing.retrying === true ? "retrying" : "",
           timing.durationMs,
+          timing.model ?? "",
           timing.observedAt ?? "",
           buildTailorRunTechnologyRefreshKey(timing.blockingTechnologies),
           buildTailorRunTechnologyRefreshKey(timing.emphasizedTechnologies),

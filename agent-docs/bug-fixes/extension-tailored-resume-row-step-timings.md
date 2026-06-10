@@ -1,0 +1,4 @@
+- Symptom: with debug UI enabled, completed tailored-resume rows showed only the final saved/generated time on the right, even when per-step timing history was available.
+- Root cause: saved resume summaries did not carry generation timing history; the row renderer only read the summary timestamp, while granular step timings lived only on active/local run state.
+- Fix: persist granular `generationStepTimings` on `TailorResumeRun` as each step event arrives, copy that array onto the saved `TailoredResume` profile/DB object, and render the saved timing label immediately before the saved timestamp when debug UI is enabled.
+- Guardrail: keep one timing entry per step/attempt so retries stay visible separately. The extension may fall back to local run history for legacy records, but new saved rows should read timings from the saved tailored resume itself.
