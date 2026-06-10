@@ -2,7 +2,6 @@
 
 import {
   Fragment,
-  startTransition,
   useEffect,
   useRef,
   useState,
@@ -11,7 +10,6 @@ import type { LucideIcon } from "lucide-react";
 import {
   Braces,
   BriefcaseBusiness,
-  ChartColumnBig,
   ChevronDown,
   FileCode2,
   FileText,
@@ -19,20 +17,6 @@ import {
   Search,
   Sparkles,
 } from "lucide-react";
-
-const previewModes = [
-  {
-    id: "helper",
-    label: "Resume Tailor",
-    description:
-      "See the real staged tailoring system: LaTeX first, then scrape, verify coverage, plan, implement, and preserve page count.",
-  },
-  {
-    id: "tracker",
-    label: "Job Tracker",
-    description: "See interviews, follow-ups, and next steps stay organized.",
-  },
-] as const;
 
 const tailorBaseStage = {
   chip: "source of truth",
@@ -84,67 +68,15 @@ const tailorPipelineStages = [
   },
 ] as const;
 
-type PreviewModeId = (typeof previewModes)[number]["id"];
-
-const trackerStats = [
-  ["Active", "18"],
-  ["Interviews", "4"],
-  ["Next up", "6"],
-] as const;
-
-const trackerRows = [
-  ["Notion", "Product Designer", "Phone screen Thu"],
-  ["Mercury", "Software Engineer", "Take-home due"],
-  ["Vercel", "Frontend Engineer", "Follow-up today"],
-  ["Linear", "Senior Product Designer", "Hiring manager Fri"],
-  ["Figma", "Design Systems Lead", "Portfolio review"],
-] as const;
-
-const trackerRowGapPx = 8;
-const trackerRowsTopInsetPx = 8;
-const defaultTrackerRowCount = 4;
-
 export default function PublicLandingShowcase() {
-  const [activePreview, setActivePreview] = useState<PreviewModeId>("helper");
-
   return (
     <section className="public-showcase-card relative h-full min-h-0 overflow-hidden rounded-[1.75rem] border border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.92),rgba(9,9,11,0.98))] p-2 sm:p-4">
       <div className="pointer-events-none absolute left-8 top-6 h-24 w-24 rounded-full bg-emerald-300/10 blur-3xl [animation:public-drift_12s_ease-in-out_infinite]" />
       <div className="pointer-events-none absolute bottom-0 right-0 h-28 w-28 rounded-full bg-cyan-300/10 blur-3xl [animation:public-drift_15s_ease-in-out_infinite_reverse]" />
 
       <div className="public-showcase-inner relative flex h-full min-h-0 flex-col gap-2 sm:gap-2">
-        <div className="public-preview-tabs-wrap flex flex-col gap-2">
-          <div className="public-preview-tabs inline-flex w-fit items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] p-0.75 sm:p-1">
-            {previewModes.map((mode) => {
-              const isActive = mode.id === activePreview;
-
-              return (
-                <button
-                  key={mode.id}
-                  type="button"
-                  aria-pressed={isActive}
-                  className={`public-preview-tab rounded-full px-3 py-1.5 text-[0.94rem] font-medium transition sm:px-4 sm:py-2 sm:text-sm ${
-                    isActive
-                      ? "bg-zinc-50 text-zinc-950 shadow-[0_12px_30px_rgba(255,255,255,0.14)]"
-                      : "text-zinc-300 hover:bg-white/6 hover:text-zinc-100"
-                  }`}
-                  onClick={() => {
-                    startTransition(() => setActivePreview(mode.id));
-                  }}
-                >
-                  {mode.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
         <div className="public-showcase-body min-h-0 flex-1">
-          {activePreview === "helper" ? (
-            <TailorResumePreview />
-          ) : (
-            <JobTrackerPreview />
-          )}
+          <TailorResumePreview />
         </div>
       </div>
     </section>
@@ -385,184 +317,6 @@ function TailorPipelineArrow() {
           strokeWidth="1.7"
         />
       </svg>
-    </div>
-  );
-}
-
-function JobTrackerPreview() {
-  const rowsViewportRef = useRef<HTMLDivElement | null>(null);
-  const rowMeasureRef = useRef<HTMLDivElement | null>(null);
-  const [visibleRowCount, setVisibleRowCount] = useState(() =>
-    Math.min(defaultTrackerRowCount, trackerRows.length),
-  );
-
-  useEffect(() => {
-    const viewportElement = rowsViewportRef.current;
-    const rowElement = rowMeasureRef.current;
-
-    if (!viewportElement || !rowElement) {
-      return;
-    }
-
-    let frameId = 0;
-
-    const updateVisibleRowCount = () => {
-      const viewportHeight = viewportElement.clientHeight;
-      const rowHeight = rowElement.clientHeight;
-      const availableHeight = viewportHeight - trackerRowsTopInsetPx;
-
-      if (availableHeight <= 0 || rowHeight <= 0) {
-        return;
-      }
-
-      const nextVisibleRowCount = Math.max(
-        1,
-        Math.min(
-          trackerRows.length,
-          Math.floor(
-            (availableHeight + trackerRowGapPx) /
-              (rowHeight + trackerRowGapPx),
-          ),
-        ),
-      );
-
-      setVisibleRowCount((current) =>
-        current === nextVisibleRowCount ? current : nextVisibleRowCount,
-      );
-    };
-
-    const scheduleVisibleRowCountUpdate = () => {
-      window.cancelAnimationFrame(frameId);
-      frameId = window.requestAnimationFrame(updateVisibleRowCount);
-    };
-
-    scheduleVisibleRowCountUpdate();
-
-    const resizeObserver = new ResizeObserver(scheduleVisibleRowCountUpdate);
-    resizeObserver.observe(viewportElement);
-    resizeObserver.observe(rowElement);
-    window.addEventListener("resize", scheduleVisibleRowCountUpdate);
-
-    return () => {
-      window.cancelAnimationFrame(frameId);
-      resizeObserver.disconnect();
-      window.removeEventListener("resize", scheduleVisibleRowCountUpdate);
-    };
-  }, []);
-
-  const visibleRows = trackerRows.slice(0, visibleRowCount);
-
-  return (
-    <div className="flex h-full min-h-0 flex-col rounded-[1.5rem] border border-white/10 bg-[#0d0d10]/95 p-2.5 sm:p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-[0.66rem] uppercase tracking-[0.28em] text-zinc-500">
-            Job Tracker
-          </p>
-          <p className="mt-1 text-[1.05rem] font-semibold text-zinc-50 sm:text-lg">
-            Your search, organized.
-          </p>
-        </div>
-        <BriefcaseBusiness className="h-4 w-4 text-cyan-200" />
-      </div>
-
-      <div className="mt-2 grid grid-cols-3 gap-2 sm:mt-3">
-        {trackerStats.map(([label, value], index) => (
-          <div
-            key={label}
-            className="rounded-[1rem] border border-white/8 bg-white/[0.04] p-2 [animation:public-float_8s_ease-in-out_infinite] sm:p-2.5"
-            style={{ animationDelay: `${index * 110}ms` }}
-          >
-            <p className="text-[0.55rem] uppercase tracking-[0.2em] text-zinc-500">
-              {label}
-            </p>
-            <p className="mt-1.5 text-base font-semibold text-zinc-50 sm:text-lg">
-              {value}
-            </p>
-          </div>
-        ))}
-      </div>
-
-      <div
-        className="mt-2 flex flex-1 min-h-0 flex-col rounded-[1.25rem] border border-white/10 bg-white/[0.03] p-2.5 sm:mt-3 sm:p-4"
-        data-preview-section="job-tracker-week"
-      >
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-[0.64rem] uppercase tracking-[0.24em] text-zinc-500">
-            This week
-          </p>
-          <ChartColumnBig className="h-4 w-4 text-cyan-200" />
-        </div>
-
-        <div
-          ref={rowsViewportRef}
-          className="relative mt-2 flex-1 min-h-0 overflow-hidden sm:mt-3"
-          data-preview-row-viewport="true"
-        >
-          <div className="space-y-2 pt-2">
-            {visibleRows.map(([company, role, stage], index) => (
-              <TrackerPreviewRow
-                key={company}
-                animationDelayMs={index * 120}
-                company={company}
-                role={role}
-                stage={stage}
-              />
-            ))}
-          </div>
-
-          <div
-            aria-hidden="true"
-            className="pointer-events-none invisible absolute inset-x-0 top-0 -z-10"
-          >
-            <div
-              ref={rowMeasureRef}
-              className="flex items-center justify-between gap-3 rounded-[1rem] border border-white/8 bg-black/20 px-3 py-2 sm:px-3.5 sm:py-2.5"
-            >
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-zinc-50">
-                  {trackerRows[0][0]}
-                </p>
-                <p className="truncate text-xs text-zinc-400">
-                  {trackerRows[0][1]}
-                </p>
-              </div>
-              <span className="shrink-0 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[0.52rem] uppercase tracking-[0.18em] text-zinc-300 sm:px-3 sm:text-[0.58rem]">
-                {trackerRows[0][2]}
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TrackerPreviewRow(input: {
-  animationDelayMs?: number;
-  company: string;
-  role: string;
-  stage: string;
-}) {
-  return (
-    <div
-      className="flex items-center justify-between gap-3 rounded-[1rem] border border-white/8 bg-black/20 px-3 py-2 [animation:public-float_9s_ease-in-out_infinite] sm:px-3.5 sm:py-2.5"
-      data-preview-row="true"
-      style={
-        input.animationDelayMs === undefined
-          ? undefined
-          : { animationDelay: `${input.animationDelayMs}ms` }
-      }
-    >
-      <div className="min-w-0">
-        <p className="truncate text-sm font-medium text-zinc-50">
-          {input.company}
-        </p>
-        <p className="truncate text-xs text-zinc-400">{input.role}</p>
-      </div>
-      <span className="shrink-0 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[0.52rem] uppercase tracking-[0.18em] text-zinc-300 sm:px-3 sm:text-[0.58rem]">
-        {input.stage}
-      </span>
     </div>
   );
 }

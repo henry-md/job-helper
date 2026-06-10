@@ -90,7 +90,7 @@ export default async function Home({ searchParams }: HomePageProps) {
             <PublicHeroTitle
               className="public-home-title max-w-sm text-[clamp(1.72rem,8vw,2.56rem)] leading-[0.92] font-semibold tracking-tight text-zinc-50 sm:max-w-xl sm:text-[clamp(2.45rem,7.4vw,4.9rem)] sm:leading-[0.9]"
               sentencePauseMs={heroTypingAnimationSentencePauseMs}
-              text={"Tailor the resume.\nTrack the search."}
+              text={"Tailor the resume.\nReview the fit."}
               wordPauseMs={heroTypingAnimationWordPauseMs}
               wordsPerMinute={heroTypingSpeedAnimation}
             />
@@ -98,8 +98,8 @@ export default async function Home({ searchParams }: HomePageProps) {
               Job Helper turns a base resume into a job-specific PDF through a
               staged LaTeX pipeline with keyword scraping, a deterministic
               coverage checkpoint, plaintext planning, Step 4A block edits, and
-              a Step 4B page-count guardrail. Job Tracker keeps every company,
-              stage, and next step in one clean workspace.
+              a Step 4B page-count guardrail. Saved reviews keep each tailored
+              resume ready to inspect, restore, or refine.
             </p>
           </div>
 
@@ -107,7 +107,7 @@ export default async function Home({ searchParams }: HomePageProps) {
             <SignInButton />
             <p className="hidden text-sm leading-relaxed text-zinc-500 sm:block">
               Sign in with Google to open your saved dashboard, tailored
-              resumes, and tracked applications.
+              resumes, and resume settings.
             </p>
           </div>
         </div>
