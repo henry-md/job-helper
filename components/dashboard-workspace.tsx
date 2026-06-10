@@ -23,11 +23,9 @@ import {
   type DashboardTabId,
 } from "@/lib/dashboard-route-state";
 import {
-  formatCompactDate,
   formatCompactDateOrSameDayTime,
   shouldIncludeShortYear,
 } from "@/lib/date-format";
-import { buildJobApplicationDisplayParts } from "@/lib/job-application-display";
 import {
   haveUserSyncStateChanged,
   readUserSyncStateSnapshot,
@@ -37,14 +35,12 @@ import {
   readTailorResumeExistingTailoringStates,
   type TailorResumeExistingTailoringState,
 } from "@/lib/tailor-resume-existing-tailoring-state";
-import { normalizeTailorResumeJobUrl } from "@/lib/tailor-resume-job-url";
 import { splitTailoredResumesByArchiveState } from "@/lib/tailored-resume-archive-state";
 import {
   getTailoredResumeGenerationFailureLabel,
   hasTailoredResumeGenerationFailure,
 } from "@/lib/tailored-resume-generation-state";
 import { formatTailoredResumeSidebarName } from "@/lib/tailored-resume-sidebar-name";
-import type { JobApplicationRecord } from "@/lib/job-application-types";
 import type { AiUsageReport } from "@/lib/ai-usage-report-types";
 import type {
   TailorResumeProfile,
@@ -68,18 +64,6 @@ type DashboardDeleteMutationResponse = {
   tailoredResumeId?: string;
 };
 
-type DashboardApplicationsResponse = {
-  applicationCount?: number;
-  applications?: JobApplicationRecord[];
-  companyCount?: number;
-  error?: string;
-};
-
-type DashboardApplicationMutationResponse = {
-  application?: JobApplicationRecord;
-  error?: string;
-};
-
 type DashboardTailorResumeResponse = {
   archived?: boolean;
   activeTailorings?: TailorResumeExistingTailoringState[];
@@ -90,14 +74,10 @@ type DashboardTailorResumeResponse = {
 };
 
 type PendingDashboardDelete =
-  | {
-      applicationId: string;
-      kind: "application";
-    }
-  | {
-      kind: "tailoredResume";
-      tailoredResumeId: string;
-    };
+  {
+    kind: "tailoredResume";
+    tailoredResumeId: string;
+  };
 
 type ArchiveView = "archived" | "unarchived";
 
@@ -132,16 +112,6 @@ const historySegmentControlClassName =
 const historySegmentButtonClassName =
   "rounded-full px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.18em] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/25 sm:px-4";
 
-function uniqueTailoredResumes(records: TailoredResumeRecord[]) {
-  const recordById = new Map<string, TailoredResumeRecord>();
-
-  for (const record of records) {
-    recordById.set(record.id, record);
-  }
-
-  return [...recordById.values()];
-}
-
 function buildTailorResumeProfileRefreshKey(profile: TailorResumeProfile) {
   return [
     profile.resume?.updatedAt ?? "",
@@ -166,52 +136,6 @@ function buildTailorResumeProfileRefreshKey(profile: TailorResumeProfile) {
     profile.generationSettings.updatedAt ?? "",
     profile.promptSettings.updatedAt ?? "",
   ].join("::");
-}
-
-function findLinkedApplicationForTailoredResume(
-  record: TailoredResumeRecord,
-  applications: JobApplicationRecord[],
-) {
-  if (record.applicationId) {
-    const linkedApplication = applications.find(
-      (application) => application.id === record.applicationId,
-    );
-
-    if (linkedApplication) {
-      return linkedApplication;
-    }
-  }
-
-  const normalizedJobUrl = normalizeTailorResumeJobUrl(record.jobUrl);
-
-  if (!normalizedJobUrl) {
-    return null;
-  }
-
-  return (
-    applications.find(
-      (application) =>
-        normalizeTailorResumeJobUrl(application.jobUrl) === normalizedJobUrl,
-    ) ?? null
-  );
-}
-
-function findLinkedTailoredResumesForApplication(
-  application: JobApplicationRecord,
-  tailoredResumes: TailoredResumeRecord[],
-) {
-  const normalizedJobUrl = normalizeTailorResumeJobUrl(application.jobUrl);
-
-  return tailoredResumes.filter((record) => {
-    if (record.applicationId) {
-      return record.applicationId === application.id;
-    }
-
-    return Boolean(
-      normalizedJobUrl &&
-        normalizeTailorResumeJobUrl(record.jobUrl) === normalizedJobUrl,
-    );
-  });
 }
 
 function formatDeleteImpactSummary(impact: DashboardDeleteImpact) {
@@ -244,17 +168,7 @@ function formatDeleteImpactSummary(impact: DashboardDeleteImpact) {
   return `${parts[0]} and ${parts[1]}`;
 }
 
-function formatApplicationStatus(value: string) {
-  return value
-    .toLowerCase()
-    .split("_")
-    .filter(Boolean)
-    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
-    .join(" ");
-}
-
 function buildPendingDeleteImpact(input: {
-  applications: JobApplicationRecord[];
   pendingDelete: PendingDashboardDelete | null;
   tailoredResumes: TailoredResumeRecord[];
 }): DashboardDeleteImpact | null {
@@ -263,32 +177,6 @@ function buildPendingDeleteImpact(input: {
   }
 
   const pendingDelete = input.pendingDelete;
-
-  if (pendingDelete.kind === "application") {
-    const application =
-      input.applications.find(
-        (record) => record.id === pendingDelete.applicationId,
-      ) ?? null;
-
-    if (!application) {
-      return null;
-    }
-
-    const linkedTailoredResumes = uniqueTailoredResumes(
-      findLinkedTailoredResumesForApplication(
-        application,
-        input.tailoredResumes,
-      ),
-    );
-
-    return {
-      applicationCount: 1,
-      applicationIds: [application.id],
-      tailoredResumeCount: linkedTailoredResumes.length,
-      tailoredResumeIds: linkedTailoredResumes.map((record) => record.id),
-      totalCount: 1 + linkedTailoredResumes.length,
-    };
-  }
 
   const tailoredResume =
     input.tailoredResumes.find(
@@ -299,29 +187,12 @@ function buildPendingDeleteImpact(input: {
     return null;
   }
 
-  const linkedApplication = findLinkedApplicationForTailoredResume(
-    tailoredResume,
-    input.applications,
-  );
-  const linkedTailoredResumes = uniqueTailoredResumes(
-    linkedApplication
-      ? [
-          tailoredResume,
-          ...findLinkedTailoredResumesForApplication(
-            linkedApplication,
-            input.tailoredResumes,
-          ),
-        ]
-      : [tailoredResume],
-  );
-
   return {
-    applicationCount: linkedApplication ? 1 : 0,
-    applicationIds: linkedApplication ? [linkedApplication.id] : [],
-    tailoredResumeCount: linkedTailoredResumes.length,
-    tailoredResumeIds: linkedTailoredResumes.map((record) => record.id),
-    totalCount:
-      linkedTailoredResumes.length + (linkedApplication ? 1 : 0),
+    applicationCount: 0,
+    applicationIds: [],
+    tailoredResumeCount: 1,
+    tailoredResumeIds: [tailoredResume.id],
+    totalCount: 1,
   };
 }
 
@@ -432,7 +303,6 @@ function ProfileAvatar({
 }
 
 export default function DashboardWorkspace({
-  applications,
   aiUsageReport,
   defaultPromptSettings,
   initialReviewingTailoredResumeId,
@@ -448,7 +318,6 @@ export default function DashboardWorkspace({
   userImage,
   userName,
 }: {
-  applications: JobApplicationRecord[];
   aiUsageReport: AiUsageReport;
   defaultPromptSettings: TailorResumeProfile["promptSettings"]["values"];
   initialReviewingTailoredResumeId?: string | null;
@@ -475,9 +344,6 @@ export default function DashboardWorkspace({
       tailoredResumeId: initialReviewingTailoredResumeId ?? null,
     }),
   );
-  const [applicationRecords, setApplicationRecords] = useState<JobApplicationRecord[]>(
-    () => applications,
-  );
   const [tailorResumeProfileState, setTailorResumeProfileState] =
     useState<TailorResumeProfile>(() => tailorResumeProfile);
   const [tailorResumeUserMemoryState, setTailorResumeUserMemoryState] =
@@ -495,11 +361,7 @@ export default function DashboardWorkspace({
   const [isDeletingDashboardItem, setIsDeletingDashboardItem] = useState(false);
   const [tailoredResumeArchiveActionId, setTailoredResumeArchiveActionId] =
     useState<string | null>(null);
-  const [applicationArchiveActionId, setApplicationArchiveActionId] =
-    useState<string | null>(null);
   const [resumeArchiveView, setResumeArchiveView] =
-    useState<ArchiveView>("unarchived");
-  const [applicationArchiveView, setApplicationArchiveView] =
     useState<ArchiveView>("unarchived");
   const lastSeenSyncStateRef = useRef<UserSyncStateSnapshot>(initialSyncState);
   const tailorResumeProfileRefreshKeyRef = useRef(
@@ -512,56 +374,38 @@ export default function DashboardWorkspace({
   const reviewingTailoredResume =
     tailoredResumes.find((tr) => tr.id === reviewingTailoredResumeId) ?? null;
   const pendingDeleteImpact = buildPendingDeleteImpact({
-    applications: applicationRecords,
     pendingDelete: pendingDashboardDelete,
     tailoredResumes,
   });
   const displayName = userName?.trim()?.split(" ")[0] || userName || "there";
   const profileImageSrc = getValidProfileImageSrc(userImage);
-  const includeYearInApplicationDates = shouldIncludeShortYear(
-    applicationRecords.map((application) => application.appliedAt),
-  );
   const includeYearInTailoredResumeDates = shouldIncludeShortYear(
     tailoredResumes.map((tailoredResume) => tailoredResume.updatedAt),
   );
   const { archived: archivedTailoredResumes, unarchived: unarchivedTailoredResumes } =
     splitTailoredResumesByArchiveState(tailoredResumes);
-  const { archived: archivedApplications, unarchived: unarchivedApplications } =
-    splitTailoredResumesByArchiveState(applicationRecords);
   const pendingDeleteTitle =
     pendingDeleteImpact && pendingDeleteImpact.totalCount > 1
       ? `Delete ${pendingDeleteImpact.totalCount} items?`
-      : pendingDashboardDelete?.kind === "application"
-        ? "Delete application?"
-        : "Delete tailored resume?";
+      : "Delete tailored resume?";
   const pendingDeleteEyebrow =
     pendingDeleteImpact && pendingDeleteImpact.totalCount > 1
       ? "Remove linked items"
-      : pendingDashboardDelete?.kind === "application"
-        ? "Remove application"
-        : "Remove from history";
+      : "Remove from history";
   const pendingDeleteDescription =
     pendingDeleteImpact && pendingDeleteImpact.totalCount > 1
       ? `This will delete ${formatDeleteImpactSummary(
           pendingDeleteImpact,
         )}. Any included tailored resume preview PDF will be removed too. This action can't be undone.`
-      : pendingDashboardDelete?.kind === "application"
-        ? "This will delete the saved application. This action can't be undone."
-        : "This removes the saved tailored resume and its PDF preview from History. This action can't be undone.";
+      : "This removes the saved tailored resume and its PDF preview from History. This action can't be undone.";
   const pendingDeleteActionLabel =
     pendingDeleteImpact && pendingDeleteImpact.totalCount > 1
       ? `Delete ${pendingDeleteImpact.totalCount} items`
-      : pendingDashboardDelete?.kind === "application"
-        ? "Delete application"
-        : "Delete resume";
+      : "Delete resume";
 
   useEffect(() => {
     setDashboardRouteState(parseDashboardRouteStateFromSearchParams(searchParams));
   }, [searchParams]);
-
-  useEffect(() => {
-    setApplicationRecords(applications);
-  }, [applications]);
 
   useEffect(() => {
     setTailorResumeProfileState(tailorResumeProfile);
@@ -631,19 +475,6 @@ export default function DashboardWorkspace({
     });
   }, [navigateDashboard]);
 
-  const refreshDashboardApplications = useCallback(async () => {
-    const response = await fetch("/api/job-applications?limit=all&includeArchived=1", {
-      cache: "no-store",
-    });
-    const payload = (await response.json()) as DashboardApplicationsResponse;
-
-    if (!response.ok || !Array.isArray(payload.applications)) {
-      throw new Error(payload.error ?? "Unable to refresh applications.");
-    }
-
-    setApplicationRecords(payload.applications);
-  }, []);
-
   const refreshDashboardTailorResume = useCallback(async () => {
     const response = await fetch("/api/tailor-resume", {
       cache: "no-store",
@@ -686,19 +517,15 @@ export default function DashboardWorkspace({
     nextSyncState: UserSyncStateSnapshot,
   ) => {
     const previousSyncState = lastSeenSyncStateRef.current;
-
-    const shouldRefreshApplications =
-      previousSyncState.applicationsVersion !== nextSyncState.applicationsVersion;
     const shouldRefreshTailoring =
       previousSyncState.tailoringVersion !== nextSyncState.tailoringVersion;
 
-    await Promise.all([
-      shouldRefreshApplications ? refreshDashboardApplications() : Promise.resolve(),
-      shouldRefreshTailoring ? refreshDashboardTailorResume() : Promise.resolve(),
-    ]);
+    if (shouldRefreshTailoring) {
+      await refreshDashboardTailorResume();
+    }
 
     lastSeenSyncStateRef.current = nextSyncState;
-  }, [refreshDashboardApplications, refreshDashboardTailorResume]);
+  }, [refreshDashboardTailorResume]);
 
   const handleSetTailoredResumeArchivedState = useCallback(async (
     tailoredResumeId: string,
@@ -743,60 +570,6 @@ export default function DashboardWorkspace({
       setTailoredResumeArchiveActionId(null);
     }
   }, [applyTailorResumeProfileChange]);
-
-  const handleSetApplicationArchivedState = useCallback(async (
-    applicationId: string,
-    archived: boolean,
-  ) => {
-    setApplicationArchiveActionId(applicationId);
-
-    try {
-      const response = await fetch(
-        `/api/job-applications/${encodeURIComponent(applicationId)}`,
-        {
-          body: JSON.stringify({
-            action: "setArchivedState",
-            archived,
-          }),
-          headers: {
-            "Content-Type": "application/json",
-          },
-          method: "PATCH",
-        },
-      );
-      const payload = (await response.json()) as DashboardApplicationMutationResponse;
-
-      if (!response.ok || !payload.application) {
-        throw new Error(
-          payload.error ??
-            (archived
-              ? "Unable to archive the application."
-              : "Unable to restore the application."),
-        );
-      }
-
-      setApplicationRecords((currentApplications) =>
-        currentApplications.map((application) =>
-          application.id === payload.application?.id
-            ? payload.application
-            : application,
-        ),
-      );
-      toast.success(
-        archived ? "Moved application to Archived." : "Restored application.",
-      );
-    } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : archived
-            ? "Unable to archive the application."
-            : "Unable to restore the application.",
-      );
-    } finally {
-      setApplicationArchiveActionId(null);
-    }
-  }, []);
 
   useEffect(() => {
     let isCancelled = false;
@@ -925,38 +698,25 @@ export default function DashboardWorkspace({
     setIsDeletingDashboardItem(true);
 
     try {
-      const response =
-        currentDelete.kind === "application"
-          ? await fetch(`/api/job-applications/${currentDelete.applicationId}`, {
-              method: "DELETE",
-            })
-          : await fetch("/api/tailor-resume", {
-              body: JSON.stringify({
-                action: "deleteTailoredResume",
-                tailoredResumeId: currentDelete.tailoredResumeId,
-              }),
-              headers: {
-                "Content-Type": "application/json",
-              },
-              method: "PATCH",
-            });
+      const response = await fetch("/api/tailor-resume", {
+        body: JSON.stringify({
+          action: "deleteTailoredResume",
+          tailoredResumeId: currentDelete.tailoredResumeId,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "PATCH",
+      });
       const payload = (await response.json()) as DashboardDeleteMutationResponse;
 
       if (!response.ok || !payload.profile) {
         throw new Error(
-          payload.error ??
-            (currentDelete.kind === "application"
-              ? "Unable to delete the application."
-              : "Unable to delete the tailored resume."),
+          payload.error ?? "Unable to delete the tailored resume.",
         );
       }
 
       applyTailorResumeProfileChange(payload.profile);
-      setApplicationRecords((currentApplications) => {
-        return currentApplications.filter(
-          (application) => !currentImpact.applicationIds.includes(application.id),
-        );
-      });
       setPendingDashboardDelete(null);
 
       if (
@@ -975,9 +735,7 @@ export default function DashboardWorkspace({
       toast.error(
         error instanceof Error
           ? error.message
-          : pendingDashboardDelete.kind === "application"
-            ? "Unable to delete the application."
-            : "Unable to delete the tailored resume.",
+          : "Unable to delete the tailored resume.",
       );
     } finally {
       setIsDeletingDashboardItem(false);
@@ -1123,118 +881,14 @@ export default function DashboardWorkspace({
     );
   };
 
-  const renderApplicationHistoryRows = (
-    historyApplications: JobApplicationRecord[],
-    options: {
-      archived: boolean;
-    },
-  ) => {
-    if (historyApplications.length === 0) {
-      return null;
-    }
-
-    return (
-      <div className="tailor-history-list grid gap-2">
-        {historyApplications.map((application) => {
-          const applicationDisplay = buildJobApplicationDisplayParts({
-            companyName: application.companyName,
-            jobTitle: application.jobTitle,
-          });
-          const isArchiveActionPending =
-            applicationArchiveActionId === application.id;
-
-          return (
-            <div
-              className="tailor-history-row group relative flex items-center justify-between gap-3 overflow-hidden rounded-[1rem] border border-white/8 bg-black/20 transition hover:border-emerald-400/25 hover:bg-emerald-400/6 focus-within:border-emerald-300/45"
-              key={application.id}
-            >
-              <a
-                className="tailor-history-row-open min-w-0 flex-1 overflow-hidden px-3 py-2.5 text-left focus-visible:outline-none"
-                href={application.jobUrl || undefined}
-                onClick={(event) => {
-                  if (!application.jobUrl) {
-                    event.preventDefault();
-                  }
-                }}
-                rel="noreferrer"
-                target={application.jobUrl ? "_blank" : undefined}
-              >
-                <div className="min-w-0 overflow-hidden">
-                  <p
-                    className="tailor-history-title truncate text-sm font-medium text-zinc-100"
-                    title={applicationDisplay.companyName}
-                  >
-                    {applicationDisplay.companyName}
-                  </p>
-                  <div className="tailor-history-meta mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                    <p className="tailor-history-company min-w-0 flex-1 truncate text-sm text-zinc-400">
-                      {applicationDisplay.positionName}
-                    </p>
-                    <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.18em] text-zinc-400">
-                      {formatApplicationStatus(application.status)}
-                    </span>
-                  </div>
-                </div>
-              </a>
-
-              <div className="flex shrink-0 items-center gap-2 px-2 py-2">
-                <span className="tailor-history-date text-center text-xs text-zinc-500">
-                  {formatCompactDate(application.appliedAt, includeYearInApplicationDates)}
-                </span>
-                <button
-                  className={historyActionButtonClassName}
-                  disabled={isDeletingDashboardItem || isArchiveActionPending}
-                  onClick={() =>
-                    void handleSetApplicationArchivedState(
-                      application.id,
-                      !options.archived,
-                    )
-                  }
-                  type="button"
-                >
-                  {isArchiveActionPending
-                    ? options.archived
-                      ? "Restoring..."
-                      : "Archiving..."
-                    : options.archived
-                      ? "Restore"
-                      : "Archive"}
-                </button>
-                <button
-                  aria-label={`Delete ${application.jobTitle} at ${application.companyName}`}
-                  className={historyDeleteButtonClassName}
-                  disabled={isDeletingDashboardItem || isArchiveActionPending}
-                  onClick={() =>
-                    setPendingDashboardDelete({
-                      applicationId: application.id,
-                      kind: "application",
-                    })
-                  }
-                  title="Delete application"
-                  type="button"
-                >
-                  <Trash2 aria-hidden="true" className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
   const resumeHistoryRows =
     resumeArchiveView === "archived"
       ? archivedTailoredResumes
       : unarchivedTailoredResumes;
-  const applicationHistoryRows =
-    applicationArchiveView === "archived"
-      ? archivedApplications
-      : unarchivedApplications;
 
   const savedWorkspacePane = (
     <div className="tailor-history-shell h-full overflow-visible sm:app-scrollbar sm:min-h-0 sm:overflow-y-auto sm:pr-1">
-      <div className="grid gap-[clamp(0.75rem,1.2vh,1rem)] xl:grid-cols-2">
+      <div className="grid gap-[clamp(0.75rem,1.2vh,1rem)]">
         <section className="tailor-history-panel glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
           <div className="tailor-history-header mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
@@ -1311,72 +965,6 @@ export default function DashboardWorkspace({
           ) : (
             renderTailoredResumeHistoryRows(resumeHistoryRows, {
               archived: true,
-            })
-          )}
-        </section>
-
-        <section className="tailor-history-panel glass-panel soft-ring rounded-[1.5rem] p-4 sm:p-5">
-          <div className="tailor-history-header mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <p className="tailor-history-heading text-xs uppercase tracking-[0.24em] text-zinc-500">
-                Applications
-              </p>
-              <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-50">
-                Saved applications
-              </h2>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-              <div
-                aria-label="Application archive view"
-                className={historySegmentControlClassName}
-                role="group"
-              >
-                <button
-                  aria-pressed={applicationArchiveView === "unarchived"}
-                  className={`${historySegmentButtonClassName} ${
-                    applicationArchiveView === "unarchived"
-                      ? "bg-emerald-400/16 text-emerald-100 shadow-[inset_0_0_0_1px_rgba(52,211,153,0.28)]"
-                      : "text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200"
-                  }`}
-                  onClick={() => setApplicationArchiveView("unarchived")}
-                  type="button"
-                >
-                  Unarchived
-                  <span className="ml-2 text-zinc-500">
-                    {unarchivedApplications.length}
-                  </span>
-                </button>
-                <button
-                  aria-pressed={applicationArchiveView === "archived"}
-                  className={`${historySegmentButtonClassName} ${
-                    applicationArchiveView === "archived"
-                      ? "bg-emerald-400/16 text-emerald-100 shadow-[inset_0_0_0_1px_rgba(52,211,153,0.28)]"
-                      : "text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200"
-                  }`}
-                  onClick={() => setApplicationArchiveView("archived")}
-                  type="button"
-                >
-                  Archived
-                  <span className="ml-2 text-zinc-500">
-                    {archivedApplications.length}
-                  </span>
-                </button>
-              </div>
-              <span className="tailor-history-count shrink-0 whitespace-nowrap rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-zinc-400">
-                {applicationHistoryRows.length} apps
-              </span>
-            </div>
-          </div>
-
-          {applicationHistoryRows.length === 0 ? (
-            <p className="text-sm text-zinc-400">
-              {applicationArchiveView === "archived"
-                ? "No archived applications yet."
-                : "No unarchived applications yet."}
-            </p>
-          ) : (
-            renderApplicationHistoryRows(applicationHistoryRows, {
-              archived: applicationArchiveView === "archived",
             })
           )}
         </section>
