@@ -9,6 +9,7 @@ import {
 import {
   tailorResumeDebugErrorSources,
 } from "./tailor-resume-debug-errors.ts";
+import { resolveTailorResumeSelectableModel } from "./tailor-resume-generation-settings.ts";
 import { validateTailorResumeLatexDocument } from "./tailor-resume-link-validation.ts";
 import { buildTailorResumeKeywordCheckResult } from "./tailor-resume-keyword-coverage.ts";
 import {
@@ -75,10 +76,10 @@ type TailorResumeCompactionResponse = {
 
 function resolveTailorResumeCompactionModel(inputModel?: string) {
   return (
-    inputModel ??
+    (inputModel ? resolveTailorResumeSelectableModel(inputModel) : null) ??
     process.env.OPENAI_TAILOR_RESUME_COMPACTION_MODEL ??
     process.env.OPENAI_TAILOR_RESUME_MODEL ??
-    "gpt-5-mini"
+    "gpt-5.4"
   );
 }
 

@@ -9,6 +9,10 @@ import {
   type SystemPromptSettings,
 } from "./system-prompt-settings.ts";
 import { applyTailorResumeLinkOverridesWithSummary } from "./tailor-resume-link-overrides.ts";
+import {
+  resolveTailorResumeSelectableModel,
+  type TailorResumeGenerationSettings,
+} from "./tailor-resume-generation-settings.ts";
 import { validateTailorResumeLatexDocument } from "./tailor-resume-link-validation.ts";
 import {
   buildTailorResumeKeywordCheckResult,
@@ -584,7 +588,7 @@ function getAnthropicApiKey() {
 }
 
 function parseTailorResumeModelRef(value: string | undefined): TailorResumeModelRef {
-  const rawValue = value?.trim() || "gpt-5-mini";
+  const rawValue = value?.trim() || "anthropic:claude-sonnet-4-6";
   const separatorIndex = rawValue.indexOf(":");
 
   if (separatorIndex > 0) {
@@ -618,11 +622,13 @@ function parseTailorResumeModelRef(value: string | undefined): TailorResumeModel
   };
 }
 
-function resolveTailorResumePlanningModelRef() {
+function resolveTailorResumePlanningModelRefFromInput(inputModel?: string) {
   return parseTailorResumeModelRef(
-    process.env.TAILOR_RESUME_PLANNING_MODEL ??
-      process.env.OPENAI_TAILOR_RESUME_MODEL ??
-      "gpt-5-mini",
+    inputModel
+      ? resolveTailorResumeSelectableModel(inputModel)
+      : process.env.TAILOR_RESUME_PLANNING_MODEL ??
+          process.env.OPENAI_TAILOR_RESUME_MODEL ??
+          "anthropic:claude-sonnet-4-6",
   );
 }
 
@@ -4312,6 +4318,7 @@ function buildFallbackTailoredResumeOpenAiDebug() {
 export async function extractTailorResumeEmphasizedTechnologiesForQuestioning(input: {
   employerName?: string | null;
   jobDescription: string;
+  model?: string;
   nonTechnologies?: readonly string[] | null;
   onStepEvent?: (
     event: TailorResumeGenerationStepEvent,
@@ -4319,9 +4326,11 @@ export async function extractTailorResumeEmphasizedTechnologiesForQuestioning(in
 }): Promise<ExtractTailorResumeEmphasizedTechnologiesResult> {
   const startedAt = Date.now();
   const model =
-    process.env.OPENAI_TAILOR_RESUME_KEYWORD_MODEL ??
-    process.env.OPENAI_TAILOR_RESUME_MODEL ??
-    "gpt-5.5";
+    input.model
+        ? resolveTailorResumeSelectableModel(input.model)
+        : process.env.OPENAI_TAILOR_RESUME_KEYWORD_MODEL ??
+          process.env.OPENAI_TAILOR_RESUME_MODEL ??
+          "gpt-5.4-mini";
   const client = getOpenAIClient();
   const technologyHintTechnologies =
     extractTailorResumeJobDescriptionTechnologyHints(input.jobDescription, {
@@ -4439,6 +4448,7 @@ export async function planTailoredResume(input: {
   employerName?: string | null;
   jobDescription: string;
   ludicrousMissingSkillsSectionTerms?: string[];
+  model?: string;
   onStepEvent?: (
     event: TailorResumeGenerationStepEvent,
   ) => void | Promise<void>;
@@ -4449,7 +4459,9 @@ export async function planTailoredResume(input: {
   userMarkdown?: TailorResumeUserMarkdownState;
 }): Promise<PlanTailoredResumeResult> {
   const startedAt = Date.now();
-  const planningModelRef = resolveTailorResumePlanningModelRef();
+  const planningModelRef = resolveTailorResumePlanningModelRefFromInput(
+    input.model,
+  );
   const model = planningModelRef.serialized;
   const maxPlanningAttempts = Math.min(2, getRetryAttemptsToGenerateLatexEdits());
   const normalizedInput = normalizeTailorResumeLatex(input.annotatedLatexCode);
@@ -4481,7 +4493,7 @@ export async function planTailoredResume(input: {
         client,
         employerName: input.employerName,
         jobDescription: input.jobDescription,
-        model: process.env.OPENAI_TAILOR_RESUME_KEYWORD_MODEL ?? "gpt-5.5",
+        model: process.env.OPENAI_TAILOR_RESUME_KEYWORD_MODEL ?? "gpt-5.4-mini",
       })
         .catch(() => [] as TailoredResumeEmphasizedTechnology[])
         .then((extractedTechnologies) =>
@@ -4940,7 +4952,9 @@ export async function implementTailoredResumePlan(input: {
   userMarkdown?: TailorResumeUserMarkdownState;
 }): Promise<GenerateTailoredResumeResult> {
   const startedAt = Date.now();
-  const model = input.model ?? process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5-mini";
+  const model = input.model
+    ? resolveTailorResumeSelectableModel(input.model)
+    : process.env.OPENAI_TAILOR_RESUME_MODEL ?? "gpt-5.5";
   const normalizedInput = normalizeTailorResumeLatex(input.annotatedLatexCode);
   const linkOverrides = input.linkOverrides ?? [];
   const planningSnapshot =
@@ -5738,6 +5752,10 @@ export async function generateTailoredResume(input: {
   companyName?: string | null;
   jobDescription: string;
   linkOverrides?: TailorResumeLinkRecord[];
+  modelSettings?: Pick<
+    TailorResumeGenerationSettings,
+    "step1Model" | "step3Model" | "step4Model"
+  >;
   onBuildFailure?: (latexCode: string, error: string, attempt: number) => Promise<void>;
   onInvalidReplacement?: (
     payload: string,
@@ -5798,6 +5816,7 @@ export async function generateTailoredResume(input: {
   const keywordStage = await extractTailorResumeEmphasizedTechnologiesForQuestioning({
     employerName: input.companyName,
     jobDescription: input.jobDescription,
+    model: input.modelSettings?.step1Model,
     nonTechnologies: input.userMarkdown?.nonTechnologies,
     onStepEvent: input.onStepEvent,
   });
@@ -5805,6 +5824,7 @@ export async function generateTailoredResume(input: {
     annotatedLatexCode: input.annotatedLatexCode,
     employerName: input.companyName,
     jobDescription: input.jobDescription,
+    model: input.modelSettings?.step3Model,
     onStepEvent: input.onStepEvent,
     precomputedEmphasizedTechnologies: keywordStage.emphasizedTechnologies,
     promptSettings: input.promptSettings,
@@ -5864,6 +5884,7 @@ export async function generateTailoredResume(input: {
       questioningSummary: planningStage.planningResult.questioningSummary,
     }),
     linkOverrides,
+    model: input.modelSettings?.step4Model,
     onBuildFailure: input.onBuildFailure,
     onInvalidReplacement: input.onInvalidReplacement,
     onStepEvent: input.onStepEvent,

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Prisma } from "@/generated/prisma/client";
 import OpenAI from "openai";
 import { getPrismaClient } from "./prisma.ts";
+import { resolveTailorResumeSelectableModel } from "./tailor-resume-generation-settings.ts";
 import { buildTailorResumeChatInstructions } from "./system-prompt-settings.ts";
 import { buildTailorResumePlanningSnapshot } from "./tailor-resume-planning.ts";
 import { readTailorResumeProfileState } from "./tailor-resume-profile-state.ts";
@@ -701,6 +702,7 @@ export async function createTailorResumeChatAssistantMessage(input: {
 
 export async function generateTailorResumeChatResponse(input: {
   currentUserMessage: string;
+  model?: string;
   onDelta: (delta: string) => void | Promise<void>;
   pageContext: TailorResumeChatPageContext;
   previousMessages: TailorResumeChatMessageRecord[];
@@ -712,10 +714,12 @@ export async function generateTailorResumeChatResponse(input: {
     buildUserMarkdownContext(input.userId),
   ]);
   const client = getOpenAIClient();
-  const model = process.env.OPENAI_MASTER_CHAT_MODEL ??
-    process.env.OPENAI_TAILOR_RESUME_CHAT_MODEL ??
-    process.env.OPENAI_TAILOR_RESUME_MODEL ??
-    "gpt-5-mini";
+  const model = input.model
+    ? resolveTailorResumeSelectableModel(input.model)
+    : process.env.OPENAI_MASTER_CHAT_MODEL ??
+      process.env.OPENAI_TAILOR_RESUME_CHAT_MODEL ??
+      process.env.OPENAI_TAILOR_RESUME_MODEL ??
+      "gpt-5.4";
   const stream = client.responses.stream(
     {
       input: buildTailorResumeChatInput({

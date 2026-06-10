@@ -10,6 +10,7 @@ import {
   readTailorResumeChatForUrl,
   readTailorResumeChatPageContext,
 } from "@/lib/tailor-resume-chat";
+import { readTailorResumeProfileState } from "@/lib/tailor-resume-profile-state";
 
 export const runtime = "nodejs";
 
@@ -170,8 +171,10 @@ export async function POST(request: Request) {
       type: "user-message",
     });
 
+    const { rawProfile } = await readTailorResumeProfileState(session.user.id);
     const assistantResponse = await generateTailorResumeChatResponse({
       currentUserMessage: content,
+      model: rawProfile.generationSettings.values.masterChatModel,
       onDelta: (delta) =>
         sendEvent({
           delta,

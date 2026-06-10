@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { getPrismaClient } from "./prisma.ts";
+import { resolveTailorResumeSelectableModel } from "./tailor-resume-generation-settings.ts";
 import {
   buildTailorResumeSupportChatFinalSummaryInstructions,
   buildTailorResumeSupportChatInstructions,
@@ -1415,6 +1416,7 @@ const supportChatTools = [
 
 export async function generateTailorResumeSupportChatResponse(input: {
   currentUserMessage: string;
+  model?: string;
   pageContext: TailorResumeChatPageContext | null;
   previousMessages: TailorResumeChatMessageRecord[];
   signal?: AbortSignal;
@@ -1435,12 +1437,13 @@ export async function generateTailorResumeSupportChatResponse(input: {
     userId: input.userId,
   });
   const client = getOpenAIClient();
-  const model =
-    process.env.OPENAI_TAILOR_RESUME_SUPPORT_CHAT_MODEL ??
-    process.env.OPENAI_MASTER_CHAT_MODEL ??
-    process.env.OPENAI_TAILOR_RESUME_CHAT_MODEL ??
-    process.env.OPENAI_TAILOR_RESUME_MODEL ??
-    "gpt-5-mini";
+  const model = input.model
+    ? resolveTailorResumeSelectableModel(input.model)
+    : process.env.OPENAI_TAILOR_RESUME_SUPPORT_CHAT_MODEL ??
+      process.env.OPENAI_MASTER_CHAT_MODEL ??
+      process.env.OPENAI_TAILOR_RESUME_CHAT_MODEL ??
+      process.env.OPENAI_TAILOR_RESUME_MODEL ??
+      "gpt-5.4";
   let responseInput: SupportChatResponseInput = buildTailorResumeSupportChatInput({
     currentUserMessage: input.currentUserMessage,
     pageContext: input.pageContext,

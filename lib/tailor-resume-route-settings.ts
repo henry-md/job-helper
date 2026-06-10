@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import {
   currentTailorResumeGenerationSettingsVersion,
+  isTailorResumeSelectableModel,
+  tailorResumeModelSettingKeys,
   tailorResumeGenerationSettingKeys,
   type TailorResumeGenerationSettings,
 } from "./tailor-resume-generation-settings.ts";
@@ -66,31 +68,48 @@ export function readGenerationSettingsUpdates(value: unknown) {
   const updates: Partial<TailorResumeGenerationSettings> = {};
   let changeCount = 0;
 
-  for (const key of tailorResumeGenerationSettingKeys) {
-    if (key === "customResumeDownloadName") {
-      const nextValue = rawUpdates[key];
+  const nextCustomResumeDownloadName = rawUpdates.customResumeDownloadName;
 
-      if (typeof nextValue !== "string") {
-        continue;
-      }
+  if (typeof nextCustomResumeDownloadName === "string") {
+    const trimmedValue = nextCustomResumeDownloadName.trim();
 
-      const trimmedValue = nextValue.trim();
+    if (!trimmedValue) {
+      throw new Error("Enter a custom resume download name.");
+    }
 
-      if (!trimmedValue) {
-        throw new Error("Enter a custom resume download name.");
-      }
+    if (trimmedValue.length > maxCustomResumeDownloadNameLength) {
+      throw new Error(
+        `Keep the custom resume download name under ${maxCustomResumeDownloadNameLength.toLocaleString()} characters.`,
+      );
+    }
 
-      if (trimmedValue.length > maxCustomResumeDownloadNameLength) {
-        throw new Error(
-          `Keep the custom resume download name under ${maxCustomResumeDownloadNameLength.toLocaleString()} characters.`,
-        );
-      }
+    updates.customResumeDownloadName = trimmedValue;
+    changeCount += 1;
+  }
 
-      updates[key] = trimmedValue;
-      changeCount += 1;
+  for (const key of tailorResumeModelSettingKeys) {
+    if (!isTailorResumeSelectableModel(rawUpdates[key])) {
       continue;
     }
 
+    updates[key] = rawUpdates[key];
+    changeCount += 1;
+  }
+
+  const booleanSettingKeys = tailorResumeGenerationSettingKeys.filter(
+    (settingKey) =>
+      settingKey !== "customResumeDownloadName" &&
+      !tailorResumeModelSettingKeys.includes(
+        settingKey as (typeof tailorResumeModelSettingKeys)[number],
+      ),
+  ) as Array<
+    Exclude<
+      keyof TailorResumeGenerationSettings,
+      "customResumeDownloadName" | (typeof tailorResumeModelSettingKeys)[number]
+    >
+  >;
+
+  for (const key of booleanSettingKeys) {
     if (typeof rawUpdates[key] !== "boolean") {
       continue;
     }
