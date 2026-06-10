@@ -1,4 +1,5 @@
 import { buildNormalizedJobUrlHash } from "./job-url-hash.ts";
+import { setAiUsageSubjectStatus } from "./ai-usage.ts";
 import { deletePersistedJobScreenshot } from "./job-tracking.ts";
 import {
   dedupeTailoredResumesByJobUrl,
@@ -516,6 +517,13 @@ export async function deleteLinkedDashboardArtifactsWithinLockedProfile(input: {
       deleteTailoredResumePdf(input.userId, tailoredResumeId),
     ),
   );
+  await setAiUsageSubjectStatus({
+    applicationIds: impact.applicationIds,
+    runIds: [],
+    status: "deleted",
+    tailoredResumeIds: impact.tailoredResumeIds,
+    userId: input.userId,
+  });
   await deleteDbTailoredResumes({
     ids: [...impact.dbTailoredResumeIds, ...impact.tailoredResumeIds],
     userId: input.userId,
@@ -658,6 +666,18 @@ export async function deleteTailorResumeArtifacts(input: {
       deleteTailoredResumePdf(input.userId, tailoredResumeId),
     ),
   );
+  await setAiUsageSubjectStatus({
+    applicationIds,
+    jobUrls: input.jobUrls,
+    runIds: requestedRunIds,
+    status: "deleted",
+    tailoredResumeIds: [
+      ...requestedTailoredResumeIds,
+      ...dbTailoredResumeIds,
+      ...tailoredResumePdfIds,
+    ],
+    userId: input.userId,
+  });
   await deleteDbTailoredResumes({
     ids: dbTailoredResumeIds,
     userId: input.userId,
