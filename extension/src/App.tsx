@@ -18009,14 +18009,17 @@ function App() {
                 </div>
                 <div className="chat-header-actions">
                   <button
-                    aria-label="Delete resume chat"
-                    className="icon-action"
+                    aria-label="Delete saved Resume Chat messages"
+                    className="icon-action chat-delete-action"
                     disabled={!canDeleteChat}
-                    title="Delete resume chat"
                     type="button"
                     onClick={() => void handleDeleteChat()}
                   >
                     <TrashIcon />
+                    <span className="chat-action-tooltip" role="tooltip">
+                      Delete this chat history. Clears saved Resume Chat
+                      messages.
+                    </span>
                   </button>
                   <button
                     aria-label="Compact resume chat"

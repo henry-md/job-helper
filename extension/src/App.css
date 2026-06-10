@@ -6208,6 +6208,7 @@ button:disabled {
 
 .icon-action,
 .chat-send-action {
+  position: relative;
   width: 34px;
   min-width: 34px;
   min-height: 34px;
@@ -6232,6 +6233,57 @@ button:disabled {
   color: var(--foreground);
   border-color: var(--border-strong);
   background: rgba(255, 255, 255, 0.12);
+}
+
+.chat-delete-action:hover:not(:disabled),
+.chat-delete-action:focus-visible:not(:disabled) {
+  color: #ffe4e6;
+  border-color: rgba(251, 113, 133, 0.42);
+  background: rgba(159, 18, 57, 0.18);
+}
+
+.chat-action-tooltip {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  z-index: 3;
+  width: 194px;
+  padding: 7px 8px;
+  border: 1px solid rgba(244, 244, 245, 0.12);
+  border-radius: 8px;
+  color: var(--foreground);
+  background: rgba(9, 9, 11, 0.98);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.42);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.35;
+  opacity: 0;
+  pointer-events: none;
+  text-align: left;
+  transform: translateY(-2px);
+  transition:
+    opacity 0.14s ease,
+    transform 0.14s ease;
+  white-space: normal;
+}
+
+.chat-action-tooltip::before {
+  position: absolute;
+  top: -5px;
+  right: 12px;
+  width: 8px;
+  height: 8px;
+  border-top: 1px solid rgba(244, 244, 245, 0.12);
+  border-left: 1px solid rgba(244, 244, 245, 0.12);
+  background: rgba(9, 9, 11, 0.98);
+  content: "";
+  transform: rotate(45deg);
+}
+
+.chat-delete-action:hover:not(:disabled) .chat-action-tooltip,
+.chat-delete-action:focus-visible:not(:disabled) .chat-action-tooltip {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .icon-action:disabled,
