@@ -5,17 +5,19 @@ function buildPersonalInfo() {
   return {
     activeTailoring: null,
     activeTailorings: [],
-    applicationCount: 0,
-    applications: [],
-    companyCount: 0,
     generationSettings: {
       allowTailorResumeFollowUpQuestions: true,
       customResumeDownloadName: "Resume",
       includeLowPriorityTermsInKeywordCoverage: false,
       ludicrousMode: true,
+      masterChatModel: "gpt-5.4",
       preventPageCountIncrease: true,
+      step1Model: "gpt-5.4-mini",
+      step3Model: "anthropic:claude-sonnet-4-6",
+      step4Model: "gpt-5.5",
+      step4bModel: "gpt-5.4",
       useCustomResumeDownloadName: false,
-      version: 5,
+      version: 7,
     },
     originalResume: {
       error: null,
@@ -46,6 +48,7 @@ function buildPersonalInfo() {
         createdAt: "2026-04-26T21:32:00.000Z",
         displayName: "Microsoft - Software Engineer II",
         emphasizedTechnologies: [],
+        generationStepTimings: [],
         id: "tailored-1",
         jobIdentifier: null,
         jobUrl: "https://jobs.example.com/roles/1",
@@ -118,9 +121,6 @@ test("invalidates only the stale cached personal-info slices when sync versions 
     personalInfo,
   });
 
-  assert.deepEqual(invalidated.applications, []);
-  assert.equal(invalidated.applicationCount, 0);
-  assert.equal(invalidated.companyCount, 0);
   assert.deepEqual(invalidated.activeTailorings, []);
   assert.equal(invalidated.activeTailoring, null);
   assert.deepEqual(invalidated.tailoredResumes, []);
@@ -128,5 +128,8 @@ test("invalidates only the stale cached personal-info slices when sync versions 
   assert.deepEqual(invalidated.tailoringInterviews, []);
   assert.deepEqual(invalidated.originalResume, personalInfo.originalResume);
   assert.deepEqual(invalidated.userMarkdown, personalInfo.userMarkdown);
-  assert.deepEqual(invalidated.syncState, personalInfo.syncState);
+  assert.deepEqual(invalidated.syncState, {
+    applicationsVersion: 2,
+    tailoringVersion: 3,
+  });
 });

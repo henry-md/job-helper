@@ -246,10 +246,10 @@ test("parseTailorResumeProfile keeps saved generation settings", () => {
     profile.generationSettings.updatedAt,
     "2026-05-01T22:30:00.000Z",
   );
-  assert.equal(profile.generationSettings.version, 5);
+  assert.equal(profile.generationSettings.version, 7);
   assert.equal(
     profile.generationSettings.values.allowTailorResumeFollowUpQuestions,
-    false,
+    true,
   );
   assert.equal(
     profile.generationSettings.values.preventPageCountIncrease,
@@ -283,7 +283,7 @@ test("parseTailorResumeProfile migrates legacy hidden follow-up disable", () => 
     },
   });
 
-  assert.equal(profile.generationSettings.version, 5);
+  assert.equal(profile.generationSettings.version, 7);
   assert.equal(
     profile.generationSettings.values.allowTailorResumeFollowUpQuestions,
     true,
