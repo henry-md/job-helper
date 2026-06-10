@@ -2023,10 +2023,14 @@ async function removeCachedGoogleAccessToken(accessToken: string) {
 }
 
 async function exchangeGoogleAccessTokenForJobHelperSession(accessToken: string) {
+  const previousSession = await readStoredAuthSession();
   const response = await fetch(EXTENSION_AUTH_GOOGLE_ENDPOINT, {
     body: JSON.stringify({ accessToken }),
     credentials: "include",
     headers: {
+      ...(previousSession
+        ? authorizationHeaders(previousSession)
+        : {}),
       "Content-Type": "application/json",
     },
     method: "POST",

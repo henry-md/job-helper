@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
+import { getApiSession } from "@/lib/api-auth";
 import {
   createDatabaseSession,
   ExtensionAuthConfigError,
   ExtensionAuthTokenError,
   findOrCreateUserForGoogleExtension,
+  mergeExtensionTailoringIntoGoogleUser,
   setNextAuthSessionCookie,
   verifyGoogleExtensionAccessToken,
 } from "@/lib/extension-auth";
@@ -51,8 +53,15 @@ export async function POST(request: Request) {
   }
 
   try {
+    const previousSession = await getApiSession(request);
     const googleProfile = await verifyGoogleExtensionAccessToken(accessToken);
     const user = await findOrCreateUserForGoogleExtension(googleProfile);
+
+    await mergeExtensionTailoringIntoGoogleUser({
+      sourceUserId: previousSession?.user.id ?? null,
+      targetUserId: user.id,
+    });
+
     const session = await createDatabaseSession(user.id);
     const response = NextResponse.json({
       expires: session.expires.toISOString(),

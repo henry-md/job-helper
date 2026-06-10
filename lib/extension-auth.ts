@@ -8,6 +8,24 @@ import type { NextResponse } from "next/server";
 import { authOptions } from "@/auth";
 import { resolveAuthOrigin } from "@/lib/auth-origin";
 import { getPrismaClient } from "@/lib/prisma";
+import { buildNormalizedJobUrlHash } from "@/lib/job-url-hash";
+import { normalizeCompanyName } from "@/lib/job-tracking-shared";
+import {
+  copyTailoredResumePdfBetweenUsers,
+  copyTailoredResumeVersionPdfBetweenUsers,
+  copyTailorResumePreviewPdfBetweenUsers,
+  deleteTailoredResumePdf,
+  readTailorResumeProfile,
+  withTailorResumeProfileLock,
+  writeTailorResumeProfile,
+} from "@/lib/tailor-resume-storage";
+import { normalizeTailorResumeJobUrl } from "@/lib/tailor-resume-job-url";
+import type {
+  TailorResumePendingInterview,
+  TailorResumeProfile,
+  TailoredResumeRecord,
+} from "@/lib/tailor-resume-types";
+import { bumpUserSyncState } from "@/lib/user-sync-state";
 
 const googleTokenInfoUrl = "https://oauth2.googleapis.com/tokeninfo";
 const googleUserInfoUrl = "https://www.googleapis.com/oauth2/v3/userinfo";
@@ -41,6 +59,13 @@ type BrowserSessionTicketPayload = {
   expiresAt: number;
   sessionToken: string;
   version: typeof browserSessionTicketVersion;
+};
+
+type TailoringMergeKeys = {
+  applicationIds: Set<string>;
+  jobUrls: Set<string>;
+  runIds: Set<string>;
+  tailoredResumeIds: Set<string>;
 };
 
 export type ExtensionGoogleProfile = {
@@ -270,6 +295,432 @@ async function linkGoogleAccount(userId: string, providerAccountId: string) {
       );
     }
   }
+}
+
+function addTailoringJobKeys(
+  keys: TailoringMergeKeys,
+  record: Pick<TailoredResumeRecord, "applicationId" | "id" | "jobUrl">,
+) {
+  if (record.applicationId) {
+    keys.applicationIds.add(record.applicationId);
+  }
+
+  keys.tailoredResumeIds.add(record.id);
+
+  const normalizedJobUrl = normalizeTailorResumeJobUrl(record.jobUrl);
+
+  if (normalizedJobUrl) {
+    keys.jobUrls.add(normalizedJobUrl);
+  }
+}
+
+function addTailoringInterviewKeys(
+  keys: TailoringMergeKeys,
+  interview: TailorResumePendingInterview,
+) {
+  if (interview.applicationId) {
+    keys.applicationIds.add(interview.applicationId);
+  }
+
+  if (interview.tailorResumeRunId) {
+    keys.runIds.add(interview.tailorResumeRunId);
+  }
+
+  keys.tailoredResumeIds.add(interview.id);
+
+  const normalizedJobUrl = normalizeTailorResumeJobUrl(interview.jobUrl);
+
+  if (normalizedJobUrl) {
+    keys.jobUrls.add(normalizedJobUrl);
+  }
+}
+
+function buildSourceTailoringMergeKeys(profile: TailorResumeProfile) {
+  const keys: TailoringMergeKeys = {
+    applicationIds: new Set(),
+    jobUrls: new Set(),
+    runIds: new Set(),
+    tailoredResumeIds: new Set(),
+  };
+
+  for (const tailoredResume of profile.tailoredResumes) {
+    addTailoringJobKeys(keys, tailoredResume);
+  }
+
+  for (const interview of [
+    profile.workspace.tailoringInterview,
+    ...profile.workspace.tailoringInterviews,
+  ]) {
+    if (interview) {
+      addTailoringInterviewKeys(keys, interview);
+    }
+  }
+
+  return keys;
+}
+
+function tailoredResumeMatchesMergeKeys(
+  tailoredResume: TailoredResumeRecord,
+  keys: TailoringMergeKeys,
+) {
+  if (
+    keys.tailoredResumeIds.has(tailoredResume.id) ||
+    (tailoredResume.applicationId &&
+      keys.applicationIds.has(tailoredResume.applicationId))
+  ) {
+    return true;
+  }
+
+  const normalizedJobUrl = normalizeTailorResumeJobUrl(tailoredResume.jobUrl);
+
+  return Boolean(normalizedJobUrl && keys.jobUrls.has(normalizedJobUrl));
+}
+
+function tailoringInterviewMatchesMergeKeys(
+  interview: TailorResumePendingInterview,
+  keys: TailoringMergeKeys,
+) {
+  if (
+    keys.tailoredResumeIds.has(interview.id) ||
+    (interview.applicationId && keys.applicationIds.has(interview.applicationId)) ||
+    (interview.tailorResumeRunId && keys.runIds.has(interview.tailorResumeRunId))
+  ) {
+    return true;
+  }
+
+  const normalizedJobUrl = normalizeTailorResumeJobUrl(interview.jobUrl);
+
+  return Boolean(normalizedJobUrl && keys.jobUrls.has(normalizedJobUrl));
+}
+
+function mergeTailorResumeProfilesWithSourcePrecedence(input: {
+  sourceProfile: TailorResumeProfile;
+  targetProfile: TailorResumeProfile;
+}) {
+  const sourceKeys = buildSourceTailoringMergeKeys(input.sourceProfile);
+  const removedTargetTailoredResumeIds = input.targetProfile.tailoredResumes
+    .filter((record) => tailoredResumeMatchesMergeKeys(record, sourceKeys))
+    .map((record) => record.id);
+  const targetTailoringInterviews = input.targetProfile.workspace.tailoringInterviews
+    .filter((interview) => !tailoringInterviewMatchesMergeKeys(interview, sourceKeys));
+  const targetPrimaryInterview =
+    input.targetProfile.workspace.tailoringInterview &&
+    !tailoringInterviewMatchesMergeKeys(
+      input.targetProfile.workspace.tailoringInterview,
+      sourceKeys,
+    )
+      ? input.targetProfile.workspace.tailoringInterview
+      : null;
+  const sourceInterviews = [
+    input.sourceProfile.workspace.tailoringInterview,
+    ...input.sourceProfile.workspace.tailoringInterviews,
+  ].filter((interview): interview is TailorResumePendingInterview =>
+    Boolean(interview),
+  );
+  const sourcePrimaryInterview =
+    input.sourceProfile.workspace.tailoringInterview ?? sourceInterviews[0] ?? null;
+  const mergedInterviewById = new Map<string, TailorResumePendingInterview>();
+
+  for (const interview of [
+    ...targetTailoringInterviews,
+    ...(targetPrimaryInterview ? [targetPrimaryInterview] : []),
+    ...sourceInterviews,
+  ]) {
+    mergedInterviewById.set(interview.id, interview);
+  }
+
+  const mergedProfile = {
+    ...input.targetProfile,
+    annotatedLatex: input.sourceProfile.annotatedLatex,
+    extraction: input.sourceProfile.extraction,
+    jobDescription: input.sourceProfile.jobDescription,
+    latex: input.sourceProfile.latex,
+    links: input.sourceProfile.links,
+    resume: input.sourceProfile.resume,
+    tailoredResumes: [
+      ...input.targetProfile.tailoredResumes.filter(
+        (record) => !tailoredResumeMatchesMergeKeys(record, sourceKeys),
+      ),
+      ...input.sourceProfile.tailoredResumes,
+    ],
+    workspace: {
+      ...input.targetProfile.workspace,
+      isBaseResumeStepComplete:
+        input.sourceProfile.workspace.isBaseResumeStepComplete ||
+        input.targetProfile.workspace.isBaseResumeStepComplete,
+      tailoringInterview: sourcePrimaryInterview ?? targetPrimaryInterview,
+      tailoringInterviews: [...mergedInterviewById.values()],
+      updatedAt:
+        input.sourceProfile.workspace.updatedAt ??
+        input.targetProfile.workspace.updatedAt,
+    },
+  } satisfies TailorResumeProfile;
+
+  return {
+    mergedProfile,
+    removedTargetTailoredResumeIds,
+    sourceKeys,
+  };
+}
+
+async function copySourceTailorResumeArtifacts(input: {
+  sourceProfile: TailorResumeProfile;
+  sourceUserId: string;
+  targetUserId: string;
+}) {
+  await copyTailorResumePreviewPdfBetweenUsers({
+    fromUserId: input.sourceUserId,
+    toUserId: input.targetUserId,
+  });
+
+  await Promise.all(
+    input.sourceProfile.tailoredResumes.flatMap((tailoredResume) => [
+      copyTailoredResumePdfBetweenUsers({
+        fromUserId: input.sourceUserId,
+        tailoredResumeId: tailoredResume.id,
+        toUserId: input.targetUserId,
+      }),
+      ...tailoredResume.versions.map((version) =>
+        copyTailoredResumeVersionPdfBetweenUsers({
+          fromUserId: input.sourceUserId,
+          tailoredResumeId: tailoredResume.id,
+          toUserId: input.targetUserId,
+          versionId: version.id,
+        }),
+      ),
+    ]),
+  );
+}
+
+async function moveTailoringDatabaseRowsToGoogleUser(input: {
+  sourceKeys: TailoringMergeKeys;
+  sourceUserId: string;
+  sourceProfile: TailorResumeProfile;
+  targetUserId: string;
+}) {
+  const prisma = getPrismaClient();
+  const sourceApplicationIds = [
+    ...new Set(
+      [
+        ...input.sourceKeys.applicationIds,
+        ...input.sourceProfile.tailoredResumes.map((record) => record.applicationId),
+        input.sourceProfile.workspace.tailoringInterview?.applicationId,
+        ...input.sourceProfile.workspace.tailoringInterviews.map(
+          (interview) => interview.applicationId,
+        ),
+      ].filter((value): value is string => Boolean(value)),
+    ),
+  ];
+  const sourceJobUrlHashes = [
+    ...new Set(
+      [...input.sourceKeys.jobUrls]
+        .map((jobUrl) => buildNormalizedJobUrlHash(jobUrl))
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ];
+
+  await prisma.$transaction(async (tx) => {
+    const sourceApplications =
+      sourceApplicationIds.length > 0
+        ? await tx.jobApplication.findMany({
+            include: {
+              company: true,
+            },
+            where: {
+              id: { in: sourceApplicationIds },
+              userId: input.sourceUserId,
+            },
+          })
+        : [];
+    const allSourceJobUrlHashes = [
+      ...new Set([
+        ...sourceJobUrlHashes,
+        ...sourceApplications
+          .map((application) => application.jobUrlHash)
+          .filter((value): value is string => Boolean(value)),
+      ]),
+    ];
+
+    if (allSourceJobUrlHashes.length > 0) {
+      await tx.tailorResumeRun.deleteMany({
+        where: {
+          jobUrlHash: { in: allSourceJobUrlHashes },
+          userId: input.targetUserId,
+        },
+      });
+      await tx.tailoredResume.deleteMany({
+        where: {
+          jobUrlHash: { in: allSourceJobUrlHashes },
+          userId: input.targetUserId,
+        },
+      });
+      await tx.jobApplication.deleteMany({
+        where: {
+          jobUrlHash: { in: allSourceJobUrlHashes },
+          userId: input.targetUserId,
+        },
+      });
+    }
+
+    if (input.sourceProfile.tailoredResumes.length > 0) {
+      await tx.tailoredResume.deleteMany({
+        where: {
+          profileRecordId: {
+            in: input.sourceProfile.tailoredResumes.map((record) => record.id),
+          },
+          userId: input.targetUserId,
+        },
+      });
+    }
+
+    for (const application of sourceApplications) {
+      const targetCompany = await tx.company.upsert({
+        create: {
+          name: application.company.name,
+          normalizedName: application.company.normalizedName,
+          userId: input.targetUserId,
+        },
+        update: {
+          name: application.company.name,
+        },
+        where: {
+          userId_normalizedName: {
+            normalizedName:
+              application.company.normalizedName ||
+              normalizeCompanyName(application.company.name),
+            userId: input.targetUserId,
+          },
+        },
+      });
+
+      await tx.jobApplication.update({
+        data: {
+          companyId: targetCompany.id,
+          referrerId: null,
+          userId: input.targetUserId,
+        },
+        where: {
+          id: application.id,
+        },
+      });
+    }
+
+    if (sourceApplicationIds.length > 0) {
+      await tx.jobApplicationScreenshot.updateMany({
+        data: {
+          userId: input.targetUserId,
+        },
+        where: {
+          applicationId: { in: sourceApplicationIds },
+          userId: input.sourceUserId,
+        },
+      });
+    }
+
+    const runMoveConditions = [
+      ...(sourceApplicationIds.length > 0
+        ? [{ applicationId: { in: sourceApplicationIds } }]
+        : []),
+      ...(allSourceJobUrlHashes.length > 0
+        ? [{ jobUrlHash: { in: allSourceJobUrlHashes } }]
+        : []),
+      ...([...input.sourceKeys.runIds].length > 0
+        ? [{ id: { in: [...input.sourceKeys.runIds] } }]
+        : []),
+    ];
+
+    if (runMoveConditions.length > 0) {
+      await tx.tailorResumeRun.updateMany({
+        data: {
+          userId: input.targetUserId,
+        },
+        where: {
+          userId: input.sourceUserId,
+          OR: runMoveConditions,
+        },
+      });
+    }
+
+    const tailoredResumeMoveConditions = [
+      ...(sourceApplicationIds.length > 0
+        ? [{ applicationId: { in: sourceApplicationIds } }]
+        : []),
+      ...(allSourceJobUrlHashes.length > 0
+        ? [{ jobUrlHash: { in: allSourceJobUrlHashes } }]
+        : []),
+      ...(input.sourceProfile.tailoredResumes.length > 0
+        ? [
+            {
+              profileRecordId: {
+                in: input.sourceProfile.tailoredResumes.map((record) => record.id),
+              },
+            },
+          ]
+        : []),
+    ];
+
+    if (tailoredResumeMoveConditions.length > 0) {
+      await tx.tailoredResume.updateMany({
+        data: {
+          userId: input.targetUserId,
+        },
+        where: {
+          userId: input.sourceUserId,
+          OR: tailoredResumeMoveConditions,
+        },
+      });
+    }
+  });
+}
+
+export async function mergeExtensionTailoringIntoGoogleUser(input: {
+  sourceUserId: string | null;
+  targetUserId: string;
+}) {
+  if (!input.sourceUserId || input.sourceUserId === input.targetUserId) {
+    return;
+  }
+
+  const sourceProfile = await readTailorResumeProfile(input.sourceUserId);
+
+  if (
+    sourceProfile.tailoredResumes.length === 0 &&
+    !sourceProfile.workspace.tailoringInterview &&
+    sourceProfile.workspace.tailoringInterviews.length === 0
+  ) {
+    return;
+  }
+
+  const { removedTargetTailoredResumeIds, sourceKeys } =
+    await withTailorResumeProfileLock(input.targetUserId, async () => {
+      const targetProfile = await readTailorResumeProfile(input.targetUserId);
+      const mergeResult = mergeTailorResumeProfilesWithSourcePrecedence({
+        sourceProfile,
+        targetProfile,
+      });
+
+      await writeTailorResumeProfile(input.targetUserId, mergeResult.mergedProfile);
+
+      return mergeResult;
+    });
+
+  await Promise.all(
+    removedTargetTailoredResumeIds.map((tailoredResumeId) =>
+      deleteTailoredResumePdf(input.targetUserId, tailoredResumeId),
+    ),
+  );
+  await copySourceTailorResumeArtifacts({
+    sourceProfile,
+    sourceUserId: input.sourceUserId,
+    targetUserId: input.targetUserId,
+  });
+  await moveTailoringDatabaseRowsToGoogleUser({
+    sourceKeys,
+    sourceProfile,
+    sourceUserId: input.sourceUserId,
+    targetUserId: input.targetUserId,
+  });
+  await bumpUserSyncState({ tailoring: true, userId: input.targetUserId });
 }
 
 export async function findOrCreateUserForGoogleExtension(
