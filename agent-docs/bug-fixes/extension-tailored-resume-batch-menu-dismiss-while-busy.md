@@ -1,0 +1,4 @@
+- Symptom: the Tailor tab batch overflow menu could stay open after the cursor moved away while a batch action showed a loading label such as "Retrying...".
+- Root cause: the batch menu outside/hover dismiss handlers returned early during retry-all, archive-all, or delete-all work, tying a transient popover to background action lifetime.
+- Fix: close the batch menu on pointer leave, outside pointerdown, or Escape regardless of batch action state, while preserving clicks inside the trigger shell and popover with the event composed path.
+- Guardrail: batch action loading should disable only the affected commands; it should not pin overflow menus open.

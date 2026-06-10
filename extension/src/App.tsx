@@ -3377,6 +3377,10 @@ type TailoredResumeMenuActionState =
   | "idle"
   | "openingWeb"
   | "retrying";
+type TailoredResumeMenuPendingAction = Exclude<
+  TailoredResumeMenuActionState,
+  "idle"
+>;
 
 type ExistingTailoringPromptState = {
   actionState: "idle" | "overwriting";
@@ -4686,10 +4690,8 @@ function App() {
     useState<string | null>(null);
   const [tailoredResumeMenuId, setTailoredResumeMenuId] =
     useState<string | null>(null);
-  const [tailoredResumeMenuActionState, setTailoredResumeMenuActionState] =
-    useState<TailoredResumeMenuActionState>("idle");
-  const [tailoredResumeMenuActionResumeId, setTailoredResumeMenuActionResumeId] =
-    useState<string | null>(null);
+  const [tailoredResumeMenuActionStates, setTailoredResumeMenuActionStates] =
+    useState<Partial<Record<TailoredResumeMenuPendingAction, string>>>({});
   const [tailoredPreviewDownloadError, setTailoredPreviewDownloadError] =
     useState<string | null>(null);
   const [tailoredResumeMenuError, setTailoredResumeMenuError] =
@@ -6286,12 +6288,14 @@ function App() {
     );
   const hasBackgroundTailorRunAction =
     Object.keys(backgroundTailorRunActionStates).length > 0;
+  const hasTailoredResumeMenuAction =
+    Object.keys(tailoredResumeMenuActionStates).length > 0;
   const canRetryTailorRunBatch =
     authState.status === "signedIn" &&
     personalInfoState.status === "ready" &&
     !isRetryingAllTailorRuns &&
     tailorRunMenuActionState === "idle" &&
-    tailoredResumeMenuActionState === "idle" &&
+    !hasTailoredResumeMenuAction &&
     !hasBackgroundTailorRunAction &&
     !isStoppingCurrentTailoring &&
     !isDeletingAllTailoredResumes &&
@@ -6845,7 +6849,12 @@ function App() {
       return;
     }
 
-    const shouldKeepBatchMenuOpen = (event: MouseEvent) => {
+    const closeBatchMenu = () => {
+      setIsTailoredResumeBatchMenuOpen(false);
+      setHoveredTailoredResumeBatchAction(null);
+    };
+
+    const shouldKeepBatchMenuOpen = (event: MouseEvent | PointerEvent) => {
       const menuShell = tailoredResumeBatchMenuRef.current;
 
       if (!menuShell) {
@@ -6855,6 +6864,20 @@ function App() {
       const popover = menuShell.querySelector<HTMLElement>(
         ".tailored-resume-batch-menu-popover",
       );
+      const composedPath =
+        typeof event.composedPath === "function" ? event.composedPath() : [];
+
+      if (
+        composedPath.includes(menuShell) ||
+        (popover && composedPath.includes(popover))
+      ) {
+        return true;
+      }
+
+      if (event.type === "pointerdown") {
+        return false;
+      }
+
       const shellRect = menuShell.getBoundingClientRect();
       const popoverRect = popover?.getBoundingClientRect();
       const left = Math.min(shellRect.left, popoverRect?.left ?? shellRect.left) - 20;
@@ -6873,65 +6896,33 @@ function App() {
     };
 
     const handleMouseMove = (event: MouseEvent) => {
-      if (
-        isRetryingAllTailorRuns ||
-        isArchivingAllTailoredResumes ||
-        isDeletingAllTailoredResumes
-      ) {
-        return;
-      }
-
       if (!shouldKeepBatchMenuOpen(event)) {
-        setIsTailoredResumeBatchMenuOpen(false);
-        setHoveredTailoredResumeBatchAction(null);
+        closeBatchMenu();
       }
     };
 
-    const handleMouseDown = (event: MouseEvent) => {
-      if (
-        isRetryingAllTailorRuns ||
-        isArchivingAllTailoredResumes ||
-        isDeletingAllTailoredResumes
-      ) {
-        return;
-      }
-
+    const handlePointerDown = (event: PointerEvent) => {
       if (!shouldKeepBatchMenuOpen(event)) {
-        setIsTailoredResumeBatchMenuOpen(false);
-        setHoveredTailoredResumeBatchAction(null);
+        closeBatchMenu();
       }
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (
-        isRetryingAllTailorRuns ||
-        isArchivingAllTailoredResumes ||
-        isDeletingAllTailoredResumes
-      ) {
-        return;
-      }
-
       if (event.key === "Escape") {
-        setIsTailoredResumeBatchMenuOpen(false);
-        setHoveredTailoredResumeBatchAction(null);
+        closeBatchMenu();
       }
     };
 
     window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("pointerdown", handlePointerDown, true);
     window.addEventListener("keydown", handleKeyDown);
 
     return () => {
       window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [
-    isArchivingAllTailoredResumes,
-    isDeletingAllTailoredResumes,
-    isRetryingAllTailorRuns,
-    isTailoredResumeBatchMenuOpen,
-  ]);
+  }, [isTailoredResumeBatchMenuOpen]);
 
   useEffect(() => {
     setIsTailoredResumeBatchMenuOpen(false);
@@ -7007,6 +6998,20 @@ function App() {
         return false;
       }
 
+      const composedPath =
+        typeof event.composedPath === "function" ? event.composedPath() : [];
+
+      if (
+        (menuShell && composedPath.includes(menuShell)) ||
+        (popover && composedPath.includes(popover))
+      ) {
+        return true;
+      }
+
+      if (event.type === "pointerdown") {
+        return false;
+      }
+
       const shellRect = menuShell?.getBoundingClientRect();
       const popoverRect = popover?.getBoundingClientRect();
       const left =
@@ -7039,30 +7044,18 @@ function App() {
     };
 
     const handleMouseMove = (event: MouseEvent) => {
-      if (tailoredResumeMenuActionState !== "idle") {
-        return;
-      }
-
       if (!shouldKeepTailoredResumeMenuOpen(event)) {
         closeTailoredResumeMenu();
       }
     };
 
     const handlePointerDown = (event: PointerEvent) => {
-      if (tailoredResumeMenuActionState !== "idle") {
-        return;
-      }
-
       if (!shouldKeepTailoredResumeMenuOpen(event)) {
         closeTailoredResumeMenu();
       }
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (tailoredResumeMenuActionState !== "idle") {
-        return;
-      }
-
       if (event.key === "Escape") {
         closeTailoredResumeMenu();
       }
@@ -7086,7 +7079,6 @@ function App() {
       window.removeEventListener("scroll", handleViewportChange, true);
     };
   }, [
-    tailoredResumeMenuActionState,
     tailoredResumeMenuId,
     updateTailoredResumeMenuPosition,
   ]);
@@ -10860,15 +10852,39 @@ function App() {
     }
   }
 
+  function startTailoredResumeMenuAction(
+    action: TailoredResumeMenuPendingAction,
+    tailoredResumeId: string,
+  ) {
+    setTailoredResumeMenuActionStates((currentStates) => ({
+      ...currentStates,
+      [action]: tailoredResumeId,
+    }));
+  }
+
+  function finishTailoredResumeMenuAction(
+    action: TailoredResumeMenuPendingAction,
+    tailoredResumeId: string,
+  ) {
+    setTailoredResumeMenuActionStates((currentStates) => {
+      if (currentStates[action] !== tailoredResumeId) {
+        return currentStates;
+      }
+
+      const nextStates = { ...currentStates };
+      delete nextStates[action];
+      return nextStates;
+    });
+  }
+
   async function handleDownloadTailoredResumeFromMenu(
     tailoredResume: TailoredResumeSummary,
   ) {
-    if (tailoredResumeMenuActionState !== "idle") {
+    if (tailoredResumeMenuActionStates.downloading) {
       return;
     }
 
-    setTailoredResumeMenuActionState("downloading");
-    setTailoredResumeMenuActionResumeId(tailoredResume.id);
+    startTailoredResumeMenuAction("downloading", tailoredResume.id);
     setTailoredResumeMenuError(null);
     setTailoredResumeMenuErrorResumeId(null);
 
@@ -10893,8 +10909,7 @@ function App() {
       );
       setTailoredResumeMenuErrorResumeId(tailoredResume.id);
     } finally {
-      setTailoredResumeMenuActionState("idle");
-      setTailoredResumeMenuActionResumeId(null);
+      finishTailoredResumeMenuAction("downloading", tailoredResume.id);
     }
   }
 
@@ -10903,12 +10918,14 @@ function App() {
       return;
     }
 
-    if (tailoredResumeMenuActionState !== "idle") {
+    if (tailoredResumeMenuActionStates.downloading) {
       return;
     }
 
-    setTailoredResumeMenuActionState("downloading");
-    setTailoredResumeMenuActionResumeId(activeTailoredResumeDownloadRecord.id);
+    startTailoredResumeMenuAction(
+      "downloading",
+      activeTailoredResumeDownloadRecord.id,
+    );
     setTailoredPreviewDownloadError(null);
     setTailoredResumeMenuError(null);
     setTailoredResumeMenuErrorResumeId(null);
@@ -10932,20 +10949,21 @@ function App() {
         error instanceof Error ? error.message : "Could not download that resume.",
       );
     } finally {
-      setTailoredResumeMenuActionState("idle");
-      setTailoredResumeMenuActionResumeId(null);
+      finishTailoredResumeMenuAction(
+        "downloading",
+        activeTailoredResumeDownloadRecord.id,
+      );
     }
   }
 
   async function handleGoToTailoredResumeTab(tailoredResume: TailoredResumeSummary) {
     const targetUrl = tailoredResume.jobUrl?.trim() ?? "";
 
-    if (!targetUrl || tailoredResumeMenuActionState !== "idle") {
+    if (!targetUrl || tailoredResumeMenuActionStates.goingToTab) {
       return;
     }
 
-    setTailoredResumeMenuActionState("goingToTab");
-    setTailoredResumeMenuActionResumeId(tailoredResume.id);
+    startTailoredResumeMenuAction("goingToTab", tailoredResume.id);
     setTailoredResumeMenuError(null);
     setTailoredResumeMenuErrorResumeId(null);
 
@@ -10965,20 +10983,18 @@ function App() {
       );
       setTailoredResumeMenuErrorResumeId(tailoredResume.id);
     } finally {
-      setTailoredResumeMenuActionState("idle");
-      setTailoredResumeMenuActionResumeId(null);
+      finishTailoredResumeMenuAction("goingToTab", tailoredResume.id);
     }
   }
 
   async function handleOpenTailoredResumeInWebAppFromMenu(
     tailoredResume: TailoredResumeSummary,
   ) {
-    if (tailoredResumeMenuActionState !== "idle") {
+    if (tailoredResumeMenuActionStates.openingWeb) {
       return;
     }
 
-    setTailoredResumeMenuActionState("openingWeb");
-    setTailoredResumeMenuActionResumeId(tailoredResume.id);
+    startTailoredResumeMenuAction("openingWeb", tailoredResume.id);
     setTailoredResumeMenuError(null);
     setTailoredResumeMenuErrorResumeId(null);
 
@@ -11000,8 +11016,7 @@ function App() {
       );
       setTailoredResumeMenuErrorResumeId(tailoredResume.id);
     } finally {
-      setTailoredResumeMenuActionState("idle");
-      setTailoredResumeMenuActionResumeId(null);
+      finishTailoredResumeMenuAction("openingWeb", tailoredResume.id);
     }
   }
 
@@ -11010,12 +11025,11 @@ function App() {
   ) {
     const targetUrl = tailoredResume.jobUrl?.trim() ?? "";
 
-    if (!targetUrl || tailoredResumeMenuActionState !== "idle") {
+    if (!targetUrl || tailoredResumeMenuActionStates.retrying) {
       return;
     }
 
-    setTailoredResumeMenuActionState("retrying");
-    setTailoredResumeMenuActionResumeId(tailoredResume.id);
+    startTailoredResumeMenuAction("retrying", tailoredResume.id);
     setTailoredResumeMenuError(null);
     setTailoredResumeMenuErrorResumeId(null);
     void requestHideTailoredResumeBadgesForUrls([targetUrl]);
@@ -11102,8 +11116,7 @@ function App() {
       );
       setTailoredResumeMenuErrorResumeId(tailoredResume.id);
     } finally {
-      setTailoredResumeMenuActionState("idle");
-      setTailoredResumeMenuActionResumeId(null);
+      finishTailoredResumeMenuAction("retrying", tailoredResume.id);
     }
   }
 
@@ -13800,12 +13813,15 @@ function App() {
             const isActionPending =
               tailoredResumeArchiveActionIds.has(tailoredResume.id);
             const isMenuOpen = tailoredResumeMenuId === tailoredResume.id;
-            const isMenuBusy =
-              tailoredResumeMenuActionState !== "idle" &&
-              tailoredResumeMenuActionResumeId === tailoredResume.id;
-            const menuActionState = isMenuBusy
-              ? tailoredResumeMenuActionState
-              : "idle";
+            const isDownloadPending =
+              tailoredResumeMenuActionStates.downloading === tailoredResume.id;
+            const isOpenWebPending =
+              tailoredResumeMenuActionStates.openingWeb === tailoredResume.id;
+            const isGoToTabPending =
+              tailoredResumeMenuActionStates.goingToTab === tailoredResume.id;
+            const isRetryPending =
+              tailoredResumeMenuActionStates.retrying === tailoredResume.id;
+            const isRowMutationPending = isActionPending || isRetryPending;
             const menuError =
               tailoredResumeMenuErrorResumeId === tailoredResume.id
                 ? tailoredResumeMenuError
@@ -13997,7 +14013,7 @@ function App() {
                                 className={readTailoredResumeRowMenuItemClassName(
                                   "download",
                                 )}
-                                disabled={isMenuBusy}
+                                disabled={isDownloadPending}
                                 type="button"
                                 {...buildTailoredResumeRowMenuHoverHandlers(
                                   "download",
@@ -14008,15 +14024,13 @@ function App() {
                                   )
                                 }
                               >
-                                {menuActionState === "downloading"
-                                  ? "Downloading..."
-                                  : "Download"}
+                                {isDownloadPending ? "Downloading..." : "Download"}
                               </button>
                               <button
                                 className={readTailoredResumeRowMenuItemClassName(
                                   "openWeb",
                                 )}
-                                disabled={isMenuBusy}
+                                disabled={isOpenWebPending}
                                 type="button"
                                 {...buildTailoredResumeRowMenuHoverHandlers(
                                   "openWeb",
@@ -14027,16 +14041,13 @@ function App() {
                                   )
                                 }
                               >
-                                {menuActionState === "openingWeb"
-                                  ? "Opening..."
-                                  : "See in web app"}
+                                {isOpenWebPending ? "Opening..." : "See in web app"}
                               </button>
                               {canShowKeywordBadge ? (
                                 <button
                                   className={readTailoredResumeRowMenuItemClassName(
                                     "showKeywords",
                                   )}
-                                  disabled={isMenuBusy}
                                   type="button"
                                   {...buildTailoredResumeRowMenuHoverHandlers(
                                     "showKeywords",
@@ -14053,7 +14064,7 @@ function App() {
                                   className={readTailoredResumeRowMenuItemClassName(
                                     "goToTab",
                                   )}
-                                  disabled={isMenuBusy}
+                                  disabled={isGoToTabPending}
                                   type="button"
                                   {...buildTailoredResumeRowMenuHoverHandlers(
                                     "goToTab",
@@ -14062,9 +14073,7 @@ function App() {
                                     void handleGoToTailoredResumeTab(tailoredResume)
                                   }
                                 >
-                                  {menuActionState === "goingToTab"
-                                    ? "Opening..."
-                                    : "Go to tab"}
+                                  {isGoToTabPending ? "Opening..." : "Go to tab"}
                                 </button>
                               ) : null}
                               {canGoToTab ? (
@@ -14072,7 +14081,7 @@ function App() {
                                   className={readTailoredResumeRowMenuItemClassName(
                                     "retry",
                                   )}
-                                  disabled={isMenuBusy || isActionPending}
+                                  disabled={isRowMutationPending}
                                   type="button"
                                   {...buildTailoredResumeRowMenuHoverHandlers(
                                     "retry",
@@ -14083,16 +14092,14 @@ function App() {
                                     )
                                   }
                                 >
-                                  {menuActionState === "retrying"
-                                    ? "Retrying..."
-                                    : "Retry"}
+                                  {isRetryPending ? "Retrying..." : "Retry"}
                                 </button>
                               ) : null}
                               <button
                                 className={readTailoredResumeRowMenuItemClassName(
                                   "archive",
                                 )}
-                                disabled={isMenuBusy || isActionPending}
+                                disabled={isRowMutationPending}
                                 type="button"
                                 {...buildTailoredResumeRowMenuHoverHandlers(
                                   "archive",
@@ -14112,7 +14119,7 @@ function App() {
                                 className={readTailoredResumeRowMenuItemClassName(
                                   "delete",
                                 )}
-                                disabled={isMenuBusy || isActionPending}
+                                disabled={isRowMutationPending}
                                 type="button"
                                 {...buildTailoredResumeRowMenuHoverHandlers(
                                   "delete",
@@ -15462,8 +15469,8 @@ function App() {
 
   function renderTailoredPreviewDownloadAction() {
     const isDownloadingActiveResume =
-      tailoredResumeMenuActionState === "downloading" &&
-      tailoredResumeMenuActionResumeId === activeTailoredResumeDownloadRecord?.id;
+      tailoredResumeMenuActionStates.downloading ===
+      activeTailoredResumeDownloadRecord?.id;
 
     return (
       <button

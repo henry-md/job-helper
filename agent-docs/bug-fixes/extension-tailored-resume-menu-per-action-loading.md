@@ -1,0 +1,4 @@
+- Symptom: a slow saved tailored-resume menu action, especially "Go to tab", could leave every other menu item disabled while the background navigation kept buffering.
+- Root cause: the saved-resume row menu used one shared action state for all menu items, so any pending item made the row read as globally busy.
+- Fix: track pending saved-resume menu work by action name and resume id. Disable and relabel only the matching item, while unrelated actions remain clickable unless they mutate the same row.
+- Guardrail: async navigation or download work should not globally lock transient menus. Keep mutation guards scoped to the affected row/action and let independent actions proceed.

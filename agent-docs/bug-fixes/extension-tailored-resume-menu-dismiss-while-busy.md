@@ -1,0 +1,4 @@
+- Symptom: the saved tailored-resume row menu could stay open while a menu action showed a loading label such as "Opening...", making outside click, pointer leave, and Escape feel ignored.
+- Root cause: document-level dismiss handlers returned early whenever a tailored-resume menu action was busy, so the popup UI was tied to the lifetime of background work.
+- Fix: let outside pointerdown, pointer leave, and Escape close the menu regardless of the action state. Keep the async action state running separately, and use the composed event path to preserve clicks inside the trigger shell or portal popover.
+- Guardrail: loading labels may disable risky menu items, but row popups must remain dismissible because they are transient UI around independent background work.
