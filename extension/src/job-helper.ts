@@ -97,8 +97,6 @@ export const DEFAULT_APP_BASE_URL = normalizeAppBaseUrl(
 export const DEFAULT_DASHBOARD_URL = `${DEFAULT_APP_BASE_URL}/dashboard`;
 export const DEFAULT_SYNC_STATE_ENDPOINT = `${DEFAULT_APP_BASE_URL}/api/sync-state`;
 export const DEFAULT_AI_USAGE_ENDPOINT = `${DEFAULT_APP_BASE_URL}/api/ai-usage`;
-export const DEFAULT_JOB_APPLICATIONS_ENDPOINT =
-  `${DEFAULT_APP_BASE_URL}/api/job-applications`;
 export const DEFAULT_TAILOR_RESUME_ENDPOINT =
   `${DEFAULT_APP_BASE_URL}/api/tailor-resume`;
 export const DEFAULT_TAILOR_RESUME_CHAT_ENDPOINT =
@@ -404,17 +402,6 @@ export type TailorResumeGenerationSettingsSummary = {
   version: number;
 };
 
-export type TrackedApplicationSummary = {
-  appliedAt: string;
-  companyName: string;
-  id: string;
-  jobTitle: string;
-  jobUrl: string | null;
-  location: string | null;
-  status: string;
-  updatedAt: string;
-};
-
 export type OriginalResumeSummary = {
   error: string | null;
   filename: string | null;
@@ -426,9 +413,6 @@ export type OriginalResumeSummary = {
 export type PersonalInfoSummary = {
   activeTailoring: TailorResumeExistingTailoringState | null;
   activeTailorings: TailorResumeExistingTailoringState[];
-  applicationCount: number;
-  applications: TrackedApplicationSummary[];
-  companyCount: number;
   generationSettings: TailorResumeGenerationSettingsSummary;
   originalResume: OriginalResumeSummary;
   promptSettings: TailorResumePromptSettingsSummary;
@@ -1731,47 +1715,6 @@ export function readTailorResumeProfileSummary(
   };
 }
 
-function readTrackedApplicationSummary(
-  value: unknown,
-): TrackedApplicationSummary | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-
-  const id = readString(value.id);
-  const jobTitle = readString(value.jobTitle);
-  const companyName = readString(value.companyName);
-  const appliedAt = readString(value.appliedAt);
-  const updatedAt = readString(value.updatedAt);
-
-  if (!id || !jobTitle || !companyName || !appliedAt || !updatedAt) {
-    return null;
-  }
-
-  return {
-    appliedAt,
-    companyName,
-    id,
-    jobTitle,
-    jobUrl: readNullableString(value.jobUrl),
-    location: readNullableString(value.location),
-    status: readString(value.status) || "APPLIED",
-    updatedAt,
-  };
-}
-
-export function readTrackedApplicationSummaries(value: unknown) {
-  const applications = Array.isArray(value)
-    ? value
-    : isRecord(value) && Array.isArray(value.applications)
-      ? value.applications
-      : [];
-
-  return applications
-    .map(readTrackedApplicationSummary)
-    .filter((record): record is TrackedApplicationSummary => Boolean(record));
-}
-
 export function readOriginalResumeSummary(value: unknown): OriginalResumeSummary {
   if (
     isRecord(value) &&
@@ -2075,46 +2018,6 @@ function readTailorResumePromptSettingsSummary(
   };
 }
 
-export function readPersonalInfoSummary(input: {
-  applicationsPayload: unknown;
-  tailorResumePayload: unknown;
-}): PersonalInfoSummary {
-  const applicationsPayload = isRecord(input.applicationsPayload)
-    ? input.applicationsPayload
-    : {};
-  const tailorResumeProfile = readTailorResumeProfileSummary(
-    input.tailorResumePayload,
-  );
-  const payloadRecord = isRecord(input.tailorResumePayload)
-    ? input.tailorResumePayload
-    : {};
-  const activeTailorings = readTailorResumeExistingTailoringStates(
-    input.tailorResumePayload,
-  );
-
-  const userMemory = readUserMemorySummary(payloadRecord);
-
-  return {
-    activeTailoring: activeTailorings[0] ?? null,
-    activeTailorings,
-    applicationCount: readNumber(applicationsPayload.applicationCount),
-    applications: readTrackedApplicationSummaries(applicationsPayload),
-    companyCount: readNumber(applicationsPayload.companyCount),
-    generationSettings: readTailorResumeGenerationSettingsSummary(
-      input.tailorResumePayload,
-    ),
-    originalResume: readOriginalResumeSummary(input.tailorResumePayload),
-    promptSettings: readTailorResumePromptSettingsSummary(input.tailorResumePayload),
-    syncState: readUserSyncStateSnapshot(input.tailorResumePayload),
-    skillData: readTailorResumeStoredSkillData(payloadRecord.skillData),
-    tailoredResumes: tailorResumeProfile?.tailoredResumes ?? [],
-    tailoringInterview: tailorResumeProfile?.tailoringInterview ?? null,
-    tailoringInterviews: tailorResumeProfile?.tailoringInterviews ?? [],
-    userMarkdown: userMemory.userMarkdown,
-    userMemory,
-  };
-}
-
 export function readPersonalInfoPayload(value: unknown): PersonalInfoSummary {
   const payload = isRecord(value) && isRecord(value.personalInfo)
     ? value.personalInfo
@@ -2144,9 +2047,6 @@ export function readPersonalInfoPayload(value: unknown): PersonalInfoSummary {
   return {
     activeTailoring: activeTailorings[0] ?? null,
     activeTailorings,
-    applicationCount: readNumber(payloadRecord.applicationCount),
-    applications: readTrackedApplicationSummaries(payloadRecord.applications),
-    companyCount: readNumber(payloadRecord.companyCount),
     generationSettings: readTailorResumeGenerationSettingsSummary(
       payloadRecord,
     ),
