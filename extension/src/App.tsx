@@ -60,6 +60,7 @@ import {
   buildEmptyTailorResumeStoredSkillData,
   defaultUserMarkdown,
   defaultExtensionPreferences,
+  defaultTailorResumeModelSettings,
   formatNonTechnologyTerm,
   normalizeNonTechnologyTerm,
   normalizeNonTechnologyTerms,
@@ -82,6 +83,7 @@ import {
   type TailorResumePreparationState,
   type TailorResumePendingInterviewSummary,
   type TailorResumeRunRecord,
+  type TailorResumeSelectableModel,
   type TailorRunTimeDisplayMode,
   type TailoredResumeEmphasizedTechnology,
   type TailoredResumeSummary,
@@ -449,6 +451,120 @@ const EMPTY_TAILORED_PREVIEW_HIGHLIGHT_QUERIES: TailoredResumeInteractivePreview
   [];
 const DEFAULT_STEP_2_EXPERIENCE_CHAT_PROMPT =
   "Help me craft resume experiences for the following technologies. Be optimistic about what my experience may be and I can correct you if it's too much. Create FAANG level experiences for each resume point, and give 3 sample bullets for each of the following experiences. Suggest them *in the context of my actual resume*, and for each bullet say which of my previous experiences you would put them under. List your bullets in letter order A. B. C., and be ready for me to answer like '[keyword] A' which should tell you to (1) iterate on this one by checking that it's not malformed (2) save it as a new resume bullet for me if you didn't have to change the string, or give a version that isn't malformed and ask me if you can add it.";
+
+const tailorResumeModelOptions = [
+  { group: "OpenAI", label: "GPT-5.4 mini", value: "gpt-5.4-mini" },
+  { group: "OpenAI", label: "GPT-5.4", value: "gpt-5.4" },
+  { group: "OpenAI", label: "GPT-5.5", value: "gpt-5.5" },
+  { group: "OpenAI", label: "GPT-5 mini", value: "gpt-5-mini" },
+  { group: "OpenAI", label: "GPT-5", value: "gpt-5" },
+  {
+    group: "Anthropic",
+    label: "Claude Sonnet 4.6",
+    value: "anthropic:claude-sonnet-4-6",
+  },
+  {
+    group: "Anthropic",
+    label: "Claude Opus 4.6",
+    value: "anthropic:claude-opus-4-6",
+  },
+  {
+    group: "Anthropic",
+    label: "Claude Haiku 4.5",
+    value: "anthropic:claude-haiku-4-5",
+  },
+  {
+    group: "Anthropic",
+    label: "Claude Sonnet 4",
+    value: "anthropic:claude-sonnet-4",
+  },
+] as const satisfies ReadonlyArray<{
+  group: "Anthropic" | "OpenAI";
+  label: string;
+  value: TailorResumeSelectableModel;
+}>;
+
+type TailorResumeModelSettingKey = keyof typeof defaultTailorResumeModelSettings;
+
+const tailorResumeModelSettingRows = [
+  {
+    help: "Step 1 scrapes the job description for emphasized technologies before keyword review.",
+    key: "step1Model",
+    label: "Step 1",
+  },
+  {
+    help: "Step 3 generates the targeted edit intent and assigns supported keywords to resume blocks.",
+    key: "step3Model",
+    label: "Step 3",
+  },
+  {
+    help: "Step 4A writes exact block-scoped resume edits from the accepted plan.",
+    key: "step4Model",
+    label: "Step 4",
+  },
+  {
+    help: "Step 4B compacts edited blocks only when the tailored PDF exceeds the original page count.",
+    key: "step4bModel",
+    label: "Step 4B",
+  },
+  {
+    help: "Master chat is the Resume Chat used for job-page help and first-class resume memory support.",
+    key: "masterChatModel",
+    label: "Master chat",
+  },
+] as const satisfies ReadonlyArray<{
+  help: string;
+  key: TailorResumeModelSettingKey;
+  label: string;
+}>;
+
+function readTailorResumeModelOptionGroups(
+  key: TailorResumeModelSettingKey,
+): Array<"Anthropic" | "OpenAI"> {
+  return key === "step3Model" ? ["OpenAI", "Anthropic"] : ["OpenAI"];
+}
+
+function formatTailorResumeModelLabel(model: string | null | undefined) {
+  const normalizedModel = model?.trim();
+
+  if (!normalizedModel) {
+    return null;
+  }
+
+  return (
+    tailorResumeModelOptions.find((option) => option.value === normalizedModel)
+      ?.label ?? normalizedModel
+  );
+}
+
+function formatTailorRunModelStepLabel(stepNumber: number) {
+  return stepNumber === 5 ? "Step 4B" : `Step ${stepNumber}`;
+}
+
+function buildTailorRunStepModelsTitle(
+  timings: TailorResumeGenerationStepTiming[],
+) {
+  const modelsByStep = new Map<number, string>();
+
+  for (const timing of timings) {
+    const modelLabel = formatTailorResumeModelLabel(timing.model);
+
+    if (!modelLabel) {
+      continue;
+    }
+
+    modelsByStep.set(timing.stepNumber, modelLabel);
+  }
+
+  const modelParts = [...modelsByStep.entries()]
+    .sort(([leftStep], [rightStep]) => leftStep - rightStep)
+    .map(
+      ([stepNumber, modelLabel]) =>
+        `${formatTailorRunModelStepLabel(stepNumber)}: ${modelLabel}`,
+    );
+
+  return modelParts.length > 0 ? ` Models: ${modelParts.join("; ")}` : "";
+}
 
 function readDebugPreviewFlag(name: string) {
   if (
@@ -6026,6 +6142,12 @@ function App() {
     savedSettingsUserMarkdown.nonTechnologies.join("\n");
   const isSettingsUserMarkdownChanged =
     draftSettingsUserMarkdown !== savedSettingsUserMarkdown.markdown;
+  const generationModelSettings =
+    personalInfo?.generationSettings ?? defaultTailorResumeModelSettings;
+  const areGenerationModelsDefault = tailorResumeModelSettingRows.every(
+    (row) =>
+      generationModelSettings[row.key] === defaultTailorResumeModelSettings[row.key],
+  );
   const canSaveSettingsSpareBullet =
     draftSettingsSpareBulletQuote.trim().length > 0 &&
     draftSettingsSpareBulletExperienceId.trim().length > 0 &&
@@ -8178,6 +8300,122 @@ function App() {
     } finally {
       setIsSavingKeywordCoverageSetting(false);
     }
+  }
+
+  async function updateGenerationModelSettings(
+    updates: Partial<Record<TailorResumeModelSettingKey, TailorResumeSelectableModel>>,
+  ) {
+    if (authState.status !== "signedIn") {
+      setKeywordCoverageSettingError(
+        "Connect Google before changing model settings.",
+      );
+      return;
+    }
+
+    if (isSavingKeywordCoverageSetting) {
+      return;
+    }
+
+    const previousPersonalInfo = personalInfo ?? lastReadyPersonalInfoRef.current;
+    const nextGenerationSettings = previousPersonalInfo
+      ? {
+          ...previousPersonalInfo.generationSettings,
+          ...updates,
+        }
+      : null;
+    const optimisticPersonalInfo =
+      previousPersonalInfo && nextGenerationSettings
+        ? {
+            ...previousPersonalInfo,
+            generationSettings: nextGenerationSettings,
+          }
+        : null;
+
+    setIsSavingKeywordCoverageSetting(true);
+    setKeywordCoverageSettingError(null);
+
+    if (optimisticPersonalInfo) {
+      lastReadyPersonalInfoRef.current = optimisticPersonalInfo;
+      setPersonalInfoState({
+        personalInfo: optimisticPersonalInfo,
+        status: "ready",
+      });
+      publishPersonalInfoToSharedCache(optimisticPersonalInfo);
+    }
+
+    try {
+      const result = await patchTailorResume({
+        action: "saveGenerationSettings",
+        generationSettings: updates,
+      });
+
+      if (!result.ok) {
+        throw new Error(
+          readTailorResumePayloadError(
+            result.payload,
+            "Unable to save model settings.",
+          ),
+        );
+      }
+
+      const savedGenerationSettings =
+        readTailorResumeGenerationSettingsSummary(result.payload);
+
+      setPersonalInfoState((currentState) => {
+        if (currentState.status !== "ready") {
+          return currentState;
+        }
+
+        const nextPersonalInfo = {
+          ...currentState.personalInfo,
+          generationSettings: savedGenerationSettings,
+        };
+
+        lastReadyPersonalInfoRef.current = nextPersonalInfo;
+        publishPersonalInfoToSharedCache(nextPersonalInfo);
+
+        return {
+          personalInfo: nextPersonalInfo,
+          status: "ready",
+        };
+      });
+
+      void loadPersonalInfo({ preserveCurrent: true });
+    } catch (error) {
+      if (previousPersonalInfo) {
+        lastReadyPersonalInfoRef.current = previousPersonalInfo;
+        setPersonalInfoState({
+          personalInfo: previousPersonalInfo,
+          status: "ready",
+        });
+        publishPersonalInfoToSharedCache(previousPersonalInfo);
+      }
+
+      setKeywordCoverageSettingError(
+        error instanceof Error ? error.message : "Unable to save model settings.",
+      );
+    } finally {
+      setIsSavingKeywordCoverageSetting(false);
+    }
+  }
+
+  function updateGenerationModelSetting(
+    key: TailorResumeModelSettingKey,
+    model: TailorResumeSelectableModel,
+  ) {
+    if (generationModelSettings[key] === model) {
+      return;
+    }
+
+    void updateGenerationModelSettings({ [key]: model });
+  }
+
+  function resetGenerationModelSettings() {
+    if (areGenerationModelsDefault) {
+      return;
+    }
+
+    void updateGenerationModelSettings({ ...defaultTailorResumeModelSettings });
   }
 
   function openTailorAuthPrompt() {
@@ -16287,6 +16525,66 @@ function App() {
                 {authActionState === "running" ? "Connecting..." : "Connect Google"}
               </button>
             )}
+          </div>
+        </section>
+
+        <section className="snapshot-card settings-card settings-model-card">
+          <div className="settings-section-heading">
+            <p className="settings-section-eyebrow">Models</p>
+            <button
+              className="secondary-action compact-action settings-account-action settings-model-reset"
+              disabled={
+                authState.status !== "signedIn" ||
+                isSavingKeywordCoverageSetting ||
+                areGenerationModelsDefault
+              }
+              type="button"
+              onClick={resetGenerationModelSettings}
+            >
+              Reset defaults
+            </button>
+          </div>
+          <div className="settings-model-grid">
+            {tailorResumeModelSettingRows.map((row) => (
+              <label className="settings-model-field" key={row.key}>
+                <span className="settings-model-label-row">
+                  <span>{row.label}</span>
+                  <button
+                    aria-label={`${row.label} model help: ${row.help}`}
+                    className="settings-model-help"
+                    title={row.help}
+                    type="button"
+                  >
+                    ?
+                  </button>
+                </span>
+                <select
+                  disabled={
+                    authState.status !== "signedIn" ||
+                    isSavingKeywordCoverageSetting
+                  }
+                  value={generationModelSettings[row.key]}
+                  onChange={(event) =>
+                    updateGenerationModelSetting(
+                      row.key,
+                      event.currentTarget.value as TailorResumeSelectableModel,
+                    )
+                  }
+                >
+                  {readTailorResumeModelOptionGroups(row.key).map((group) => (
+                    <optgroup key={group} label={group}>
+                      {tailorResumeModelOptions
+                        .filter((option) => option.group === group)
+                        .map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </label>
+            ))}
           </div>
         </section>
 

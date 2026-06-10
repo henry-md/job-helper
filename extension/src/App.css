@@ -894,6 +894,110 @@ button:disabled {
   padding: 0 12px;
 }
 
+.settings-model-card {
+  gap: 8px;
+  padding-block: 10px;
+}
+
+.settings-model-card .settings-section-heading {
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+
+.settings-model-reset {
+  min-height: 26px;
+  padding: 0 9px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.settings-model-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+@media (min-width: 520px) {
+  .settings-model-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 12px;
+    row-gap: 7px;
+  }
+}
+
+.settings-model-field {
+  display: grid;
+  grid-template-columns: max-content minmax(118px, 1fr);
+  min-width: 0;
+  align-items: center;
+  column-gap: 7px;
+}
+
+.settings-model-label-row {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0;
+  color: var(--muted-strong);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.settings-model-label-row .settings-model-help {
+  margin-left: 7px;
+}
+
+.settings-model-help {
+  display: inline-flex;
+  width: 17px;
+  height: 17px;
+  min-width: 17px;
+  min-height: 17px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 0;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.settings-model-help:hover {
+  border-color: rgba(52, 211, 153, 0.32);
+  color: rgb(167, 243, 208);
+}
+
+.settings-model-field select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--foreground);
+  background: rgba(255, 255, 255, 0.04);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  outline: none;
+  padding: 0 7px;
+}
+
+.settings-model-field select:focus {
+  border-color: rgba(52, 211, 153, 0.44);
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.12);
+}
+
+.settings-model-field select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .settings-toggle-row {
   display: flex;
   flex-wrap: wrap;

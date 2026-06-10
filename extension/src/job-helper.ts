@@ -187,7 +187,38 @@ export const defaultExtensionPreferences: ExtensionPreferences = {
   tailorRunTimeDisplayMode: "specific",
 };
 
-const currentTailorResumeGenerationSettingsVersion = 5;
+const currentTailorResumeGenerationSettingsVersion = 7;
+
+export const defaultTailorResumeModelSettings = {
+  masterChatModel: "gpt-5.4",
+  step1Model: "gpt-5.4-mini",
+  step3Model: "anthropic:claude-sonnet-4-6",
+  step4Model: "gpt-5.5",
+  step4bModel: "gpt-5.4",
+} as const;
+
+const previousTailorResumeModelDefaults = {
+  masterChatModel: "gpt-5-mini",
+  step1Model: "gpt-5.5",
+  step3Model: "gpt-5-mini",
+  step4Model: "gpt-5-mini",
+  step4bModel: "gpt-5-mini",
+} as const;
+
+export const tailorResumeSelectableModelValues = [
+  "gpt-5.4-mini",
+  "gpt-5.4",
+  "gpt-5.5",
+  "gpt-5-mini",
+  "gpt-5",
+  "anthropic:claude-sonnet-4-6",
+  "anthropic:claude-opus-4-6",
+  "anthropic:claude-haiku-4-5",
+  "anthropic:claude-sonnet-4",
+] as const;
+
+export type TailorResumeSelectableModel =
+  (typeof tailorResumeSelectableModelValues)[number];
 
 export const defaultTailorResumeGenerationSettingsSummary:
   TailorResumeGenerationSettingsSummary = {
@@ -195,7 +226,12 @@ export const defaultTailorResumeGenerationSettingsSummary:
     customResumeDownloadName: "Resume",
     includeLowPriorityTermsInKeywordCoverage: false,
     ludicrousMode: true,
+    masterChatModel: defaultTailorResumeModelSettings.masterChatModel,
     preventPageCountIncrease: true,
+    step1Model: defaultTailorResumeModelSettings.step1Model,
+    step3Model: defaultTailorResumeModelSettings.step3Model,
+    step4Model: defaultTailorResumeModelSettings.step4Model,
+    step4bModel: defaultTailorResumeModelSettings.step4bModel,
     useCustomResumeDownloadName: false,
     version: currentTailorResumeGenerationSettingsVersion,
   };
@@ -357,7 +393,12 @@ export type TailorResumeGenerationSettingsSummary = {
   customResumeDownloadName: string;
   includeLowPriorityTermsInKeywordCoverage: boolean;
   ludicrousMode: boolean;
+  masterChatModel: TailorResumeSelectableModel;
   preventPageCountIncrease: boolean;
+  step1Model: TailorResumeSelectableModel;
+  step3Model: TailorResumeSelectableModel;
+  step4Model: TailorResumeSelectableModel;
+  step4bModel: TailorResumeSelectableModel;
   useCustomResumeDownloadName: boolean;
   version: number;
 };
@@ -510,6 +551,7 @@ export type TailorResumeGenerationStepSummary = {
   detail: string | null;
   durationMs: number;
   emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
+  model?: string | null;
   retrying: boolean;
   status: "failed" | "running" | "skipped" | "succeeded";
   stepCount: number;
@@ -1260,6 +1302,22 @@ export function readTailorResumeGenerationSettingsSummary(
     typeof settings.ludicrousMode === "boolean"
       ? settings.ludicrousMode
       : defaultTailorResumeGenerationSettingsSummary.ludicrousMode;
+  const readModel = (
+    key: keyof typeof defaultTailorResumeModelSettings,
+  ): TailorResumeSelectableModel => {
+    const candidate = settings[key];
+
+    const model = typeof candidate === "string" &&
+      tailorResumeSelectableModelValues.includes(
+        candidate as TailorResumeSelectableModel,
+      )
+      ? candidate as TailorResumeSelectableModel
+      : defaultTailorResumeModelSettings[key];
+
+    return version < 7 && model === previousTailorResumeModelDefaults[key]
+      ? defaultTailorResumeModelSettings[key]
+      : model;
+  };
 
   return {
     allowTailorResumeFollowUpQuestions:
@@ -1278,10 +1336,15 @@ export function readTailorResumeGenerationSettingsSummary(
         : defaultTailorResumeGenerationSettingsSummary.customResumeDownloadName,
     ludicrousMode:
       version < currentTailorResumeGenerationSettingsVersion ? true : ludicrousMode,
+    masterChatModel: readModel("masterChatModel"),
     preventPageCountIncrease:
       typeof settings.preventPageCountIncrease === "boolean"
         ? settings.preventPageCountIncrease
         : defaultTailorResumeGenerationSettingsSummary.preventPageCountIncrease,
+    step1Model: readModel("step1Model"),
+    step3Model: readModel("step3Model"),
+    step4Model: readModel("step4Model"),
+    step4bModel: readModel("step4bModel"),
     useCustomResumeDownloadName:
       typeof settings.useCustomResumeDownloadName === "boolean"
         ? settings.useCustomResumeDownloadName
@@ -1344,6 +1407,7 @@ export function readTailorResumeGenerationStepSummary(
     emphasizedTechnologies: readTailoredResumeEmphasizedTechnologies(
       value.emphasizedTechnologies,
     ),
+    model: readNullableString(value.model),
     retrying: value.retrying === true,
     status,
     stepCount: Math.max(1, Math.floor(stepCount)),
