@@ -3,9 +3,9 @@ Job Helper is a small Next.js App Router app for tracking job applications from 
 Current product slice:
 - Default product surface is the Chrome extension. If a request is ambiguous and could apply to either the web app or the extension, assume the extension is the primary target and verify it there first. The web app is usually supporting/admin surface unless the user explicitly names it.
 - Public `/` page handles Google sign-in.
-- Protected `/dashboard` has Config, Saved, and Settings tabs.
+- Protected `/dashboard` has Config, Saved, Usage, and Settings tabs.
 - `/dashboard?tab=config` lets each signed-in user upload/edit the source resume, review the rendered LaTeX PDF preview, and edit `USER.md` from a collapsed memory card.
-- `/dashboard?tab=saved` shows two panels: saved resumes and saved applications. Each panel has an extension-style Unarchived/Archived switch so only one list is visible at a time. The web app is a saved-data/configuration surface; resume tailoring and application capture happen through the Chrome extension.
+- `/dashboard?tab=saved` shows saved tailored resumes with an Unarchived/Archived switch. The web app is a saved-data/configuration surface; resume tailoring and application capture happen through the Chrome extension.
 - `/dashboard?tab=settings` exposes per-user AI prompt settings plus Tailor Resume generation guardrails so users can inspect and edit the live templates, Step 2 follow-up-question behavior, and page-count behavior that drive extraction and resume-generation flows.
 - Important dashboard verification state is URL-addressable with `?tab=...`; legacy `/dashboard?tab=tailor` and `/dashboard?tab=new` links resolve to Saved so extension dashboard links keep working, and `tailoredResumeId=<id>` opens the saved tailored-resume review modal there.
 - Uploading a resume triggers an OpenAI extraction pass that returns LaTeX directly, then Config lets the user edit that LaTeX side-by-side with the rendered PDF preview.
@@ -31,5 +31,5 @@ Dashboard UI note:
 When changing behavior, gather more context from:
 - `app/dashboard/page.tsx` for the main server-rendered dashboard.
 - `components/dashboard-workspace.tsx` for tab layout and Saved/Config interactions.
-- `app/api/job-applications/*.ts` for persistence, extraction endpoints, and application archive state.
+- `app/api/job-applications/*.ts` for persistence/extraction endpoints that still back Tailor Resume job identity and run linkage.
 - `prisma/schema.prisma` for the real data model.

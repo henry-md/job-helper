@@ -6,11 +6,6 @@ import { readAiUsageReport } from "@/lib/ai-usage-report";
 import { defaultAiUsagePeriod } from "@/lib/ai-usage-report-types";
 import { parseDashboardRouteState } from "@/lib/dashboard-route-state";
 import { createDefaultSystemPromptSettings } from "@/lib/system-prompt-settings";
-import {
-  filterVisibleJobApplicationsByUrl,
-  toJobApplicationRecord,
-} from "@/lib/job-application-records";
-import { getPrismaClient } from "@/lib/prisma";
 import { buildActiveTailoringStates } from "@/lib/tailor-resume-existing-tailoring-state";
 import { readTailorResumeResponseState } from "@/lib/tailor-resume-route-response-state";
 import { readTailorResumeStoredSkillData } from "@/lib/tailor-resume-skill-store";
@@ -42,46 +37,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     redirect("/");
   }
 
-  const databaseStatus = await (async () => {
-    try {
-      const prisma = getPrismaClient();
-      const applications = await prisma.jobApplication.findMany({
-        where: { userId: session.user.id },
-        include: {
-          company: true,
-          referrer: {
-            include: {
-              company: true,
-            },
-          },
-        },
-        orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-      });
-      const visibleApplications = filterVisibleJobApplicationsByUrl(applications);
-
-      return {
-        ok: true,
-        detail:
-          visibleApplications.length === 0
-            ? "Connected"
-            : `Tracking ${visibleApplications.length} application${
-                visibleApplications.length === 1 ? "" : "s"
-              }`,
-        applicationCount: visibleApplications.length,
-        applications: visibleApplications.map(toJobApplicationRecord),
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        detail:
-          error instanceof Error
-            ? error.message
-            : "Unable to connect to Postgres.",
-        applicationCount: 0,
-        applications: [],
-      };
-    }
-  })();
   const tailorResumeState = await (async () => {
     try {
       const state = await readTailorResumeResponseState(session.user.id);
@@ -170,12 +125,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         tone: "error" as const,
         text: params.error,
       }
-    : !databaseStatus.ok
-      ? {
-          tone: "error" as const,
-          text: databaseStatus.detail,
-        }
-      : null;
+    : null;
   const initialDashboardRouteState = parseDashboardRouteState({
     tab: params?.tab,
     tailoredResumeId: params?.tailoredResumeId,
@@ -186,7 +136,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       <div className="mx-auto flex w-full max-w-[1800px] flex-col gap-[clamp(0.75rem,1.2vh,1rem)] sm:h-full sm:min-h-full">
         <section className="flex flex-1 flex-col gap-[clamp(0.75rem,1.2vh,1rem)] sm:min-h-0">
           <DashboardWorkspace
-            applications={databaseStatus.applications}
             aiUsageReport={aiUsageReport}
             defaultPromptSettings={createDefaultSystemPromptSettings()}
             statusMessage={statusMessage}

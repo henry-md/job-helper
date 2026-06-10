@@ -7,9 +7,9 @@ High-level structure:
 
 Current request flow:
 1. NextAuth session is resolved server-side with `getServerSession(authOptions)`.
-2. `/dashboard` loads saved applications from Prisma and reads the saved tailor-resume profile from the local filesystem, including the source-resume assets, `USER.md`, and per-user prompt-settings payload used by the OpenAI-backed flows.
+2. `/dashboard` reads the saved tailor-resume profile from the local filesystem, including the source-resume assets, `USER.md`, and per-user prompt-settings payload used by the OpenAI-backed flows.
 3. Config uses `POST /api/tailor-resume` to persist the uploaded source resume file, run resume extraction through OpenAI, store the extracted LaTeX as the saved draft, and compile the preview PDF in the per-user tailor-resume profile.
-4. Saved uses `/api/tailor-resume` and `/api/job-applications` archive/delete endpoints to organize stored tailored resumes and job applications.
+4. Saved uses `/api/tailor-resume` archive/delete endpoints to organize stored tailored resumes. `JobApplication` rows remain backend metadata for Tailor Resume job identity, duplicate detection, run linkage, and usage attribution, but they are not shown as a standalone saved-applications surface.
 5. Application capture and tailoring are extension-owned flows; the web app keeps legacy dashboard tab aliases for extension-opened review links but does not expose manual tailoring intake.
 
 Important boundaries:
@@ -26,7 +26,7 @@ Current persistence nuance:
 - A saved application can own multiple `JobApplicationScreenshot` records through `JobApplicationScreenshot.applicationId`.
 - Screenshot records may store extraction payload/model/error snapshots from the client-side draft state.
 - Cross-surface freshness uses a Prisma-backed per-user sync cursor (`UserSyncState`) with separate application and tailoring versions so clients can poll a tiny endpoint and only refetch the heavier application/profile data when something actually changed.
-- `JobApplication.archivedAt` separates active and archived saved applications. `/api/job-applications` defaults to active records for extension compatibility and accepts `includeArchived=1` for the dashboard Saved tab.
+- `JobApplication` rows are still created/reused by Tailor Resume for normalized job identity. They should not be exposed as a standalone dashboard or extension list unless a new workflow explicitly needs tracked applications again.
 - Tailor Resume stores the public resume asset under `public/uploads/resumes/<userId>/` and the private editable profile JSON under `.job-helper-data/tailor-resumes/<userId>/profile.json`.
 - Saved tailored resumes live in both the profile JSON and the Prisma mirror, including `archivedAt`, so archive/unarchive UI should mutate both stores together and let both the extension and dashboard derive `working set` vs `stored` sections from one synced record list.
 - The same profile JSON also stores prompt template overrides for job extraction, resume-to-LaTeX generation, tailoring, and tailored-resume refinement, so the dashboard settings tab and the API routes read from one source of truth.
