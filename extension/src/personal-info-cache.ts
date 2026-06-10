@@ -6,7 +6,7 @@ import {
 import { type UserSyncStateSnapshot } from "../../lib/sync-state.ts";
 
 export const PERSONAL_INFO_CACHE_STORAGE_KEY = "jobHelperPersonalInfoCache";
-const PERSONAL_INFO_CACHE_SCHEMA_VERSION = 3;
+const PERSONAL_INFO_CACHE_SCHEMA_VERSION = 4;
 
 export type PersonalInfoCacheEntry = {
   cachedAt: string;
@@ -68,35 +68,25 @@ export function invalidateChangedPersonalInfoSlices(input: {
   nextSyncState: UserSyncStateSnapshot;
   personalInfo: PersonalInfoSummary;
 }) {
-  const applicationsChanged =
-    input.personalInfo.syncState.applicationsVersion !==
-    input.nextSyncState.applicationsVersion;
   const tailoringChanged =
     input.personalInfo.syncState.tailoringVersion !==
     input.nextSyncState.tailoringVersion;
 
-  if (!applicationsChanged && !tailoringChanged) {
-    return input.personalInfo;
+  if (!tailoringChanged) {
+    return {
+      ...input.personalInfo,
+      syncState: input.nextSyncState,
+    } satisfies PersonalInfoSummary;
   }
 
   return {
     ...input.personalInfo,
-    ...(applicationsChanged
-      ? {
-          applicationCount: 0,
-          applications: [],
-          companyCount: 0,
-        }
-      : {}),
-    ...(tailoringChanged
-      ? {
-          activeTailoring: null,
-          activeTailorings: [],
-          generationSettings: defaultTailorResumeGenerationSettingsSummary,
-          tailoredResumes: [],
-          tailoringInterview: null,
-          tailoringInterviews: [],
-        }
-      : {}),
+    activeTailoring: null,
+    activeTailorings: [],
+    generationSettings: defaultTailorResumeGenerationSettingsSummary,
+    syncState: input.nextSyncState,
+    tailoredResumes: [],
+    tailoringInterview: null,
+    tailoringInterviews: [],
   } satisfies PersonalInfoSummary;
 }

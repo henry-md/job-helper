@@ -184,10 +184,6 @@ import {
   persistUserResume,
 } from "@/lib/job-tracking";
 import {
-  filterVisibleJobApplicationsByUrl,
-  toJobApplicationRecord,
-} from "@/lib/job-application-records";
-import {
   normalizeCompanyName,
   resolveAppliedAt,
 } from "@/lib/job-tracking-shared";
@@ -344,77 +340,6 @@ async function writeTailorResumeProfileAndMarkChanged(
 ) {
   await writeTailorResumeProfile(userId, profile);
   await markTailoringChanged(userId);
-}
-
-function readIncludeApplicationsFlag(request: Request) {
-  const includeApplications = new URL(request.url).searchParams.get(
-    "includeApplications",
-  );
-
-  return (
-    includeApplications === "1" ||
-    includeApplications === "true" ||
-    includeApplications === "yes"
-  );
-}
-
-function readApplicationSummaryLimit(request: Request) {
-  const rawLimit = new URL(request.url).searchParams.get("applicationLimit");
-
-  if (!rawLimit) {
-    return 12;
-  }
-
-  const parsedLimit = Number.parseInt(rawLimit, 10);
-
-  if (!Number.isInteger(parsedLimit)) {
-    return 12;
-  }
-
-  return Math.min(Math.max(parsedLimit, 1), 100);
-}
-
-async function readApplicationSummaryPayload(input: {
-  limit: number;
-  userId: string;
-}) {
-  const prisma = getPrismaClient();
-  const [applications, companyCount] = await Promise.all([
-    prisma.jobApplication.findMany({
-      include: {
-        company: true,
-        referrer: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-      },
-      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-      where: {
-        archivedAt: null,
-        userId: input.userId,
-      },
-    }),
-    prisma.company.count({
-      where: {
-        applications: {
-          some: {
-            userId: input.userId,
-          },
-        },
-        userId: input.userId,
-      },
-    }),
-  ]);
-  const visibleApplications = filterVisibleJobApplicationsByUrl(applications);
-  const limitedApplications = visibleApplications.slice(0, input.limit);
-
-  return {
-    applicationCount: visibleApplications.length,
-    applications: limitedApplications.map(toJobApplicationRecord),
-    companyCount,
-  };
 }
 
 function buildResumeRecord(input: {
@@ -5601,26 +5526,16 @@ export async function GET(request: Request) {
     return unauthorizedResponse();
   }
 
-  const includeApplications = readIncludeApplicationsFlag(request);
-  const applicationSummaryLimit = readApplicationSummaryLimit(request);
-
   await cleanupInvalidTailorResumeArtifacts(session.user.id);
 
   const [
     { activeRun, activeRuns, profile, rawProfile },
     syncState,
     userMarkdown,
-    applicationSummary,
   ] = await Promise.all([
     readTailorResumeResponseState(session.user.id),
     readUserSyncStateSnapshotForUser(session.user.id),
     readTailorResumeUserMarkdown(session.user.id),
-    includeApplications
-      ? readApplicationSummaryPayload({
-          limit: applicationSummaryLimit,
-          userId: session.user.id,
-        })
-      : Promise.resolve(null),
   ]);
   const skillData = await readTailorResumeStoredSkillData({
     sourceAnnotatedLatexCode: rawProfile.annotatedLatex.code,
@@ -5643,7 +5558,6 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     activeTailorings,
-    ...(applicationSummary ?? {}),
     existingTailoring,
     profile: profileWithReviewChats,
     skillData,

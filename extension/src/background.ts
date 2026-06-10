@@ -2549,16 +2549,13 @@ async function fetchWithTimeout(
 }
 
 async function fetchFreshPersonalInfoSummary(session: JobHelperAuthSession) {
-  const personalInfoUrl = new URL(DEFAULT_TAILOR_RESUME_ENDPOINT);
-  personalInfoUrl.searchParams.set("includeApplications", "1");
-  personalInfoUrl.searchParams.set("applicationLimit", "12");
   const tailorResumeResponse = await fetchWithTimeout({
     cache: "no-store",
     credentials: "include",
     errorMessage: "Timed out while loading your Job Helper info.",
     headers: authorizationHeaders(session),
     timeoutMs: PERSONAL_INFO_REQUEST_TIMEOUT_MS,
-    url: personalInfoUrl,
+    url: DEFAULT_TAILOR_RESUME_ENDPOINT,
   });
   const tailorResumePayload = await readJsonResponse(tailorResumeResponse);
 

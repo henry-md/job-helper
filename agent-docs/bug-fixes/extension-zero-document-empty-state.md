@@ -1,7 +1,7 @@
 ## Extension zero-document empty states regressed to plain placeholders
 
 - Date: 2026-04-26
-- Surface: extension Tailor, Archived, and Applications tabs
+- Surface: extension Tailor and Archived resume views
 
 ### What broke
 
@@ -13,7 +13,6 @@ Reintroduce the old empty-state SVG as a reusable `DocumentEmptyState` and rende
 
 - unarchived tailored resumes
 - archived tailored resumes
-- tracked applications
 
 Keep loading, auth, and error states on the simpler text placeholders.
 
