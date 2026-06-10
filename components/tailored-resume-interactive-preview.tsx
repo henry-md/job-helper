@@ -1139,6 +1139,35 @@ function findSegmentKeyAtPagePoint(input: {
   return nearestMatch?.key ?? null;
 }
 
+function findNearestSegmentKeyOnPageLine(input: {
+  pageSegmentMatches: PageSegmentMatch[];
+  x: number;
+  y: number;
+  zoom?: number;
+}) {
+  const lineTolerance = Math.max(6, 16 / Math.max(1, input.zoom ?? 1));
+  let nearestMatch: { distance: number; key: string } | null = null;
+
+  for (const match of input.pageSegmentMatches) {
+    for (const rect of match.rects) {
+      const centerY = rect.top + rect.height / 2;
+
+      if (Math.abs(input.y - centerY) > lineTolerance) {
+        continue;
+      }
+
+      const centerX = rect.left + rect.width / 2;
+      const distance = Math.abs(input.x - centerX);
+
+      if (!nearestMatch || distance < nearestMatch.distance) {
+        nearestMatch = { distance, key: match.key };
+      }
+    }
+  }
+
+  return nearestMatch?.key ?? null;
+}
+
 function findSegmentKeyAtMagnifierPoint(input: {
   clientX: number;
   clientY: number;
@@ -1210,12 +1239,20 @@ function findSegmentKeyAtMagnifierPoint(input: {
     magnifierState: input.magnifierState,
   });
 
-  return findSegmentKeyAtPagePoint({
-    pageSegmentMatches: input.pageSegmentMatches,
-    x: pagePoint.x,
-    y: pagePoint.y,
-    zoom: input.magnifierState.zoom,
-  });
+  return (
+    findSegmentKeyAtPagePoint({
+      pageSegmentMatches: input.pageSegmentMatches,
+      x: pagePoint.x,
+      y: pagePoint.y,
+      zoom: input.magnifierState.zoom,
+    }) ??
+    findNearestSegmentKeyOnPageLine({
+      pageSegmentMatches: input.pageSegmentMatches,
+      x: pagePoint.x,
+      y: pagePoint.y,
+      zoom: input.magnifierState.zoom,
+    })
+  );
 }
 
 function summarizePageTextLineNearY(input: {
@@ -1396,6 +1433,76 @@ function buildFocusRectsFromPageHighlightMatches(input: {
   );
 }
 
+function resolveInteractivePreviewHoverGroup(input: {
+  pageWidth: number;
+  rects: HighlightRect[];
+}) {
+  const group = summarizeHighlightRectGroup(input.rects);
+
+  if (!group) {
+    return null;
+  }
+
+  const leftPadding = 24;
+  const rightPadding = 8;
+  const verticalPadding = 1.5;
+  const left = Math.max(0, group.left - leftPadding);
+  const top = Math.max(0, group.top - verticalPadding);
+  const right = Math.min(input.pageWidth, group.left + group.width + rightPadding);
+
+  return {
+    height: group.height + (group.top - top) + verticalPadding,
+    left,
+    top,
+    width: Math.max(0, right - left),
+  };
+}
+
+function resolveInteractivePreviewMagnifierHoverGroup(input: {
+  group: HighlightRect;
+  magnifierState: PreviewMagnifierState;
+  pageWidth: number;
+}) {
+  const visibleHalfWidth =
+    input.magnifierState.width / Math.max(1, input.magnifierState.zoom) / 2;
+  const visibleLeft = Math.max(0, input.magnifierState.x - visibleHalfWidth);
+  const visibleRight = Math.min(
+    input.pageWidth,
+    input.magnifierState.x + visibleHalfWidth,
+  );
+  const railInset = 1 / Math.max(1, input.magnifierState.zoom);
+  const minRailWidth = 2 / Math.max(1, input.magnifierState.zoom);
+  const left = Math.min(
+    Math.max(input.group.left, visibleLeft + railInset),
+    Math.max(visibleLeft + railInset, visibleRight - minRailWidth),
+  );
+  const right = Math.min(input.group.left + input.group.width, visibleRight);
+
+  return {
+    ...input.group,
+    left,
+    width: Math.max(minRailWidth, right - left),
+  };
+}
+
+function InteractivePreviewSegmentHover({
+  rect,
+}: {
+  rect: HighlightRect;
+}) {
+  return (
+    <div
+      className="resume-interactive-segment-hover"
+      style={{
+        height: `${rect.height}px`,
+        left: `${rect.left}px`,
+        top: `${rect.top}px`,
+        width: `${rect.width}px`,
+      }}
+    />
+  );
+}
+
 function InteractivePreviewPage({
   focusActive,
   focusKey,
@@ -1466,6 +1573,20 @@ function InteractivePreviewPage({
   const suppressNextSegmentClickRef = useRef(false);
   const hoveredSegmentMatch =
     pageSegmentMatches.find((match) => match.key === hoveredSegmentKey) ?? null;
+  const hoveredSegmentGroup = hoveredSegmentMatch
+    ? resolveInteractivePreviewHoverGroup({
+        pageWidth,
+        rects: hoveredSegmentMatch.rects,
+      })
+    : null;
+  const hoveredSegmentMagnifierGroup =
+    hoveredSegmentGroup && magnifierState
+      ? resolveInteractivePreviewMagnifierHoverGroup({
+          group: hoveredSegmentGroup,
+          magnifierState,
+          pageWidth,
+        })
+      : hoveredSegmentGroup;
 
   const updateHoveredSegmentKey = useCallback(
     (nextHoveredSegmentKey: string | null) => {
@@ -2073,15 +2194,15 @@ function InteractivePreviewPage({
           magnifierState,
         })
       ) {
-        updateHoveredSegmentKey(
+        const nextHoveredSegmentKey =
           findSegmentKeyAtMagnifierPoint({
             clientX: event.clientX,
             clientY: event.clientY,
             magnifierViewportRect,
             magnifierState,
             pageSegmentMatches,
-          }),
-        );
+          }) ?? hoveredSegmentKeyRef.current;
+        updateHoveredSegmentKey(nextHoveredSegmentKey);
         return;
       }
 
@@ -2312,21 +2433,30 @@ function InteractivePreviewPage({
                       magnifierState,
                     })
                   ) {
-                    updateHoveredSegmentKey(
+                    const nextHoveredSegmentKey =
                       findSegmentKeyAtMagnifierPoint({
                         clientX: event.clientX,
                         clientY: event.clientY,
                         magnifierViewportRect: magnifierViewportRect ?? undefined,
                         magnifierState,
                         pageSegmentMatches,
-                      }),
-                    );
+                      }) ?? match.key;
+                    updateHoveredSegmentKey(nextHoveredSegmentKey);
                     return;
                   }
 
                   updateHoveredSegmentKey(match.key);
                 }}
                 onMouseLeave={(event) => {
+                  const nextTarget = event.relatedTarget;
+
+                  if (
+                    nextTarget instanceof Node &&
+                    magnifierRef.current?.contains(nextTarget)
+                  ) {
+                    return;
+                  }
+
                   const magnifierViewportRect = magnifierState
                     ? resolveRenderedMagnifierViewportRect({
                         magnifierElement: magnifierRef.current,
@@ -2343,15 +2473,19 @@ function InteractivePreviewPage({
                       magnifierState,
                     })
                   ) {
-                    updateHoveredSegmentKey(
+                    const nextHoveredSegmentKey =
                       findSegmentKeyAtMagnifierPoint({
                         clientX: event.clientX,
                         clientY: event.clientY,
                         magnifierViewportRect: magnifierViewportRect ?? undefined,
                         magnifierState,
                         pageSegmentMatches,
-                      }),
-                    );
+                      }) ?? match.key;
+                    updateHoveredSegmentKey(nextHoveredSegmentKey);
+                    return;
+                  }
+
+                  if (magnifierState) {
                     return;
                   }
 
@@ -2369,20 +2503,12 @@ function InteractivePreviewPage({
           )}
         </div>
       ) : null}
-      {hoveredSegmentMatch ? (
+      {hoveredSegmentGroup ? (
         <div className="resume-interactive-layer">
-          {hoveredSegmentMatch.rects.map((rect, index) => (
-            <div
-              className="resume-interactive-highlight resume-interactive-highlight--hover"
-              key={`hover-${hoveredSegmentMatch.key}-${page.pageNumber}-${index}`}
-              style={{
-                height: `${rect.height}px`,
-                left: `${rect.left}px`,
-                top: `${rect.top}px`,
-                width: `${rect.width}px`,
-              }}
-            />
-          ))}
+          <InteractivePreviewSegmentHover
+            key={`hover-${hoveredSegmentMatch?.key ?? "segment"}-${page.pageNumber}`}
+            rect={hoveredSegmentGroup}
+          />
         </div>
       ) : null}
       {focusActive &&
@@ -2492,15 +2618,15 @@ function InteractivePreviewPage({
                 : magnifierState;
 
             setMagnifierState(nextMagnifierState);
-            updateHoveredSegmentKey(
+            const nextHoveredSegmentKey =
               findSegmentKeyAtMagnifierPoint({
                 clientX: event.clientX,
                 clientY: event.clientY,
                 magnifierViewportRect,
                 magnifierState: nextMagnifierState,
                 pageSegmentMatches,
-              }),
-            );
+              }) ?? hoveredSegmentKeyRef.current;
+            updateHoveredSegmentKey(nextHoveredSegmentKey);
           }}
           ref={magnifierRef}
           style={{
@@ -2547,20 +2673,14 @@ function InteractivePreviewPage({
                 />
               )),
             )}
-            {hoveredSegmentMatch
-              ? hoveredSegmentMatch.rects.map((rect, index) => (
-                  <div
-                    className="resume-interactive-highlight resume-interactive-highlight--hover"
-                    key={`magnifier-hover-${hoveredSegmentMatch.key}-${page.pageNumber}-${index}`}
-                    style={{
-                      height: `${rect.height}px`,
-                      left: `${rect.left}px`,
-                      top: `${rect.top}px`,
-                      width: `${rect.width}px`,
-                    }}
-                  />
-                ))
-              : null}
+            {hoveredSegmentMagnifierGroup ? (
+              <InteractivePreviewSegmentHover
+                key={`magnifier-hover-${
+                  hoveredSegmentMatch?.key ?? "segment"
+                }-${page.pageNumber}`}
+                rect={hoveredSegmentMagnifierGroup}
+              />
+            ) : null}
             {focusActive &&
             focusHighlightRects.length > 0 &&
             guidedFocusToken === `${focusKey}:${focusRequest}`

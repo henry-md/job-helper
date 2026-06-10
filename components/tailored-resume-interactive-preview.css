@@ -222,6 +222,32 @@
     0 8px 20px rgba(14, 165, 233, 0.1);
 }
 
+.resume-interactive-segment-hover {
+  position: absolute;
+  z-index: 3;
+  overflow: hidden;
+  border-radius: 0.28rem;
+  background: linear-gradient(
+    180deg,
+    rgba(147, 197, 253, 0.2),
+    rgba(96, 165, 250, 0.16)
+  );
+  box-shadow: 0 8px 18px rgba(96, 165, 250, 0.08);
+}
+
+.resume-interactive-segment-hover::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  border-radius: 999px 0 0 999px;
+  background: rgb(99, 102, 241);
+  clip-path: polygon(50% 0, 100% 8%, 100% 92%, 50% 100%, 0 92%, 0 8%);
+  box-shadow: 0 0 5px rgba(99, 102, 241, 0.12);
+}
+
 .resume-interactive-highlight--guided {
   background: linear-gradient(
     180deg,
