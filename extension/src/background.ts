@@ -925,7 +925,17 @@ async function revealDismissedKeywordBadge(input: {
     null;
   let resolvedPersonalInfo: PersonalInfoSummary | null = null;
 
-  if (input.tailoredResumeId || !resolvedJobUrl) {
+  const inputHasSavedKeywordData =
+    (input.emphasizedTechnologies?.some((technology) =>
+      Boolean(technology.name.trim()),
+    ) ??
+      false) || Boolean(input.keywordCoverage);
+  const inputHasNonTechnologyNames =
+    (input.nonTechnologyNames?.length ?? 0) > 0;
+  const needsPersonalInfoFallback =
+    !resolvedJobUrl || !inputHasSavedKeywordData || !inputHasNonTechnologyNames;
+
+  if (needsPersonalInfoFallback) {
     try {
       const { personalInfo } = await getPersonalInfoSummary();
       resolvedPersonalInfo = personalInfo;
