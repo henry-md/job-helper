@@ -54,7 +54,7 @@ client id for the extension itself:
 ```bash
 GOOGLE_EXTENSION_CLIENT_ID=your-chrome-extension-client-id.apps.googleusercontent.com
 VITE_JOB_HELPER_APP_BASE_URL=http://localhost:1285
-DEBUG_UI=true # optional: enables the side-panel Debug tab
+DEBUG_UI=true # optional: enables debug-only extension controls
 # Optional, but useful if you need a stable unpacked extension id.
 CHROME_EXTENSION_PUBLIC_KEY=...
 ```
@@ -76,7 +76,7 @@ extension. `VITE_JOB_HELPER_APP_BASE_URL` must be present when Vite builds or
 runs the extension because it is baked into the extension bundle. The extension
 Vite config loads both the repo root `.env` and `extension/.env*`, so keeping
 both values in the root `.env` is usually simplest. When `DEBUG_UI=true`, the
-side panel shows a Debug tab with the current page's URL identity.
+side panel shows debug-only extension controls.
 
 Chrome may not show a visible OAuth popup if the current Chrome profile already
 has a usable Google session and the extension grant can be completed silently.

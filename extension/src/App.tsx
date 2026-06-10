@@ -22,7 +22,6 @@ import {
   buildTailoredResumeResolvedSegmentMap,
   buildTailoredResumeSnapshotComparisonEdits,
 } from "../../lib/tailor-resume-edit-history.ts";
-import { buildJobApplicationDisplayParts } from "../../lib/job-application-display.ts";
 import { buildTailoredResumeInteractivePreviewQueries } from "../../lib/tailor-resume-preview-focus.ts";
 import type { TailoredResumeInteractivePreviewQuery } from "../../lib/tailor-resume-preview-focus.ts";
 import TailoredResumeInteractivePreview from "../../components/tailored-resume-interactive-preview";
@@ -35,8 +34,6 @@ import {
   buildTailorResumePreparationState,
   buildTailorResumeApplicationContext,
   buildTailoredResumeReviewUrl,
-  DEFAULT_DASHBOARD_URL,
-  DEFAULT_JOB_APPLICATIONS_ENDPOINT,
   DEFAULT_TAILOR_RESUME_ENDPOINT,
   DEFAULT_TAILOR_RESUME_PREVIEW_ENDPOINT,
   DEFAULT_TAILOR_RESUME_SUPPORT_CHAT_ENDPOINT,
@@ -87,7 +84,6 @@ import {
   type TailorRunTimeDisplayMode,
   type TailoredResumeEmphasizedTechnology,
   type TailoredResumeSummary,
-  type TrackedApplicationSummary,
 } from "./job-helper";
 import {
   PAGE_CONTEXT_UNAVAILABLE_MESSAGE,
@@ -231,7 +227,7 @@ type AuthState =
 type AuthActionState = "idle" | "running";
 type DashboardOpenActionState = "idle" | "running";
 
-type PanelTab = "applications" | "debug" | "settings" | "tailor" | "usage";
+type PanelTab = "settings" | "tailor" | "usage";
 type TailoredResumeArchiveFilter = "archived" | "unarchived";
 type AiUsageReportState =
   | { error: string | null; report: null; status: "idle" | "loading" }
@@ -399,8 +395,7 @@ type TailoredResumeReviewState =
     };
 
 type PendingPersonalDelete =
-  | { applicationId: string; kind: "application" }
-  | { kind: "tailoredResume"; tailoredResumeId: string };
+  { kind: "tailoredResume"; tailoredResumeId: string };
 
 type PersonalDeleteImpact = {
   applicationCount: number;
@@ -1157,15 +1152,6 @@ function formatTailoredResumeDate(value: string) {
   });
 }
 
-function formatApplicationStatus(value: string) {
-  return value
-    .toLowerCase()
-    .split("_")
-    .filter(Boolean)
-    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
-    .join(" ");
-}
-
 function buildOriginalResumePreviewUrl(pdfUpdatedAt: string | null) {
   const url = new URL(DEFAULT_TAILOR_RESUME_PREVIEW_ENDPOINT);
 
@@ -1868,65 +1854,6 @@ function buildRetryTailorRunRecord(input: {
   });
 }
 
-function findLinkedApplicationForTailoredResume(
-  record: TailoredResumeSummary,
-  applications: TrackedApplicationSummary[],
-) {
-  if (record.applicationId) {
-    const linkedApplication =
-      applications.find((application) => application.id === record.applicationId) ??
-      null;
-
-    return {
-      application: linkedApplication,
-      applicationId: record.applicationId,
-      jobUrl: linkedApplication?.jobUrl ?? record.jobUrl,
-    };
-  }
-
-  const normalizedJobUrl = normalizeComparableUrl(record.jobUrl);
-
-  if (!normalizedJobUrl) {
-    return null;
-  }
-
-  const linkedApplication =
-    applications.find(
-      (application) => normalizeComparableUrl(application.jobUrl) === normalizedJobUrl,
-    ) ?? null;
-
-  if (!linkedApplication) {
-    return null;
-  }
-
-  return {
-    application: linkedApplication,
-    applicationId: linkedApplication.id,
-    jobUrl: linkedApplication.jobUrl,
-  };
-}
-
-function findLinkedTailoredResumesForApplication(
-  input: {
-    applicationId: string;
-    jobUrl: string | null;
-  },
-  tailoredResumes: TailoredResumeSummary[],
-) {
-  const normalizedJobUrl = normalizeComparableUrl(input.jobUrl);
-
-  return tailoredResumes.filter((record) => {
-    if (record.applicationId) {
-      return record.applicationId === input.applicationId;
-    }
-
-    return Boolean(
-      normalizedJobUrl &&
-        normalizeComparableUrl(record.jobUrl) === normalizedJobUrl,
-    );
-  });
-}
-
 function formatDeleteImpactSummary(impact: PersonalDeleteImpact) {
   const parts: string[] = [];
 
@@ -1958,7 +1885,6 @@ function formatDeleteImpactSummary(impact: PersonalDeleteImpact) {
 }
 
 function buildPendingPersonalDeleteImpact(input: {
-  applications: TrackedApplicationSummary[];
   pendingDelete: PendingPersonalDelete | null;
   tailoredResumes: TailoredResumeSummary[];
 }): PersonalDeleteImpact | null {
@@ -1966,35 +1892,6 @@ function buildPendingPersonalDeleteImpact(input: {
 
   if (!pendingDelete) {
     return null;
-  }
-
-  if (pendingDelete.kind === "application") {
-    const application =
-      input.applications.find(
-        (record) => record.id === pendingDelete.applicationId,
-      ) ?? null;
-
-    if (!application) {
-      return null;
-    }
-
-    const linkedTailoredResumes = uniqueTailoredResumeSummaries(
-      findLinkedTailoredResumesForApplication(
-        {
-          applicationId: application.id,
-          jobUrl: application.jobUrl,
-        },
-        input.tailoredResumes,
-      ),
-    );
-
-    return {
-      applicationCount: 1,
-      applicationIds: [application.id],
-      tailoredResumeCount: linkedTailoredResumes.length,
-      tailoredResumeIds: linkedTailoredResumes.map((record) => record.id),
-      totalCount: 1 + linkedTailoredResumes.length,
-    };
   }
 
   const tailoredResume =
@@ -2006,32 +1903,12 @@ function buildPendingPersonalDeleteImpact(input: {
     return null;
   }
 
-  const linkedApplication = findLinkedApplicationForTailoredResume(
-    tailoredResume,
-    input.applications,
-  );
-  const linkedTailoredResumes = uniqueTailoredResumeSummaries(
-    linkedApplication
-      ? [
-          tailoredResume,
-          ...findLinkedTailoredResumesForApplication(
-            {
-              applicationId: linkedApplication.applicationId,
-              jobUrl: linkedApplication.jobUrl,
-            },
-            input.tailoredResumes,
-          ),
-        ]
-      : [tailoredResume],
-  );
-
   return {
-    applicationCount: linkedApplication ? 1 : 0,
-    applicationIds: linkedApplication ? [linkedApplication.applicationId] : [],
-    tailoredResumeCount: linkedTailoredResumes.length,
-    tailoredResumeIds: linkedTailoredResumes.map((record) => record.id),
-    totalCount:
-      linkedTailoredResumes.length + (linkedApplication ? 1 : 0),
+    applicationCount: 0,
+    applicationIds: [],
+    tailoredResumeCount: 1,
+    tailoredResumeIds: [tailoredResume.id],
+    totalCount: 1,
   };
 }
 
@@ -2039,14 +1916,10 @@ function removeDeletedItemsFromPersonalInfo(input: {
   impact: PersonalDeleteImpact;
   personalInfo: PersonalInfoSummary;
 }): PersonalInfoSummary {
-  const applicationIds = new Set(input.impact.applicationIds);
   const tailoredResumeIds = new Set(input.impact.tailoredResumeIds);
 
   return {
     ...input.personalInfo,
-    applications: input.personalInfo.applications.filter(
-      (application) => !applicationIds.has(application.id),
-    ),
     tailoredResumes: input.personalInfo.tailoredResumes.filter(
       (tailoredResume) => !tailoredResumeIds.has(tailoredResume.id),
     ),
@@ -2057,13 +1930,9 @@ function readDeletedPersonalInfoJobUrls(input: {
   impact: PersonalDeleteImpact;
   personalInfo: PersonalInfoSummary;
 }) {
-  const applicationIds = new Set(input.impact.applicationIds);
   const tailoredResumeIds = new Set(input.impact.tailoredResumeIds);
 
   return uniqueNonEmptyStrings([
-    ...input.personalInfo.applications
-      .filter((application) => applicationIds.has(application.id))
-      .map((application) => application.jobUrl),
     ...input.personalInfo.tailoredResumes
       .filter((tailoredResume) => tailoredResumeIds.has(tailoredResume.id))
       .map((tailoredResume) => tailoredResume.jobUrl),
@@ -2094,11 +1963,6 @@ function removeTailorRunArtifactsFromPersonalInfo(input: {
   const matchesTailoredResume = (tailoredResume: TailoredResumeSummary) =>
     (input.tailoredResumeId && tailoredResume.id === input.tailoredResumeId) ||
     (input.jobUrl && sameTailoringJobUrl(tailoredResume.jobUrl, input.jobUrl));
-  const matchesApplication = (application: TrackedApplicationSummary) =>
-    input.jobUrl && sameTailoringJobUrl(application.jobUrl, input.jobUrl);
-  const removedApplicationCount = input.personalInfo.applications.filter(
-    matchesApplication,
-  ).length;
 
   return {
     ...input.personalInfo,
@@ -2109,13 +1973,6 @@ function removeTailorRunArtifactsFromPersonalInfo(input: {
         : input.personalInfo.activeTailoring,
     activeTailorings: input.personalInfo.activeTailorings.filter(
       (activeTailoring) => !matchesActiveTailoring(activeTailoring),
-    ),
-    applicationCount: Math.max(
-      0,
-      input.personalInfo.applicationCount - removedApplicationCount,
-    ),
-    applications: input.personalInfo.applications.filter(
-      (application) => !matchesApplication(application),
     ),
     tailoredResumes: input.personalInfo.tailoredResumes.filter(
       (tailoredResume) => !matchesTailoredResume(tailoredResume),
@@ -4973,12 +4830,8 @@ function App() {
     useRef<AbortController | null>(null);
   const availablePanelTabs = [
     { id: "tailor" as const, label: "Tailor", title: "Tailor Resume" },
-    { id: "applications" as const, label: "Applications", title: "Applications" },
     { id: "usage" as const, label: "Usage", title: "Usage" },
     { id: "settings" as const, label: "Settings", title: "Settings" },
-    ...(EXTENSION_DEBUG_UI_ENABLED
-      ? [{ id: "debug" as const, label: "Debug", title: "Debug" }]
-      : []),
   ];
   const readCurrentPageRegistryKey = useCallback(
     () =>
@@ -5933,9 +5786,7 @@ function App() {
     personalInfo?.generationSettings.useCustomResumeDownloadName ?? false;
   const customResumeDownloadName =
     personalInfo?.generationSettings.customResumeDownloadName ?? "Resume";
-  const displayedApplications = personalInfo?.applications.slice(0, 12) ?? [];
   const pendingPersonalDeleteImpact = buildPendingPersonalDeleteImpact({
-    applications: personalInfo?.applications ?? [],
     pendingDelete: pendingPersonalDelete,
     tailoredResumes: personalInfo?.tailoredResumes ?? [],
   });
@@ -5946,29 +5797,21 @@ function App() {
   const pendingPersonalDeleteTitle =
     pendingPersonalDeleteImpact && pendingPersonalDeleteImpact.totalCount > 1
       ? `Delete ${pendingPersonalDeleteImpact.totalCount} items?`
-      : pendingPersonalDelete?.kind === "application"
-        ? "Delete application?"
-        : "Delete tailored resume?";
+      : "Delete tailored resume?";
   const pendingPersonalDeleteEyebrow =
     pendingPersonalDeleteImpact && pendingPersonalDeleteImpact.totalCount > 1
       ? "Remove linked items"
-      : pendingPersonalDelete?.kind === "application"
-        ? "Remove application"
-        : "Remove from history";
+      : "Remove from history";
   const pendingPersonalDeleteDescription =
     pendingPersonalDeleteImpact && pendingPersonalDeleteImpact.totalCount > 1
       ? `This will delete ${formatDeleteImpactSummary(
           pendingPersonalDeleteImpact,
         )}. Any included tailored resume preview PDF will be removed too. This action can't be undone.`
-      : pendingPersonalDelete?.kind === "application"
-        ? "This will delete the saved application. This action can't be undone."
-        : "This removes the saved tailored resume and its PDF preview from History. This action can't be undone.";
+      : "This removes the saved tailored resume and its PDF preview from History. This action can't be undone.";
   const pendingPersonalDeleteActionLabel =
     pendingPersonalDeleteImpact && pendingPersonalDeleteImpact.totalCount > 1
       ? `Delete ${pendingPersonalDeleteImpact.totalCount} items`
-      : pendingPersonalDelete?.kind === "application"
-        ? "Delete application"
-        : "Delete resume";
+      : "Delete resume";
   const currentPageContext = state.status === "ready" ? state.snapshot : null;
   const currentPageIdentity = currentPageContext
     ? {
@@ -6474,10 +6317,6 @@ function App() {
     personalInfoState.status === "ready" &&
     (unarchivedTailoredResumeCount > 0 ||
       displayedActiveTailorRunCards.length > 0);
-  const shouldRenderApplicationsEmptySurface =
-    authState.status === "signedIn" &&
-    personalInfoState.status === "ready" &&
-    (!personalInfo || personalInfo.applications.length === 0);
   const hasCompletedTailorRun = Boolean(latestTailoredResumeId);
   const hasCompletedTailorRunWarning = Boolean(
     completedTailoringError || (latestTailoredResumeId && lastTailoringRunError),
@@ -6542,18 +6381,6 @@ function App() {
           lastTailoringRunError !== lastTailoringRunMessage
         ? lastTailoringRunError
         : null;
-  const debugStatusLabel =
-    state.status === "ready"
-      ? "Live"
-      : state.status === "loading"
-        ? "Loading"
-        : state.status === "error"
-          ? "Error"
-          : "Idle";
-  const debugPageIdentityDisplay =
-    state.status === "loading"
-      ? "Loading..."
-      : readTailorRunDisplayUrl(currentPageUrl) ?? "None";
   const displayedTailorRunUrl =
     existingTailoringPrompt?.jobUrl ??
     activeTailoring?.jobUrl ??
@@ -10920,35 +10747,6 @@ function App() {
     void handleSubmitChat();
   }
 
-  async function handleOpenApplicationsDashboard() {
-    if (dashboardOpenActionState === "running") {
-      return;
-    }
-
-    setDashboardOpenActionState("running");
-
-    try {
-      const response = await chrome.runtime.sendMessage({
-        payload: {
-          callbackUrl: `${DEFAULT_DASHBOARD_URL}?tab=new`,
-        },
-        type: "JOB_HELPER_OPEN_DASHBOARD",
-      });
-      assertRuntimeResponseOk(response, "Could not open applications.");
-      void loadAuthStatus();
-    } catch (error) {
-      setAuthState({
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not open applications.",
-        status: "error",
-      });
-    } finally {
-      setDashboardOpenActionState("idle");
-    }
-  }
-
   const openTailoredResumeDetailView = useCallback((
     tailoredResumeId: string,
     nextView: TailorRunDetailView = "quickReview",
@@ -11469,17 +11267,6 @@ function App() {
     }
   }
 
-  async function handleOpenTrackedApplication(
-    application: TrackedApplicationSummary,
-  ) {
-    if (application.jobUrl) {
-      await chrome.tabs.create({ url: application.jobUrl });
-      return;
-    }
-
-    await handleOpenApplicationsDashboard();
-  }
-
   async function deletePendingPersonalItem() {
     if (
       authState.status !== "signedIn" ||
@@ -11491,10 +11278,7 @@ function App() {
 
     const currentDelete = pendingPersonalDelete;
     const currentDeleteImpact = pendingPersonalDeleteImpact;
-    const fallbackMessage =
-      currentDelete.kind === "application"
-        ? "Unable to delete the application."
-        : "Unable to delete the tailored resume.";
+    const fallbackMessage = "Unable to delete the tailored resume.";
     const previousPersonalInfo = personalInfo ?? null;
     const optimisticPersonalInfo =
       previousPersonalInfo && currentDeleteImpact
@@ -11529,40 +11313,15 @@ function App() {
     setPendingPersonalDelete(null);
 
     try {
-      if (currentDelete.kind === "application") {
-        const response = await fetch(
-          `${DEFAULT_JOB_APPLICATIONS_ENDPOINT}/${encodeURIComponent(
-            currentDelete.applicationId,
-          )}`,
-          {
-            credentials: "include",
-            headers: {
-              Authorization: `Bearer ${authState.session.sessionToken}`,
-            },
-            method: "DELETE",
-          },
+      const result = await patchTailorResume({
+        action: "deleteTailoredResume",
+        tailoredResumeId: currentDelete.tailoredResumeId,
+      });
+
+      if (!result.ok) {
+        throw new Error(
+          readTailorResumePayloadError(result.payload, fallbackMessage),
         );
-        const payload = await response.json().catch(() => ({}));
-
-        if (response.status === 401) {
-          await invalidateAuthSession();
-          throw new Error("Connect Google before managing applications.");
-        }
-
-        if (!response.ok) {
-          throw new Error(readErrorMessage(payload, fallbackMessage));
-        }
-      } else {
-        const result = await patchTailorResume({
-          action: "deleteTailoredResume",
-          tailoredResumeId: currentDelete.tailoredResumeId,
-        });
-
-        if (!result.ok) {
-          throw new Error(
-            readTailorResumePayloadError(result.payload, fallbackMessage),
-          );
-        }
       }
 
       setPersonalDeleteError(null);
@@ -11590,9 +11349,7 @@ function App() {
         setPendingPersonalDelete(currentDelete);
         setPersonalDeleteError(message);
 
-        if (currentDelete.kind === "tailoredResume") {
-          setTailoredResumeMutationError(message);
-        }
+        setTailoredResumeMutationError(message);
       }
     } finally {
       setPersonalDeleteActionState("idle");
@@ -14380,96 +14137,6 @@ function App() {
             );
           })}
         </div>
-      </>
-    );
-  }
-
-  function renderApplicationsSurface() {
-    if (authState.status !== "signedIn") {
-      return <p className="placeholder">Connect Google to load applications.</p>;
-    }
-
-    if (personalInfoState.status === "loading") {
-      return <p className="placeholder">Loading tracked applications...</p>;
-    }
-
-    if (personalInfoState.status === "error") {
-      return <p className="placeholder">{personalInfoState.error}</p>;
-    }
-
-    if (!personalInfo || personalInfo.applications.length === 0) {
-      return <DocumentEmptyState message="No tracked applications yet." />;
-    }
-
-    return (
-      <>
-        <div className="application-list">
-          {displayedApplications.map((application) => {
-            const isDeleteDisabled =
-              authActionState === "running" || isDeletingPersonalItem;
-            const applicationDisplay = buildJobApplicationDisplayParts({
-              companyName: application.companyName,
-              jobTitle: application.jobTitle,
-            });
-
-            return (
-              <div
-                key={application.id}
-                className="application-row-shell"
-              >
-                <button
-                  className="application-row"
-                  disabled={authActionState === "running"}
-                  type="button"
-                  onClick={() => void handleOpenTrackedApplication(application)}
-                >
-                  <span className="application-main">
-                    <span className="application-title">
-                      {applicationDisplay.companyName}
-                    </span>
-                    <span className="application-meta">
-                      {applicationDisplay.positionName}
-                    </span>
-                  </span>
-                  <span className="application-side">
-                    <span className="application-status">
-                      {formatApplicationStatus(application.status)}
-                    </span>
-                    <span className="tailored-resume-date">
-                      {formatTailoredResumeDate(application.appliedAt)}
-                    </span>
-                  </span>
-                </button>
-                <button
-                  aria-label={`Delete ${application.jobTitle} at ${application.companyName}`}
-                  className="icon-action personal-row-delete-action"
-                  disabled={isDeleteDisabled}
-                  title="Delete application"
-                  type="button"
-                  onClick={() => {
-                    setPendingPersonalDelete({
-                      applicationId: application.id,
-                      kind: "application",
-                    });
-                    setPersonalDeleteError(null);
-                  }}
-                >
-                  <TrashIcon />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-        {personalInfo.applicationCount > displayedApplications.length ? (
-          <button
-            className="link-action more-action"
-            disabled={dashboardOpenActionState === "running"}
-            type="button"
-            onClick={handleOpenApplicationsDashboard}
-          >
-            View all applications
-          </button>
-        ) : null}
       </>
     );
   }
@@ -18221,36 +17888,7 @@ function App() {
         renderSettingsSurface()
       ) : activePanelTab === "usage" ? (
         renderUsageSurface()
-      ) : activePanelTab === "applications" ? (
-        shouldRenderApplicationsEmptySurface ? (
-          <DocumentEmptySurface
-            count={personalInfo?.applicationCount ?? 0}
-            message="No tracked applications yet."
-            title="Tracked apps"
-          />
-        ) : (
-          <section className="applications-surface">
-            <div className="card-heading-row">
-              <h2>Tracked apps</h2>
-              <span>{personalInfo?.applicationCount ?? 0}</span>
-            </div>
-            {renderApplicationsSurface()}
-          </section>
-        )
-      ) : (
-        <section className="snapshot-card">
-          <div className="card-heading-row">
-            <h2>Page identity</h2>
-            <span>{debugStatusLabel}</span>
-          </div>
-          <dl className="snapshot-grid">
-            <div>
-              <dt>URL</dt>
-              <dd className="wrap-anywhere">{debugPageIdentityDisplay}</dd>
-            </div>
-          </dl>
-        </section>
-      )}
+      ) : null}
       {pendingPersonalDelete ? (
         <div
           className="personal-delete-overlay"

@@ -1257,13 +1257,19 @@ export function installDebugChromeRuntime() {
     return {
       activeTailoring: activeTailorings[0] ?? null,
       activeTailorings,
-      applicationCount: 0,
-      applications: [],
-      companyCount: 0,
       generationSettings: {
         allowTailorResumeFollowUpQuestions: true,
+        customResumeDownloadName: "Resume",
         includeLowPriorityTermsInKeywordCoverage: false,
+        ludicrousMode: true,
+        masterChatModel: "gpt-5.4",
         preventPageCountIncrease: true,
+        step1Model: "gpt-5.4-mini",
+        step3Model: "anthropic:claude-sonnet-4-6",
+        step4Model: "gpt-5.5",
+        step4bModel: "gpt-5.4",
+        useCustomResumeDownloadName: false,
+        version: 7,
       },
       originalResume: {
         error: null,

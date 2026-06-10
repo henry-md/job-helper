@@ -5462,47 +5462,6 @@ button:disabled {
   margin-top: 13px;
 }
 
-.applications-surface {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  min-height: 0;
-  flex: 1 1 auto;
-  flex-direction: column;
-  overflow: hidden;
-  padding-top: 2px;
-}
-
-.applications-surface .card-heading-row {
-  flex: 0 0 auto;
-  padding: 0 2px;
-}
-
-.applications-surface h2 {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.22em;
-  line-height: 1.25;
-  text-transform: uppercase;
-}
-
-.application-list {
-  display: grid;
-  min-height: 0;
-  flex: 1 1 auto;
-  align-content: start;
-  gap: 7px;
-  margin-top: 13px;
-  overflow-y: auto;
-  padding: 1px 2px 0 0;
-}
-
-.applications-surface .more-action {
-  flex: 0 0 auto;
-}
-
 .usage-page {
   display: grid;
   min-height: 0;
