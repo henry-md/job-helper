@@ -23,6 +23,8 @@ export const aiUsagePeriods: {
   { label: "All time", value: "all" },
 ];
 
+export const defaultAiUsagePeriod: AiUsagePeriod = "7d";
+
 export type AiUsageEventRecord = {
   applicationId: string | null;
   attempt: number | null;
@@ -106,5 +108,5 @@ export type AiUsageReport = {
 export function normalizeAiUsagePeriod(value: string | null | undefined) {
   return aiUsagePeriods.some((period) => period.value === value)
     ? (value as AiUsagePeriod)
-    : "all";
+    : defaultAiUsagePeriod;
 }

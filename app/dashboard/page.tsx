@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import DashboardWorkspace from "@/components/dashboard-workspace";
 import { authOptions } from "@/auth";
 import { readAiUsageReport } from "@/lib/ai-usage-report";
+import { defaultAiUsagePeriod } from "@/lib/ai-usage-report-types";
 import { parseDashboardRouteState } from "@/lib/dashboard-route-state";
 import { createDefaultSystemPromptSettings } from "@/lib/system-prompt-settings";
 import {
@@ -139,7 +140,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       return {
         events: [],
         generatedAt: new Date().toISOString(),
-        period: "all" as const,
+        period: defaultAiUsagePeriod,
         resumeGroups: [],
         summary: {
           archivedCostUsdMicros: "0",

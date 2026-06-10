@@ -8,7 +8,10 @@ import type {
   AiUsageResumeGroup,
   AiUsageSubjectStatus,
 } from "@/lib/ai-usage-report-types";
-import { aiUsagePeriods } from "@/lib/ai-usage-report-types";
+import {
+  aiUsagePeriods,
+  defaultAiUsagePeriod,
+} from "@/lib/ai-usage-report-types";
 
 const statusLabels: Record<AiUsageSubjectStatus, string> = {
   archived: "Archived",
@@ -95,7 +98,7 @@ export default function UsageWorkspace({
 }) {
   const [report, setReport] = useState(initialReport);
   const [period, setPeriod] = useState<AiUsagePeriod>(
-    initialReport.period ?? "all",
+    initialReport.period ?? defaultAiUsagePeriod,
   );
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   const [isLoadingPeriod, setIsLoadingPeriod] = useState(false);

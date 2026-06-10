@@ -200,7 +200,10 @@ import type {
   AiUsageResumeGroup,
   AiUsageSubjectStatus,
 } from "../../lib/ai-usage-report-types.ts";
-import { aiUsagePeriods } from "../../lib/ai-usage-report-types.ts";
+import {
+  aiUsagePeriods,
+  defaultAiUsagePeriod,
+} from "../../lib/ai-usage-report-types.ts";
 
 type PanelState =
   | { status: "idle"; snapshot: null }
@@ -4516,7 +4519,8 @@ function App() {
       report: null,
       status: "idle",
     });
-  const [aiUsagePeriod, setAiUsagePeriod] = useState<AiUsagePeriod>("all");
+  const [aiUsagePeriod, setAiUsagePeriod] =
+    useState<AiUsagePeriod>(defaultAiUsagePeriod);
   const [selectedUsageBucketKey, setSelectedUsageBucketKey] = useState<
     string | null
   >(null);
@@ -4526,8 +4530,6 @@ function App() {
   const [usageTooltipStyle, setUsageTooltipStyle] = useState<CSSProperties>({});
   const [isAiUsageFiltersOpen, setIsAiUsageFiltersOpen] = useState(false);
   const aiUsageFilterPopoverRef = useRef<HTMLDivElement | null>(null);
-  const aiUsageFilterCloseTimerRef = useRef<number | null>(null);
-  const aiUsageFilterPointerRef = useRef({ x: 0, y: 0 });
   const [isUnarchivedUsageSectionOpen, setIsUnarchivedUsageSectionOpen] =
     useState(true);
   const [isArchivedUsageSectionOpen, setIsArchivedUsageSectionOpen] =
@@ -8443,40 +8445,48 @@ function App() {
   }, [activePanelTab, loadAiUsageReport]);
 
   useEffect(() => {
-    return () => {
-      if (aiUsageFilterCloseTimerRef.current !== null) {
-        window.clearTimeout(aiUsageFilterCloseTimerRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
     if (!isAiUsageFiltersOpen) {
       return;
     }
 
-    const handlePointerDown = (event: PointerEvent) => {
+    const shouldKeepAiUsageFiltersOpen = (event: MouseEvent | PointerEvent) => {
       const shell = aiUsageFilterPopoverRef.current;
 
-      if (
-        shell &&
-        event.target instanceof Node &&
-        shell.contains(event.target)
-      ) {
-        return;
+      if (!shell) {
+        return false;
       }
 
-      if (aiUsageFilterCloseTimerRef.current !== null) {
-        window.clearTimeout(aiUsageFilterCloseTimerRef.current);
-        aiUsageFilterCloseTimerRef.current = null;
-      }
+      const shellRect = shell.getBoundingClientRect();
+      const left = shellRect.left - 20;
+      const right = shellRect.right + 20;
+      const top = shellRect.top - 20;
+      const bottom = shellRect.bottom + 20;
 
-      setIsAiUsageFiltersOpen(false);
+      return (
+        event.clientX >= left &&
+        event.clientX <= right &&
+        event.clientY >= top &&
+        event.clientY <= bottom
+      );
     };
 
+    const handleMouseMove = (event: MouseEvent) => {
+      if (!shouldKeepAiUsageFiltersOpen(event)) {
+        setIsAiUsageFiltersOpen(false);
+      }
+    };
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!shouldKeepAiUsageFiltersOpen(event)) {
+        setIsAiUsageFiltersOpen(false);
+      }
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("pointerdown", handlePointerDown);
 
     return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("pointerdown", handlePointerDown);
     };
   }, [isAiUsageFiltersOpen]);
@@ -13383,8 +13393,46 @@ function App() {
   }
 
   function renderTailoredResumeArchiveControls() {
+    const openTailoredResumeBatchMenu = () => {
+      if (!isShowingArchivedTailoredResumes) {
+        setIsTailoredResumeBatchMenuOpen(true);
+      }
+    };
+    const readBatchMenuItemClassName = (
+      action: NonNullable<typeof hoveredTailoredResumeBatchAction>,
+      extraClassName = "",
+    ) =>
+      `tailor-run-menu-item tailored-resume-batch-menu-item ${
+        hoveredTailoredResumeBatchAction === action
+          ? "tailored-resume-batch-menu-item-hovered"
+          : ""
+      } ${extraClassName}`.trim();
+    const buildBatchMenuHoverHandlers = (
+      action: NonNullable<typeof hoveredTailoredResumeBatchAction>,
+    ) => ({
+      onMouseEnter: () => setHoveredTailoredResumeBatchAction(action),
+      onMouseLeave: () => setHoveredTailoredResumeBatchAction(null),
+      onMouseMove: () => setHoveredTailoredResumeBatchAction(action),
+      onPointerEnter: () => setHoveredTailoredResumeBatchAction(action),
+    });
+
     return (
       <div className="tailored-resume-archive-controls">
+        <label className="tailored-resume-archive-search">
+          <span className="sr-only">
+            Search tailored resumes by scraped company or title
+          </span>
+          <SearchIcon />
+          <input
+            aria-label="Search tailored resumes by company or title"
+            placeholder="Search company or title"
+            type="search"
+            value={tailoredResumeSearchQuery}
+            onChange={(event) =>
+              setTailoredResumeSearchQuery(event.target.value)
+            }
+          />
+        </label>
         <div
           aria-label="Resume archive filter"
           className="tailored-resume-filter-toggle"
@@ -15581,41 +15629,8 @@ function App() {
     const selectUsagePeriod = (nextPeriod: AiUsagePeriod) => {
       setAiUsagePeriod(nextPeriod);
     };
-    const clearAiUsageFilterCloseTimer = () => {
-      if (aiUsageFilterCloseTimerRef.current === null) {
-        return;
-      }
-
-      window.clearTimeout(aiUsageFilterCloseTimerRef.current);
-      aiUsageFilterCloseTimerRef.current = null;
-    };
     const openAiUsageFilters = () => {
-      clearAiUsageFilterCloseTimer();
       setIsAiUsageFiltersOpen(true);
-    };
-    const scheduleAiUsageFiltersClose = () => {
-      clearAiUsageFilterCloseTimer();
-      aiUsageFilterCloseTimerRef.current = window.setTimeout(() => {
-        aiUsageFilterCloseTimerRef.current = null;
-
-        const shell = aiUsageFilterPopoverRef.current;
-        const hoverTarget = document.elementFromPoint(
-          aiUsageFilterPointerRef.current.x,
-          aiUsageFilterPointerRef.current.y,
-        );
-
-        if (shell && hoverTarget && shell.contains(hoverTarget)) {
-          return;
-        }
-
-        setIsAiUsageFiltersOpen(false);
-      }, 120);
-    };
-    const trackAiUsageFilterPointer = (event: ReactMouseEvent<HTMLDivElement>) => {
-      aiUsageFilterPointerRef.current = {
-        x: event.clientX,
-        y: event.clientY,
-      };
     };
     const renderUsageResumeRow = (group: AiUsageResumeGroup) => {
       const displayName = group.displayName.trim() || "Tailored resume";
@@ -15728,15 +15743,10 @@ function App() {
               </button>
               <div
                 className="usage-filter-popover-shell"
-                onBlur={(event) => {
-                  if (!event.currentTarget.contains(event.relatedTarget)) {
-                    scheduleAiUsageFiltersClose();
-                  }
-                }}
                 onFocus={openAiUsageFilters}
                 onMouseEnter={openAiUsageFilters}
-                onMouseLeave={scheduleAiUsageFiltersClose}
-                onMouseMove={trackAiUsageFilterPointer}
+                onMouseMove={openAiUsageFilters}
+                onPointerEnter={openAiUsageFilters}
                 ref={aiUsageFilterPopoverRef}
               >
                 <button
@@ -17431,8 +17441,6 @@ function App() {
 
       {activePanelTab === "tailor" ? (
         <>
-          {renderTailoredResumeArchiveControls()}
-
           <div
             className={`action-grid ${
               showTopLevelTailoredWebAction ? "action-grid-split" : ""
@@ -17490,6 +17498,8 @@ function App() {
               </button>
             ) : null}
           </div>
+
+          {renderTailoredResumeArchiveControls()}
 
           {renderSelectedTailoredResumeLibrarySurface()}
 

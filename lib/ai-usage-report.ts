@@ -7,6 +7,7 @@ import type {
   AiUsageSubjectStatus,
   AiUsageUrlGroup,
 } from "./ai-usage-report-types.ts";
+import { defaultAiUsagePeriod } from "./ai-usage-report-types.ts";
 
 function normalizeSubjectStatus(value: string): AiUsageSubjectStatus {
   if (value === "ARCHIVED") {
@@ -33,7 +34,7 @@ export async function readAiUsageReport(input: {
   period?: AiUsagePeriod;
   userId: string;
 }): Promise<AiUsageReport> {
-  const period = input.period ?? "all";
+  const period = input.period ?? defaultAiUsagePeriod;
   const limit =
     typeof input.limit === "number" && Number.isFinite(input.limit)
       ? Math.min(2000, Math.max(1, Math.floor(input.limit)))
