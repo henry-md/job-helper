@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   emptyTailorResumeProfile,
@@ -156,6 +156,23 @@ export async function deleteTailorResumePreviewPdf(userId: string) {
   await rm(getTailorResumePreviewPdfPath(userId), { force: true });
 }
 
+export async function copyTailorResumePreviewPdfBetweenUsers(input: {
+  fromUserId: string;
+  toUserId: string;
+}) {
+  const sourcePath = getTailorResumePreviewPdfPath(input.fromUserId);
+  const targetPath = getTailorResumePreviewPdfPath(input.toUserId);
+
+  await mkdir(path.dirname(targetPath), { recursive: true });
+  await cp(sourcePath, targetPath, { force: true }).catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return;
+    }
+
+    throw error;
+  });
+}
+
 export async function readTailoredResumePdf(
   userId: string,
   tailoredResumeId: string,
@@ -182,6 +199,30 @@ export async function deleteTailoredResumePdf(
   tailoredResumeId: string,
 ) {
   await rm(getTailoredResumePdfPath(userId, tailoredResumeId), { force: true });
+}
+
+export async function copyTailoredResumePdfBetweenUsers(input: {
+  fromUserId: string;
+  tailoredResumeId: string;
+  toUserId: string;
+}) {
+  const sourcePath = getTailoredResumePdfPath(
+    input.fromUserId,
+    input.tailoredResumeId,
+  );
+  const targetPath = getTailoredResumePdfPath(
+    input.toUserId,
+    input.tailoredResumeId,
+  );
+
+  await mkdir(path.dirname(targetPath), { recursive: true });
+  await cp(sourcePath, targetPath, { force: true }).catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return;
+    }
+
+    throw error;
+  });
 }
 
 export async function readTailoredResumeVersionPdf(
@@ -215,6 +256,33 @@ export async function deleteTailoredResumeVersionPdf(
 ) {
   await rm(getTailoredResumeVersionPdfPath(userId, tailoredResumeId, versionId), {
     force: true,
+  });
+}
+
+export async function copyTailoredResumeVersionPdfBetweenUsers(input: {
+  fromUserId: string;
+  tailoredResumeId: string;
+  toUserId: string;
+  versionId: string;
+}) {
+  const sourcePath = getTailoredResumeVersionPdfPath(
+    input.fromUserId,
+    input.tailoredResumeId,
+    input.versionId,
+  );
+  const targetPath = getTailoredResumeVersionPdfPath(
+    input.toUserId,
+    input.tailoredResumeId,
+    input.versionId,
+  );
+
+  await mkdir(path.dirname(targetPath), { recursive: true });
+  await cp(sourcePath, targetPath, { force: true }).catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return;
+    }
+
+    throw error;
   });
 }
 
