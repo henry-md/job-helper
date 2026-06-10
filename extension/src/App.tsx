@@ -806,6 +806,17 @@ function formatAiUsageStepLabel(stepKey: string) {
   return stepKey === "other" ? "Other" : `Step ${stepKey}`;
 }
 
+function getAiUsageTooltipStepSummary(stepKey: string) {
+  const summaries: Record<string, string> = {
+    "1": "scrape",
+    "3": "think",
+    "4": "edit",
+    "5": "fix",
+  };
+
+  return summaries[stepKey] ?? null;
+}
+
 function compareAiUsageStepKeys(leftKey: string, rightKey: string) {
   if (leftKey === "other") {
     return 1;
@@ -8609,6 +8620,62 @@ function App() {
   ]);
 
   useEffect(() => {
+    if (!activeUsageTooltipBucketKey) {
+      return;
+    }
+
+    const positionUsageTooltip = () => {
+      const tooltip = document.querySelector<HTMLElement>(".usage-tooltip-floating");
+
+      if (!tooltip) {
+        return;
+      }
+
+      const styles = window.getComputedStyle(tooltip);
+      const anchorTop = Number.parseFloat(
+        styles.getPropertyValue("--usage-tooltip-anchor-top"),
+      );
+
+      if (!Number.isFinite(anchorTop)) {
+        return;
+      }
+
+      const viewportTopInset = 8;
+      const tooltipGap = 10;
+      const tooltipHeight = tooltip.getBoundingClientRect().height;
+      const tooltipTop = Math.max(
+        viewportTopInset,
+        Math.min(
+          window.innerHeight - tooltipHeight - viewportTopInset,
+          anchorTop - tooltipHeight - tooltipGap,
+        ),
+      );
+
+      setUsageTooltipStyle((currentStyle) => {
+        const nextTop = `${tooltipTop}px`;
+        const currentTop = (currentStyle as Record<string, string>)[
+          "--usage-tooltip-top"
+        ];
+
+        return currentTop === nextTop
+          ? currentStyle
+          : ({
+              ...currentStyle,
+              "--usage-tooltip-top": nextTop,
+            } as CSSProperties);
+      });
+    };
+
+    const animationFrameId = window.requestAnimationFrame(positionUsageTooltip);
+    window.addEventListener("resize", positionUsageTooltip);
+
+    return () => {
+      window.cancelAnimationFrame(animationFrameId);
+      window.removeEventListener("resize", positionUsageTooltip);
+    };
+  }, [activeUsageTooltipBucketKey]);
+
+  useEffect(() => {
     function handleStorageChange(
       changes: Record<string, chrome.storage.StorageChange>,
       areaName: string,
@@ -15744,26 +15811,40 @@ function App() {
         [stepKey]: !(currentFilters[stepKey] ?? true),
       }));
     };
+    const estimateUsageTooltipHeight = (bucket: AiUsageDailySpendBucket) => {
+      const breakdownRowCount = Math.max(1, bucket.stepBreakdown.length);
+      return 96 + breakdownRowCount * 19;
+    };
     const showUsageTooltip = (
       barElement: HTMLButtonElement,
       bucketKey: string,
     ) => {
+      const bucket = usageDailySpendBuckets.find(
+        (usageBucket) => usageBucket.bucketKey === bucketKey,
+      );
       const barRect = barElement.getBoundingClientRect();
       const barCenterX = barRect.left + barRect.width / 2;
       const tooltipWidth = Math.min(230, window.innerWidth - 36);
+      const tooltipHeight = bucket ? estimateUsageTooltipHeight(bucket) : 140;
+      const viewportTopInset = 8;
+      const tooltipGap = 10;
       const tooltipLeft = Math.min(
         window.innerWidth - 18 - tooltipWidth,
         Math.max(18, barCenterX - tooltipWidth / 2),
       );
-      const tooltipTop = Math.min(
-        window.innerHeight - 140,
-        Math.max(18, barRect.top + 8),
+      const tooltipTop = Math.max(
+        viewportTopInset,
+        Math.min(
+          window.innerHeight - tooltipHeight - viewportTopInset,
+          barRect.top - tooltipHeight - tooltipGap,
+        ),
       );
 
       setActiveUsageTooltipBucketKey(bucketKey);
       setUsageTooltipStyle({
         "--usage-tooltip-left": `${tooltipLeft}px`,
         "--usage-tooltip-top": `${tooltipTop}px`,
+        "--usage-tooltip-anchor-top": `${barRect.top}px`,
         "--usage-tooltip-width": `${tooltipWidth}px`,
       } as CSSProperties);
     };
@@ -16104,7 +16185,15 @@ function App() {
                           ) : (
                             activeUsageTooltipBucket.stepBreakdown.map((step) => (
                               <span key={step.stepKey}>
-                                <span>{step.label}</span>
+                                <span>
+                                  {formatAiUsageStepLabel(step.stepKey)}
+                                  {getAiUsageTooltipStepSummary(step.stepKey) ? (
+                                    <span className="usage-tooltip-step-helper">
+                                      {" "}
+                                      {getAiUsageTooltipStepSummary(step.stepKey)}
+                                    </span>
+                                  ) : null}
+                                </span>
                                 <strong>{formatAiUsageUsd(step.costUsdMicros)}</strong>
                               </span>
                             ))

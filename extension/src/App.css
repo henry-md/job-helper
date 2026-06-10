@@ -5973,9 +5973,18 @@ button:disabled {
   line-height: 1.2;
 }
 
+.usage-tooltip-breakdown > span > span {
+  color: rgba(244, 244, 245, 0.88);
+}
+
 .usage-tooltip-breakdown strong {
   color: var(--foreground);
   font-size: 11px;
+}
+
+.usage-tooltip-step-helper {
+  color: rgba(244, 244, 245, 0.42);
+  font-weight: 400;
 }
 
 .usage-empty-copy {
