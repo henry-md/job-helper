@@ -4149,6 +4149,28 @@ function ArrowUpRightIcon() {
   );
 }
 
+function RefreshIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M20 7v5h-5" />
+      <path d="M4 17v-5h5" />
+      <path d="M18 12a6 6 0 0 0-10-4.5L4 12" />
+      <path d="M6 12a6 6 0 0 0 10 4.5L20 12" />
+    </svg>
+  );
+}
+
+function ArchiveIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M4 7h16" />
+      <path d="M6 7v12h12V7" />
+      <path d="M9 11h6" />
+      <path d="M7 4h10l1 3H6l1-3Z" />
+    </svg>
+  );
+}
+
 function DownloadIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -4689,6 +4711,16 @@ function App() {
     useState<FloatingMenuPosition | null>(null);
   const [tailoredResumeArchiveActionIds, setTailoredResumeArchiveActionIds] =
     useState<Set<string>>(() => new Set());
+  const [
+    isTailoredResumeBatchMenuOpen,
+    setIsTailoredResumeBatchMenuOpen,
+  ] = useState(false);
+  const [
+    hoveredTailoredResumeBatchAction,
+    setHoveredTailoredResumeBatchAction,
+  ] = useState<
+    "archiveAll" | "deleteAll" | "retryAll" | "retryInFlight" | null
+  >(null);
   const [dismissedKeywordBadgeKeys, setDismissedKeywordBadgeKeys] = useState<
     Set<string>
   >(() => new Set());
@@ -4778,6 +4810,7 @@ function App() {
   const backgroundTailorRunMenuRef = useRef<HTMLDivElement | null>(null);
   const tailoredResumeMenuRef = useRef<HTMLDivElement | null>(null);
   const tailoredResumeMenuPopoverRef = useRef<HTMLDivElement | null>(null);
+  const tailoredResumeBatchMenuRef = useRef<HTMLDivElement | null>(null);
   const currentPageTailoredResumeRowRef = useRef<HTMLDivElement | null>(null);
   const currentPageActiveTailorRunCardRef = useRef<HTMLElement | null>(null);
   const lastReadyPersonalInfoRef = useRef<PersonalInfoSummary | null>(null);
@@ -6828,6 +6861,104 @@ function App() {
     setIsTailorRunMenuOpen(false);
     setTailorRunMenuError(null);
   }, [displayedTailorRunUrl]);
+
+  useEffect(() => {
+    if (!isTailoredResumeBatchMenuOpen) {
+      return;
+    }
+
+    const shouldKeepBatchMenuOpen = (event: MouseEvent) => {
+      const menuShell = tailoredResumeBatchMenuRef.current;
+
+      if (!menuShell) {
+        return false;
+      }
+
+      const popover = menuShell.querySelector<HTMLElement>(
+        ".tailored-resume-batch-menu-popover",
+      );
+      const shellRect = menuShell.getBoundingClientRect();
+      const popoverRect = popover?.getBoundingClientRect();
+      const left = Math.min(shellRect.left, popoverRect?.left ?? shellRect.left) - 20;
+      const right =
+        Math.max(shellRect.right, popoverRect?.right ?? shellRect.right) + 20;
+      const top = Math.min(shellRect.top, popoverRect?.top ?? shellRect.top) - 20;
+      const bottom =
+        Math.max(shellRect.bottom, popoverRect?.bottom ?? shellRect.bottom) + 20;
+
+      return (
+        event.clientX >= left &&
+        event.clientX <= right &&
+        event.clientY >= top &&
+        event.clientY <= bottom
+      );
+    };
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (
+        isRetryingAllTailorRuns ||
+        isArchivingAllTailoredResumes ||
+        isDeletingAllTailoredResumes
+      ) {
+        return;
+      }
+
+      if (!shouldKeepBatchMenuOpen(event)) {
+        setIsTailoredResumeBatchMenuOpen(false);
+        setHoveredTailoredResumeBatchAction(null);
+      }
+    };
+
+    const handleMouseDown = (event: MouseEvent) => {
+      if (
+        isRetryingAllTailorRuns ||
+        isArchivingAllTailoredResumes ||
+        isDeletingAllTailoredResumes
+      ) {
+        return;
+      }
+
+      if (!shouldKeepBatchMenuOpen(event)) {
+        setIsTailoredResumeBatchMenuOpen(false);
+        setHoveredTailoredResumeBatchAction(null);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        isRetryingAllTailorRuns ||
+        isArchivingAllTailoredResumes ||
+        isDeletingAllTailoredResumes
+      ) {
+        return;
+      }
+
+      if (event.key === "Escape") {
+        setIsTailoredResumeBatchMenuOpen(false);
+        setHoveredTailoredResumeBatchAction(null);
+      }
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mousedown", handleMouseDown);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mousedown", handleMouseDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [
+    isArchivingAllTailoredResumes,
+    isDeletingAllTailoredResumes,
+    isRetryingAllTailorRuns,
+    isTailoredResumeBatchMenuOpen,
+  ]);
+
+  useEffect(() => {
+    setIsTailoredResumeBatchMenuOpen(false);
+    setHoveredTailoredResumeBatchAction(null);
+  }, [isShowingArchivedTailoredResumes]);
 
   useEffect(() => {
     if (!backgroundTailorRunMenuId) {
@@ -13227,7 +13358,7 @@ function App() {
             type="button"
             onClick={() => setTailoredResumeArchiveFilter("unarchived")}
           >
-            Unarchived
+            Active
           </button>
           <button
             aria-pressed={isShowingArchivedTailoredResumes}
@@ -13242,41 +13373,37 @@ function App() {
             Archived
           </button>
         </div>
-        <label className="tailored-resume-archive-search">
-          <span className="sr-only">
-            Search tailored resumes by scraped company or title
-          </span>
-          <SearchIcon />
-          <input
-            aria-label="Search tailored resumes by company or title"
-            placeholder="Search company or title"
-            type="search"
-            value={tailoredResumeSearchQuery}
-            onChange={(event) =>
-              setTailoredResumeSearchQuery(event.target.value)
+        <div
+          className="tailored-resume-batch-menu-shell"
+          ref={tailoredResumeBatchMenuRef}
+          onMouseEnter={openTailoredResumeBatchMenu}
+          onMouseMove={openTailoredResumeBatchMenu}
+          onPointerEnter={openTailoredResumeBatchMenu}
+        >
+          <button
+            aria-expanded={isTailoredResumeBatchMenuOpen}
+            aria-label="More tailored resume actions"
+            className="secondary-action compact-action tailored-resume-batch-menu-trigger"
+            disabled={isShowingArchivedTailoredResumes}
+            title={
+              isShowingArchivedTailoredResumes
+                ? "Batch actions are available for active tailored resumes"
+                : "More tailored resume actions"
             }
-          />
-          {isTailoredResumeSearchActive ? (
-            <button
-              aria-label="Clear tailored resume search"
-              className="tailored-resume-archive-search-clear"
-              type="button"
-              onClick={() => setTailoredResumeSearchQuery("")}
-            >
-              <CloseIcon />
-            </button>
-          ) : null}
-        </label>
-        {!isShowingArchivedTailoredResumes ? (
-          <>
-            <div className="tailored-resume-retry-all-shell">
-              <div
-                aria-label="Retry tailoring runs"
-                className="tailored-resume-retry-all-options"
-                role="group"
-              >
+            type="button"
+            onClick={() => setIsTailoredResumeBatchMenuOpen(true)}
+            onFocus={openTailoredResumeBatchMenu}
+            onMouseEnter={openTailoredResumeBatchMenu}
+            onMouseMove={openTailoredResumeBatchMenu}
+            onPointerEnter={openTailoredResumeBatchMenu}
+          >
+            <EllipsisHorizontalIcon />
+          </button>
+          {!isShowingArchivedTailoredResumes && isTailoredResumeBatchMenuOpen ? (
+            <div className="tailor-run-menu-popover tailored-resume-batch-menu-popover">
+              <div className="tailor-run-menu">
                 <button
-                  className="secondary-action compact-action"
+                  className={readBatchMenuItemClassName("retryInFlight")}
                   disabled={!canRetryInFlightTailorRuns}
                   title={
                     retryableTailorRunCards.length > 0
@@ -13284,47 +13411,72 @@ function App() {
                       : "No in-flight tailoring runs to retry"
                   }
                   type="button"
+                  {...buildBatchMenuHoverHandlers("retryInFlight")}
                   onClick={() => void retryTailorRunBatch("inFlight")}
                 >
-                  {retryingTailorRunBatchScope === "inFlight"
-                    ? "Retrying..."
-                    : "Retry in-flight"}
+                  <RefreshIcon />
+                  <span>
+                    {retryingTailorRunBatchScope === "inFlight"
+                      ? "Retrying..."
+                      : "Retry in-flight"}
+                  </span>
                 </button>
                 <button
-                  className="secondary-action compact-action"
+                  className={readBatchMenuItemClassName("retryAll")}
                   disabled={!canRetryAllTailorRuns}
                   title={
                     canRetryAllTailorRuns
-                      ? "Retry every unarchived tailoring run"
-                      : "No unarchived tailoring runs to retry"
+                      ? "Retry every active tailoring run"
+                      : "No active tailoring runs to retry"
                   }
                   type="button"
+                  {...buildBatchMenuHoverHandlers("retryAll")}
                   onClick={() => void retryTailorRunBatch("all")}
                 >
-                  {retryingTailorRunBatchScope === "all" ? "Retrying..." : "Retry all"}
+                  <RefreshIcon />
+                  <span>
+                    {retryingTailorRunBatchScope === "all"
+                      ? "Retrying..."
+                      : "Retry all"}
+                  </span>
+                </button>
+                <button
+                  className={readBatchMenuItemClassName("archiveAll")}
+                  disabled={!canArchiveAllTailoredResumes}
+                  title="Archive every active saved resume"
+                  type="button"
+                  {...buildBatchMenuHoverHandlers("archiveAll")}
+                  onClick={() => void archiveAllTailoredResumes()}
+                >
+                  <ArchiveIcon />
+                  <span>
+                    {isArchivingAllTailoredResumes ? "Archiving..." : "Archive all"}
+                  </span>
+                </button>
+                <button
+                  className={readBatchMenuItemClassName(
+                    "deleteAll",
+                    "tailored-resume-batch-menu-item-danger",
+                  )}
+                  disabled={!canDeleteAllTailoredResumes}
+                  title="Delete every active saved resume"
+                  type="button"
+                  {...buildBatchMenuHoverHandlers("deleteAll")}
+                  onClick={() => {
+                    setIsTailoredResumeBatchMenuOpen(false);
+                    setHoveredTailoredResumeBatchAction(null);
+                    setIsDeleteAllTailoredResumesPromptOpen(true);
+                  }}
+                >
+                  <TrashIcon />
+                  <span>
+                    {isDeletingAllTailoredResumes ? "Deleting..." : "Delete all"}
+                  </span>
                 </button>
               </div>
             </div>
-            <button
-              className="secondary-action compact-action tailored-resume-archive-all-action"
-              disabled={!canArchiveAllTailoredResumes}
-              title="Archive every unarchived saved resume"
-              type="button"
-              onClick={() => void archiveAllTailoredResumes()}
-            >
-              {isArchivingAllTailoredResumes ? "Archiving..." : "Archive all"}
-            </button>
-            <button
-              className="danger-action compact-action tailored-resume-delete-all-action"
-              disabled={!canDeleteAllTailoredResumes}
-              title="Delete every unarchived saved resume"
-              type="button"
-              onClick={() => setIsDeleteAllTailoredResumesPromptOpen(true)}
-            >
-              {isDeletingAllTailoredResumes ? "Deleting..." : "Delete all"}
-            </button>
-          </>
-        ) : null}
+          ) : null}
+        </div>
       </div>
     );
   }
@@ -13574,6 +13726,40 @@ function App() {
                     personalInfo?.generationSettings,
                   )
                 : tailoredResume.displayName;
+            const openTailoredResumeRowMenu = () => {
+              if (isMenuTriggerDisabled) {
+                return;
+              }
+
+              if (tailoredResumeMenuId === tailoredResume.id) {
+                return;
+              }
+
+              setTailoredResumeMenuId(tailoredResume.id);
+              setTailoredResumeMenuError(null);
+              setTailoredResumeMenuErrorResumeId(null);
+              setHoveredTailoredResumeRowMenuAction(null);
+              setTailoredResumeMenuPosition(null);
+              window.requestAnimationFrame(() => {
+                updateTailoredResumeMenuPosition();
+              });
+            };
+            const readTailoredResumeRowMenuItemClassName = (
+              action: NonNullable<typeof hoveredTailoredResumeRowMenuAction>,
+            ) =>
+              `tailor-run-menu-item ${
+                hoveredTailoredResumeRowMenuAction === action
+                  ? "tailored-resume-row-menu-item-hovered"
+                  : ""
+              }`.trim();
+            const buildTailoredResumeRowMenuHoverHandlers = (
+              action: NonNullable<typeof hoveredTailoredResumeRowMenuAction>,
+            ) => ({
+              onMouseEnter: () => setHoveredTailoredResumeRowMenuAction(action),
+              onMouseLeave: () => setHoveredTailoredResumeRowMenuAction(null),
+              onMouseMove: () => setHoveredTailoredResumeRowMenuAction(action),
+              onPointerEnter: () => setHoveredTailoredResumeRowMenuAction(action),
+            });
 
             return (
               <div
@@ -13618,6 +13804,9 @@ function App() {
                   <div
                     className="tailor-run-menu-shell tailored-resume-row-menu-shell"
                     ref={isMenuOpen ? tailoredResumeMenuRef : undefined}
+                    onMouseEnter={openTailoredResumeRowMenu}
+                    onMouseMove={openTailoredResumeRowMenu}
+                    onPointerEnter={openTailoredResumeRowMenu}
                   >
                     <button
                       aria-expanded={isMenuOpen}
