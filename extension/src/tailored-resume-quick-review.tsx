@@ -57,7 +57,10 @@ type TailoredResumeQuickReviewProps = {
     editId: string,
     nextState: TailoredResumeReviewEdit["state"],
   ) => void;
+  onCancelUserEditDraft?: (editId: string) => void;
   onSaveUserEdit: (editId: string, latexCode: string) => Promise<boolean>;
+  openEditingEditId?: string | null;
+  openEditRequest?: number;
 };
 
 function PencilIcon() {
@@ -230,7 +233,10 @@ function QuickReviewEditCard({
   readOnly = false,
   startLabel = "Original block",
   endLabel = "Tailored block",
+  onCancelUserEditDraft,
   onFocusEdit,
+  openEditRequest = 0,
+  openEditingEditId = null,
   onSaveUserEdit,
   onSetEditState,
 }: {
@@ -239,7 +245,10 @@ function QuickReviewEditCard({
   readOnly?: boolean;
   startLabel?: string;
   endLabel?: string;
+  onCancelUserEditDraft?: TailoredResumeQuickReviewProps["onCancelUserEditDraft"];
   onFocusEdit?: TailoredResumeQuickReviewProps["onFocusEdit"];
+  openEditRequest?: number;
+  openEditingEditId?: string | null;
   onSaveUserEdit: TailoredResumeQuickReviewProps["onSaveUserEdit"];
   onSetEditState: TailoredResumeQuickReviewProps["onSetEditState"];
 }) {
@@ -252,8 +261,9 @@ function QuickReviewEditCard({
     [edit.beforeLatexCode, proposedLatexCode],
   );
   const isCustomOverride = edit.customLatexCode !== null;
+  const isUserEdit = edit.source === "user";
   const isSelectionLocked =
-    readOnly || isUpdating || isCustomOverride || isEditingLatex;
+    readOnly || isUpdating || isCustomOverride || isUserEdit || isEditingLatex;
 
   function resizeDraftTextarea() {
     const textarea = textareaRef.current;
@@ -273,6 +283,28 @@ function QuickReviewEditCard({
       resizeDraftTextarea();
     }
   }, [isEditingLatex]);
+
+  useEffect(() => {
+    if (openEditingEditId !== edit.editId || openEditRequest <= 0) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      setDraftLatexCode(isUserEdit ? edit.beforeLatexCode : proposedLatexCode);
+      setIsEditingLatex(true);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [
+    edit.beforeLatexCode,
+    edit.editId,
+    isUserEdit,
+    openEditRequest,
+    openEditingEditId,
+    proposedLatexCode,
+  ]);
 
   useEffect(() => {
     if (isEditingLatex) {
@@ -296,17 +328,21 @@ function QuickReviewEditCard({
     }
 
     onFocusEdit?.(edit.editId);
-    setDraftLatexCode(proposedLatexCode);
+    setDraftLatexCode(isUserEdit ? edit.beforeLatexCode : proposedLatexCode);
     setIsEditingLatex(true);
   }
 
   function cancelEditingLatex() {
-    setDraftLatexCode(proposedLatexCode);
+    setDraftLatexCode(isUserEdit ? edit.beforeLatexCode : proposedLatexCode);
     setIsEditingLatex(false);
+
+    if (isUserEdit) {
+      onCancelUserEditDraft?.(edit.editId);
+    }
   }
 
   function revertToModelSuggestion() {
-    setDraftLatexCode(edit.afterLatexCode);
+    setDraftLatexCode(isUserEdit ? edit.beforeLatexCode : edit.afterLatexCode);
     textareaRef.current?.focus();
   }
 
@@ -339,9 +375,9 @@ function QuickReviewEditCard({
         </span>
       </button>
 
-      {isCustomOverride && !isEditingLatex ? (
+      {(isCustomOverride || isUserEdit) && !isEditingLatex ? (
         <p className="quick-review-custom-note">
-          This block has a custom edit.
+          {isUserEdit ? "User edit" : "This block has a custom edit."}
         </p>
       ) : null}
 
@@ -392,23 +428,37 @@ function QuickReviewEditCard({
               : ""
           } ${isSelectionLocked ? "quick-review-diff-surface-inert" : ""}`}
         >
-          <div className="quick-review-diff-heading-row">
-            <button
-              aria-pressed={readOnly ? undefined : edit.state === "applied"}
-              className="quick-review-diff-heading quick-review-diff-heading-action"
-              disabled={isSelectionLocked}
-              type="button"
-              onClick={() => handleSurfaceSelect("applied")}
-            >
-              {endLabel}
-            </button>
+          <div
+            className={`quick-review-diff-heading-row ${
+              isEditingLatex ? "quick-review-diff-heading-row-editing" : ""
+            }`}
+          >
+            {isEditingLatex ? null : (
+              <button
+                aria-pressed={readOnly ? undefined : edit.state === "applied"}
+                className="quick-review-diff-heading quick-review-diff-heading-action"
+                disabled={isSelectionLocked}
+                type="button"
+                onClick={() => handleSurfaceSelect("applied")}
+              >
+                {endLabel}
+              </button>
+            )}
             {isEditingLatex ? (
               <div className="quick-review-inline-editor-actions">
                 <button
                   aria-label="Revert to model suggestion"
                   className="quick-review-inline-editor-icon-action"
-                  disabled={isUpdating || draftLatexCode === edit.afterLatexCode}
-                  title="Revert to the model suggestion"
+                  disabled={
+                    isUpdating ||
+                    draftLatexCode ===
+                      (isUserEdit ? edit.beforeLatexCode : edit.afterLatexCode)
+                  }
+                  title={
+                    isUserEdit
+                      ? "Reset to the original block"
+                      : "Revert to the model suggestion"
+                  }
                   type="button"
                   onClick={revertToModelSuggestion}
                 >
@@ -424,7 +474,14 @@ function QuickReviewEditCard({
                 </button>
                 <button
                   className="quick-review-inline-editor-done"
-                  disabled={isUpdating}
+                  disabled={
+                    isUpdating ||
+                    draftLatexCode.replace(/\n+$/, "") ===
+                      (isUserEdit
+                        ? edit.beforeLatexCode
+                        : proposedLatexCode
+                      ).replace(/\n+$/, "")
+                  }
                   type="button"
                   onClick={() => void saveEditingLatex()}
                 >
@@ -499,7 +556,10 @@ export default function TailoredResumeQuickReview({
   actionPortalTarget,
   chatPortalTarget,
   onDeleteVersion,
+  onCancelUserEditDraft,
   onFocusEdit,
+  openEditRequest = 0,
+  openEditingEditId = null,
   onRefineWithChat,
   onSaveUserEdit,
   record,
@@ -883,7 +943,10 @@ export default function TailoredResumeQuickReview({
             <QuickReviewEditCard
               edit={edit}
               isUpdating={isUpdating}
+              onCancelUserEditDraft={onCancelUserEditDraft}
               onFocusEdit={onFocusEdit}
+              openEditRequest={openEditRequest}
+              openEditingEditId={openEditingEditId}
               onSaveUserEdit={onSaveUserEdit}
               key={edit.editId}
               readOnly={isDiffMode}

@@ -1,0 +1,4 @@
+- Symptom: clicking an untouched resume segment in the extension preview opened a temporary `:user` block edit, and pressing Cancel could leave a no-diff "User edit" card behind.
+- Root cause: the extension quick-review parent added a draft user edit for editing, but the inline editor cancel path only closed local textarea state and did not tell the parent to discard the unsaved draft.
+- Fix: quick-review cards now notify the parent when a user-edit draft is canceled, and the extension save handler treats unchanged newly-created drafts as local no-ops instead of optimistically adding or persisting them.
+- Guardrail: created user edits must differ from the original block after trailing-newline normalization before they can become saved review edits.

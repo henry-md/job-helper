@@ -18,7 +18,10 @@ import {
   type TailoredResumeReviewRecord,
 } from "../../lib/tailored-resume-review-record.ts";
 import type { TailoredResumeOpenAiDebugStage } from "../../lib/tailor-resume-types.ts";
-import { buildTailoredResumeSnapshotComparisonEdits } from "../../lib/tailor-resume-edit-history.ts";
+import {
+  buildTailoredResumeResolvedSegmentMap,
+  buildTailoredResumeSnapshotComparisonEdits,
+} from "../../lib/tailor-resume-edit-history.ts";
 import { buildJobApplicationDisplayParts } from "../../lib/job-application-display.ts";
 import { buildTailoredResumeInteractivePreviewQueries } from "../../lib/tailor-resume-preview-focus.ts";
 import type { TailoredResumeInteractivePreviewQuery } from "../../lib/tailor-resume-preview-focus.ts";
@@ -261,6 +264,10 @@ type AiUsageBucketDescriptor = {
   end: Date;
   start: Date;
 };
+
+function normalizeTailoredReviewEditedLatex(latexCode: string) {
+  return latexCode.replace(/\n+$/, "");
+}
 
 function splitFuzzySearchTokens(value: string | null | undefined) {
   return normalizeFuzzySearchText(value)
@@ -4621,6 +4628,10 @@ function App() {
     useState<string | null>(null);
   const [tailoredPreviewFocusRequest, setTailoredPreviewFocusRequest] =
     useState(0);
+  const [tailoredReviewDraftUserEditSegmentId, setTailoredReviewDraftUserEditSegmentId] =
+    useState<string | null>(null);
+  const [tailoredReviewOpenEditRequest, setTailoredReviewOpenEditRequest] =
+    useState(0);
   const [tailoredResumeReviewState, setTailoredResumeReviewState] =
     useState<TailoredResumeReviewState>({ record: null, status: "idle" });
   const [
@@ -6485,6 +6496,50 @@ function App() {
     tailoredResumeReviewState.record?.id === focusedTailoredResumeId
       ? tailoredResumeReviewState.record
       : null;
+  const displayedActiveTailoredResumeReviewRecord = useMemo(() => {
+    if (!activeTailoredResumeReviewRecord || !tailoredReviewDraftUserEditSegmentId) {
+      return activeTailoredResumeReviewRecord;
+    }
+
+    if (
+      activeTailoredResumeReviewRecord.edits.some(
+        (edit) => edit.segmentId === tailoredReviewDraftUserEditSegmentId,
+      )
+    ) {
+      return activeTailoredResumeReviewRecord;
+    }
+
+    const resolvedSegments = buildTailoredResumeResolvedSegmentMap({
+      annotatedLatexCode: activeTailoredResumeReviewRecord.annotatedLatexCode ?? "",
+      edits: activeTailoredResumeReviewRecord.edits,
+      sourceAnnotatedLatexCode:
+        activeTailoredResumeReviewRecord.sourceAnnotatedLatexCode,
+    });
+    const segment = resolvedSegments.get(tailoredReviewDraftUserEditSegmentId);
+
+    if (!segment) {
+      return activeTailoredResumeReviewRecord;
+    }
+
+    return {
+      ...activeTailoredResumeReviewRecord,
+      edits: [
+        ...activeTailoredResumeReviewRecord.edits,
+        {
+          afterLatexCode: segment.latexCode,
+          beforeLatexCode: segment.latexCode,
+          command: segment.command,
+          customLatexCode: segment.latexCode,
+          editId: `${tailoredReviewDraftUserEditSegmentId}:user`,
+          generatedByStep: 4,
+          reason: "User edit",
+          source: "user",
+          state: "applied",
+          segmentId: tailoredReviewDraftUserEditSegmentId,
+        } satisfies TailoredResumeReviewEdit,
+      ],
+    };
+  }, [activeTailoredResumeReviewRecord, tailoredReviewDraftUserEditSegmentId]);
   const activeTailoredResumeDownloadRecord =
     focusedTailoredResumeId && personalInfo
       ? personalInfo.tailoredResumes.find(
@@ -6494,22 +6549,22 @@ function App() {
   const activeTailoredResumeError =
     activeTailoredResumeReviewRecord?.error?.trim() || null;
   const tailoredPreviewInteractiveQueries = useMemo(() => {
-    if (!activeTailoredResumeReviewRecord?.annotatedLatexCode) {
+    if (!displayedActiveTailoredResumeReviewRecord?.annotatedLatexCode) {
       return null;
     }
 
     return buildTailoredResumeInteractivePreviewQueries({
-      annotatedLatexCode: activeTailoredResumeReviewRecord.annotatedLatexCode,
-      edits: activeTailoredResumeReviewRecord.edits,
+      annotatedLatexCode: displayedActiveTailoredResumeReviewRecord.annotatedLatexCode,
+      edits: displayedActiveTailoredResumeReviewRecord.edits,
       sourceAnnotatedLatexCode:
-        activeTailoredResumeReviewRecord.sourceAnnotatedLatexCode,
+        displayedActiveTailoredResumeReviewRecord.sourceAnnotatedLatexCode,
     });
-  }, [activeTailoredResumeReviewRecord]);
+  }, [displayedActiveTailoredResumeReviewRecord]);
   const tailoredPreviewHighlightQueries =
     tailoredPreviewInteractiveQueries?.highlightQueries ??
     EMPTY_TAILORED_PREVIEW_HIGHLIGHT_QUERIES;
   const tailoredPreviewFocusEdit =
-    activeTailoredResumeReviewRecord?.edits.find(
+    displayedActiveTailoredResumeReviewRecord?.edits.find(
       (edit) => edit.editId === tailoredPreviewFocusEditId,
     ) ?? null;
   const tailoredPreviewFocusQuery =
@@ -6526,9 +6581,12 @@ function App() {
       ? tailoredResumeReviewState.error
       : null;
   const canToggleTailoredPreviewDiffHighlighting = Boolean(
-    activeTailoredResumeReviewRecord?.edits.length &&
-      activeTailoredResumeReviewRecord?.annotatedLatexCode,
+    displayedActiveTailoredResumeReviewRecord?.edits.length &&
+      displayedActiveTailoredResumeReviewRecord?.annotatedLatexCode,
   );
+  useEffect(() => {
+    setTailoredReviewDraftUserEditSegmentId(null);
+  }, [activeTailoredResumeReviewRecord?.id]);
   const shouldShowTailoredPreviewDiffHighlighting =
     isTailoredPreviewDiffHighlightingEnabled &&
     canToggleTailoredPreviewDiffHighlighting;
@@ -14362,13 +14420,14 @@ function App() {
   async function saveTailoredResumeReviewUserEdit(editId: string, latexCode: string) {
     if (
       authState.status !== "signedIn" ||
+      !displayedActiveTailoredResumeReviewRecord ||
       !activeTailoredResumeReviewRecord ||
       pendingTailoredResumeReviewEditId
     ) {
       return false;
     }
 
-    const currentEdit = activeTailoredResumeReviewRecord.edits.find(
+    const currentEdit = displayedActiveTailoredResumeReviewRecord.edits.find(
       (edit) => edit.editId === editId,
     );
 
@@ -14377,9 +14436,27 @@ function App() {
     }
 
     const previousRecord = activeTailoredResumeReviewRecord;
+    const isCreatingUserEdit = !previousRecord.edits.some(
+      (edit) => edit.editId === editId,
+    );
+
+    if (
+      isCreatingUserEdit &&
+      normalizeTailoredReviewEditedLatex(latexCode) ===
+        normalizeTailoredReviewEditedLatex(currentEdit.beforeLatexCode)
+    ) {
+      setTailoredReviewDraftUserEditSegmentId((currentSegmentId) =>
+        `${currentSegmentId}:user` === editId ? null : currentSegmentId,
+      );
+      return true;
+    }
+
     const optimisticRecord: TailoredResumeReviewRecord = {
       ...previousRecord,
-      edits: previousRecord.edits.map((edit) => {
+      edits: (isCreatingUserEdit
+        ? [...previousRecord.edits, currentEdit]
+        : previousRecord.edits
+      ).map((edit) => {
         if (edit.editId !== editId) {
           return edit;
         }
@@ -14415,7 +14492,9 @@ function App() {
 
     try {
       const result = await patchTailorResume({
-        action: "saveTailoredResumeUserEdit",
+        action: isCreatingUserEdit
+          ? "createTailoredResumeUserEdit"
+          : "editExistingTailoredResumeUserEdit",
         latexCode,
         segmentId: currentEdit.segmentId,
         tailoredResumeId: previousRecord.id,
@@ -14444,6 +14523,7 @@ function App() {
         record: reviewRecord,
         status: "ready",
       });
+      setTailoredReviewDraftUserEditSegmentId(null);
       syncTailoredResumeSummariesFromPayload(result.payload);
       return true;
     } catch (error) {
@@ -14459,6 +14539,12 @@ function App() {
     } finally {
       setPendingTailoredResumeReviewEditId(null);
     }
+  }
+
+  function cancelTailoredResumeReviewUserEditDraft(editId: string) {
+    setTailoredReviewDraftUserEditSegmentId((currentSegmentId) =>
+      `${currentSegmentId}:user` === editId ? null : currentSegmentId,
+    );
   }
 
   async function refineTailoredResumeReviewWithChat(
@@ -14800,6 +14886,32 @@ function App() {
     [isTailorRunDetailWideLayout],
   );
 
+  const handleTailoredPreviewSegmentClick = useCallback(
+    (segmentId: string) => {
+      const existingEdit = displayedActiveTailoredResumeReviewRecord?.edits.find(
+        (edit) => edit.segmentId === segmentId,
+      );
+
+      if (existingEdit) {
+        setTailoredReviewDraftUserEditSegmentId((currentSegmentId) =>
+          existingEdit.source === "user" ? currentSegmentId : null,
+        );
+        setTailoredPreviewFocusEditId(existingEdit.editId);
+        setTailoredPreviewFocusRequest((currentValue) => currentValue + 1);
+        setTailoredReviewOpenEditRequest((currentValue) => currentValue + 1);
+        setActiveTailorRunDetailView("quickReview");
+        return;
+      }
+
+      setTailoredReviewDraftUserEditSegmentId(segmentId);
+      setTailoredPreviewFocusEditId(`${segmentId}:user`);
+      setTailoredPreviewFocusRequest((currentValue) => currentValue + 1);
+      setTailoredReviewOpenEditRequest((currentValue) => currentValue + 1);
+      setActiveTailorRunDetailView("quickReview");
+    },
+    [displayedActiveTailoredResumeReviewRecord],
+  );
+
   function renderTailoredPreviewSurface() {
     const isShowingHighlightedPreview =
       shouldShowTailoredPreviewDiffHighlighting;
@@ -14839,9 +14951,11 @@ function App() {
                 highlightQueries={previewHighlightQueries}
                 loadPdfJsModule={loadExtensionTailoredPreviewPdfJsModule}
                 magnifierMaxWidthRatio={null}
+                onSegmentClick={handleTailoredPreviewSegmentClick}
                 pdfUrl={tailoredResumePreviewState.objectUrl}
                 presentation="frameless"
                 scaleMode="fit"
+                segmentQueries={tailoredPreviewInteractiveQueries?.segmentQueries ?? []}
               />
             ) : (
               <p className="placeholder preview-placeholder">
@@ -14944,7 +15058,7 @@ function App() {
       );
     }
 
-    if (activeTailoredResumeReviewRecord) {
+    if (displayedActiveTailoredResumeReviewRecord) {
       return (
         <div className="tailor-run-detail-page-body tailor-run-detail-page-body-review">
           <TailoredResumeQuickReview
@@ -14953,9 +15067,12 @@ function App() {
             error={tailoredResumeReviewError}
             isUpdating={pendingTailoredResumeReviewEditId !== null}
             onDeleteVersion={deleteTailoredResumeReviewVersion}
+            onCancelUserEditDraft={cancelTailoredResumeReviewUserEditDraft}
             onFocusEdit={focusTailoredPreviewEdit}
             onRefineWithChat={refineTailoredResumeReviewWithChat}
-            record={activeTailoredResumeReviewRecord}
+            openEditRequest={tailoredReviewOpenEditRequest}
+            openEditingEditId={tailoredPreviewFocusEditId}
+            record={displayedActiveTailoredResumeReviewRecord}
             variant="fullscreen"
             onSaveUserEdit={saveTailoredResumeReviewUserEdit}
             onSetEditState={(editId, nextState) =>
