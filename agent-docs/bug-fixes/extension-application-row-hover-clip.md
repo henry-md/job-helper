@@ -1,0 +1,4 @@
+- Symptom: hovering the first tracked-application row in the extension side panel lifted the row into the scroll container's top edge, clipping the top border.
+- Root cause: global button hover motion translates buttons upward by 1px, but the tracked-application scroll list had no top inset for that hover affordance.
+- Fix: add a 1px top padding to the tracked-application list while keeping the compact row spacing unchanged.
+- Guardrail: scrollable lists with lifted hover cards need a small inset at the clipping edge, especially for the first visible row.

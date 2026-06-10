@@ -433,20 +433,6 @@ type FloatingMenuPosition = {
   top: number;
 };
 
-function eventIncludesElement(event: Event, element: HTMLElement | null) {
-  if (!element) {
-    return false;
-  }
-
-  const eventPath = event.composedPath();
-
-  if (eventPath.includes(element)) {
-    return true;
-  }
-
-  return event.target instanceof Node && element.contains(event.target);
-}
-
 const TAILOR_RESUME_SHORTCUT_KEYS = ["⌘", "⇧", "S"] as const;
 const TAILOR_RESUME_SHORTCUT_ARIA_LABEL = "Command Shift S";
 const STALE_TAILORING_RUN_MAX_AGE_MS = 1000 * 60 * 2;
@@ -4707,6 +4693,19 @@ function App() {
     useState<string | null>(null);
   const [tailoredResumeMenuErrorResumeId, setTailoredResumeMenuErrorResumeId] =
     useState<string | null>(null);
+  const [
+    hoveredTailoredResumeRowMenuAction,
+    setHoveredTailoredResumeRowMenuAction,
+  ] = useState<
+    | "archive"
+    | "delete"
+    | "download"
+    | "goToTab"
+    | "openWeb"
+    | "retry"
+    | "showKeywords"
+    | null
+  >(null);
   const [tailoredResumeMenuPosition, setTailoredResumeMenuPosition] =
     useState<FloatingMenuPosition | null>(null);
   const [tailoredResumeArchiveActionIds, setTailoredResumeArchiveActionIds] =
@@ -7017,7 +7016,57 @@ function App() {
       setTailoredResumeMenuId(null);
       setTailoredResumeMenuError(null);
       setTailoredResumeMenuErrorResumeId(null);
+      setHoveredTailoredResumeRowMenuAction(null);
       setTailoredResumeMenuPosition(null);
+    };
+
+    const shouldKeepTailoredResumeMenuOpen = (event: MouseEvent | PointerEvent) => {
+      const menuShell = tailoredResumeMenuRef.current;
+      const popover = tailoredResumeMenuPopoverRef.current;
+
+      if (!menuShell && !popover) {
+        return false;
+      }
+
+      const shellRect = menuShell?.getBoundingClientRect();
+      const popoverRect = popover?.getBoundingClientRect();
+      const left =
+        Math.min(
+          shellRect?.left ?? popoverRect?.left ?? 0,
+          popoverRect?.left ?? shellRect?.left ?? 0,
+        ) - 20;
+      const right =
+        Math.max(
+          shellRect?.right ?? popoverRect?.right ?? 0,
+          popoverRect?.right ?? shellRect?.right ?? 0,
+        ) + 20;
+      const top =
+        Math.min(
+          shellRect?.top ?? popoverRect?.top ?? 0,
+          popoverRect?.top ?? shellRect?.top ?? 0,
+        ) - 20;
+      const bottom =
+        Math.max(
+          shellRect?.bottom ?? popoverRect?.bottom ?? 0,
+          popoverRect?.bottom ?? shellRect?.bottom ?? 0,
+        ) + 20;
+
+      return (
+        event.clientX >= left &&
+        event.clientX <= right &&
+        event.clientY >= top &&
+        event.clientY <= bottom
+      );
+    };
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (tailoredResumeMenuActionState !== "idle") {
+        return;
+      }
+
+      if (!shouldKeepTailoredResumeMenuOpen(event)) {
+        closeTailoredResumeMenu();
+      }
     };
 
     const handlePointerDown = (event: PointerEvent) => {
@@ -7025,16 +7074,7 @@ function App() {
         return;
       }
 
-      const clickedInsideShell = eventIncludesElement(
-        event,
-        tailoredResumeMenuRef.current,
-      );
-      const clickedInsidePopover = eventIncludesElement(
-        event,
-        tailoredResumeMenuPopoverRef.current,
-      );
-
-      if (!clickedInsideShell && !clickedInsidePopover) {
+      if (!shouldKeepTailoredResumeMenuOpen(event)) {
         closeTailoredResumeMenu();
       }
     };
@@ -7053,12 +7093,14 @@ function App() {
       updateTailoredResumeMenuPosition();
     };
 
+    window.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("pointerdown", handlePointerDown, true);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("resize", handleViewportChange);
     window.addEventListener("scroll", handleViewportChange, true);
 
     return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("resize", handleViewportChange);
@@ -13814,22 +13856,11 @@ function App() {
                       className="secondary-action compact-action tailor-run-menu-trigger"
                       disabled={isMenuTriggerDisabled}
                       type="button"
-                      onClick={() => {
-                        const shouldOpen = tailoredResumeMenuId !== tailoredResume.id;
-
-                        setTailoredResumeMenuId(
-                          shouldOpen ? tailoredResume.id : null,
-                        );
-                        setTailoredResumeMenuError(null);
-                        setTailoredResumeMenuErrorResumeId(null);
-                        setTailoredResumeMenuPosition(null);
-
-                        if (shouldOpen) {
-                          window.requestAnimationFrame(() => {
-                            updateTailoredResumeMenuPosition();
-                          });
-                        }
-                      }}
+                      onClick={openTailoredResumeRowMenu}
+                      onFocus={openTailoredResumeRowMenu}
+                      onMouseEnter={openTailoredResumeRowMenu}
+                      onMouseMove={openTailoredResumeRowMenu}
+                      onPointerEnter={openTailoredResumeRowMenu}
                     >
                       <EllipsisHorizontalIcon />
                     </button>
@@ -13845,9 +13876,14 @@ function App() {
                           >
                             <div className="tailor-run-menu">
                               <button
-                                className="tailor-run-menu-item"
+                                className={readTailoredResumeRowMenuItemClassName(
+                                  "download",
+                                )}
                                 disabled={isMenuBusy}
                                 type="button"
+                                {...buildTailoredResumeRowMenuHoverHandlers(
+                                  "download",
+                                )}
                                 onClick={() =>
                                   void handleDownloadTailoredResumeFromMenu(
                                     tailoredResume,
@@ -13859,9 +13895,14 @@ function App() {
                                   : "Download"}
                               </button>
                               <button
-                                className="tailor-run-menu-item"
+                                className={readTailoredResumeRowMenuItemClassName(
+                                  "openWeb",
+                                )}
                                 disabled={isMenuBusy}
                                 type="button"
+                                {...buildTailoredResumeRowMenuHoverHandlers(
+                                  "openWeb",
+                                )}
                                 onClick={() =>
                                   void handleOpenTailoredResumeInWebAppFromMenu(
                                     tailoredResume,
@@ -13874,9 +13915,14 @@ function App() {
                               </button>
                               {canShowKeywordBadge ? (
                                 <button
-                                  className="tailor-run-menu-item"
+                                  className={readTailoredResumeRowMenuItemClassName(
+                                    "showKeywords",
+                                  )}
                                   disabled={isMenuBusy}
                                   type="button"
+                                  {...buildTailoredResumeRowMenuHoverHandlers(
+                                    "showKeywords",
+                                  )}
                                   onClick={() =>
                                     void handleRevealKeywordBadge(tailoredResume)
                                   }
@@ -13886,9 +13932,14 @@ function App() {
                               ) : null}
                               {canGoToTab ? (
                                 <button
-                                  className="tailor-run-menu-item"
+                                  className={readTailoredResumeRowMenuItemClassName(
+                                    "goToTab",
+                                  )}
                                   disabled={isMenuBusy}
                                   type="button"
+                                  {...buildTailoredResumeRowMenuHoverHandlers(
+                                    "goToTab",
+                                  )}
                                   onClick={() =>
                                     void handleGoToTailoredResumeTab(tailoredResume)
                                   }
@@ -13900,9 +13951,14 @@ function App() {
                               ) : null}
                               {canGoToTab ? (
                                 <button
-                                  className="tailor-run-menu-item"
+                                  className={readTailoredResumeRowMenuItemClassName(
+                                    "retry",
+                                  )}
                                   disabled={isMenuBusy || isActionPending}
                                   type="button"
+                                  {...buildTailoredResumeRowMenuHoverHandlers(
+                                    "retry",
+                                  )}
                                   onClick={() =>
                                     void handleRetryTailoredResumeFromMenu(
                                       tailoredResume,
@@ -13915,9 +13971,14 @@ function App() {
                                 </button>
                               ) : null}
                               <button
-                                className="tailor-run-menu-item"
+                                className={readTailoredResumeRowMenuItemClassName(
+                                  "archive",
+                                )}
                                 disabled={isMenuBusy || isActionPending}
                                 type="button"
+                                {...buildTailoredResumeRowMenuHoverHandlers(
+                                  "archive",
+                                )}
                                 onClick={() =>
                                   void handleArchiveTailoredResumeFromMenu({
                                     archived: input.actionLabel === "archive",
@@ -13930,9 +13991,14 @@ function App() {
                                   : archiveActionLabel}
                               </button>
                               <button
-                                className="tailor-run-menu-item"
+                                className={readTailoredResumeRowMenuItemClassName(
+                                  "delete",
+                                )}
                                 disabled={isMenuBusy || isActionPending}
                                 type="button"
+                                {...buildTailoredResumeRowMenuHoverHandlers(
+                                  "delete",
+                                )}
                                 onClick={() =>
                                   handleDeleteTailoredResumeFromMenu(tailoredResume.id)
                                 }

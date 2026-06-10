@@ -1,0 +1,4 @@
+- Symptom: hovering the tracked-application delete button in the extension side panel made the trash icon jump far away from the row's vertical center.
+- Root cause: the button is absolutely positioned with `top: 50%` and `transform: translateY(-50%)`, but the global `button:hover` transform replaced that centering transform with `translateY(-1px)`.
+- Fix: keep the row delete action's hover state on `translateY(-50%)` so color/background hover feedback does not alter its anchor position.
+- Guardrail: absolutely positioned controls that use `transform` for centering need explicit hover transforms whenever global button hover motion applies.
