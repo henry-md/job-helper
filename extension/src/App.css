@@ -4361,11 +4361,35 @@ button:disabled {
   font-weight: 560;
 }
 
-.tailored-resume-date {
+.tailored-resume-row-timing-cluster {
   align-self: center;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.tailored-resume-step-timings {
+  min-width: 0;
+  max-width: 24ch;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tailored-resume-date {
+  flex: 0 0 auto;
   color: var(--subtle);
   font-size: 11px;
   font-weight: 650;
+  white-space: nowrap;
 }
 
 .tailored-resume-row-actions {

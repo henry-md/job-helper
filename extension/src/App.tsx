@@ -1763,14 +1763,37 @@ function resolveTailoredResumeByComparableUrl(input: {
   );
 }
 
-function uniqueTailoredResumeSummaries(records: TailoredResumeSummary[]) {
-  const recordById = new Map<string, TailoredResumeSummary>();
+function findTimingRunForTailoredResume(input: {
+  resume: TailoredResumeSummary;
+  runsByKey: Record<string, TailorResumeRunRecord>;
+}) {
+  const resumeJobUrl = normalizeComparableUrl(input.resume.jobUrl);
+  const matchingRuns = Object.values(input.runsByKey).filter((run) => {
+    if ((run.generationStepTimings ?? []).length === 0) {
+      return false;
+    }
 
-  for (const record of records) {
-    recordById.set(record.id, record);
-  }
+    if (run.tailoredResumeId && run.tailoredResumeId === input.resume.id) {
+      return true;
+    }
 
-  return [...recordById.values()];
+    if (
+      input.resume.applicationId &&
+      run.applicationId === input.resume.applicationId
+    ) {
+      return true;
+    }
+
+    return Boolean(
+      resumeJobUrl && normalizeComparableUrl(run.pageUrl) === resumeJobUrl,
+    );
+  });
+
+  return matchingRuns.sort(
+    (left, right) =>
+      readActiveTailorRunSortTime(right.capturedAt) -
+      readActiveTailorRunSortTime(left.capturedAt),
+  )[0] ?? null;
 }
 
 function uniqueNonEmptyStrings(values: Array<string | null | undefined>) {
@@ -2246,7 +2269,10 @@ function buildTailoringRunRecordFromExistingTailoring(input: {
         observedAt: input.existingTailoring.updatedAt,
         previousTimings: previousGenerationStepTimings,
         step: null,
-        timings: [],
+        timings:
+          "generationStepTimings" in input.existingTailoring
+            ? input.existingTailoring.generationStepTimings
+            : [],
       }),
       jobIdentifier,
       message:
@@ -2272,7 +2298,7 @@ function buildTailoringRunRecordFromExistingTailoring(input: {
       companyName: input.existingTailoring.companyName,
       endpoint: DEFAULT_TAILOR_RESUME_ENDPOINT,
       generationStep: null,
-      generationStepTimings: [],
+      generationStepTimings: input.existingTailoring.generationStepTimings,
       jobIdentifier,
       message: buildCompletedTailoringMessage({
         jobLabel: input.existingTailoring.displayName,
@@ -2293,7 +2319,7 @@ function buildTailoringRunRecordFromExistingTailoring(input: {
     observedAt: input.existingTailoring.updatedAt,
     previousTimings: previousGenerationStepTimings,
     step: generationStep,
-    timings: [],
+    timings: input.existingTailoring.generationStepTimings,
   });
   const isFailedGeneration = input.existingTailoring.status === "FAILED";
 
@@ -11213,6 +11239,7 @@ function App() {
       createdAt: optimisticRun.capturedAt,
       error: null,
       emphasizedTechnologies: [],
+      generationStepTimings: [],
       id: `retry:${tailoredResume.id}`,
       jobDescription: "",
       jobIdentifier: tailoredResume.jobIdentifier,
@@ -12808,18 +12835,18 @@ function App() {
     const elapsedTimeAriaLabel =
       card.statusDisplayState === "loading"
         ? isStepTimingElapsedLabel
-          ? `Step timings ${elapsedTimeLabel}`
+          ? `Step timings ${elapsedTimeLabel}${buildTailorRunStepModelsTitle(card.stepTimings)}`
           : `Loading for ${elapsedTimeLabel}`
         : isStepTimingElapsedLabel
-          ? `Step timings ${elapsedTimeLabel}`
+          ? `Step timings ${elapsedTimeLabel}${buildTailorRunStepModelsTitle(card.stepTimings)}`
         : `Waited after ${elapsedTimeLabel}`;
     const elapsedTimeTitle =
       card.statusDisplayState === "loading"
         ? isStepTimingElapsedLabel
-          ? `Step timings: ${elapsedTimeLabel}`
+          ? `Step timings: ${elapsedTimeLabel}${buildTailorRunStepModelsTitle(card.stepTimings)}`
           : `Loading for ${elapsedTimeLabel}`
         : isStepTimingElapsedLabel
-          ? `Step timings: ${elapsedTimeLabel}`
+          ? `Step timings: ${elapsedTimeLabel}${buildTailorRunStepModelsTitle(card.stepTimings)}`
         : `Reached this waiting state after ${elapsedTimeLabel}`;
     const canStopCard = card.statusDisplayState !== "error";
     const canRetryCard = card.statusDisplayState === "error" && Boolean(card.url);
@@ -13472,13 +13499,13 @@ function App() {
                     <span
                       aria-label={
                         tailorRunTimeDisplayMode === "specific"
-                          ? `Step timings ${legacyTailorRunElapsedTimeLabel}`
+                          ? `Step timings ${legacyTailorRunElapsedTimeLabel}${buildTailorRunStepModelsTitle(tailorGenerationStepTimings)}`
                           : `Loading for ${legacyTailorRunElapsedTimeLabel}`
                       }
                       className="tailor-progress-step-elapsed"
                       title={
                         tailorRunTimeDisplayMode === "specific"
-                          ? `Step timings: ${legacyTailorRunElapsedTimeLabel}`
+                          ? `Step timings: ${legacyTailorRunElapsedTimeLabel}${buildTailorRunStepModelsTitle(tailorGenerationStepTimings)}`
                           : `Loading for ${legacyTailorRunElapsedTimeLabel}`
                       }
                     >
@@ -14048,6 +14075,41 @@ function App() {
               tailoredResume.emphasizedTechnologies.length > 0 ||
               Boolean(tailoredResume.keywordCoverage) ||
               isKeywordBadgeDismissed;
+            const savedStepTimings = tailoredResume.generationStepTimings ?? [];
+            const timingRun =
+              EXTENSION_DEBUG_UI_ENABLED && savedStepTimings.length === 0
+                ? findTimingRunForTailoredResume({
+                    resume: tailoredResume,
+                    runsByKey: tailoringRunsByKey,
+                  })
+                : null;
+            const rowStepTimings =
+              savedStepTimings.length > 0
+                ? savedStepTimings
+                : timingRun?.generationStepTimings ?? [];
+            const rowStepTimingStartedAtTime =
+              savedStepTimings.length > 0
+                ? readActiveTailorRunSortTime(tailoredResume.createdAt)
+                : timingRun
+                  ? readActiveTailorRunSortTime(timingRun.capturedAt)
+                  : 0;
+            const tailoredResumeStepTimingLabel =
+              EXTENSION_DEBUG_UI_ENABLED && rowStepTimings.length > 0
+                ? formatTailorRunStepTimeDisplay({
+                    activeStepNumber:
+                      timingRun?.generationStep?.stepNumber ??
+                      rowStepTimings.at(-1)?.stepNumber ??
+                      null,
+                    mode: "specific",
+                    nowTime:
+                      readLatestTailorRunTimingObservedAtTime(rowStepTimings) ||
+                      readActiveTailorRunSortTime(tailoredResume.updatedAt),
+                    runStartedAtTime: rowStepTimingStartedAtTime,
+                    timings: buildTailorRunStepTimingDisplayInputs(
+                      rowStepTimings,
+                    ),
+                  })
+                : null;
             const displayName =
               tailoredResume.displayName.trim().toLowerCase() ===
               "tailored resume"
@@ -14125,8 +14187,19 @@ function App() {
                         input.title}
                     </span>
                   </span>
-                  <span className="tailored-resume-date">
-                    {formatTailoredResumeDate(tailoredResume.updatedAt)}
+                  <span className="tailored-resume-row-timing-cluster">
+                    {tailoredResumeStepTimingLabel ? (
+                      <span
+                        aria-label={`Step timings ${tailoredResumeStepTimingLabel}${buildTailorRunStepModelsTitle(rowStepTimings)}`}
+                        className="tailored-resume-step-timings"
+                        title={`Step timings: ${tailoredResumeStepTimingLabel}${buildTailorRunStepModelsTitle(rowStepTimings)}`}
+                      >
+                        {tailoredResumeStepTimingLabel}
+                      </span>
+                    ) : null}
+                    <span className="tailored-resume-date">
+                      {formatTailoredResumeDate(tailoredResume.updatedAt)}
+                    </span>
                   </span>
                 </button>
 

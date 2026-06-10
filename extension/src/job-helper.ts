@@ -323,6 +323,7 @@ export type TailoredResumeSummary = {
   createdAt: string;
   displayName: string;
   emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+  generationStepTimings: TailorResumeGenerationStepTiming[];
   id: string;
   jobIdentifier: string | null;
   jobUrl: string | null;
@@ -576,6 +577,7 @@ export type TailorResumeExistingTailoringState =
       jobIdentifier: string | null;
       jobUrl: string | null;
       emphasizedTechnologies?: TailoredResumeEmphasizedTechnology[];
+      generationStepTimings: TailorResumeGenerationStepTiming[];
       kind: "active_generation";
       lastStep: TailorResumeGenerationStepSummary | null;
       positionTitle: string | null;
@@ -591,6 +593,7 @@ export type TailorResumeExistingTailoringState =
       jobIdentifier: string | null;
       jobUrl: string | null;
       kind: "pending_interview";
+      generationStepTimings: TailorResumeGenerationStepTiming[];
       blockingTechnologies: TailoredResumeEmphasizedTechnology[];
       emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
       interviewStatus: "deciding" | "pending" | "ready";
@@ -606,6 +609,7 @@ export type TailorResumeExistingTailoringState =
       error: string | null;
       id: string;
       emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
+      generationStepTimings: TailorResumeGenerationStepTiming[];
       jobIdentifier: string | null;
       jobUrl: string | null;
       keywordCoverage: TailoredResumeKeywordCoverage | null;
@@ -938,6 +942,9 @@ export function readTailoredResumeSummary(
     displayName,
     emphasizedTechnologies: readTailoredResumeEmphasizedTechnologies(
       planningResult?.emphasizedTechnologies ?? value.emphasizedTechnologies,
+    ),
+    generationStepTimings: readTailorResumeGenerationStepTimings(
+      value.generationStepTimings,
     ),
     id,
     jobIdentifier: readNullableString(value.jobIdentifier),
@@ -1517,6 +1524,9 @@ export function readTailorResumeExistingTailoringState(
       jobDescription,
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
       jobUrl: readNullableString(existingTailoring.jobUrl),
+      generationStepTimings: readTailorResumeGenerationStepTimings(
+        existingTailoring.generationStepTimings,
+      ),
       kind,
       lastStep: readTailorResumeGenerationStepSummary(
         existingTailoring.lastStep,
@@ -1553,6 +1563,9 @@ export function readTailorResumeExistingTailoringState(
       jobDescription: readString(existingTailoring.jobDescription),
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
       jobUrl: readNullableString(existingTailoring.jobUrl),
+      generationStepTimings: readTailorResumeGenerationStepTimings(
+        existingTailoring.generationStepTimings,
+      ),
       kind,
       positionTitle: readNullableString(existingTailoring.positionTitle),
       questionCount: readExistingTailoringQuestionCount(
@@ -1580,6 +1593,9 @@ export function readTailorResumeExistingTailoringState(
         existingTailoring.emphasizedTechnologies,
       ),
       error: readNullableString(existingTailoring.error),
+      generationStepTimings: readTailorResumeGenerationStepTimings(
+        existingTailoring.generationStepTimings,
+      ),
       id,
       jobIdentifier: readNullableString(existingTailoring.jobIdentifier),
       jobUrl: readNullableString(existingTailoring.jobUrl),
