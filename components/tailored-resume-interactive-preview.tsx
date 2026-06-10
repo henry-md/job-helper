@@ -1,7 +1,14 @@
 "use client";
 
 import "./tailored-resume-interactive-preview.css";
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type {
   PDFDocumentLoadingTask,
   PDFDocumentProxy,
@@ -98,6 +105,13 @@ type PreviewMagnifierState = {
   zoom: number;
 };
 
+type PreviewViewportRect = {
+  height: number;
+  left: number;
+  top: number;
+  width: number;
+};
+
 type PreviewMagnifierBounds = {
   left: number;
   width: number;
@@ -183,6 +197,23 @@ function buildCanvasObjectUrl(canvas: HTMLCanvasElement) {
 
       resolve(URL.createObjectURL(blob));
     }, "image/png");
+  });
+}
+
+function waitForPreviewImageDecode(src: string) {
+  return new Promise<void>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      resolve();
+    };
+    image.onerror = () => {
+      reject(new Error("Unable to decode high-resolution magnifier image."));
+    };
+    image.src = src;
+
+    if (image.decode) {
+      image.decode().then(resolve, reject);
+    }
   });
 }
 
@@ -848,6 +879,35 @@ function resolvePreviewMagnifierState(input: {
   } satisfies PreviewMagnifierState;
 }
 
+function resolvePreviewMagnifierStateFromViewportPagePoint(input: {
+  clientX: number;
+  clientY: number;
+  magnifierBounds: PreviewMagnifierBounds;
+  pageHeight: number;
+  pageMatchIndex: PageMatchIndex | null;
+  pageRect: { left: number; top: number };
+  pageWidth: number;
+}) {
+  // Use the real PDF page coordinates for spotlight movement. Feeding cursor
+  // motion through the already-transformed magnifier image creates a feedback
+  // loop where reversing direction can briefly accelerate or feel inverted.
+  const pointerX = input.clientX - input.pageRect.left;
+  const pointerY = input.clientY - input.pageRect.top;
+
+  return resolvePreviewMagnifierState({
+    magnifierBounds: input.magnifierBounds,
+    pageHeight: input.pageHeight,
+    pageViewportTop: input.pageRect.top,
+    pageWidth: input.pageWidth,
+    pointerX,
+    pointerY,
+    targetGroup: summarizePageTextLineNearY({
+      pageMatchIndex: input.pageMatchIndex,
+      pointerY,
+    }),
+  });
+}
+
 function resolvePreviewFocusMagnifierState(input: {
   focusGroup: { height: number; left: number; top: number; width: number };
   magnifierBounds: PreviewMagnifierBounds;
@@ -970,14 +1030,40 @@ function isPreviewMagnifierImageUsable(input: {
 function isViewportPointInsideMagnifier(input: {
   clientX: number;
   clientY: number;
+  magnifierViewportRect?: PreviewViewportRect;
   magnifierState: PreviewMagnifierState;
 }) {
+  const magnifierRect = input.magnifierViewportRect ?? input.magnifierState;
+
   return (
-    input.clientX >= input.magnifierState.left &&
-    input.clientX <= input.magnifierState.left + input.magnifierState.width &&
-    input.clientY >= input.magnifierState.top &&
-    input.clientY <= input.magnifierState.top + input.magnifierState.height
+    input.clientX >= magnifierRect.left &&
+    input.clientX <= magnifierRect.left + magnifierRect.width &&
+    input.clientY >= magnifierRect.top &&
+    input.clientY <= magnifierRect.top + magnifierRect.height
   );
+}
+
+function resolveRenderedMagnifierViewportRect(input: {
+  magnifierElement: HTMLDivElement | null;
+  magnifierState: PreviewMagnifierState;
+}): PreviewViewportRect {
+  const renderedRect = input.magnifierElement?.getBoundingClientRect();
+
+  if (renderedRect && renderedRect.width > 0 && renderedRect.height > 0) {
+    return {
+      height: renderedRect.height,
+      left: renderedRect.left,
+      top: renderedRect.top,
+      width: renderedRect.width,
+    };
+  }
+
+  return {
+    height: input.magnifierState.height,
+    left: input.magnifierState.left,
+    top: input.magnifierState.top,
+    width: input.magnifierState.width,
+  };
 }
 
 function isViewportPointInsidePage(input: {
@@ -996,8 +1082,10 @@ function isViewportPointInsidePage(input: {
 function mapViewportPointToMagnifierPagePoint(input: {
   clientX: number;
   clientY: number;
+  magnifierViewportRect?: PreviewViewportRect;
   magnifierState: PreviewMagnifierState;
 }) {
+  const magnifierRect = input.magnifierViewportRect ?? input.magnifierState;
   const translatedX =
     input.magnifierState.width / 2 -
     input.magnifierState.x * input.magnifierState.zoom;
@@ -1007,10 +1095,10 @@ function mapViewportPointToMagnifierPagePoint(input: {
 
   return {
     x:
-      (input.clientX - input.magnifierState.left - translatedX) /
+      (input.clientX - magnifierRect.left - translatedX) /
       input.magnifierState.zoom,
     y:
-      (input.clientY - input.magnifierState.top - translatedY) /
+      (input.clientY - magnifierRect.top - translatedY) /
       input.magnifierState.zoom,
   };
 }
@@ -1054,6 +1142,7 @@ function findSegmentKeyAtPagePoint(input: {
 function findSegmentKeyAtMagnifierPoint(input: {
   clientX: number;
   clientY: number;
+  magnifierViewportRect?: PreviewViewportRect;
   magnifierState: PreviewMagnifierState;
   pageSegmentMatches: PageSegmentMatch[];
 }) {
@@ -1061,6 +1150,7 @@ function findSegmentKeyAtMagnifierPoint(input: {
     !isViewportPointInsideMagnifier({
       clientX: input.clientX,
       clientY: input.clientY,
+      magnifierViewportRect: input.magnifierViewportRect,
       magnifierState: input.magnifierState,
     })
   ) {
@@ -1073,17 +1163,18 @@ function findSegmentKeyAtMagnifierPoint(input: {
   const translatedY =
     input.magnifierState.height / 2 -
     input.magnifierState.y * input.magnifierState.zoom;
+  const magnifierRect = input.magnifierViewportRect ?? input.magnifierState;
   const tolerance = 6;
   let nearestMatch: { distance: number; key: string } | null = null;
 
   for (const match of input.pageSegmentMatches) {
     for (const rect of match.rects) {
       const left =
-        input.magnifierState.left +
+        magnifierRect.left +
         translatedX +
         rect.left * input.magnifierState.zoom;
       const top =
-        input.magnifierState.top +
+        magnifierRect.top +
         translatedY +
         rect.top * input.magnifierState.zoom;
       const width = rect.width * input.magnifierState.zoom;
@@ -1115,6 +1206,7 @@ function findSegmentKeyAtMagnifierPoint(input: {
   const pagePoint = mapViewportPointToMagnifierPagePoint({
     clientX: input.clientX,
     clientY: input.clientY,
+    magnifierViewportRect: input.magnifierViewportRect,
     magnifierState: input.magnifierState,
   });
 
@@ -1348,6 +1440,7 @@ function InteractivePreviewPage({
     [],
   );
   const [hoveredSegmentKey, setHoveredSegmentKey] = useState<string | null>(null);
+  const hoveredSegmentKeyRef = useRef<string | null>(null);
   const [pageSegmentMatches, setPageSegmentMatches] = useState<PageSegmentMatch[]>([]);
   const [guidedFocusToken, setGuidedFocusToken] = useState<string | null>(null);
   const [highlightSource, setHighlightSource] = useState<PageHighlightSource | null>(
@@ -1368,9 +1461,27 @@ function InteractivePreviewPage({
   const pageWidth = page.baseWidth * scale;
   const pageRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const magnifierRef = useRef<HTMLDivElement | null>(null);
   const lastScrolledFocusSignatureRef = useRef<string | null>(null);
+  const suppressNextSegmentClickRef = useRef(false);
   const hoveredSegmentMatch =
     pageSegmentMatches.find((match) => match.key === hoveredSegmentKey) ?? null;
+
+  const updateHoveredSegmentKey = useCallback(
+    (nextHoveredSegmentKey: string | null) => {
+      hoveredSegmentKeyRef.current = nextHoveredSegmentKey;
+      setHoveredSegmentKey(nextHoveredSegmentKey);
+    },
+    [],
+  );
+
+  const clearHoveredSegmentKeyIfCurrent = useCallback((segmentKey: string) => {
+    setHoveredSegmentKey((currentKey) => {
+      const nextHoveredSegmentKey = currentKey === segmentKey ? null : currentKey;
+      hoveredSegmentKeyRef.current = nextHoveredSegmentKey;
+      return nextHoveredSegmentKey;
+    });
+  }, []);
   const targetMagnifierSourceScale = magnifierState
     ? resolveHighResSpotlightSourceScale({
         devicePixelRatio:
@@ -1679,6 +1790,13 @@ function InteractivePreviewPage({
 
         const imageObjectUrl = await buildCanvasObjectUrl(highResCanvas);
 
+        try {
+          await waitForPreviewImageDecode(imageObjectUrl);
+        } catch (decodeError) {
+          URL.revokeObjectURL(imageObjectUrl);
+          throw decodeError;
+        }
+
         if (isCancelled) {
           URL.revokeObjectURL(imageObjectUrl);
           return;
@@ -1789,7 +1907,7 @@ function InteractivePreviewPage({
       !focusKey ||
       focusHighlightRects.length === 0 ||
       renderState !== "ready" ||
-      !magnifierCanvasDataUrl
+      !baseMagnifierCanvasDataUrl
     ) {
       return;
     }
@@ -1806,21 +1924,36 @@ function InteractivePreviewPage({
       height: focusGroup.height,
       top: pageRect.top + focusGroup.top,
     });
-    setMagnifierState(
-      resolvePreviewFocusMagnifierState({
-        focusGroup,
-        magnifierBounds: resolvePreviewMagnifierBounds({
-          maxWidthRatio: magnifierMaxWidthRatio,
-          rootRect: rootRef.current?.getBoundingClientRect() ?? null,
-        }),
-        pageHeight,
-        pageViewportTop: pageRect.top,
-        pageWidth,
+    const nextFocusMagnifierState = resolvePreviewFocusMagnifierState({
+      focusGroup,
+      magnifierBounds: resolvePreviewMagnifierBounds({
+        maxWidthRatio: magnifierMaxWidthRatio,
+        rootRect: rootRef.current?.getBoundingClientRect() ?? null,
       }),
-    );
+      pageHeight,
+      pageViewportTop: pageRect.top,
+      pageWidth,
+    });
+
+    setMagnifierState(nextFocusMagnifierState);
 
     const clearMagnifierTimer = window.setTimeout(() => {
-      setMagnifierState(null);
+      setMagnifierState((currentState) => {
+        if (
+          !currentState ||
+          Math.abs(currentState.left - nextFocusMagnifierState.left) >= 0.01 ||
+          Math.abs(currentState.top - nextFocusMagnifierState.top) >= 0.01 ||
+          Math.abs(currentState.width - nextFocusMagnifierState.width) >= 0.01 ||
+          Math.abs(currentState.height - nextFocusMagnifierState.height) >= 0.01 ||
+          Math.abs(currentState.x - nextFocusMagnifierState.x) >= 0.01 ||
+          Math.abs(currentState.y - nextFocusMagnifierState.y) >= 0.01 ||
+          Math.abs(currentState.zoom - nextFocusMagnifierState.zoom) >= 0.01
+        ) {
+          return currentState;
+        }
+
+        return null;
+      });
     }, 950);
 
     return () => {
@@ -1828,11 +1961,11 @@ function InteractivePreviewPage({
       onFocusViewportRectChange?.(null);
     };
   }, [
+    baseMagnifierCanvasDataUrl,
     focusActive,
     focusHighlightRects,
     focusKey,
     focusRequest,
-    magnifierCanvasDataUrl,
     magnifierMaxWidthRatio,
     onFocusViewportRectChange,
     pageHeight,
@@ -1927,17 +2060,24 @@ function InteractivePreviewPage({
         return;
       }
 
+      const magnifierViewportRect = resolveRenderedMagnifierViewportRect({
+        magnifierElement: magnifierRef.current,
+        magnifierState,
+      });
+
       if (
         isViewportPointInsideMagnifier({
           clientX: event.clientX,
           clientY: event.clientY,
+          magnifierViewportRect,
           magnifierState,
         })
       ) {
-        setHoveredSegmentKey(
+        updateHoveredSegmentKey(
           findSegmentKeyAtMagnifierPoint({
             clientX: event.clientX,
             clientY: event.clientY,
+            magnifierViewportRect,
             magnifierState,
             pageSegmentMatches,
           }),
@@ -1960,7 +2100,8 @@ function InteractivePreviewPage({
       }
 
       if (!pageElement) {
-        setHoveredSegmentKey(null);
+        setMagnifierState(null);
+        updateHoveredSegmentKey(null);
         return;
       }
 
@@ -1972,7 +2113,8 @@ function InteractivePreviewPage({
           pageRect,
         })
       ) {
-        setHoveredSegmentKey(null);
+        setMagnifierState(null);
+        updateHoveredSegmentKey(null);
       }
     }
 
@@ -1981,17 +2123,34 @@ function InteractivePreviewPage({
     return () => {
       window.removeEventListener("pointermove", handleWindowPointerMove);
     };
-  }, [magnifierState, pageSegmentMatches, renderState]);
+  }, [magnifierState, pageSegmentMatches, renderState, updateHoveredSegmentKey]);
 
   return (
     <div
       className="resume-interactive-page"
+      onClickCapture={(event) => {
+        if (!suppressNextSegmentClickRef.current) {
+          return;
+        }
+
+        suppressNextSegmentClickRef.current = false;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
       onPointerLeave={(event) => {
+        const magnifierViewportRect = magnifierState
+          ? resolveRenderedMagnifierViewportRect({
+              magnifierElement: magnifierRef.current,
+              magnifierState,
+            })
+          : null;
+
         if (
           magnifierState &&
           isViewportPointInsideMagnifier({
             clientX: event.clientX,
             clientY: event.clientY,
+            magnifierViewportRect: magnifierViewportRect ?? undefined,
             magnifierState,
           })
         ) {
@@ -1999,51 +2158,89 @@ function InteractivePreviewPage({
         }
 
         setMagnifierState(null);
-        setHoveredSegmentKey(null);
+        updateHoveredSegmentKey(null);
       }}
       onPointerMove={(event) => {
         if (renderState !== "ready" || !magnifierCanvasDataUrl) {
           return;
         }
 
+        const magnifierViewportRect = magnifierState
+          ? resolveRenderedMagnifierViewportRect({
+              magnifierElement: magnifierRef.current,
+              magnifierState,
+            })
+          : null;
+
+        if (
+          magnifierState &&
+          isViewportPointInsideMagnifier({
+            clientX: event.clientX,
+            clientY: event.clientY,
+            magnifierViewportRect: magnifierViewportRect ?? undefined,
+            magnifierState,
+          })
+        ) {
+          // The fixed spotlight can sit under the cursor, but if the cursor is
+          // still over the rendered PDF, scroll from PDF coordinates, not from
+          // the magnifier transform. The latter causes speed bursts.
+          const pageRect = event.currentTarget.getBoundingClientRect();
+          const nextMagnifierState = isViewportPointInsidePage({
+            clientX: event.clientX,
+            clientY: event.clientY,
+            pageRect,
+          })
+            ? resolvePreviewMagnifierStateFromViewportPagePoint({
+                clientX: event.clientX,
+                clientY: event.clientY,
+                magnifierBounds: resolvePreviewMagnifierBounds({
+                  maxWidthRatio: magnifierMaxWidthRatio,
+                  rootRect: rootRef.current?.getBoundingClientRect() ?? null,
+                }),
+                pageHeight,
+                pageMatchIndex: highlightSource?.pageMatchIndex ?? null,
+                pageRect,
+                pageWidth,
+              })
+            : magnifierState;
+
+          setMagnifierState(nextMagnifierState);
+          updateHoveredSegmentKey(
+            findSegmentKeyAtMagnifierPoint({
+              clientX: event.clientX,
+              clientY: event.clientY,
+              magnifierViewportRect: magnifierViewportRect ?? undefined,
+              magnifierState: nextMagnifierState,
+              pageSegmentMatches,
+            }),
+          );
+          return;
+        }
+
         const pageRect = event.currentTarget.getBoundingClientRect();
-        const pointerX = event.clientX - pageRect.left;
-        const pointerY = event.clientY - pageRect.top;
-        const nextMagnifierState = resolvePreviewMagnifierState({
+        const nextMagnifierState = resolvePreviewMagnifierStateFromViewportPagePoint({
+          clientX: event.clientX,
+          clientY: event.clientY,
           magnifierBounds: resolvePreviewMagnifierBounds({
             maxWidthRatio: magnifierMaxWidthRatio,
             rootRect: rootRef.current?.getBoundingClientRect() ?? null,
           }),
           pageHeight,
-          pageViewportTop: pageRect.top,
+          pageMatchIndex: highlightSource?.pageMatchIndex ?? null,
+          pageRect,
           pageWidth,
-          pointerX,
-          pointerY,
-          targetGroup: summarizePageTextLineNearY({
-            pageMatchIndex: highlightSource?.pageMatchIndex ?? null,
-            pointerY,
-          }),
+        });
+        const pointerX = event.clientX - pageRect.left;
+        const pointerY = event.clientY - pageRect.top;
+
+        const nextHoveredSegmentKey = findSegmentKeyAtPagePoint({
+          pageSegmentMatches,
+          x: pointerX,
+          y: pointerY,
         });
 
-        const nextHoveredSegmentKey = isViewportPointInsideMagnifier({
-          clientX: event.clientX,
-          clientY: event.clientY,
-          magnifierState: nextMagnifierState,
-        })
-          ? findSegmentKeyAtMagnifierPoint({
-              clientX: event.clientX,
-              clientY: event.clientY,
-              magnifierState: nextMagnifierState,
-              pageSegmentMatches,
-            })
-          : findSegmentKeyAtPagePoint({
-              pageSegmentMatches,
-              x: pointerX,
-              y: pointerY,
-            });
-
         setMagnifierState(nextMagnifierState);
-        setHoveredSegmentKey(nextHoveredSegmentKey);
+        updateHoveredSegmentKey(nextHoveredSegmentKey);
       }}
       ref={pageRef}
       style={{
@@ -2087,23 +2284,39 @@ function InteractivePreviewPage({
                     : ""
                 }`}
                 key={`segment-${match.key}-${page.pageNumber}-${index}`}
-                onClick={() => {
+                onClick={(event) => {
+                  if (suppressNextSegmentClickRef.current) {
+                    suppressNextSegmentClickRef.current = false;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return;
+                  }
+
                   setMagnifierState(null);
                   onSegmentClick?.(match.segmentId);
                 }}
                 onMouseEnter={(event) => {
+                  const magnifierViewportRect = magnifierState
+                    ? resolveRenderedMagnifierViewportRect({
+                        magnifierElement: magnifierRef.current,
+                        magnifierState,
+                      })
+                    : null;
+
                   if (
                     magnifierState &&
                     isViewportPointInsideMagnifier({
                       clientX: event.clientX,
                       clientY: event.clientY,
+                      magnifierViewportRect: magnifierViewportRect ?? undefined,
                       magnifierState,
                     })
                   ) {
-                    setHoveredSegmentKey(
+                    updateHoveredSegmentKey(
                       findSegmentKeyAtMagnifierPoint({
                         clientX: event.clientX,
                         clientY: event.clientY,
+                        magnifierViewportRect: magnifierViewportRect ?? undefined,
                         magnifierState,
                         pageSegmentMatches,
                       }),
@@ -2111,21 +2324,30 @@ function InteractivePreviewPage({
                     return;
                   }
 
-                  setHoveredSegmentKey(match.key);
+                  updateHoveredSegmentKey(match.key);
                 }}
                 onMouseLeave={(event) => {
+                  const magnifierViewportRect = magnifierState
+                    ? resolveRenderedMagnifierViewportRect({
+                        magnifierElement: magnifierRef.current,
+                        magnifierState,
+                      })
+                    : null;
+
                   if (
                     magnifierState &&
                     isViewportPointInsideMagnifier({
                       clientX: event.clientX,
                       clientY: event.clientY,
+                      magnifierViewportRect: magnifierViewportRect ?? undefined,
                       magnifierState,
                     })
                   ) {
-                    setHoveredSegmentKey(
+                    updateHoveredSegmentKey(
                       findSegmentKeyAtMagnifierPoint({
                         clientX: event.clientX,
                         clientY: event.clientY,
+                        magnifierViewportRect: magnifierViewportRect ?? undefined,
                         magnifierState,
                         pageSegmentMatches,
                       }),
@@ -2133,9 +2355,7 @@ function InteractivePreviewPage({
                     return;
                   }
 
-                  setHoveredSegmentKey((currentKey) =>
-                    currentKey === match.key ? null : currentKey,
-                  );
+                  clearHoveredSegmentKeyIfCurrent(match.key);
                 }}
                 style={{
                   height: `${rect.height}px`,
@@ -2188,6 +2408,101 @@ function InteractivePreviewPage({
         <div
           aria-hidden="true"
           className="resume-interactive-magnifier"
+          data-hovered-segment-key={hoveredSegmentMatch?.key ?? undefined}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const renderedMagnifierRect = event.currentTarget.getBoundingClientRect();
+            const magnifierViewportRect = {
+              height: renderedMagnifierRect.height,
+              left: renderedMagnifierRect.left,
+              top: renderedMagnifierRect.top,
+              width: renderedMagnifierRect.width,
+            };
+            const renderedSpotlightSegmentKey =
+              event.currentTarget.dataset.hoveredSegmentKey ?? null;
+            const highlightedSpotlightSegmentKey =
+              renderedSpotlightSegmentKey ?? hoveredSegmentKeyRef.current;
+            const highlightedSpotlightMatch = highlightedSpotlightSegmentKey
+              ? pageSegmentMatches.find(
+                  (match) => match.key === highlightedSpotlightSegmentKey,
+                ) ?? null
+              : null;
+            const fallbackSpotlightSegmentKey =
+              highlightedSpotlightMatch === null
+                ? findSegmentKeyAtMagnifierPoint({
+                    clientX: event.clientX,
+                    clientY: event.clientY,
+                    magnifierViewportRect,
+                    magnifierState,
+                    pageSegmentMatches,
+                  })
+                : null;
+            const spotlightMatch =
+              highlightedSpotlightMatch ??
+              pageSegmentMatches.find(
+                (match) => match.key === fallbackSpotlightSegmentKey,
+              ) ??
+              null;
+
+            if (!spotlightMatch) {
+              updateHoveredSegmentKey(null);
+              return;
+            }
+
+            suppressNextSegmentClickRef.current = true;
+            window.setTimeout(() => {
+              suppressNextSegmentClickRef.current = false;
+            }, 1000);
+            setMagnifierState(null);
+            updateHoveredSegmentKey(null);
+            onSegmentClick?.(spotlightMatch.segmentId);
+          }}
+          onPointerMove={(event) => {
+            const renderedMagnifierRect = event.currentTarget.getBoundingClientRect();
+            const magnifierViewportRect = {
+              height: renderedMagnifierRect.height,
+              left: renderedMagnifierRect.left,
+              top: renderedMagnifierRect.top,
+              width: renderedMagnifierRect.width,
+            };
+            const pageRect = pageRef.current?.getBoundingClientRect() ?? null;
+            // Keep movement tied to the underlying PDF while the cursor is over
+            // it; use magnifier-space math below only for segment hit testing.
+            const nextMagnifierState =
+              pageRect &&
+              isViewportPointInsidePage({
+                clientX: event.clientX,
+                clientY: event.clientY,
+                pageRect,
+              })
+                ? resolvePreviewMagnifierStateFromViewportPagePoint({
+                    clientX: event.clientX,
+                    clientY: event.clientY,
+                    pageHeight,
+                    pageMatchIndex: highlightSource?.pageMatchIndex ?? null,
+                    pageRect,
+                    pageWidth,
+                    magnifierBounds: resolvePreviewMagnifierBounds({
+                      maxWidthRatio: magnifierMaxWidthRatio,
+                      rootRect: rootRef.current?.getBoundingClientRect() ?? null,
+                    }),
+                  })
+                : magnifierState;
+
+            setMagnifierState(nextMagnifierState);
+            updateHoveredSegmentKey(
+              findSegmentKeyAtMagnifierPoint({
+                clientX: event.clientX,
+                clientY: event.clientY,
+                magnifierViewportRect,
+                magnifierState: nextMagnifierState,
+                pageSegmentMatches,
+              }),
+            );
+          }}
+          ref={magnifierRef}
           style={{
             backgroundImage: `url(${magnifierCanvasDataUrl})`,
             backgroundPosition: `${magnifierState.width / 2 - magnifierState.x * magnifierState.zoom}px ${
