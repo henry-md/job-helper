@@ -1,0 +1,3 @@
+- Preserve: pressing the pencil/edit action on a saved user-authored resume edit must open the textarea with the user's current edited LaTeX, not the original source block.
+- Common failure mode: `source === "user"` rows are special-cased to use `beforeLatexCode` when hydrating the editor. That is correct only for an explicit reset-to-original action; normal editing should use `customLatexCode ?? afterLatexCode`.
+- Focused check: create a user edit from an untouched preview segment, save changed LaTeX, reopen the same user edit, and verify the textarea contains the changed LaTeX. The reset icon may still restore the original block.

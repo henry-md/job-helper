@@ -58,7 +58,9 @@ type TailoredResumeQuickReviewProps = {
     nextState: TailoredResumeReviewEdit["state"],
   ) => void;
   onCancelUserEditDraft?: (editId: string) => void;
+  onDeleteEdit: (editId: string) => Promise<boolean>;
   onSaveUserEdit: (editId: string, latexCode: string) => Promise<boolean>;
+  closeEditRequest?: number;
   openEditingEditId?: string | null;
   openEditRequest?: number;
 };
@@ -237,6 +239,7 @@ function QuickReviewEditCard({
   onFocusEdit,
   openEditRequest = 0,
   openEditingEditId = null,
+  onDeleteEdit,
   onSaveUserEdit,
   onSetEditState,
 }: {
@@ -249,6 +252,7 @@ function QuickReviewEditCard({
   onFocusEdit?: TailoredResumeQuickReviewProps["onFocusEdit"];
   openEditRequest?: number;
   openEditingEditId?: string | null;
+  onDeleteEdit: TailoredResumeQuickReviewProps["onDeleteEdit"];
   onSaveUserEdit: TailoredResumeQuickReviewProps["onSaveUserEdit"];
   onSetEditState: TailoredResumeQuickReviewProps["onSetEditState"];
 }) {
@@ -262,6 +266,7 @@ function QuickReviewEditCard({
   );
   const isCustomOverride = edit.customLatexCode !== null;
   const isUserEdit = edit.source === "user";
+  const resetLatexCode = isUserEdit ? edit.beforeLatexCode : edit.afterLatexCode;
   const isSelectionLocked =
     readOnly || isUpdating || isCustomOverride || isUserEdit || isEditingLatex;
 
@@ -290,7 +295,7 @@ function QuickReviewEditCard({
     }
 
     const frame = window.requestAnimationFrame(() => {
-      setDraftLatexCode(isUserEdit ? edit.beforeLatexCode : proposedLatexCode);
+      setDraftLatexCode(proposedLatexCode);
       setIsEditingLatex(true);
     });
 
@@ -298,9 +303,7 @@ function QuickReviewEditCard({
       window.cancelAnimationFrame(frame);
     };
   }, [
-    edit.beforeLatexCode,
     edit.editId,
-    isUserEdit,
     openEditRequest,
     openEditingEditId,
     proposedLatexCode,
@@ -328,12 +331,12 @@ function QuickReviewEditCard({
     }
 
     onFocusEdit?.(edit.editId);
-    setDraftLatexCode(isUserEdit ? edit.beforeLatexCode : proposedLatexCode);
+    setDraftLatexCode(proposedLatexCode);
     setIsEditingLatex(true);
   }
 
   function cancelEditingLatex() {
-    setDraftLatexCode(isUserEdit ? edit.beforeLatexCode : proposedLatexCode);
+    setDraftLatexCode(proposedLatexCode);
     setIsEditingLatex(false);
 
     if (isUserEdit) {
@@ -342,7 +345,7 @@ function QuickReviewEditCard({
   }
 
   function revertToModelSuggestion() {
-    setDraftLatexCode(isUserEdit ? edit.beforeLatexCode : edit.afterLatexCode);
+    setDraftLatexCode(resetLatexCode);
     textareaRef.current?.focus();
   }
 
@@ -354,6 +357,18 @@ function QuickReviewEditCard({
     const wasSaved = await onSaveUserEdit(edit.editId, draftLatexCode);
 
     if (wasSaved) {
+      setIsEditingLatex(false);
+    }
+  }
+
+  async function deleteEdit() {
+    if (isUpdating) {
+      return;
+    }
+
+    const wasDeleted = await onDeleteEdit(edit.editId);
+
+    if (wasDeleted) {
       setIsEditingLatex(false);
     }
   }
@@ -450,9 +465,7 @@ function QuickReviewEditCard({
                   aria-label="Revert to model suggestion"
                   className="quick-review-inline-editor-icon-action"
                   disabled={
-                    isUpdating ||
-                    draftLatexCode ===
-                      (isUserEdit ? edit.beforeLatexCode : edit.afterLatexCode)
+                    isUpdating || draftLatexCode === resetLatexCode
                   }
                   title={
                     isUserEdit
@@ -463,6 +476,16 @@ function QuickReviewEditCard({
                   onClick={revertToModelSuggestion}
                 >
                   <RevertIcon />
+                </button>
+                <button
+                  aria-label="Delete block edit"
+                  className="quick-review-inline-editor-icon-action quick-review-inline-editor-delete-action"
+                  disabled={isUpdating}
+                  title="Delete this block edit"
+                  type="button"
+                  onClick={() => void deleteEdit()}
+                >
+                  <TrashIcon />
                 </button>
                 <button
                   className="quick-review-inline-editor-cancel"
@@ -477,10 +500,7 @@ function QuickReviewEditCard({
                   disabled={
                     isUpdating ||
                     draftLatexCode.replace(/\n+$/, "") ===
-                      (isUserEdit
-                        ? edit.beforeLatexCode
-                        : proposedLatexCode
-                      ).replace(/\n+$/, "")
+                      proposedLatexCode.replace(/\n+$/, "")
                   }
                   type="button"
                   onClick={() => void saveEditingLatex()}
@@ -558,8 +578,10 @@ export default function TailoredResumeQuickReview({
   onDeleteVersion,
   onCancelUserEditDraft,
   onFocusEdit,
+  closeEditRequest = 0,
   openEditRequest = 0,
   openEditingEditId = null,
+  onDeleteEdit,
   onRefineWithChat,
   onSaveUserEdit,
   record,
@@ -944,11 +966,12 @@ export default function TailoredResumeQuickReview({
               edit={edit}
               isUpdating={isUpdating}
               onCancelUserEditDraft={onCancelUserEditDraft}
+              onDeleteEdit={onDeleteEdit}
               onFocusEdit={onFocusEdit}
               openEditRequest={openEditRequest}
               openEditingEditId={openEditingEditId}
               onSaveUserEdit={onSaveUserEdit}
-              key={edit.editId}
+              key={`${edit.editId}:${closeEditRequest}`}
               readOnly={isDiffMode}
               startLabel={isDiffMode && diffStart ? diffStart.label : "Original block"}
               endLabel={isDiffMode && diffEnd ? diffEnd.label : "Tailored block"}

@@ -4642,6 +4642,8 @@ function App() {
     useState<string | null>(null);
   const [tailoredReviewOpenEditRequest, setTailoredReviewOpenEditRequest] =
     useState(0);
+  const [tailoredReviewCloseEditRequest, setTailoredReviewCloseEditRequest] =
+    useState(0);
   const [tailoredResumeReviewState, setTailoredResumeReviewState] =
     useState<TailoredResumeReviewState>({ record: null, status: "idle" });
   const [
@@ -14844,6 +14846,106 @@ function App() {
     }
   }
 
+  async function deleteTailoredResumeReviewEdit(editId: string) {
+    if (
+      authState.status !== "signedIn" ||
+      !displayedActiveTailoredResumeReviewRecord ||
+      !activeTailoredResumeReviewRecord ||
+      pendingTailoredResumeReviewEditId
+    ) {
+      return false;
+    }
+
+    const currentEdit = displayedActiveTailoredResumeReviewRecord.edits.find(
+      (edit) => edit.editId === editId,
+    );
+
+    if (!currentEdit) {
+      return false;
+    }
+
+    const previousRecord = activeTailoredResumeReviewRecord;
+    const isDraftUserEdit = !previousRecord.edits.some(
+      (edit) => edit.editId === editId,
+    );
+
+    if (isDraftUserEdit) {
+      setTailoredReviewDraftUserEditSegmentId((currentSegmentId) =>
+        `${currentSegmentId}:user` === editId ? null : currentSegmentId,
+      );
+      setTailoredPreviewFocusEditId(null);
+      setTailoredReviewCloseEditRequest((currentValue) => currentValue + 1);
+      return true;
+    }
+
+    const optimisticEdits = previousRecord.edits.filter(
+      (edit) => edit.editId !== editId,
+    );
+    const optimisticRecord: TailoredResumeReviewRecord = {
+      ...previousRecord,
+      edits: optimisticEdits,
+    };
+
+    setPendingTailoredResumeReviewEditId(editId);
+    setTailoredResumeReviewState({
+      record: optimisticRecord,
+      status: "ready",
+    });
+    setTailoredReviewCloseEditRequest((currentValue) => currentValue + 1);
+    setTailoredReviewDraftUserEditSegmentId((currentSegmentId) =>
+      currentEdit.source === "user" && `${currentSegmentId}:user` === editId
+        ? null
+        : currentSegmentId,
+    );
+    setTailoredPreviewFocusEditId(null);
+
+    try {
+      const result = await patchTailorResume({
+        action: "deleteTailoredResumeEdit",
+        editId,
+        tailoredResumeId: previousRecord.id,
+      });
+
+      if (!result.ok) {
+        throw new Error(
+          readTailorResumePayloadError(
+            result.payload,
+            "Unable to delete the tailored resume block edit.",
+          ),
+        );
+      }
+
+      const reviewRecord =
+        resolveTailoredResumeReviewRecordFromPayload(
+          result.payload,
+          previousRecord.id,
+        ) ?? null;
+
+      if (!reviewRecord) {
+        throw new Error("The tailored resume review could not be refreshed.");
+      }
+
+      setTailoredResumeReviewState({
+        record: reviewRecord,
+        status: "ready",
+      });
+      syncTailoredResumeSummariesFromPayload(result.payload);
+      return true;
+    } catch (error) {
+      setTailoredResumeReviewState({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to delete the tailored resume block edit.",
+        record: previousRecord,
+        status: "error",
+      });
+      return false;
+    } finally {
+      setPendingTailoredResumeReviewEditId(null);
+    }
+  }
+
   function cancelTailoredResumeReviewUserEditDraft(editId: string) {
     setTailoredReviewDraftUserEditSegmentId((currentSegmentId) =>
       `${currentSegmentId}:user` === editId ? null : currentSegmentId,
@@ -15371,8 +15473,10 @@ function App() {
             isUpdating={pendingTailoredResumeReviewEditId !== null}
             onDeleteVersion={deleteTailoredResumeReviewVersion}
             onCancelUserEditDraft={cancelTailoredResumeReviewUserEditDraft}
+            onDeleteEdit={deleteTailoredResumeReviewEdit}
             onFocusEdit={focusTailoredPreviewEdit}
             onRefineWithChat={refineTailoredResumeReviewWithChat}
+            closeEditRequest={tailoredReviewCloseEditRequest}
             openEditRequest={tailoredReviewOpenEditRequest}
             openEditingEditId={tailoredPreviewFocusEditId}
             record={displayedActiveTailoredResumeReviewRecord}

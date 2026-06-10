@@ -124,12 +124,54 @@ const mockPageContext: JobPageContext = {
   url: "https://jobs.example.com/acme-ai/senior-product-engineer",
 };
 
-const mockPdfBytes = Uint8Array.from(
-  atob(
-    "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA0IDAgUiA+PiA+PiAvQ29udGVudHMgNSAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggMjcwID4+CnN0cmVhbQpCVAovRjEgMTIgVGYKNDAgNzM1IFRkCihIZW5yeSBEZXV0c2NoIC0gU29mdHdhcmUgRW5naW5lZXIpIFRqCjAgLTE4IFRkCihXb3JrIEV4cGVyaWVuY2UpIFRqCjAgLTE2IFRkCihTaGlwcGVkIEt1YmVybmV0ZXMgZGVwbG95bWVudCBhdXRvbWF0aW9uIHdpdGggUG9zdGdyZVNRTCBwZXJzaXN0ZW5jZS4pIFRqCjAgLTE2IFRkCihCdWlsdCBiYWNrZW5kIHJldmlldyB3b3JrZmxvd3Mgd2l0aCBwZXJzaXN0ZW50IHN0b3JhZ2UgYW5kIGxvdy1sYXRlbmN5IEFQSXMuKSBUagpFVAplbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCA2CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMTUgMDAwMDAgbiAKMDAwMDAwMDI0MSAwMDAwMCBuIAowMDAwMDAwMzExIDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgNiAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKNjMxCiUlRU9GCg==",
-  ),
-  (character) => character.charCodeAt(0),
-);
+function escapePdfText(value: string) {
+  return value.replace(/[\\()]/g, "\\$&");
+}
+
+function createDebugPdfBytes(lines: string[]) {
+  const content = [
+    "BT",
+    "/F1 12 Tf",
+    "40 735 Td",
+    ...lines.flatMap((line, index) =>
+      index === lines.length - 1
+        ? [`(${escapePdfText(line)}) Tj`]
+        : [`(${escapePdfText(line)}) Tj`, "0 -16 Td"],
+    ),
+    "ET",
+  ].join("\n");
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+
+  objects.forEach((object, index) => {
+    offsets.push(pdf.length);
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+
+  const xrefOffset = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  offsets.slice(1).forEach((offset) => {
+    pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  });
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+
+  return new TextEncoder().encode(pdf);
+}
+
+const mockPdfBytes = createDebugPdfBytes([
+  "Henry Deutsch - Software Engineer",
+  "Work Experience",
+  "Led major refactor enabling $50K+/mo in TikTok ad spend by incorporating TikTok support for our entire suite of software.",
+  "Built and migrated 100% of internal account managers and external clients to a streamlined messaging and reporting system.",
+  "Refactored 31K+ LOC in 365 files, reworking 140+ tRPC endpoints & Bayesian inference engine for platform-agnostic objectives.",
+]);
 
 function createMockAiUsageReport() {
   const now = new Date("2026-05-25T23:35:00.000Z").toISOString();
@@ -662,7 +704,7 @@ function createMockTailoringRun(
   } satisfies TailorResumeRunRecord;
 }
 
-function createMockTailoredResumes() {
+function createMockTailoredResumes(input: { includeUserEdit?: boolean } = {}) {
   const sourceAnnotatedLatexCode = [
     "% JOBHELPER_SEGMENT_ID: work-experience.entry-1.bullet-1",
     "\\resumeItem{Supported backend platform work across consumer analytics and ads tooling.}",
@@ -718,16 +760,39 @@ function createMockTailoredResumes() {
       state: "applied" as const,
     },
   ];
+  const userEdit = {
+    afterLatexCode:
+      "\\resumeItem{User-authored browser check edit for deleting a saved block edit.}",
+    beforeLatexCode:
+      "\\resumeItem{Refactored backend services and maintained internal account management workflows.}",
+    command: null,
+    customLatexCode: null,
+    editId: "work-experience.entry-1.bullet-2:user",
+    generatedByStep: 4 as const,
+    reason: "User edit",
+    source: "user" as const,
+    segmentId: "work-experience.entry-1.bullet-2",
+    state: "applied" as const,
+  };
+  const visibleEdits = input.includeUserEdit
+    ? [...refinedEdits, userEdit]
+    : refinedEdits;
+  const visibleAnnotatedLatexCode = input.includeUserEdit
+    ? rebuildDebugAnnotatedLatexCode({
+        edits: visibleEdits,
+        sourceAnnotatedLatexCode,
+      })
+    : refinedAnnotatedLatexCode;
 
   return [
     {
-      annotatedLatexCode: refinedAnnotatedLatexCode,
+      annotatedLatexCode: visibleAnnotatedLatexCode,
       applicationId: null,
       archivedAt: null as string | null,
       companyName: "Microsoft",
       createdAt: new Date("2026-04-21T23:17:00.000Z").toISOString(),
       displayName: "Microsoft - Software Engineer",
-      edits: refinedEdits,
+      edits: visibleEdits,
       emphasizedTechnologies: [],
       error: null,
       id: "debug-tailored-resume",
@@ -817,6 +882,54 @@ function createMockTailoredResumes() {
       ],
     },
   ];
+}
+
+function readDebugAnnotatedSegments(annotatedLatexCode: string) {
+  const markerPattern =
+    /^% JOBHELPER_SEGMENT_ID:\s*(?<segmentId>[^\n]+)\n(?<latexCode>[\s\S]*?)(?=^% JOBHELPER_SEGMENT_ID:|\s*$)/gm;
+  const segments: Array<{
+    latexCode: string;
+    segmentId: string;
+  }> = [];
+
+  for (const match of annotatedLatexCode.matchAll(markerPattern)) {
+    const segmentId = match.groups?.segmentId?.trim();
+    const latexCode = match.groups?.latexCode?.replace(/\n+$/, "");
+
+    if (segmentId && latexCode !== undefined) {
+      segments.push({ latexCode, segmentId });
+    }
+  }
+
+  return segments;
+}
+
+function rebuildDebugAnnotatedLatexCode(input: {
+  edits: Array<{
+    afterLatexCode: string;
+    customLatexCode?: string | null;
+    segmentId: string;
+    state: "applied" | "rejected";
+  }>;
+  sourceAnnotatedLatexCode: string;
+}) {
+  const activeEditsBySegmentId = new Map(
+    input.edits
+      .filter((edit) => edit.state === "applied")
+      .map((edit) => [
+        edit.segmentId,
+        edit.customLatexCode ?? edit.afterLatexCode,
+      ]),
+  );
+
+  return readDebugAnnotatedSegments(input.sourceAnnotatedLatexCode)
+    .map((segment) =>
+      [
+        `% JOBHELPER_SEGMENT_ID: ${segment.segmentId}`,
+        activeEditsBySegmentId.get(segment.segmentId) ?? segment.latexCode,
+      ].join("\n"),
+    )
+    .join("\n");
 }
 
 function createMockSkillData(): TailorResumeStoredSkillData {
@@ -1053,7 +1166,13 @@ export function installDebugChromeRuntime() {
   const storage = new Map<string, unknown>();
   const nativeFetch = globalThis.fetch.bind(globalThis);
   let authSession = readInitialAuthSession(searchParams);
-  let mockTailoredResumes = authSession ? createMockTailoredResumes() : [];
+  let mockTailoredResumes = authSession
+    ? createMockTailoredResumes({
+        includeUserEdit:
+          searchParams.get("userEdit") === "1" ||
+          searchParams.get("userEdit") === "true",
+      })
+    : [];
   let mockSkillData = createMockSkillData();
   let mockSupportChatMessages: DebugChatMessage[] = [];
   let mockTailoringRun = readInitialTailoringRun(searchParams);
@@ -1876,6 +1995,137 @@ export function installDebugChromeRuntime() {
               tailoringInterview: null,
             },
             tailoredResumeIds: deletedResumeIds,
+          }),
+          {
+            headers: {
+              "Content-Type": "application/json",
+            },
+            status: 200,
+          },
+        );
+      }
+
+      if (
+        action === "createTailoredResumeUserEdit" ||
+        action === "editExistingTailoredResumeUserEdit"
+      ) {
+        const tailoredResumeId = readBodyString(body, "tailoredResumeId");
+        const segmentId = readBodyString(body, "segmentId");
+        const latexCode = readBodyString(body, "latexCode").replace(/\n+$/, "");
+        const updatedAt = new Date().toISOString();
+
+        mockTailoredResumes = mockTailoredResumes.map((record) => {
+          if (record.id !== tailoredResumeId) {
+            return record;
+          }
+
+          const existingEdit = record.edits.find(
+            (edit) => edit.segmentId === segmentId,
+          );
+          const sourceSegment = readDebugAnnotatedSegments(
+            record.sourceAnnotatedLatexCode ?? record.annotatedLatexCode,
+          ).find((segment) => segment.segmentId === segmentId);
+
+          if (!sourceSegment || (action === "createTailoredResumeUserEdit" && existingEdit)) {
+            return record;
+          }
+
+          const nextEdit = existingEdit
+            ? {
+                ...existingEdit,
+                afterLatexCode: latexCode,
+                customLatexCode: null,
+                state: "applied" as const,
+              }
+            : {
+                afterLatexCode: latexCode,
+                beforeLatexCode: sourceSegment.latexCode,
+                command: null,
+                customLatexCode: null,
+                editId: `${segmentId}:user`,
+                generatedByStep: 4 as const,
+                reason: "User edit",
+                source: "user" as const,
+                segmentId,
+                state: "applied" as const,
+              };
+          const nextEdits = existingEdit
+            ? record.edits.map((edit) =>
+                edit.editId === existingEdit.editId ? nextEdit : edit,
+              )
+            : [...record.edits, nextEdit];
+          const annotatedLatexCode = rebuildDebugAnnotatedLatexCode({
+            edits: nextEdits,
+            sourceAnnotatedLatexCode:
+              record.sourceAnnotatedLatexCode ?? record.annotatedLatexCode,
+          });
+
+          return {
+            ...record,
+            annotatedLatexCode,
+            edits: nextEdits,
+            pdfUpdatedAt: updatedAt,
+            updatedAt,
+          };
+        });
+
+        return new Response(
+          JSON.stringify({
+            profile: {
+              tailoredResumes: mockTailoredResumes,
+              tailoringInterview: null,
+            },
+            tailoredResumeEditId: `${segmentId}:user`,
+            tailoredResumeId: tailoredResumeId || null,
+          }),
+          {
+            headers: {
+              "Content-Type": "application/json",
+            },
+            status: 200,
+          },
+        );
+      }
+
+      if (action === "deleteTailoredResumeEdit") {
+        const tailoredResumeId = readBodyString(body, "tailoredResumeId");
+        const editId = readBodyString(body, "editId");
+        const updatedAt = new Date().toISOString();
+
+        mockTailoredResumes = mockTailoredResumes.map((record) => {
+          if (record.id !== tailoredResumeId) {
+            return record;
+          }
+
+          const nextEdits = record.edits.filter((edit) => edit.editId !== editId);
+
+          if (nextEdits.length === record.edits.length) {
+            return record;
+          }
+
+          const annotatedLatexCode = rebuildDebugAnnotatedLatexCode({
+            edits: nextEdits,
+            sourceAnnotatedLatexCode:
+              record.sourceAnnotatedLatexCode ?? record.annotatedLatexCode,
+          });
+
+          return {
+            ...record,
+            annotatedLatexCode,
+            edits: nextEdits,
+            pdfUpdatedAt: updatedAt,
+            updatedAt,
+          };
+        });
+
+        return new Response(
+          JSON.stringify({
+            profile: {
+              tailoredResumes: mockTailoredResumes,
+              tailoringInterview: null,
+            },
+            tailoredResumeEditId: editId || null,
+            tailoredResumeId: tailoredResumeId || null,
           }),
           {
             headers: {

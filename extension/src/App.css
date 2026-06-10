@@ -5144,11 +5144,13 @@ button:disabled {
   display: flex;
   flex: 0 0 auto;
   align-self: center;
-  height: 28px;
+  min-height: 28px;
+  max-width: 100%;
   justify-content: flex-end;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
-  padding: 2px 5px 2px 0;
+  padding: 2px 5px;
 }
 
 .quick-review-inline-editor-actions button {
@@ -5177,6 +5179,17 @@ button:disabled {
 .quick-review-inline-editor-icon-action:hover:not(:disabled) {
   border-color: rgba(252, 211, 77, 0.34);
   background: rgba(252, 211, 77, 0.14);
+}
+
+.quick-review-inline-editor-delete-action {
+  border-color: rgba(248, 113, 113, 0.2);
+  color: #fecaca;
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.quick-review-inline-editor-delete-action:hover:not(:disabled) {
+  border-color: rgba(248, 113, 113, 0.38);
+  background: rgba(248, 113, 113, 0.15);
 }
 
 .quick-review-inline-editor-icon-action svg {
