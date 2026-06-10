@@ -205,6 +205,45 @@ export async function appendTailoredResumeReviewChatMessages(input: {
   );
 }
 
+export async function deleteTailoredResumeReviewChat(input: {
+  displayName: string;
+  tailoredResumeId: string;
+  userId: string;
+}) {
+  const key = buildTailoredResumeReviewChatThreadKey(input.tailoredResumeId);
+  const urlHash = hashTailoredResumeReviewChatKey(key);
+  const prisma = getPrismaClient();
+  const thread = await prisma.tailorResumeChatThread.upsert({
+    create: {
+      pageTitle: buildTailoredResumeReviewChatPageTitle(input.displayName),
+      url: key,
+      urlHash,
+      userId: input.userId,
+    },
+    update: {
+      pageTitle: buildTailoredResumeReviewChatPageTitle(input.displayName),
+      url: key,
+    },
+    where: {
+      userId_urlHash: {
+        urlHash,
+        userId: input.userId,
+      },
+    },
+  });
+
+  await prisma.tailorResumeChatMessage.deleteMany({
+    where: {
+      threadId: thread.id,
+      userId: input.userId,
+    },
+  });
+
+  return {
+    messages: [],
+  };
+}
+
 export async function attachTailoredResumeReviewChatsToProfile(input: {
   profile: TailorResumeProfile;
   userId: string;

@@ -5,6 +5,7 @@ import {
   buildTailoredResumeSnapshotComparisonEdits,
   buildTailoredResumeReviewEdits,
   buildTailoredResumeCombinedActiveEdits,
+  deleteTailoredResumeEdit,
   rebuildTailoredResumeAnnotatedLatex,
   resolveTailoredResumeSourceAnnotatedLatex,
   updateTailoredResumeEditState,
@@ -147,6 +148,94 @@ test("changing the model choice clears user overrides for the same segment", () 
       ?.customLatexCode,
     null,
   );
+});
+
+test("deleting a model edit removes its tailored block from the rebuilt resume", () => {
+  const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
+  const sourceBlock = findBlockBySnippet(
+    normalized.annotatedLatex,
+    "Created full-stack dashboard for project management",
+  );
+  const editId = `${sourceBlock.id}:model`;
+  const editedLatexCode =
+    "\\resumeitem{Added explicit open-source collaboration bullet}";
+  const nextEdits = deleteTailoredResumeEdit({
+    editId,
+    edits: [
+      {
+        afterLatexCode: editedLatexCode,
+        beforeLatexCode: sourceBlock.latexCode,
+        command: "resumeitem",
+        customLatexCode: null,
+        editId,
+        reason: "Model edit",
+        state: "applied",
+        segmentId: sourceBlock.id,
+      },
+    ],
+  });
+
+  assert.deepEqual(nextEdits, []);
+
+  const rebuiltAnnotatedLatex = rebuildTailoredResumeAnnotatedLatex({
+    annotatedLatexCode: replaceBlockInAnnotatedLatex({
+      annotatedLatexCode: normalized.annotatedLatex,
+      replacementLatexCode: editedLatexCode,
+      segmentId: sourceBlock.id,
+    }),
+    edits: nextEdits ?? [],
+    sourceAnnotatedLatexCode: normalized.annotatedLatex,
+  });
+
+  assert.doesNotMatch(rebuiltAnnotatedLatex, /open-source collaboration bullet/);
+  assert.match(
+    rebuiltAnnotatedLatex,
+    /Created full-stack dashboard for project management/,
+  );
+});
+
+test("deleting a user edit removes only that user-authored edit", () => {
+  const normalized = normalizeTailorResumeLatex(tailorResumeLatexExample);
+  const firstBlock = findBlockBySnippet(
+    normalized.annotatedLatex,
+    "Created full-stack dashboard for project management",
+  );
+  const secondBlock = findBlockBySnippet(
+    normalized.annotatedLatex,
+    "Developed a \\textbf{Python and SQL} backend",
+  );
+  const userEditId = `${firstBlock.id}:user`;
+  const modelEditId = `${secondBlock.id}:model`;
+  const nextEdits = deleteTailoredResumeEdit({
+    editId: userEditId,
+    edits: [
+      {
+        afterLatexCode: "\\resumeitem{User-authored replacement bullet}",
+        beforeLatexCode: firstBlock.latexCode,
+        command: "resumeitem",
+        customLatexCode: null,
+        editId: userEditId,
+        generatedByStep: 4,
+        reason: "User edit",
+        source: "user",
+        state: "applied",
+        segmentId: firstBlock.id,
+      },
+      {
+        afterLatexCode: "\\resumeitem{Model-authored replacement bullet}",
+        beforeLatexCode: secondBlock.latexCode,
+        command: "resumeitem",
+        customLatexCode: null,
+        editId: modelEditId,
+        reason: "Model edit",
+        state: "applied",
+        segmentId: secondBlock.id,
+      },
+    ],
+  });
+
+  assert.equal(nextEdits?.length, 1);
+  assert.equal(nextEdits?.[0]?.editId, modelEditId);
 });
 
 test("rebuilding tailored resume latex drops rejected edits from the effective document", () => {

@@ -145,6 +145,19 @@ export function updateTailoredResumeEditState(input: {
   });
 }
 
+export function deleteTailoredResumeEdit(input: {
+  editId: string;
+  edits: TailoredResumeBlockEditRecord[];
+}): TailoredResumeBlockEditRecord[] | null {
+  const nextEdits = input.edits.filter((edit) => edit.editId !== input.editId);
+
+  if (nextEdits.length === input.edits.length) {
+    return null;
+  }
+
+  return nextEdits;
+}
+
 export function resolveTailoredResumeSourceAnnotatedLatex(
   record: Pick<
     TailoredResumeRecord,
