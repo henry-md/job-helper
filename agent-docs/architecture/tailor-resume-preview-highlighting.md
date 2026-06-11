@@ -2,7 +2,7 @@ Tailor Resume review preview highlighting:
 
 - Purpose: Tailor Resume surfaces can show temporary edit highlighting without mutating the saved clean preview on disk.
 - Entry points:
-  - `components/tailored-resume-review-modal.tsx` uses the interactive preview renderer to paint overlay highlights on top of the clean compiled PDF.
+  - `components/tailor-resume-workspace.tsx` uses the interactive preview renderer for source-resume Config previews.
   - `extension/src/App.tsx` exposes a fullscreen preview toggle that feeds the same `components/tailored-resume-interactive-preview.tsx` renderer in frameless mode.
   - `app/api/tailor-resume/preview/route.ts` returns the clean compiled PDF only; highlighting is a client-side overlay on that stable layout.
 
@@ -13,8 +13,7 @@ Implementation:
 - Added-only ranges become green highlights; modified ranges become amber highlights over just the added/replacement text.
 - The in-app interactive renderer is separate from the highlighted PDF. It draws browser overlays on top of the clean compiled PDF, keeps all currently active segment diffs visible at once, and treats clicking an edit card as a temporary focus event that scrolls to the block and pulses the overlay without changing the steady highlight set.
 - The extension's fullscreen diff-highlighting mode uses the same shared interactive component in frameless mode. It renders the clean PDF locally with `pdf.js`, then paints the same diff-style overlays on top of that page canvas. This preserves the clean preview's pagination while avoiding the blur introduced by pre-rendered page images.
-- The extension review payload needs raw `annotatedLatexCode` and `sourceAnnotatedLatexCode` so it can rebuild the same highlight queries the web review modal uses without recompiling a second highlighted PDF.
-- The review modal's original/tailored LaTeX block panes sync vertical scrolling by diff row index. The source pane's top visible row and relative offset inside that row drive the other pane, with a short programmatic-scroll guard to avoid feedback loops. This keeps analogous rows lined up without requiring model output changes.
+- The extension review payload needs raw `annotatedLatexCode` and `sourceAnnotatedLatexCode` so it can rebuild highlight queries without recompiling a second highlighted PDF.
 
 Multi-line highlight rule:
 

@@ -34,8 +34,7 @@ type PdfPageViewport = ReturnType<PDFPageProxy["getViewport"]>;
 
 export type TailoredResumeInteractivePreviewProps = {
   displayName: string;
-  // Focus props are optional — the chrome extension doesn't have a click-to-
-  // focus edit card, so it omits these. The dashboard review modal supplies
+  // Focus props are optional; callers with click-to-focus edit cards can use
   // them to scroll/pulse a specific edit when its card is clicked.
   focusKey?: string | null;
   focusMatchKey?: string | null;
@@ -142,6 +141,7 @@ const interactivePreviewHighResSpotlightMaxPixels = 16_000_000;
 const interactivePreviewHighResSpotlightMaxDimension = 4096;
 const interactivePreviewHighResSpotlightIdleTimeoutMs = 700;
 const interactivePreviewHighResSpotlightFallbackDelayMs = 80;
+const interactivePreviewPageBoundaryHitSlop = 8;
 const maxPreviewSnapshotWidth = 1200;
 
 type PreviewSnapshotHighlightTone = "added" | "changed" | "focus";
@@ -1070,12 +1070,15 @@ function isViewportPointInsidePage(input: {
   clientX: number;
   clientY: number;
   pageRect: DOMRect;
+  slop?: number;
 }) {
+  const slop = input.slop ?? 0;
+
   return (
-    input.clientX >= input.pageRect.left &&
-    input.clientX <= input.pageRect.right &&
-    input.clientY >= input.pageRect.top &&
-    input.clientY <= input.pageRect.bottom
+    input.clientX >= input.pageRect.left - slop &&
+    input.clientX <= input.pageRect.right + slop &&
+    input.clientY >= input.pageRect.top - slop &&
+    input.clientY <= input.pageRect.bottom + slop
   );
 }
 
@@ -1433,36 +1436,82 @@ function buildFocusRectsFromPageHighlightMatches(input: {
   );
 }
 
-function resolveInteractivePreviewHoverGroup(input: {
+function resolveInteractivePreviewHoverGroups(input: {
   pageWidth: number;
   rects: HighlightRect[];
-}) {
-  const group = summarizeHighlightRectGroup(input.rects);
-
-  if (!group) {
-    return null;
-  }
-
+}): HighlightRect[] {
   const leftPadding = 24;
   const rightPadding = 8;
-  const verticalPadding = 1.5;
-  const left = Math.max(0, group.left - leftPadding);
-  const top = Math.max(0, group.top - verticalPadding);
-  const right = Math.min(input.pageWidth, group.left + group.width + rightPadding);
+  const sortedRects = [...input.rects].sort((left, right) => {
+    const topDelta = left.top - right.top;
 
-  return {
-    height: group.height + (group.top - top) + verticalPadding,
-    left,
-    top,
-    width: Math.max(0, right - left),
-  };
+    return Math.abs(topDelta) > Math.max(left.height, right.height) * 0.35
+      ? topDelta
+      : left.left - right.left;
+  });
+  const lineRects: HighlightRect[][] = [];
+
+  for (const rect of sortedRects) {
+    const currentLine = lineRects.at(-1);
+
+    if (!currentLine) {
+      lineRects.push([rect]);
+      continue;
+    }
+
+    const currentGroup = summarizeHighlightRectGroup(currentLine);
+    const currentMidline = currentGroup
+      ? currentGroup.top + currentGroup.height / 2
+      : rect.top + rect.height / 2;
+    const rectMidline = rect.top + rect.height / 2;
+    const sameLine =
+      Math.abs(rectMidline - currentMidline) <=
+      Math.max(rect.height, currentGroup?.height ?? rect.height) * 0.7;
+
+    if (sameLine) {
+      currentLine.push(rect);
+      continue;
+    }
+
+    lineRects.push([rect]);
+  }
+
+  const groups = lineRects.flatMap((line) => {
+    const group = summarizeHighlightRectGroup(line);
+
+    return group ? [group] : [];
+  });
+
+  const paddedGroups = groups.map((group) => {
+    // Pad by about 20% of one line's height above and below, even for wrapped blocks.
+    const desiredPadding = Math.min(2.5, Math.max(1.25, group.height * 0.2));
+    const height = group.height + desiredPadding * 2;
+    const left = Math.max(0, group.left - leftPadding);
+    const top = Math.max(0, group.top + group.height / 2 - height / 2);
+    const right = Math.min(input.pageWidth, group.left + group.width + rightPadding);
+
+    return {
+      height,
+      left,
+      top,
+      width: Math.max(0, right - left),
+    };
+  });
+
+  if (paddedGroups.length <= 1) {
+    return paddedGroups;
+  }
+
+  const unifiedGroup = summarizeHighlightRectGroup(paddedGroups);
+
+  return unifiedGroup ? [unifiedGroup] : paddedGroups;
 }
 
 function resolveInteractivePreviewMagnifierHoverGroup(input: {
   group: HighlightRect;
   magnifierState: PreviewMagnifierState;
   pageWidth: number;
-}) {
+}): HighlightRect {
   const visibleHalfWidth =
     input.magnifierState.width / Math.max(1, input.magnifierState.zoom) / 2;
   const visibleLeft = Math.max(0, input.magnifierState.x - visibleHalfWidth);
@@ -1573,20 +1622,22 @@ function InteractivePreviewPage({
   const suppressNextSegmentClickRef = useRef(false);
   const hoveredSegmentMatch =
     pageSegmentMatches.find((match) => match.key === hoveredSegmentKey) ?? null;
-  const hoveredSegmentGroup = hoveredSegmentMatch
-    ? resolveInteractivePreviewHoverGroup({
+  const hoveredSegmentGroups = hoveredSegmentMatch
+    ? resolveInteractivePreviewHoverGroups({
         pageWidth,
         rects: hoveredSegmentMatch.rects,
       })
-    : null;
-  const hoveredSegmentMagnifierGroup =
-    hoveredSegmentGroup && magnifierState
-      ? resolveInteractivePreviewMagnifierHoverGroup({
-          group: hoveredSegmentGroup,
-          magnifierState,
-          pageWidth,
-        })
-      : hoveredSegmentGroup;
+    : [];
+  const hoveredSegmentMagnifierGroups =
+    magnifierState
+      ? hoveredSegmentGroups.map((group) =>
+          resolveInteractivePreviewMagnifierHoverGroup({
+            group,
+            magnifierState,
+            pageWidth,
+          }),
+        )
+      : hoveredSegmentGroups;
 
   const updateHoveredSegmentKey = useCallback(
     (nextHoveredSegmentKey: string | null) => {
@@ -2215,6 +2266,7 @@ function InteractivePreviewPage({
           clientX: event.clientX,
           clientY: event.clientY,
           pageRect,
+          slop: interactivePreviewPageBoundaryHitSlop,
         })
       ) {
         return;
@@ -2232,6 +2284,7 @@ function InteractivePreviewPage({
           clientX: event.clientX,
           clientY: event.clientY,
           pageRect,
+          slop: interactivePreviewPageBoundaryHitSlop,
         })
       ) {
         setMagnifierState(null);
@@ -2248,8 +2301,38 @@ function InteractivePreviewPage({
 
   return (
     <div
-      className="resume-interactive-page"
+      className={`resume-interactive-page ${
+        magnifierState ? "resume-interactive-page--magnifier-active" : ""
+      }`}
       onClickCapture={(event) => {
+        if (magnifierState) {
+          const magnifierViewportRect = resolveRenderedMagnifierViewportRect({
+            magnifierElement: magnifierRef.current,
+            magnifierState,
+          });
+          const spotlightSegmentKey = findSegmentKeyAtMagnifierPoint({
+            clientX: event.clientX,
+            clientY: event.clientY,
+            magnifierViewportRect,
+            magnifierState,
+            pageSegmentMatches,
+          });
+          const spotlightSegment =
+            (spotlightSegmentKey
+              ? pageSegmentMatches.find((match) => match.key === spotlightSegmentKey)
+              : null) ?? hoveredSegmentMatch;
+
+          if (spotlightSegment) {
+            event.preventDefault();
+            event.stopPropagation();
+            suppressNextSegmentClickRef.current = false;
+            updateHoveredSegmentKey(spotlightSegment.key);
+            setMagnifierState(null);
+            onSegmentClick?.(spotlightSegment.segmentId);
+            return;
+          }
+        }
+
         if (!suppressNextSegmentClickRef.current) {
           return;
         }
@@ -2259,6 +2342,19 @@ function InteractivePreviewPage({
         event.stopPropagation();
       }}
       onPointerLeave={(event) => {
+        const pageRect = event.currentTarget.getBoundingClientRect();
+
+        if (
+          isViewportPointInsidePage({
+            clientX: event.clientX,
+            clientY: event.clientY,
+            pageRect,
+            slop: interactivePreviewPageBoundaryHitSlop,
+          })
+        ) {
+          return;
+        }
+
         const magnifierViewportRect = magnifierState
           ? resolveRenderedMagnifierViewportRect({
               magnifierElement: magnifierRef.current,
@@ -2302,38 +2398,15 @@ function InteractivePreviewPage({
             magnifierState,
           })
         ) {
-          // The fixed spotlight can sit under the cursor, but if the cursor is
-          // still over the rendered PDF, scroll from PDF coordinates, not from
-          // the magnifier transform. The latter causes speed bursts.
-          const pageRect = event.currentTarget.getBoundingClientRect();
-          const nextMagnifierState = isViewportPointInsidePage({
-            clientX: event.clientX,
-            clientY: event.clientY,
-            pageRect,
-          })
-            ? resolvePreviewMagnifierStateFromViewportPagePoint({
-                clientX: event.clientX,
-                clientY: event.clientY,
-                magnifierBounds: resolvePreviewMagnifierBounds({
-                  maxWidthRatio: magnifierMaxWidthRatio,
-                  rootRect: rootRef.current?.getBoundingClientRect() ?? null,
-                }),
-                pageHeight,
-                pageMatchIndex: highlightSource?.pageMatchIndex ?? null,
-                pageRect,
-                pageWidth,
-              })
-            : magnifierState;
-
-          setMagnifierState(nextMagnifierState);
           updateHoveredSegmentKey(
             findSegmentKeyAtMagnifierPoint({
               clientX: event.clientX,
               clientY: event.clientY,
               magnifierViewportRect: magnifierViewportRect ?? undefined,
-              magnifierState: nextMagnifierState,
+              magnifierState,
               pageSegmentMatches,
-            }),
+            }) ??
+              hoveredSegmentKeyRef.current,
           );
           return;
         }
@@ -2355,6 +2428,10 @@ function InteractivePreviewPage({
         const pointerY = event.clientY - pageRect.top;
 
         const nextHoveredSegmentKey = findSegmentKeyAtPagePoint({
+          pageSegmentMatches,
+          x: pointerX,
+          y: pointerY,
+        }) ?? findNearestSegmentKeyOnPageLine({
           pageSegmentMatches,
           x: pointerX,
           y: pointerY,
@@ -2406,6 +2483,36 @@ function InteractivePreviewPage({
                 }`}
                 key={`segment-${match.key}-${page.pageNumber}-${index}`}
                 onClick={(event) => {
+                  if (magnifierState) {
+                    const magnifierViewportRect = resolveRenderedMagnifierViewportRect({
+                      magnifierElement: magnifierRef.current,
+                      magnifierState,
+                    });
+                    const spotlightSegmentKey = findSegmentKeyAtMagnifierPoint({
+                      clientX: event.clientX,
+                      clientY: event.clientY,
+                      magnifierViewportRect,
+                      magnifierState,
+                      pageSegmentMatches,
+                    });
+                    const spotlightSegment =
+                      (spotlightSegmentKey
+                        ? pageSegmentMatches.find(
+                            (pageMatch) => pageMatch.key === spotlightSegmentKey,
+                          )
+                        : null) ?? hoveredSegmentMatch;
+
+                    if (spotlightSegment) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      suppressNextSegmentClickRef.current = false;
+                      setMagnifierState(null);
+                      updateHoveredSegmentKey(spotlightSegment.key);
+                      onSegmentClick?.(spotlightSegment.segmentId);
+                      return;
+                    }
+                  }
+
                   if (suppressNextSegmentClickRef.current) {
                     suppressNextSegmentClickRef.current = false;
                     event.preventDefault();
@@ -2445,6 +2552,12 @@ function InteractivePreviewPage({
                     return;
                   }
 
+                  updateHoveredSegmentKey(match.key);
+                }}
+                onPointerEnter={() => {
+                  updateHoveredSegmentKey(match.key);
+                }}
+                onPointerMove={() => {
                   updateHoveredSegmentKey(match.key);
                 }}
                 onMouseLeave={(event) => {
@@ -2491,6 +2604,11 @@ function InteractivePreviewPage({
 
                   clearHoveredSegmentKeyIfCurrent(match.key);
                 }}
+                onPointerLeave={() => {
+                  if (!magnifierState) {
+                    clearHoveredSegmentKeyIfCurrent(match.key);
+                  }
+                }}
                 style={{
                   height: `${rect.height}px`,
                   left: `${rect.left}px`,
@@ -2503,12 +2621,16 @@ function InteractivePreviewPage({
           )}
         </div>
       ) : null}
-      {hoveredSegmentGroup ? (
+      {hoveredSegmentGroups.length > 0 ? (
         <div className="resume-interactive-layer">
-          <InteractivePreviewSegmentHover
-            key={`hover-${hoveredSegmentMatch?.key ?? "segment"}-${page.pageNumber}`}
-            rect={hoveredSegmentGroup}
-          />
+          {hoveredSegmentGroups.map((rect, index) => (
+            <InteractivePreviewSegmentHover
+              key={`hover-${
+                hoveredSegmentMatch?.key ?? "segment"
+              }-${page.pageNumber}-${index}`}
+              rect={rect}
+            />
+          ))}
         </div>
       ) : null}
       {focusActive &&
@@ -2546,30 +2668,22 @@ function InteractivePreviewPage({
               top: renderedMagnifierRect.top,
               width: renderedMagnifierRect.width,
             };
-            const renderedSpotlightSegmentKey =
-              event.currentTarget.dataset.hoveredSegmentKey ?? null;
-            const highlightedSpotlightSegmentKey =
-              renderedSpotlightSegmentKey ?? hoveredSegmentKeyRef.current;
-            const highlightedSpotlightMatch = highlightedSpotlightSegmentKey
-              ? pageSegmentMatches.find(
-                  (match) => match.key === highlightedSpotlightSegmentKey,
-                ) ?? null
-              : null;
-            const fallbackSpotlightSegmentKey =
-              highlightedSpotlightMatch === null
-                ? findSegmentKeyAtMagnifierPoint({
-                    clientX: event.clientX,
-                    clientY: event.clientY,
-                    magnifierViewportRect,
-                    magnifierState,
-                    pageSegmentMatches,
-                  })
-                : null;
+            const spotlightSegmentKey = findSegmentKeyAtMagnifierPoint({
+              clientX: event.clientX,
+              clientY: event.clientY,
+              magnifierViewportRect,
+              magnifierState,
+              pageSegmentMatches,
+            });
             const spotlightMatch =
-              highlightedSpotlightMatch ??
-              pageSegmentMatches.find(
-                (match) => match.key === fallbackSpotlightSegmentKey,
-              ) ??
+              (spotlightSegmentKey
+                ? pageSegmentMatches.find((match) => match.key === spotlightSegmentKey)
+                : null) ??
+              (hoveredSegmentKeyRef.current
+                ? pageSegmentMatches.find(
+                    (match) => match.key === hoveredSegmentKeyRef.current,
+                  )
+                : null) ??
               null;
 
             if (!spotlightMatch) {
@@ -2594,14 +2708,13 @@ function InteractivePreviewPage({
               width: renderedMagnifierRect.width,
             };
             const pageRect = pageRef.current?.getBoundingClientRect() ?? null;
-            // Keep movement tied to the underlying PDF while the cursor is over
-            // it; use magnifier-space math below only for segment hit testing.
             const nextMagnifierState =
               pageRect &&
               isViewportPointInsidePage({
                 clientX: event.clientX,
                 clientY: event.clientY,
                 pageRect,
+                slop: interactivePreviewPageBoundaryHitSlop,
               })
                 ? resolvePreviewMagnifierStateFromViewportPagePoint({
                     clientX: event.clientX,
@@ -2673,13 +2786,15 @@ function InteractivePreviewPage({
                 />
               )),
             )}
-            {hoveredSegmentMagnifierGroup ? (
-              <InteractivePreviewSegmentHover
-                key={`magnifier-hover-${
-                  hoveredSegmentMatch?.key ?? "segment"
-                }-${page.pageNumber}`}
-                rect={hoveredSegmentMagnifierGroup}
-              />
+            {hoveredSegmentMagnifierGroups.length > 0 ? (
+              hoveredSegmentMagnifierGroups.map((rect, index) => (
+                <InteractivePreviewSegmentHover
+                  key={`magnifier-hover-${
+                    hoveredSegmentMatch?.key ?? "segment"
+                  }-${page.pageNumber}-${index}`}
+                  rect={rect}
+                />
+              ))
             ) : null}
             {focusActive &&
             focusHighlightRects.length > 0 &&

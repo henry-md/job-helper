@@ -264,6 +264,11 @@
   animation: resume-preview-focus-pulse 420ms cubic-bezier(0.22, 1, 0.36, 1) 1;
 }
 
+.resume-interactive-page--magnifier-active > .resume-interactive-layer .resume-interactive-highlight,
+.resume-interactive-page--magnifier-active > .resume-interactive-layer .resume-interactive-segment-hover {
+  opacity: 0;
+}
+
 .resume-interactive-segment-target {
   appearance: none;
   pointer-events: auto;
@@ -285,11 +290,9 @@
 .resume-interactive-segment-target:hover,
 .resume-interactive-segment-target--hovered,
 .resume-interactive-segment-target:focus-visible {
-  border-color: rgba(34, 197, 94, 0.82);
-  background: rgba(34, 197, 94, 0.07);
-  box-shadow:
-    0 0 0 1px rgba(16, 185, 129, 0.42),
-    0 0 0 4px rgba(16, 185, 129, 0.14);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
 }
 
 .resume-interactive-segment-target:focus-visible {
