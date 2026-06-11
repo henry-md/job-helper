@@ -134,7 +134,7 @@ test("tailor resume refinement system prompt explains the preview highlight key"
   assert.match(prompt, /do not make the reason just say that the block was shortened/i);
   assert.match(prompt, /use the rendered PDF screenshots to judge whether an edit actually removes a full rendered line/i);
   assert.match(prompt, /prefer one minimal edit to one original block/i);
-  assert.match(prompt, /answer the question instead of explaining that no edit was made/i);
+  assert.match(prompt, /Answer the user's actual question first/i);
   assert.match(prompt, /Use the keyword-coverage tool/i);
   assert.doesNotMatch(prompt, /saved scraped-keyword coverage report/i);
 });

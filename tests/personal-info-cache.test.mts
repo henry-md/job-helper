@@ -12,6 +12,7 @@ function buildPersonalInfo() {
       ludicrousMode: true,
       masterChatModel: "gpt-5.4",
       preventPageCountIncrease: true,
+      reviewChatModel: "gpt-5.4",
       step1Model: "gpt-5.4-mini",
       step3Model: "anthropic:claude-sonnet-4-6",
       step4Model: "gpt-5.5",
