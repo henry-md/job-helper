@@ -4923,6 +4923,8 @@ async function handleRefineTailoredResumeAction(input: {
         : "";
     const userPrompt =
       typeof input.body.userPrompt === "string" ? input.body.userPrompt.trim() : "";
+    const selectedModel =
+      typeof input.body.model === "string" ? input.body.model.trim() : "";
     const previewImageDataUrls = readRefinementPreviewImageDataUrls(
       "previewImageDataUrls" in input.body ? input.body.previewImageDataUrls : null,
     );
@@ -4969,16 +4971,25 @@ async function handleRefineTailoredResumeAction(input: {
         tailoredResumeId,
         userId: input.userId,
       });
-      const refinementResult = await refineTailoredResume({
-        edits: tailoredResume.edits,
-        onStreamEvent: input.onStreamEvent,
-        previousMessages,
-        previewImageDataUrls,
-        promptSettings: rawProfile.promptSettings.values,
-        sourceAnnotatedLatexCode,
-        thesis: tailoredResume.thesis,
-        userPrompt,
-      });
+      const refinementResult = await withAiUsageContext({
+        applicationId: tailoredResume.applicationId ?? null,
+        jobUrl: tailoredResume.jobUrl ?? null,
+        tailoredResumeId,
+        userId: input.userId,
+      }, () =>
+        refineTailoredResume({
+          edits: tailoredResume.edits,
+          keywordCoverage: tailoredResume.keywordCoverage,
+          model: selectedModel || rawProfile.generationSettings.values.reviewChatModel,
+          onStreamEvent: input.onStreamEvent,
+          previousMessages,
+          previewImageDataUrls,
+          promptSettings: rawProfile.promptSettings.values,
+          sourceAnnotatedLatexCode,
+          thesis: tailoredResume.thesis,
+          userPrompt,
+        }),
+      );
       const nextUpdatedAt = new Date().toISOString();
       const seededVersionId = randomUUID();
       const refinementVersionId = randomUUID();
@@ -5009,6 +5020,7 @@ async function handleRefineTailoredResumeAction(input: {
           displayName: tailoredResume.displayName,
           model: refinementResult.model,
           tailoredResumeId,
+          toolCalls: refinementResult.toolCalls,
           userContent: userPrompt,
           userId: input.userId,
         });
@@ -5024,6 +5036,7 @@ async function handleRefineTailoredResumeAction(input: {
           profile: responseProfile,
           tailoredResumeDurationMs: refinementResult.generationDurationMs,
           tailoredResumeId,
+          toolCalls: refinementResult.toolCalls,
         });
       }
 
@@ -5095,6 +5108,7 @@ async function handleRefineTailoredResumeAction(input: {
         displayName: tailoredResume.displayName,
         model: refinementResult.model,
         tailoredResumeId,
+        toolCalls: refinementResult.toolCalls,
         userContent: userPrompt,
         userId: input.userId,
       });
@@ -5114,6 +5128,7 @@ async function handleRefineTailoredResumeAction(input: {
         },
         tailoredResumeDurationMs: refinementResult.generationDurationMs,
         tailoredResumeId,
+        toolCalls: refinementResult.toolCalls,
       });
     } catch (error) {
       return NextResponse.json(

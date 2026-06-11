@@ -141,6 +141,7 @@ export async function appendTailoredResumeReviewChatMessages(input: {
   displayName: string;
   model: string | null;
   tailoredResumeId: string;
+  toolCalls?: readonly TailorResumeChatToolCallRecord[];
   userContent: string;
   userId: string;
 }) {
@@ -174,11 +175,13 @@ export async function appendTailoredResumeReviewChatMessages(input: {
       content: input.assistantContent.trim(),
       model: input.model,
       role: "assistant",
+      toolCalls: input.toolCalls ?? [],
     },
   ] satisfies Array<{
     content: string;
     model: string | null;
     role: TailorResumeChatRole;
+    toolCalls?: readonly TailorResumeChatToolCallRecord[];
   }>;
   const messages = candidateMessages.filter((message) => message.content);
 
@@ -194,6 +197,7 @@ export async function appendTailoredResumeReviewChatMessages(input: {
           model: message.model,
           role: message.role === "assistant" ? "ASSISTANT" : "USER",
           threadId: thread.id,
+          toolCalls: message.toolCalls ? [...message.toolCalls] : undefined,
           userId: input.userId,
         },
       }),

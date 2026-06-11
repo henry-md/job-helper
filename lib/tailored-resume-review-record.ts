@@ -5,6 +5,7 @@ import {
   type TailoredResumeRecord,
   type TailoredResumeVersionSnapshot,
 } from "./tailor-resume-types.ts";
+import type { TailorResumeChatToolCallRecord } from "./tailor-resume-chat.ts";
 
 export type TailoredResumeReviewEdit = Pick<
   TailoredResumeBlockEditRecord,
@@ -51,6 +52,7 @@ export type TailoredResumeReviewChatMessage = {
   createdAt: string;
   id: string;
   role: "assistant" | "user";
+  toolCalls: TailorResumeChatToolCallRecord[];
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -68,6 +70,40 @@ function readNullableString(value: unknown) {
 
 function readNullableRawString(value: unknown) {
   return typeof value === "string" ? value : null;
+}
+
+function readTailoredResumeReviewToolCall(
+  value: unknown,
+): TailorResumeChatToolCallRecord | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const name = readString(value.name);
+  const argumentsText = readString(value.argumentsText);
+  const outputText = readString(value.outputText);
+
+  if (!name || !argumentsText) {
+    return null;
+  }
+
+  return {
+    argumentsText,
+    name,
+    ...(outputText ? { outputText } : {}),
+  };
+}
+
+function readTailoredResumeReviewToolCalls(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as TailorResumeChatToolCallRecord[];
+  }
+
+  return value
+    .map(readTailoredResumeReviewToolCall)
+    .filter((toolCall): toolCall is TailorResumeChatToolCallRecord =>
+      Boolean(toolCall),
+    );
 }
 
 function buildFallbackOpenAiDebugTrace(): TailoredResumeOpenAiDebugTrace {
@@ -123,7 +159,7 @@ function readTailoredResumeReviewEdit(
 
   if (
     !afterLatexCode ||
-    !beforeLatexCode ||
+    beforeLatexCode === null ||
     !editId ||
     generatedByStep === null ||
     !reason ||
@@ -196,6 +232,7 @@ function readTailoredResumeReviewChatMessage(
     createdAt,
     id,
     role,
+    toolCalls: readTailoredResumeReviewToolCalls(value.toolCalls),
   };
 }
 

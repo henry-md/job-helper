@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   buildTailorResumeRefinementSystemPrompt,
@@ -127,13 +128,49 @@ test("tailor resume refinement system prompt explains the preview highlight key"
   assert.match(prompt, /Amber\/yellow highlight = changed or rewritten text/i);
   assert.match(prompt, /Green highlight = newly added text/i);
   assert.match(prompt, /Blue highlight = the currently focused block/i);
-  assert.match(prompt, /empty changes and insertions/i);
-  assert.match(prompt, /any listed editable segmentId/i);
+  assert.match(prompt, /listed editable segmentIds/i);
   assert.match(prompt, /Do not write JOBHELPER_SEGMENT_ID comments/i);
   assert.match(prompt, /fully replaces the old saved reason/i);
   assert.match(prompt, /do not make the reason just say that the block was shortened/i);
   assert.match(prompt, /use the rendered PDF screenshots to judge whether an edit actually removes a full rendered line/i);
   assert.match(prompt, /prefer one minimal edit to one original block/i);
+  assert.match(prompt, /answer the question instead of explaining that no edit was made/i);
+  assert.match(prompt, /Use the keyword-coverage tool/i);
+  assert.doesNotMatch(prompt, /saved scraped-keyword coverage report/i);
+});
+
+test("tailored resume review chat exposes the refinement health-check tool", () => {
+  const source = readFileSync(
+    new URL("../lib/tailor-resume-refinement.ts", import.meta.url),
+    "utf8",
+  );
+  const routeSource = readFileSync(
+    new URL("../app/api/tailor-resume/route.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /check_refined_resume_health/);
+  assert.match(source, /rendered page-count and malformed-bullet result/i);
+  assert.match(routeSource, /toolCalls: refinementResult\.toolCalls/);
+});
+
+test("tailored resume review chat exposes keyword coverage as a tool", () => {
+  const source = readFileSync(
+    new URL("../lib/tailor-resume-refinement.ts", import.meta.url),
+    "utf8",
+  );
+  const routeSource = readFileSync(
+    new URL("../app/api/tailor-resume/route.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /list_refined_resume_keyword_coverage/);
+  assert.match(source, /listRefinedResumeKeywordCoverage/);
+  assert.match(source, /buildTailoredResumeKeywordCoverage/);
+  assert.match(source, /includedInTailored/);
+  assert.match(source, /missingFromTailored/);
+  assert.match(source, /newlyAddedVsOriginal/);
+  assert.match(routeSource, /keywordCoverage: tailoredResume\.keywordCoverage/);
 });
 
 test("tailored resume review chat falls back to refinement version history", () => {

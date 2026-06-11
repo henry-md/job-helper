@@ -8,9 +8,11 @@ import {
 } from "../../lib/tailor-resume-review.ts";
 import type {
   TailoredResumeReviewEdit,
+  TailoredResumeReviewChatMessage,
   TailoredResumeReviewRecord,
   TailoredResumeReviewVersion,
 } from "../../lib/tailored-resume-review-record.ts";
+import type { TailorResumeSelectableModel } from "./job-helper.ts";
 
 type TailoredResumeDiffEndpoint = {
   annotatedLatexCode: string;
@@ -29,6 +31,7 @@ type TailoredResumeAiChatMessage = {
   role: "assistant" | "user";
   status: "error" | "ready" | "streaming";
   text: string;
+  toolCalls: TailoredResumeReviewChatMessage["toolCalls"];
 };
 
 type TailoredResumeQuickReviewProps = {
@@ -43,6 +46,7 @@ type TailoredResumeQuickReviewProps = {
   onDeleteVersion?: (versionId: string) => Promise<boolean>;
   onRefineWithChat?: (
     prompt: string,
+    model: TailorResumeSelectableModel,
     handlers?: {
       onTextDelta?: (delta: string) => void;
       onTextStart?: () => void;
@@ -53,6 +57,7 @@ type TailoredResumeQuickReviewProps = {
       startVersionId: string;
     };
     message: string;
+    toolCalls?: TailoredResumeReviewChatMessage["toolCalls"];
   } | null>;
   onSetEditState: (
     editId: string,
@@ -61,6 +66,13 @@ type TailoredResumeQuickReviewProps = {
   onCancelUserEditDraft?: (editId: string) => void;
   onDeleteEdit: (editId: string) => Promise<boolean>;
   onSaveUserEdit: (editId: string, latexCode: string) => Promise<boolean>;
+  reviewChatModel: TailorResumeSelectableModel;
+  reviewChatModelOptions: ReadonlyArray<{
+    group: "Anthropic" | "OpenAI";
+    label: string;
+    value: TailorResumeSelectableModel;
+  }>;
+  onReviewChatModelChange?: (model: TailorResumeSelectableModel) => void;
   closeEditRequest?: number;
   openEditingEditId?: string | null;
   openEditRequest?: number;
@@ -95,7 +107,9 @@ function TrashIcon() {
 }
 
 function createChatMessage(
-  input: Omit<TailoredResumeAiChatMessage, "id">,
+  input: Omit<TailoredResumeAiChatMessage, "id" | "toolCalls"> & {
+    toolCalls?: TailoredResumeAiChatMessage["toolCalls"];
+  },
 ): TailoredResumeAiChatMessage {
   const id =
     typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -104,6 +118,7 @@ function createChatMessage(
 
   return {
     id,
+    toolCalls: [],
     ...input,
   };
 }
@@ -115,6 +130,7 @@ function buildInitialChatMessages(record: TailoredResumeReviewRecord) {
       role: message.role,
       status: "ready" as const,
       text: message.content,
+      toolCalls: message.toolCalls,
     }));
   }
 
@@ -127,6 +143,7 @@ function buildInitialChatMessages(record: TailoredResumeReviewRecord) {
         role: "user",
         status: "ready",
         text: version.userPrompt.trim(),
+        toolCalls: [],
       });
     }
 
@@ -136,6 +153,7 @@ function buildInitialChatMessages(record: TailoredResumeReviewRecord) {
         role: "assistant",
         status: "ready",
         text: version.assistantMessage.trim(),
+        toolCalls: [],
       });
     }
 
@@ -154,6 +172,45 @@ function formatOutputTime(value: string) {
     hour: "numeric",
     minute: "2-digit",
   }).format(date);
+}
+
+function formatQuickReviewToolCallText(value: string) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+
+  if (normalized.length <= 220) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 217).trimEnd()}...`;
+}
+
+function QuickReviewToolCallDetails({
+  toolCalls,
+}: {
+  toolCalls: TailoredResumeReviewChatMessage["toolCalls"];
+}) {
+  if (toolCalls.length === 0) {
+    return null;
+  }
+
+  return (
+    <details className="quick-review-toolcall-details">
+      <summary>See Toolcalls ({toolCalls.length})</summary>
+      <div className="quick-review-toolcall-list">
+        {toolCalls.map((toolCall, index) => (
+          <div
+            className="quick-review-toolcall-entry"
+            key={`${toolCall.name}:${index}`}
+          >
+            <span>{toolCall.name}</span>
+            {toolCall.outputText ? (
+              <pre>{formatQuickReviewToolCallText(toolCall.outputText)}</pre>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
 }
 
 function buildDiffEndpoints(record: TailoredResumeReviewRecord) {
@@ -585,8 +642,11 @@ export default function TailoredResumeQuickReview({
   onClearChat,
   onDeleteEdit,
   onRefineWithChat,
+  onReviewChatModelChange,
   onSaveUserEdit,
   record,
+  reviewChatModel,
+  reviewChatModelOptions,
   variant = "card",
   onSetEditState,
 }: TailoredResumeQuickReviewProps) {
@@ -765,34 +825,38 @@ export default function TailoredResumeQuickReview({
     setIsChatSubmitting(true);
 
     try {
-      const response = await onRefineWithChat(trimmedPrompt, {
-        onTextDelta: (delta) => {
-          setChatMessages((messages) =>
-            messages.map((message) =>
-              message.id === assistantMessage.id
-                ? {
-                    ...message,
-                    status: "streaming",
-                    text: `${message.text}${delta}`,
-                  }
-                : message,
-            ),
-          );
+      const response = await onRefineWithChat(
+        trimmedPrompt,
+        reviewChatModel,
+        {
+          onTextDelta: (delta) => {
+            setChatMessages((messages) =>
+              messages.map((message) =>
+                message.id === assistantMessage.id
+                  ? {
+                      ...message,
+                      status: "streaming",
+                      text: `${message.text}${delta}`,
+                    }
+                  : message,
+              ),
+            );
+          },
+          onTextStart: () => {
+            setChatMessages((messages) =>
+              messages.map((message) =>
+                message.id === assistantMessage.id
+                  ? {
+                      ...message,
+                      status: "streaming",
+                      text: "",
+                    }
+                  : message,
+              ),
+            );
+          },
         },
-        onTextStart: () => {
-          setChatMessages((messages) =>
-            messages.map((message) =>
-              message.id === assistantMessage.id
-                ? {
-                    ...message,
-                    status: "streaming",
-                    text: "",
-                  }
-                : message,
-            ),
-          );
-        },
-      });
+      );
 
       if (response) {
         setChatMessages((messages) =>
@@ -803,6 +867,7 @@ export default function TailoredResumeQuickReview({
                   comparison: response.comparison,
                   status: "ready",
                   text: response.message,
+                  toolCalls: response.toolCalls ?? [],
                 }
               : message,
           ),
@@ -1016,6 +1081,31 @@ export default function TailoredResumeQuickReview({
   const chatContent = (
     <div className="quick-review-chat-panel">
       <div className="quick-review-chat-actions">
+        <label className="quick-review-chat-model">
+          <span className="sr-only">Tailored resume chat model</span>
+          <select
+            aria-label="Tailored resume chat model"
+            disabled={chatDisabled || !onReviewChatModelChange}
+            value={reviewChatModel}
+            onChange={(event) =>
+              onReviewChatModelChange?.(
+                event.currentTarget.value as TailorResumeSelectableModel,
+              )
+            }
+          >
+            {(["OpenAI", "Anthropic"] as const).map((group) => (
+              <optgroup key={group} label={group}>
+                {reviewChatModelOptions
+                  .filter((option) => option.group === group)
+                  .map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
         <button
           aria-label="Clear tailored resume chat history"
           className="quick-review-chat-clear-action"
@@ -1051,6 +1141,7 @@ export default function TailoredResumeQuickReview({
                   ) : null}
                 </p>
               ) : null}
+              <QuickReviewToolCallDetails toolCalls={message.toolCalls} />
               {message.status === "streaming" && !message.text ? (
                 <div className="quick-review-chat-typing" aria-label="Assistant is typing">
                   <span />

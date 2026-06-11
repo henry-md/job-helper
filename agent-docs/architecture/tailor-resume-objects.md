@@ -101,7 +101,7 @@ Tailor Resume object model:
 - Files: `prisma/schema.prisma`, `lib/ai-usage.ts`, `lib/ai-usage-report.ts`
 - Model/API spend is tracked as an append-only ledger row per provider call, not as a property of the saved resume artifact.
 - Each usage event denormalizes the owning user, application id, tailoring run id, tailored-resume id when known, job URL/hash, provider/model, pipeline step, attempt/tool round, provider response id, token buckets, pricing snapshot, and calculated USD micros.
-- Usage attaches to the job URL/run before generation finishes, so failed URL generations still have any successful prior model-call spend in the Usage page.
+- Usage attaches to the job URL/run before generation finishes, so failed URL generations still have any successful prior model-call spend in the extension Usage surface.
 - Archive/delete actions update `subjectStatus` on matching usage rows (`UNARCHIVED`, `ARCHIVED`, `DELETED`) instead of deleting usage. This keeps spend visible after a resume/application is archived or hard-deleted.
 
 9. Prompt Settings (`TailorResumePromptSettingsState`)
@@ -115,7 +115,7 @@ Tailor Resume object model:
   - tailored-resume block generation
   - tailored-resume block refinement / regeneration
   - automatic page-count compaction when a tailored resume grows beyond the original resume's page count
-- The stored values are editable from `/dashboard?tab=settings`.
+- The stored values are editable from extension settings.
 - The prompt strings may include template tokens such as `{{FEEDBACK_BLOCK}}`, `{{RETRY_INSTRUCTIONS}}`, and `{{MAX_ATTEMPTS}}`; runtime code expands those tokens before sending the final instructions to OpenAI. Step 2 interview prompts intentionally do not use `{{FEEDBACK_BLOCK}}` because Step 2 chat responses are not invalidated or retried for content/schema quality.
 - Missing keys fall back to the shipped defaults so older saved profiles remain forward-compatible when new prompt-controlled flows are added.
 
@@ -125,7 +125,7 @@ Tailor Resume object model:
 - This keeps per-user boolean generation guardrails that are not prompt text themselves.
 - The current user-editable setting is the keyword-coverage percentage basis. Step 2 keyword review is always enabled and page-count growth is always rejected.
 - Legacy saved `allowTailorResumeFollowUpQuestions` and `preventPageCountIncrease` values may still appear in old profile JSON, but they must not control new runs.
-- These values are editable from `/dashboard?tab=settings`; extension-started behavior-affecting settings must also be visible in the extension settings panel.
+- These values are editable from extension settings.
 
 11. Skills-Section Keyword, Classification, and Spare Bullet Tables
 - Files: `prisma/schema.prisma`, `lib/tailor-resume-skill-store.ts`, `lib/tailor-resume-resume-experiences.ts`, `lib/tailor-resume-types.ts`
