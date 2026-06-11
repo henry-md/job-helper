@@ -3,11 +3,9 @@ Job Helper is a small Next.js App Router app for tracking job applications from 
 Current product slice:
 - Default product surface is the Chrome extension. If a request is ambiguous and could apply to either the web app or the extension, assume the extension is the primary target and verify it there first. The web app is usually supporting/admin surface unless the user explicitly names it.
 - Public `/` page handles Google sign-in.
-- Protected `/dashboard` has Config, Saved, Usage, and Settings tabs.
-- `/dashboard?tab=config` lets each signed-in user upload/edit the source resume, review the rendered LaTeX PDF preview, and edit `USER.md` from a collapsed memory card.
-- `/dashboard?tab=saved` shows saved tailored resumes with an Unarchived/Archived switch. The web app is a saved-data/configuration surface; resume tailoring and application capture happen through the Chrome extension.
-- `/dashboard?tab=settings` exposes per-user AI prompt settings plus Tailor Resume generation guardrails so users can inspect and edit the live templates, Step 2 follow-up-question behavior, and page-count behavior that drive extraction and resume-generation flows.
-- Important dashboard verification state is URL-addressable with `?tab=...`; legacy `/dashboard?tab=tailor` and `/dashboard?tab=new` links resolve to Saved so extension dashboard links keep working, and `tailoredResumeId=<id>` opens the saved tailored-resume review modal there.
+- Protected `/dashboard` is the Config surface.
+- `/dashboard` lets each signed-in user upload/edit the source resume, review the rendered LaTeX PDF preview, and edit `USER.md` plus related resume memory cards.
+- Creating the editable LaTeX source resume is the first dashboard step; saved tailored-resume review, usage, and app-facing settings live in the Chrome extension rather than web dashboard tabs.
 - Uploading a resume triggers an OpenAI extraction pass that returns LaTeX directly, then Config lets the user edit that LaTeX side-by-side with the rendered PDF preview.
 - The Chrome extension runs its React UI in Chrome's native Side Panel. Its Tailor Resume flow signs in with Chrome's Google identity API, exchanges that for a database-backed Job Helper session, scrapes the active job page from the side panel button or hotkey, then calls `PATCH /api/tailor-resume` with `action: "tailor"`.
 - The extension side panel also exposes the master chat: the lower-right `Resume Chat` opened from the chat-bubble icon on all extension pages. It posts to `POST /api/tailor-resume/support-chat`, can use optional current-page context, and can create first-class skills-section skills, save reusable resume-bullet support, list resume experiences, and read the current source LaTeX. When a user or agent says "master chat," they mean this lower-right Resume Chat. Its primary model env var is `OPENAI_MASTER_CHAT_MODEL`.
@@ -30,6 +28,6 @@ Dashboard UI note:
 
 When changing behavior, gather more context from:
 - `app/dashboard/page.tsx` for the main server-rendered dashboard.
-- `components/dashboard-workspace.tsx` for tab layout and Saved/Config interactions.
+- `components/dashboard-workspace.tsx` for the Config layout and source-resume interactions.
 - `app/api/job-applications/*.ts` for persistence/extraction endpoints that still back Tailor Resume job identity and run linkage.
 - `prisma/schema.prisma` for the real data model.

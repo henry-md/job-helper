@@ -34,7 +34,7 @@ const sessionTokenByteLength = 32;
 const defaultSessionMaxAgeSeconds = 30 * 24 * 60 * 60;
 const browserSessionTicketMaxAgeMs = 5 * 60 * 1000;
 const browserSessionTicketVersion = 1;
-const fallbackDashboardPath = "/dashboard?tab=tailor";
+const fallbackDashboardPath = "/dashboard";
 
 type EnvShape = Partial<Record<string, string | undefined>>;
 
