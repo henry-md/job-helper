@@ -1,8 +1,4 @@
-import {
-  defaultTailorResumeGenerationSettingsSummary,
-  readPersonalInfoPayload,
-  type PersonalInfoSummary,
-} from "./job-helper.ts";
+import { readPersonalInfoPayload, type PersonalInfoSummary } from "./job-helper.ts";
 import { type UserSyncStateSnapshot } from "../../lib/sync-state.ts";
 
 export const PERSONAL_INFO_CACHE_STORAGE_KEY = "jobHelperPersonalInfoCache";
@@ -83,9 +79,7 @@ export function invalidateChangedPersonalInfoSlices(input: {
     ...input.personalInfo,
     activeTailoring: null,
     activeTailorings: [],
-    generationSettings: defaultTailorResumeGenerationSettingsSummary,
     syncState: input.nextSyncState,
-    tailoredResumes: [],
     tailoringInterview: null,
     tailoringInterviews: [],
   } satisfies PersonalInfoSummary;

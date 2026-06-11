@@ -107,7 +107,7 @@ test("personal info cache rejects entries without a user id", async () => {
   );
 });
 
-test("invalidates only the stale cached personal-info slices when sync versions change", async () => {
+test("invalidates transient personal-info slices without clearing saved resumes", async () => {
   (globalThis as Record<string, unknown>).__DEBUG_UI__ = false;
   const { invalidateChangedPersonalInfoSlices } = await import(
     "../extension/src/personal-info-cache.ts"
@@ -123,7 +123,8 @@ test("invalidates only the stale cached personal-info slices when sync versions 
 
   assert.deepEqual(invalidated.activeTailorings, []);
   assert.equal(invalidated.activeTailoring, null);
-  assert.deepEqual(invalidated.tailoredResumes, []);
+  assert.deepEqual(invalidated.tailoredResumes, personalInfo.tailoredResumes);
+  assert.deepEqual(invalidated.generationSettings, personalInfo.generationSettings);
   assert.equal(invalidated.tailoringInterview, null);
   assert.deepEqual(invalidated.tailoringInterviews, []);
   assert.deepEqual(invalidated.originalResume, personalInfo.originalResume);
