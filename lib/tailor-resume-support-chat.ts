@@ -24,6 +24,10 @@ import {
   saveTailorResumeSpareBullet,
 } from "./tailor-resume-skill-store.ts";
 import {
+  buildTailoredResumeKeywordCoverage,
+  buildTailorResumeKeywordCheckResult,
+} from "./tailor-resume-keyword-coverage.ts";
+import {
   normalizeTailorResumeLatex,
   readAnnotatedTailorResumeBlocks,
   stripTailorResumeSegmentIds,
@@ -63,6 +67,8 @@ const maxSupportChatPageContextLength = 14_000;
 const maxSupportChatSkillSummaryLength = 16_000;
 const maxSupportChatLatexLength = 80_000;
 const listSkillSupportToolName = "list_resume_skill_support";
+const listCurrentJobKeywordCoverageToolName =
+  "list_current_job_keyword_coverage";
 const listResumeExperiencesToolName = "list_resume_experiences";
 const getCurrentLatexResumeToolName = "get_current_latex_resume";
 const createSkillsSectionSkillToolName = "create_skills_section_skill";
@@ -440,6 +446,233 @@ function hasTailorResumeQuestionTechnologyListChanged(
 
 function formatSkillsSectionBlockerCount(count: number) {
   return `${count} skills-section ${count === 1 ? "blocker" : "blockers"}`;
+}
+
+function normalizeSupportChatComparableUrl(value: string | null | undefined) {
+  const trimmedValue = value?.trim();
+
+  if (!trimmedValue) {
+    return "";
+  }
+
+  try {
+    const url = new URL(trimmedValue);
+
+    url.hash = "";
+
+    const pathname =
+      url.pathname.length > 1 ? url.pathname.replace(/\/+$/, "") : url.pathname;
+
+    return `${url.origin.toLowerCase()}${pathname}${url.search}`;
+  } catch {
+    return trimmedValue.replace(/#.*$/, "").replace(/\/+$/, "").toLowerCase();
+  }
+}
+
+function buildSupportChatKeywordSource(input: {
+  pageContext: TailorResumeChatPageContext | null;
+  profile: TailorResumeProfile;
+}) {
+  const pageUrls = [
+    input.pageContext?.url ?? "",
+    input.pageContext?.canonicalUrl ?? "",
+  ]
+    .map(normalizeSupportChatComparableUrl)
+    .filter(Boolean);
+  const pageUrlSet = new Set(pageUrls);
+  const interviews = readTailorResumeWorkspaceInterviews(input.profile.workspace);
+  const matchingTailoredResumes = input.profile.tailoredResumes
+    .filter(
+      (resume) =>
+        resume.archivedAt === null &&
+        pageUrlSet.has(normalizeSupportChatComparableUrl(resume.jobUrl)),
+    )
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  const matchingInterviews = interviews
+    .filter((interview) =>
+      pageUrlSet.has(normalizeSupportChatComparableUrl(interview.jobUrl)),
+    )
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+
+  if (matchingTailoredResumes[0]) {
+    const tailoredResume = matchingTailoredResumes[0];
+
+    return {
+      displayName: tailoredResume.displayName,
+      jobUrl: tailoredResume.jobUrl,
+      source: "current_page_tailored_resume" as const,
+      sourceAnnotatedLatexCode: tailoredResume.sourceAnnotatedLatexCode,
+      tailoredLatexCode: tailoredResume.latexCode,
+      tailoredResumeId: tailoredResume.id,
+      technologies: tailoredResume.planningResult.emphasizedTechnologies,
+    };
+  }
+
+  if (matchingInterviews[0]) {
+    const interview = matchingInterviews[0];
+
+    return {
+      displayName: interview.planningResult.displayName,
+      jobUrl: interview.jobUrl,
+      source: "current_page_active_tailoring" as const,
+      sourceAnnotatedLatexCode: interview.sourceAnnotatedLatexCode,
+      tailoredLatexCode: null,
+      tailoredResumeId: null,
+      technologies: interview.planningResult.emphasizedTechnologies,
+    };
+  }
+
+  const latestTailoredResume = input.profile.tailoredResumes
+    .filter((resume) => resume.archivedAt === null)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+
+  if (latestTailoredResume) {
+    return {
+      displayName: latestTailoredResume.displayName,
+      jobUrl: latestTailoredResume.jobUrl,
+      source: "latest_unarchived_tailored_resume_fallback" as const,
+      sourceAnnotatedLatexCode: latestTailoredResume.sourceAnnotatedLatexCode,
+      tailoredLatexCode: latestTailoredResume.latexCode,
+      tailoredResumeId: latestTailoredResume.id,
+      technologies: latestTailoredResume.planningResult.emphasizedTechnologies,
+    };
+  }
+
+  const latestInterview = interviews
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+
+  if (!latestInterview) {
+    return null;
+  }
+
+  return {
+    displayName: latestInterview.planningResult.displayName,
+    jobUrl: latestInterview.jobUrl,
+    source: "latest_active_tailoring_fallback" as const,
+    sourceAnnotatedLatexCode: latestInterview.sourceAnnotatedLatexCode,
+    tailoredLatexCode: null,
+    tailoredResumeId: null,
+    technologies: latestInterview.planningResult.emphasizedTechnologies,
+  };
+}
+
+function buildSupportChatKeywordNameBuckets(
+  technologies: TailoredResumeEmphasizedTechnology[],
+) {
+  return {
+    all: technologies.map((technology) => technology.name),
+    highPriority: technologies
+      .filter((technology) => technology.priority === "high")
+      .map((technology) => technology.name),
+    lowPriority: technologies
+      .filter((technology) => technology.priority === "low")
+      .map((technology) => technology.name),
+    narrative: technologies
+      .filter((technology) => technology.classification === "narrative")
+      .map((technology) => technology.name),
+    nonSkill: technologies
+      .filter((technology) => technology.classification === "non_skill")
+      .map((technology) => technology.name),
+    skillsSection: technologies
+      .filter((technology) => technology.classification === "skills_section")
+      .map((technology) => technology.name),
+  };
+}
+
+async function listCurrentJobKeywordCoverage(input: {
+  pageContext: TailorResumeChatPageContext | null;
+  userId: string;
+}) {
+  const { annotatedLatexCode, profile } = await readCurrentResumeContext(
+    input.userId,
+  );
+  const keywordSource = buildSupportChatKeywordSource({
+    pageContext: input.pageContext,
+    profile,
+  });
+
+  if (!keywordSource || keywordSource.technologies.length === 0) {
+    return {
+      error:
+        "No extracted job keywords were found for the attached page or saved tailoring runs.",
+      ok: false,
+    };
+  }
+
+  const sourceLatexCode =
+    keywordSource.sourceAnnotatedLatexCode?.trim() || annotatedLatexCode;
+  const sourcePlainText = buildTailorResumePlanningSnapshot(
+    sourceLatexCode,
+  ).resumePlainText;
+  const currentPlainText = buildTailorResumePlanningSnapshot(
+    annotatedLatexCode,
+  ).resumePlainText;
+  const sourceResumeCoverage = buildTailorResumeKeywordCheckResult({
+    emphasizedTechnologies: keywordSource.technologies,
+    text: sourcePlainText,
+  });
+  const currentResumeCoverage = buildTailorResumeKeywordCheckResult({
+    emphasizedTechnologies: keywordSource.technologies,
+    text: currentPlainText,
+  });
+  const skillsSectionCoverage =
+    await buildTailorResumeSkillsSectionKeywordCoverage({
+      emphasizedTechnologies: keywordSource.technologies.filter(
+        (technology) => technology.classification === "skills_section",
+      ),
+      originalResumeText: currentPlainText,
+      userId: input.userId,
+    });
+  const tailoredCoverage = keywordSource.tailoredLatexCode
+    ? buildTailoredResumeKeywordCoverage({
+        emphasizedTechnologies: keywordSource.technologies,
+        originalLatexCode: sourceLatexCode,
+        tailoredLatexCode: keywordSource.tailoredLatexCode,
+      })
+    : null;
+
+  return {
+    currentLatexUpdatedAt: profile.latex.updatedAt,
+    currentResumeCoverage,
+    displayName: keywordSource.displayName,
+    extractedKeywords: buildSupportChatKeywordNameBuckets(
+      keywordSource.technologies,
+    ),
+    jobUrl: keywordSource.jobUrl,
+    keywordCount: keywordSource.technologies.length,
+    ok: true,
+    source: keywordSource.source,
+    sourceResumeCoverage,
+    skillsSectionBlockers: skillsSectionCoverage
+      .filter((term) => !term.covered)
+      .map((term) => ({
+        coveredBySkillsOnly: term.coveredBySkillsOnly,
+        coveredBySpareBullet: term.coveredBySpareBullet,
+        name: term.technology.name,
+        presentInResume: term.presentInResume,
+        priority: term.technology.priority,
+      })),
+    tailoredResumeCoverage: tailoredCoverage
+      ? {
+          allPriorities: tailoredCoverage.allPriorities,
+          highPriority: tailoredCoverage.highPriority,
+          inBase: tailoredCoverage.allPriorities.terms
+            .filter((term) => term.presentInOriginal)
+            .map((term) => term.name),
+          inNeither: tailoredCoverage.allPriorities.terms
+            .filter((term) => !term.presentInTailored)
+            .map((term) => term.name),
+          inNew: tailoredCoverage.allPriorities.terms
+            .filter((term) => term.presentInTailored)
+            .map((term) => term.name),
+          newOnly: tailoredCoverage.allPriorities.addedTerms,
+        }
+      : null,
+    tailoredResumeId: keywordSource.tailoredResumeId,
+    warning: keywordSource.source.includes("fallback")
+      ? "No saved keywords matched the attached page URL exactly, so this used the latest available tailoring run."
+      : null,
+  };
 }
 
 async function buildUncoveredTailorResumeQuestionTechnologies(input: {
@@ -859,6 +1092,7 @@ async function createSupportChatResumeBulletSupportBatch(input: {
 }
 
 async function executeSupportChatToolCall(input: {
+  pageContext: TailorResumeChatPageContext | null;
   toolCall: SupportChatToolCall;
   userId: string;
 }): Promise<SupportChatToolResult> {
@@ -874,6 +1108,15 @@ async function executeSupportChatToolCall(input: {
           skillData,
         },
         skillData,
+      };
+    }
+
+    if (input.toolCall.name === listCurrentJobKeywordCoverageToolName) {
+      return {
+        output: await listCurrentJobKeywordCoverage({
+          pageContext: input.pageContext,
+          userId: input.userId,
+        }),
       };
     }
 
@@ -1116,6 +1359,19 @@ const supportChatTools = [
     description:
       "Fetch the user's current saved skills-section keywords, saved resume bullet support, keyword classifications, and allowed resume experience categories.",
     name: listSkillSupportToolName,
+    parameters: {
+      additionalProperties: false,
+      properties: {},
+      required: [],
+      type: "object",
+    },
+    strict: true,
+    type: "function",
+  },
+  {
+    description:
+      "Return a deterministic ledger of extracted job keywords for the attached/current tailoring run, including every keyword returned, which are present in the current source resume, which are present in the tailored resume when available, and which are still missing.",
+    name: listCurrentJobKeywordCoverageToolName,
     parameters: {
       additionalProperties: false,
       properties: {},
@@ -1491,6 +1747,7 @@ export async function generateTailorResumeSupportChatResponse(input: {
     }
 
     const toolResult = await executeSupportChatToolCall({
+      pageContext: input.pageContext,
       toolCall,
       userId: input.userId,
     });

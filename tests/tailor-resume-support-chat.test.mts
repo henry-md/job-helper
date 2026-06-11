@@ -61,6 +61,7 @@ test("support chat instructions explain every tool available to the model", () =
 
   assert.match(instructions, /Tool guide:/);
   assert.match(instructions, /list_resume_skill_support/);
+  assert.match(instructions, /list_current_job_keyword_coverage/);
   assert.match(instructions, /list_resume_experiences/);
   assert.match(instructions, /get_current_latex_resume/);
   assert.match(instructions, /create_skills_section_skill/);
@@ -72,6 +73,24 @@ test("support chat instructions explain every tool available to the model", () =
   assert.match(instructions, /delete_resume_bullet_support/);
   assert.match(instructions, /create_resume_bullet_support_batch/);
   assert.match(instructions, /Do not spend separate measure\/check calls before the batch tool/);
+});
+
+test("support chat exposes deterministic current job keyword coverage", () => {
+  const source = readFileSync(
+    new URL("../lib/tailor-resume-support-chat.ts", import.meta.url),
+    "utf8",
+  );
+  const instructions = buildSupportChatTestInstructions();
+
+  assert.match(source, /list_current_job_keyword_coverage/);
+  assert.match(source, /listCurrentJobKeywordCoverage/);
+  assert.match(source, /buildTailorResumeKeywordCheckResult/);
+  assert.match(source, /buildTailoredResumeKeywordCoverage/);
+  assert.match(source, /skillsSectionBlockers/);
+  assert.match(source, /inNeither/);
+  assert.match(source, /extractedKeywords/);
+  assert.match(instructions, /which extracted keywords were returned/);
+  assert.match(instructions, /Do not answer those coverage questions by eyeballing raw LaTeX/);
 });
 
 test("support chat instructions avoid false success on ambiguous similar bullets", () => {
