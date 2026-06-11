@@ -109,7 +109,7 @@ const emphasizedTechnologyBadgeRootId =
 const pagePromptStyleId = "job-helper-page-prompt-styles";
 const pagePromptEdgeInset = 16;
 const pagePromptGap = 12;
-const pagePromptWidth = "min(420px, calc(100vw - 32px))";
+const pagePromptWidth = "min(390px, calc(100vw - 32px))";
 let overlayTimeoutId: number | null = null;
 let lastShortcutAt = 0;
 const dismissedKeywordBadgeKeys = new Set<string>();
@@ -885,25 +885,26 @@ function ensureOverlayRoot() {
   overlay = document.createElement("div");
   overlay.id = "job-helper-command-banner";
   overlay.setAttribute("aria-live", "polite");
-  overlay.style.position = "fixed";
-  overlay.style.top = "50%";
-  overlay.style.left = "50%";
-  overlay.style.transform = "translate(-50%, -50%)";
-  overlay.style.maxWidth = "min(80vw, 720px)";
-  overlay.style.padding = "18px 26px";
-  overlay.style.borderRadius = "999px";
-  overlay.style.fontFamily =
-    '"IBM Plex Sans","Avenir Next","Segoe UI",sans-serif';
-  overlay.style.fontSize = "18px";
-  overlay.style.fontWeight = "700";
-  overlay.style.letterSpacing = "0.01em";
-  overlay.style.color = "#ffffff";
-  overlay.style.background = "rgba(17, 24, 39, 0.9)";
-  overlay.style.boxShadow = "0 18px 60px rgba(0, 0, 0, 0.28)";
-  overlay.style.zIndex = "2147483647";
-  overlay.style.pointerEvents = "none";
-  overlay.style.opacity = "0";
-  overlay.style.transition = "opacity 120ms ease";
+  styleElement(overlay, {
+    background: "rgba(17, 24, 39, 0.9)",
+    borderRadius: "999px",
+    boxShadow: "0 18px 60px rgba(0, 0, 0, 0.28)",
+    color: "#ffffff",
+    fontFamily: '"IBM Plex Sans","Avenir Next","Segoe UI",sans-serif',
+    fontSize: "18px",
+    fontWeight: "700",
+    left: "50%",
+    letterSpacing: "0.01em",
+    maxWidth: "min(80vw, 720px)",
+    opacity: "0",
+    padding: "18px 26px",
+    pointerEvents: "none",
+    position: "fixed",
+    top: "50%",
+    transform: "translate(-50%, -50%)",
+    transition: "opacity 120ms ease",
+    zIndex: "2147483647",
+  });
   document.documentElement.appendChild(overlay);
 
   return overlay;
@@ -912,22 +913,25 @@ function ensureOverlayRoot() {
 function showOverlay(text: string, tone: OverlayTone) {
   const overlay = ensureOverlayRoot();
   overlay.textContent = text;
-  overlay.style.background =
+  setImportantStyle(
+    overlay,
+    "background",
     tone === "success"
       ? "rgba(15, 118, 110, 0.92)"
       : tone === "warning"
         ? "rgba(180, 83, 9, 0.94)"
-      : tone === "error"
-        ? "rgba(185, 28, 28, 0.94)"
-        : "rgba(17, 24, 39, 0.9)";
-  overlay.style.opacity = "1";
+        : tone === "error"
+          ? "rgba(185, 28, 28, 0.94)"
+          : "rgba(17, 24, 39, 0.9)",
+  );
+  setImportantStyle(overlay, "opacity", "1");
 
   if (overlayTimeoutId !== null) {
     window.clearTimeout(overlayTimeoutId);
   }
 
   overlayTimeoutId = window.setTimeout(() => {
-    overlay.style.opacity = "0";
+    setImportantStyle(overlay, "opacity", "0");
     overlayTimeoutId = null;
   }, 1_750);
 }
@@ -945,11 +949,32 @@ function shouldSuppressTailoredResumePagePrompts() {
   return isJobHelperAppUrl(window.location.href);
 }
 
-function styleElement(
-  element: HTMLElement,
-  styles: Partial<CSSStyleDeclaration>,
+function toCssPropertyName(property: string) {
+  if (property.startsWith("--")) {
+    return property;
+  }
+
+  return property.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`);
+}
+
+// Applies content-script styles with priority so host page !important rules cannot restyle prompts.
+function setImportantStyle(
+  element: HTMLElement | SVGElement,
+  property: string,
+  value: string,
 ) {
-  Object.assign(element.style, styles);
+  element.style.setProperty(toCssPropertyName(property), value, "important");
+}
+
+function styleElement(
+  element: HTMLElement | SVGElement,
+  styles: Partial<Record<keyof CSSStyleDeclaration, string>>,
+) {
+  for (const [property, value] of Object.entries(styles)) {
+    if (typeof value === "string") {
+      setImportantStyle(element, property, value);
+    }
+  }
 }
 
 function ensurePagePromptStyles() {
@@ -962,10 +987,10 @@ function ensurePagePromptStyles() {
   style.id = pagePromptStyleId;
   style.textContent = `
     #${emphasizedTechnologyBadgeRootId} summary::-webkit-details-marker {
-      display: none;
+      display: none !important;
     }
     #${emphasizedTechnologyBadgeRootId} summary::marker {
-      content: "";
+      content: "" !important;
     }
     @keyframes job-helper-keyword-spin {
       to {
@@ -986,11 +1011,11 @@ function setPagePromptPosition(
   element: HTMLElement,
   position: { x: number; y: number },
 ) {
-  element.style.left = `${position.x}px`;
-  element.style.top = `${position.y}px`;
-  element.style.right = "auto";
-  element.style.bottom = "auto";
-  element.style.transform = "none";
+  setImportantStyle(element, "left", `${position.x}px`);
+  setImportantStyle(element, "top", `${position.y}px`);
+  setImportantStyle(element, "right", "auto");
+  setImportantStyle(element, "bottom", "auto");
+  setImportantStyle(element, "transform", "none");
 }
 
 function reflowPagePromptStack() {
@@ -1027,8 +1052,8 @@ function attachPagePromptDragHandle(element: HTMLElement, handle: HTMLElement) {
   }
 
   handle.dataset.jobHelperDragHandle = "true";
-  handle.style.cursor = "move";
-  handle.style.userSelect = "none";
+  setImportantStyle(handle, "cursor", "move");
+  setImportantStyle(handle, "userSelect", "none");
   handle.addEventListener("mousedown", (event) => {
     if (event.button !== 0 || isInteractivePromptDragTarget(event.target)) {
       return;
@@ -1065,13 +1090,15 @@ function createBadgeDownloadIcon() {
 
   icon.setAttribute("aria-hidden", "true");
   icon.setAttribute("viewBox", "0 0 24 24");
-  icon.style.width = "15px";
-  icon.style.height = "15px";
-  icon.style.fill = "none";
-  icon.style.stroke = "currentColor";
-  icon.style.strokeLinecap = "round";
-  icon.style.strokeLinejoin = "round";
-  icon.style.strokeWidth = "2.2";
+  styleElement(icon, {
+    fill: "none",
+    height: "15px",
+    stroke: "currentColor",
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    strokeWidth: "2.2",
+    width: "15px",
+  });
 
   for (const pathData of [
     "M12 3v12",
@@ -1092,6 +1119,7 @@ function createBadgeIconButton(label: string) {
   button.type = "button";
   button.setAttribute("aria-label", label);
   styleElement(button, {
+    all: "initial",
     alignItems: "center",
     appearance: "none",
     background: "rgba(16, 185, 129, 0.16)",
@@ -1134,8 +1162,8 @@ function createResumeDownloadButton(payload: TailoredResumeBadgePayload) {
 
     downloadButton.disabled = true;
     downloadButton.setAttribute("aria-busy", "true");
-    downloadButton.style.cursor = "wait";
-    downloadButton.style.opacity = "0.72";
+    setImportantStyle(downloadButton, "cursor", "wait");
+    setImportantStyle(downloadButton, "opacity", "0.72");
 
     chrome.runtime.sendMessage(
       {
@@ -1163,8 +1191,8 @@ function createResumeDownloadButton(payload: TailoredResumeBadgePayload) {
 
         downloadButton.disabled = false;
         downloadButton.removeAttribute("aria-busy");
-        downloadButton.style.cursor = "pointer";
-        downloadButton.style.opacity = "1";
+        setImportantStyle(downloadButton, "cursor", "pointer");
+        setImportantStyle(downloadButton, "opacity", "1");
       },
     );
   });
@@ -1235,6 +1263,7 @@ function ensureEmphasizedTechnologyBadgeRoot() {
   badge.setAttribute("aria-label", "Job keywords extracted by Job Helper");
   badge.setAttribute("role", "region");
   styleElement(badge, {
+    all: "initial",
     backdropFilter: "blur(18px)",
     boxSizing: "border-box",
     background:
@@ -1245,15 +1274,17 @@ function ensureEmphasizedTechnologyBadgeRoot() {
       "inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 55px rgba(0, 0, 0, 0.28)",
     color: "#f4f4f5",
     display: "grid",
+    fontSize: "12px",
     fontFamily: '"DM Sans", Inter, "Segoe UI", ui-sans-serif, system-ui, sans-serif',
-    gap: "13px",
+    gap: "9px",
     gridTemplateColumns: "minmax(0, 1fr) 28px",
     left: `${pagePromptEdgeInset}px`,
     letterSpacing: "0",
+    lineHeight: "1.2",
     maxHeight: "calc(100vh - 32px)",
     maxWidth: "calc(100vw - 32px)",
     overflow: "hidden",
-    padding: "13px 13px 15px 15px",
+    padding: "10px 10px 11px 12px",
     pointerEvents: "auto",
     position: "fixed",
     top: `${pagePromptEdgeInset}px`,
@@ -1272,6 +1303,7 @@ function createPromptCloseButton(label: string) {
   closeButton.textContent = "x";
   closeButton.setAttribute("aria-label", label);
   styleElement(closeButton, {
+    all: "initial",
     alignItems: "center",
     appearance: "none",
     background: "rgba(244, 244, 245, 0.06)",
@@ -1280,7 +1312,7 @@ function createPromptCloseButton(label: string) {
     color: "#e4e4e7",
     cursor: "pointer",
     display: "inline-flex",
-    font: "700 14px/1 Inter, ui-sans-serif, system-ui, sans-serif",
+    font: "700 13px/1 Inter, ui-sans-serif, system-ui, sans-serif",
     height: "28px",
     justifyContent: "center",
     margin: "0",
@@ -1482,6 +1514,7 @@ function appendDraggableKeywordMatrix(
     }
     chip.title = titleParts.join(" - ") || "Click to edit. Drag to change classification.";
     styleElement(chip, {
+      all: "initial",
       alignItems: "center",
       appearance: "none",
       background: chipBackground,
@@ -1491,23 +1524,28 @@ function appendDraggableKeywordMatrix(
       color: chipColor,
       cursor: "grab",
       display: "inline-flex",
-      font: "650 12px/1 Inter, ui-sans-serif, system-ui, sans-serif",
-      gap: "4px",
+      font: "650 11px/1 Inter, ui-sans-serif, system-ui, sans-serif",
+      gap: "3px",
       maxWidth: "100%",
-      minHeight: "22px",
+      minHeight: "18px",
       overflowWrap: "anywhere",
-      padding: "3px 6px 3px 8px",
+      padding: "2px 5px 2px 7px",
       textAlign: "left",
     });
     styleElement(label, {
+      all: "initial",
+      color: "inherit",
+      display: "inline",
+      font: "inherit",
+      lineHeight: "1",
       minWidth: "0",
       overflowWrap: "anywhere",
     });
     styleElement(handle, {
+      all: "initial",
       color: "rgba(244, 244, 245, 0.55)",
       flex: "0 0 auto",
-      fontSize: "11px",
-      lineHeight: "1",
+      font: "700 9px/1 Inter, ui-sans-serif, system-ui, sans-serif",
     });
     label.textContent = technology.name;
     handle.textContent = "↕";
@@ -1578,6 +1616,7 @@ function appendDraggableKeywordMatrix(
       textarea.rows = 1;
       textarea.setAttribute("aria-label", `Edit ${technology.name}`);
       styleElement(textarea, {
+        all: "initial",
         appearance: "none",
         background: "rgba(9, 9, 11, 0.72)",
         border: "0",
@@ -1587,11 +1626,11 @@ function appendDraggableKeywordMatrix(
         font: "inherit",
         margin: "-2px 0",
         maxWidth: "180px",
-        minHeight: "22px",
+        minHeight: "18px",
         minWidth: "90px",
         outline: "1px solid rgba(110, 231, 183, 0.52)",
         overflow: "hidden",
-        padding: "2px 3px",
+        padding: "1px 3px",
         resize: "none",
       });
       chip.replaceChildren(textarea);
@@ -1676,10 +1715,10 @@ function appendDraggableKeywordMatrix(
       if (event.dataTransfer) {
         event.dataTransfer.effectAllowed = "move";
       }
-      chip.style.opacity = "0.58";
+      setImportantStyle(chip, "opacity", "0.58");
     });
     chip.addEventListener("dragend", () => {
-      chip.style.opacity = "1";
+      setImportantStyle(chip, "opacity", "1");
       pointerStart = null;
       window.setTimeout(() => {
         didDrag = false;
@@ -1715,17 +1754,21 @@ function appendDraggableKeywordMatrix(
         : "0",
       boxSizing: "border-box",
       display: "grid",
-      gap: "7px",
-      gridTemplateRows: "auto minmax(42px, 1fr)",
-      minHeight: parent === matrix ? "92px" : "70px",
+      gap: "5px",
+      gridTemplateRows: bucketTechnologies.length > 0
+        ? "auto minmax(34px, 1fr)"
+        : "auto minmax(8px, 1fr)",
+      minHeight: bucketTechnologies.length > 0
+        ? parent === matrix ? "76px" : "58px"
+        : "30px",
       minWidth: "0",
-      padding: "8px",
+      padding: "6px",
     });
     styleElement(heading, {
       color: "rgba(244, 244, 245, 0.62)",
-      fontSize: "10px",
+      fontSize: "9px",
       fontWeight: "800",
-      letterSpacing: "0.14em",
+      letterSpacing: "0.12em",
       lineHeight: "1.2",
       textTransform: "uppercase",
     });
@@ -1733,9 +1776,9 @@ function appendDraggableKeywordMatrix(
       alignContent: "start",
       display: "flex",
       flexWrap: "wrap",
-      gap: "6px",
+      gap: "4px",
       height: "100%",
-      minHeight: "30px",
+      minHeight: "26px",
     });
     heading.textContent = bucket.label;
 
@@ -1748,23 +1791,32 @@ function appendDraggableKeywordMatrix(
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect = "move";
       }
-      bucketElement.style.background =
+      setImportantStyle(
+        bucketElement,
+        "background",
         bucket.kind === "non_skill"
           ? "rgba(63, 63, 70, 0.76)"
-          : "rgba(16, 185, 129, 0.1)";
+          : "rgba(16, 185, 129, 0.1)",
+      );
     });
     bucketElement.addEventListener("dragleave", () => {
-      bucketElement.style.background =
+      setImportantStyle(
+        bucketElement,
+        "background",
         bucket.kind === "non_skill"
           ? "rgba(39, 39, 42, 0.58)"
-          : "rgba(9, 9, 11, 0.34)";
+          : "rgba(9, 9, 11, 0.34)",
+      );
     });
     bucketElement.addEventListener("drop", (event) => {
       event.preventDefault();
-      bucketElement.style.background =
+      setImportantStyle(
+        bucketElement,
+        "background",
         bucket.kind === "non_skill"
           ? "rgba(39, 39, 42, 0.58)"
-          : "rgba(9, 9, 11, 0.34)";
+          : "rgba(9, 9, 11, 0.34)",
+      );
       const name =
         event.dataTransfer?.getData("application/x-job-helper-keyword") ||
         event.dataTransfer?.getData("text/plain") ||
@@ -1890,10 +1942,11 @@ function appendKeywordCoverageDisclosure(
     padding: "0",
   });
   styleElement(legend, {
+    all: "initial",
     alignItems: "center",
     color: "rgba(212, 212, 216, 0.76)",
     display: "flex",
-    fontSize: "10px",
+    font: "750 10px/1.25 Inter, ui-sans-serif, system-ui, sans-serif",
     fontWeight: "750",
     gap: "6px",
     justifyContent: "space-between",
@@ -1901,10 +1954,13 @@ function appendKeywordCoverageDisclosure(
     minWidth: "0",
   });
   styleElement(legendItems, {
+    all: "initial",
     alignItems: "center",
+    color: "rgba(212, 212, 216, 0.76)",
     display: "flex",
     flexWrap: "wrap",
-    gap: "6px",
+    font: "750 10px/1.25 Inter, ui-sans-serif, system-ui, sans-serif",
+    gap: "5px",
     minWidth: "0",
   });
   styleElement(legendTooltip, {
@@ -1961,8 +2017,8 @@ function appendKeywordCoverageDisclosure(
     }
 
     action.disabled = true;
-    action.style.cursor = "wait";
-    action.style.opacity = "0.72";
+    setImportantStyle(action, "cursor", "wait");
+    setImportantStyle(action, "opacity", "0.72");
 
     chrome.runtime.sendMessage(
       {
@@ -1977,8 +2033,8 @@ function appendKeywordCoverageDisclosure(
         }
 
         action.disabled = false;
-        action.style.cursor = "pointer";
-        action.style.opacity = "1";
+        setImportantStyle(action, "cursor", "pointer");
+        setImportantStyle(action, "opacity", "1");
       },
     );
   });
@@ -2000,11 +2056,15 @@ function appendKeywordCoverageDisclosure(
       Math.max(inset, window.innerWidth - tooltipWidth - inset),
     );
 
-    legendTooltip.style.left = `${left}px`;
-    legendTooltip.style.top = `${Math.min(
-      Math.max(inset, top),
-      Math.max(inset, window.innerHeight - tooltipHeight - inset),
-    )}px`;
+    setImportantStyle(legendTooltip, "left", `${left}px`);
+    setImportantStyle(
+      legendTooltip,
+      "top",
+      `${Math.min(
+        Math.max(inset, top),
+        Math.max(inset, window.innerHeight - tooltipHeight - inset),
+      )}px`,
+    );
   };
   const showLegendTooltip = (trigger: HTMLElement, description: string) => {
     legendTooltip.textContent = description;
@@ -2012,12 +2072,12 @@ function appendKeywordCoverageDisclosure(
       document.documentElement.append(legendTooltip);
     }
     positionLegendTooltip(trigger);
-    legendTooltip.style.opacity = "1";
-    legendTooltip.style.visibility = "visible";
+    setImportantStyle(legendTooltip, "opacity", "1");
+    setImportantStyle(legendTooltip, "visibility", "visible");
   };
   const hideLegendTooltip = () => {
-    legendTooltip.style.opacity = "0";
-    legendTooltip.style.visibility = "hidden";
+    setImportantStyle(legendTooltip, "opacity", "0");
+    setImportantStyle(legendTooltip, "visibility", "hidden");
   };
   const repositionVisibleLegendTooltip = () => {
     const activeLegendItem = document.querySelector<HTMLElement>(
@@ -2043,19 +2103,23 @@ function appendKeywordCoverageDisclosure(
     item.setAttribute("aria-label", `${label}: ${description}`);
     item.setAttribute("role", "button");
     styleElement(item, {
+      all: "initial",
       alignItems: "center",
+      color: "rgba(212, 212, 216, 0.76)",
       cursor: "help",
       display: "inline-flex",
-      gap: "4px",
+      font: "750 10px/1.25 Inter, ui-sans-serif, system-ui, sans-serif",
+      gap: "3px",
       whiteSpace: "nowrap",
     });
     dot.dataset.keywordCoverageColor = tone;
     styleElement(dot, {
+      all: "initial",
       background: color,
       borderRadius: "999px",
       display: "inline-block",
-      height: "7px",
-      width: "7px",
+      height: "6px",
+      width: "6px",
     });
     item.addEventListener("mouseenter", () => {
       item.dataset.keywordCoverageLegendActive = "true";
@@ -2157,17 +2221,19 @@ function showEmphasizedTechnologyBadge(
   const closeButton = createPromptCloseButton("Dismiss job keyword terms");
 
   badge.dataset.jobHelperBadgeKey = technologyBadgeKey;
-  badge.style.gridTemplateColumns = downloadButton
-    ? "minmax(0, 1fr) 28px 28px"
-    : "minmax(0, 1fr) 28px";
+  setImportantStyle(
+    badge,
+    "gridTemplateColumns",
+    downloadButton ? "minmax(0, 1fr) 28px 28px" : "minmax(0, 1fr) 28px",
+  );
   styleElement(content, {
     display: "grid",
-    gap: "5px",
+    gap: "3px",
     minWidth: "0",
   });
   styleElement(eyebrow, {
     color: "#6ee7b7",
-    fontSize: "10px",
+    fontSize: "9px",
     fontWeight: "800",
     letterSpacing: "0.22em",
     lineHeight: "1.2",
@@ -2175,9 +2241,9 @@ function showEmphasizedTechnologyBadge(
   });
   styleElement(groups, {
     display: "grid",
-    gap: "12px",
+    gap: "8px",
     gridColumn: "1 / -1",
-    maxHeight: "min(520px, calc(100vh - 160px))",
+    maxHeight: "min(500px, calc(100vh - 128px))",
     overflowY: "auto",
   });
 
