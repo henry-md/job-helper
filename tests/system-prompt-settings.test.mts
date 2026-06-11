@@ -121,16 +121,18 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /deterministic string matching/i);
   assert.match(prompt, /commit previews, blueprints, storage systems/i);
   assert.match(prompt, /Chromium/i);
-  assert.match(prompt, /Quoted bullets under technology-specific USER\.md headings/i);
-  assert.match(prompt, /strong grounded candidates for experience-bullet edits/i);
-  assert.match(prompt, /only by adding it to the skills section/i);
-  assert.match(prompt, /passes the skills-entry gate/i);
+  assert.match(prompt, /USER\.md as contextual memory adjacent to the resume/i);
+  assert.match(prompt, /not as a permission checkpoint/i);
+  assert.match(prompt, /examples and context rather than permission/i);
+  assert.match(prompt, /include the exact hard-skill keyword in the skills section/i);
+  assert.match(prompt, /concrete hard skill such as a technology/i);
+  assert.match(prompt, /bullet keyword coverage alone is not enough for actual skills/i);
   assert.match(prompt, /experience-bullet replacement or swap/i);
   assert.match(prompt, /plan it as a swap/i);
   assert.match(prompt, /weakest or least job-relevant existing bullet/i);
   assert.match(prompt, /editIntent that says to remove/i);
   assert.match(prompt, /entire bullet\/line segment/i);
-  assert.match(prompt, /Step 3 decides where supported keywords should go/i);
+  assert.match(prompt, /Step 3 decides where resume-adjacent and memory-adjacent keywords should go/i);
   assert.match(prompt, /Step 4 writes the exact LaTeX wording/i);
   assert.match(prompt, /editIntent must be a short instruction/i);
   assert.match(prompt, /targetKeywords must list the exact emphasizedTechnology names/i);
@@ -138,17 +140,30 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /ideal job-specific resume/i);
   assert.match(prompt, /low-priority keyword list/i);
   assert.match(prompt, /Do not abandon a keyword after one awkward attempt/i);
-  assert.match(prompt, /When editing Skills or Technical Skills, add only actual skills/i);
-  assert.match(prompt, /dedicated USER\.md sentence\/bullet for that exact technology/i);
+  assert.match(prompt, /When editing Skills or Technical Skills, add actual concrete skills generously/i);
+  assert.match(prompt, /It is a GOOD idea to pack job-relevant concrete hard-skill keywords into Skills for ATS matching/i);
+  assert.match(prompt, /even when those exact terms are not in the bullets/i);
+  assert.match(prompt, /adjacent to the resume, USER\.md context/i);
+  assert.match(prompt, /Be extremely optimistic about what the user likely has experience with/i);
+  assert.match(prompt, /even when the exact term is not explicitly mentioned in experience/i);
+  assert.match(prompt, /Do not make the user choose between bullet coverage and skills-list coverage/i);
+  assert.match(prompt, /Skills keyword set must be a strict superset of concrete hard-skill keywords bolded in bullets/i);
+  assert.match(prompt, /plan a Skills change that includes that exact keyword as well/i);
+  assert.match(prompt, /Skills-only ATS coverage entry for a concrete hard skill/i);
+  assert.match(prompt, /If a concrete hard skill is useful ATS coverage but cannot responsibly fit in a bullet/i);
+  assert.match(prompt, /if the plan asks Step 4 to bold a concrete technology/i);
+  assert.match(prompt, /the plan must also add or preserve that exact keyword in Skills/i);
   assert.match(prompt, /Do not add peppering\/capability phrases such as broad API/i);
   assert.match(prompt, /infrastructure, fundamentals, or process wording/i);
-  assert.match(prompt, /Skills-only concrete tools like Windsurf/i);
-  assert.match(prompt, /Skills-entry gate/i);
-  assert.match(prompt, /not for every keyword used to pepper the resume/i);
+  assert.match(prompt, /If a concrete hard skill is adjacent to the resume or USER\.md context/i);
+  assert.match(prompt, /Skills-only keyword packing is often the right placement for ATS keywords/i);
+  assert.match(prompt, /Concrete technologies can be valuable Skills-only ATS coverage/i);
+  assert.match(prompt, /Skills placement/i);
+  assert.match(prompt, /not for every phrase used to pepper the resume/i);
   assert.match(prompt, /already provided as job keywords/i);
   assert.match(prompt, /closest existing category/i);
-  assert.match(prompt, /Concrete technologies with dedicated source-resume or USER\.md support may go into Skills/i);
-  assert.match(prompt, /capability phrases used to pepper fit should not be added to Skills/i);
+  assert.match(prompt, /adjacent to the resume, USER\.md context, user-confirmed learnings/i);
+  assert.match(prompt, /vague capability phrases used to pepper fit should not be added to Skills/i);
   assert.doesNotMatch(prompt, /RESTful/i);
   assert.equal(prompt.match(/Available tools:/g)?.length, 1);
   assert.match(prompt, /check_planned_keyword_assignments/i);
@@ -196,8 +211,9 @@ test("buildTailorResumePlanningSystemPrompt appends skills keyword coverage to s
   );
 
   assert.match(prompt, /Custom planning prompt\./);
-  assert.match(prompt, /Skills-entry gate/i);
-  assert.match(prompt, /Windsurf can be listed in a skills category/i);
+  assert.match(prompt, /Skills placement/i);
+  assert.match(prompt, /If a concrete hard skill is adjacent to the resume or USER\.md context/i);
+  assert.match(prompt, /Concrete technologies can be valuable Skills-only ATS coverage/i);
   assert.match(prompt, /broad API, infrastructure, fundamentals, or process wording/i);
   assert.doesNotMatch(prompt, /RESTful/i);
   assert.match(prompt, /Available tools:/);
@@ -331,9 +347,9 @@ test("buildTailorResumeImplementationSystemPrompt injects retry feedback", () =>
   assert.match(prompt, /replaces a lower-signal bullet with user-confirmed technology experience/i);
   assert.match(prompt, /Do not move the technology only to skills/i);
   assert.match(prompt, /keep pushing keyword coverage for both high- and low-priority terms/i);
-  assert.match(prompt, /preserve only the planned entries that are actual skills/i);
-  assert.match(prompt, /dedicated USER\.md sentence\/bullet for that exact technology/i);
-  assert.match(prompt, /Do not add capability phrases to Skills merely for keyword peppering/i);
+  assert.match(prompt, /preserve the planned entries that are actual skills/i);
+  assert.match(prompt, /USER\.md is context, not a permission gate for adjacent Skills additions/i);
+  assert.match(prompt, /Do not add vague capability phrases to Skills merely for keyword peppering/i);
   assert.match(prompt, /If the accepted plan adds actual skills to a skills section/i);
   assert.match(prompt, /Do not introduce new capability keywords that are absent/i);
   assert.match(prompt, /Do not add extra capability phrases to Skills/i);
@@ -352,7 +368,7 @@ test("buildTailorResumeImplementationSystemPrompt injects retry feedback", () =>
   assert.match(prompt, /reports keyword coverage, rendered page count/i);
   assert.match(prompt, /Pass lineCountSegmentIds as \[\]/i);
   assert.match(prompt, /testing whether a missing keyword can fit without creating another rendered line/i);
-  assert.match(prompt, /missing supported high- or low-priority keyword/i);
+  assert.match(prompt, /missing high- or low-priority keyword/i);
   assert.match(prompt, /Return final JSON only after coverage and changed-bullet health are acceptable/i);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
 });
@@ -373,7 +389,7 @@ test("buildTailorResumeImplementationSystemPrompt appends USER.md bolding guidan
   assert.match(prompt, /first response should be a check_implemented_resume_keyword_coverage tool call/i);
   assert.match(prompt, /list_current_resume_keyword_usage/i);
   assert.match(prompt, /list_malformed_resume_bullets/i);
-  assert.match(prompt, /missing supported high- or low-priority keyword/i);
+  assert.match(prompt, /missing high- or low-priority keyword/i);
 });
 
 test("buildTailorResumeRefinementSystemPrompt injects retry feedback", () => {
@@ -387,6 +403,41 @@ test("buildTailorResumeRefinementSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /Previous refinement feedback:/);
   assert.match(prompt, /did not compile/);
   assert.equal(prompt.includes("{{FEEDBACK_BLOCK}}"), false);
+});
+
+test("buildTailorResumeRefinementSystemPrompt is optimistic about adjacent skills", () => {
+  const prompt = buildTailorResumeRefinementSystemPrompt(
+    createDefaultSystemPromptSettings(),
+    {},
+  );
+
+  assert.match(prompt, /Preserve factual accuracy without becoming defensive/i);
+  assert.match(prompt, /be extremely optimistic about likely transferable experience/i);
+  assert.match(prompt, /add concrete adjacent technologies to Skills or Technical Skills/i);
+  assert.match(prompt, /the user's request is strong evidence of intent/i);
+  assert.match(prompt, /apply the edit instead of refusing/i);
+  assert.match(prompt, /Prefer Skills-section additions for adjacent or likely skills/i);
+  assert.match(prompt, /USER\.md is context, not a gate for inclusion/i);
+  assert.match(prompt, /it is a GOOD idea to pack concrete hard-skill keywords into Skills or Technical Skills/i);
+  assert.match(prompt, /recommend adjacent concrete hard skills instead of saying they need bullet-level substantiation/i);
+  assert.match(prompt, /If a revised bullet bolds a concrete hard-skill keyword/i);
+  assert.match(prompt, /Skills keyword set should be a strict superset/i);
+  assert.match(prompt, /missing Skills coverage for a bolded bullet keyword as something to fix/i);
+});
+
+test("buildTailorResumeRefinementSystemPrompt does not announce empty edits", () => {
+  const prompt = buildTailorResumeRefinementSystemPrompt(
+    createDefaultSystemPromptSettings(),
+    {},
+  );
+
+  assert.match(prompt, /Do not announce that no edits were applied/i);
+  assert.match(prompt, /expected that no edits happen unless the user explicitly asks/i);
+  assert.match(prompt, /Do not say "No edits applied"/i);
+  assert.match(prompt, /Only mention that you edited the resume when you actually returned/i);
+  assert.match(prompt, /answer the question directly and helpfully/i);
+  assert.match(prompt, /Do not answer with process notes, tool status, or unchanged-block explanations/i);
+  assert.match(prompt, /Answer the user's actual question first/i);
 });
 
 test("buildTailorResumePageCountCompactionPrompt injects page count tokens", () => {
