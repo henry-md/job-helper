@@ -745,6 +745,10 @@ function parseTailorResumeGenerationSettingsState(
     if (values.masterChatModel === "gpt-5-mini") {
       values.masterChatModel = defaultTailorResumeModelSettings.masterChatModel;
     }
+
+    if (values.reviewChatModel === "gpt-5-mini") {
+      values.reviewChatModel = defaultTailorResumeModelSettings.reviewChatModel;
+    }
   }
 
   return {

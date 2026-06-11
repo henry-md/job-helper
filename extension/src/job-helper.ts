@@ -189,6 +189,7 @@ const currentTailorResumeGenerationSettingsVersion = 7;
 
 export const defaultTailorResumeModelSettings = {
   masterChatModel: "gpt-5.4",
+  reviewChatModel: "gpt-5.4",
   step1Model: "gpt-5.4-mini",
   step3Model: "anthropic:claude-sonnet-4-6",
   step4Model: "gpt-5.5",
@@ -197,6 +198,7 @@ export const defaultTailorResumeModelSettings = {
 
 const previousTailorResumeModelDefaults = {
   masterChatModel: "gpt-5-mini",
+  reviewChatModel: "gpt-5-mini",
   step1Model: "gpt-5.5",
   step3Model: "gpt-5-mini",
   step4Model: "gpt-5-mini",
@@ -213,6 +215,7 @@ export const tailorResumeSelectableModelValues = [
   "anthropic:claude-opus-4-6",
   "anthropic:claude-haiku-4-5",
   "anthropic:claude-sonnet-4",
+  "anthropic:claude-fable-5",
 ] as const;
 
 export type TailorResumeSelectableModel =
@@ -226,6 +229,7 @@ export const defaultTailorResumeGenerationSettingsSummary:
     ludicrousMode: true,
     masterChatModel: defaultTailorResumeModelSettings.masterChatModel,
     preventPageCountIncrease: true,
+    reviewChatModel: defaultTailorResumeModelSettings.reviewChatModel,
     step1Model: defaultTailorResumeModelSettings.step1Model,
     step3Model: defaultTailorResumeModelSettings.step3Model,
     step4Model: defaultTailorResumeModelSettings.step4Model,
@@ -394,6 +398,7 @@ export type TailorResumeGenerationSettingsSummary = {
   ludicrousMode: boolean;
   masterChatModel: TailorResumeSelectableModel;
   preventPageCountIncrease: boolean;
+  reviewChatModel: TailorResumeSelectableModel;
   step1Model: TailorResumeSelectableModel;
   step3Model: TailorResumeSelectableModel;
   step4Model: TailorResumeSelectableModel;
@@ -1332,6 +1337,7 @@ export function readTailorResumeGenerationSettingsSummary(
       typeof settings.preventPageCountIncrease === "boolean"
         ? settings.preventPageCountIncrease
         : defaultTailorResumeGenerationSettingsSummary.preventPageCountIncrease,
+    reviewChatModel: readModel("reviewChatModel"),
     step1Model: readModel("step1Model"),
     step3Model: readModel("step3Model"),
     step4Model: readModel("step4Model"),

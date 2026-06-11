@@ -1,13 +1,16 @@
 import {
+  Children,
   type CSSProperties,
   type FormEvent as ReactFormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  isValidElement,
 } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
@@ -473,6 +476,11 @@ const tailorResumeModelOptions = [
     label: "Claude Sonnet 4",
     value: "anthropic:claude-sonnet-4",
   },
+  {
+    group: "Anthropic",
+    label: "Claude Fable 5",
+    value: "anthropic:claude-fable-5",
+  },
 ] as const satisfies ReadonlyArray<{
   group: "Anthropic" | "OpenAI";
   label: string;
@@ -507,6 +515,11 @@ const tailorResumeModelSettingRows = [
     key: "masterChatModel",
     label: "Master chat",
   },
+  {
+    help: "Review chat is the tailored-resume edit chat next to each generated resume.",
+    key: "reviewChatModel",
+    label: "Review chat",
+  },
 ] as const satisfies ReadonlyArray<{
   help: string;
   key: TailorResumeModelSettingKey;
@@ -516,7 +529,16 @@ const tailorResumeModelSettingRows = [
 function readTailorResumeModelOptionGroups(
   key: TailorResumeModelSettingKey,
 ): Array<"Anthropic" | "OpenAI"> {
-  return key === "step3Model" ? ["OpenAI", "Anthropic"] : ["OpenAI"];
+  return key === "step3Model" || key === "reviewChatModel"
+    ? ["OpenAI", "Anthropic"]
+    : ["OpenAI"];
+}
+
+function isTailorResumeModelOptionAvailableForSetting(
+  key: TailorResumeModelSettingKey,
+  value: TailorResumeSelectableModel,
+) {
+  return value !== "anthropic:claude-fable-5" || key === "reviewChatModel";
 }
 
 function formatTailorResumeModelLabel(model: string | null | undefined) {
@@ -799,10 +821,18 @@ function isAiUsageRecordInPeriod(
 }
 
 function getAiUsageStepKey(event: AiUsageEventRecord) {
+  if (event.stepLabel?.trim().toLowerCase() === "chat") {
+    return "chat";
+  }
+
   return event.stepNumber ? String(event.stepNumber) : "other";
 }
 
 function formatAiUsageStepLabel(stepKey: string) {
+  if (stepKey === "chat") {
+    return "Chat";
+  }
+
   return stepKey === "other" ? "Other" : `Step ${stepKey}`;
 }
 
@@ -812,12 +842,21 @@ function getAiUsageTooltipStepSummary(stepKey: string) {
     "3": "think",
     "4": "edit",
     "5": "fix",
+    chat: "chat",
   };
 
   return summaries[stepKey] ?? null;
 }
 
 function compareAiUsageStepKeys(leftKey: string, rightKey: string) {
+  if (leftKey === "chat") {
+    return rightKey === "other" ? -1 : 1;
+  }
+
+  if (rightKey === "chat") {
+    return leftKey === "other" ? 1 : -1;
+  }
+
   if (leftKey === "other") {
     return 1;
   }
@@ -4390,6 +4429,43 @@ function TailorInterviewThinkingIndicator() {
   );
 }
 
+function readReactNodeText(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") {
+    return String(node);
+  }
+
+  if (Array.isArray(node)) {
+    return node.map(readReactNodeText).join("");
+  }
+
+  if (isValidElement<{ children?: ReactNode }>(node)) {
+    return readReactNodeText(node.props.children);
+  }
+
+  return "";
+}
+
+function isCompactChatKeywordList(children: ReactNode) {
+  const listItems = Children.toArray(children).filter(
+    (item) => isValidElement(item) && item.type === "li",
+  );
+
+  if (listItems.length < 3) {
+    return false;
+  }
+
+  return listItems.every((item) => {
+    const text = readReactNodeText(item).trim();
+
+    return (
+      text.length > 0 &&
+      text.length <= 42 &&
+      !/[.!?]$/.test(text) &&
+      text.split(/\s+/).length <= 4
+    );
+  });
+}
+
 function ChatMessageMarkdown({
   content,
   isThinking = false,
@@ -4409,7 +4485,24 @@ function ChatMessageMarkdown({
             <span />
           </div>
         ) : (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          <ReactMarkdown
+            components={{
+              ul({ children }) {
+                return (
+                  <ul
+                    className={
+                      isCompactChatKeywordList(children)
+                        ? "chat-message-inline-list"
+                        : undefined
+                    }
+                  >
+                    {children}
+                  </ul>
+                );
+              },
+            }}
+            remarkPlugins={[remarkGfm]}
+          >
             {content || "Thinking..."}
           </ReactMarkdown>
         )}
@@ -15006,6 +15099,7 @@ function App() {
 
   async function refineTailoredResumeReviewWithChat(
     prompt: string,
+    model: TailorResumeSelectableModel,
     handlers?: {
       onTextDelta?: (delta: string) => void;
       onTextStart?: () => void;
@@ -15026,6 +15120,7 @@ function App() {
       const result = await patchTailorResume(
         {
           action: "refineTailoredResume",
+          model,
           previewImageDataUrls: [],
           tailoredResumeId: previousRecord.id,
           userPrompt: prompt,
@@ -15121,10 +15216,12 @@ function App() {
         payloadRecord.assistantMessage.trim()
           ? payloadRecord.assistantMessage.trim()
           : "Updated the tailored resume blocks.";
+      const toolCalls = readToolCallRecords(payloadRecord.toolCalls);
 
       return {
         comparison,
         message: assistantMessage,
+        toolCalls,
       };
     } catch (error) {
       setTailoredResumeReviewState({
@@ -15591,7 +15688,17 @@ function App() {
             openEditRequest={tailoredReviewOpenEditRequest}
             openEditingEditId={tailoredPreviewFocusEditId}
             record={displayedActiveTailoredResumeReviewRecord}
+            reviewChatModel={generationModelSettings.reviewChatModel}
+            reviewChatModelOptions={tailorResumeModelOptions.filter((option) =>
+              isTailorResumeModelOptionAvailableForSetting(
+                "reviewChatModel",
+                option.value,
+              ),
+            )}
             variant="fullscreen"
+            onReviewChatModelChange={(model) =>
+              updateGenerationModelSetting("reviewChatModel", model)
+            }
             onSaveUserEdit={saveTailoredResumeReviewUserEdit}
             onSetEditState={(editId, nextState) =>
               void setTailoredResumeReviewEditState(editId, nextState)
@@ -16410,7 +16517,14 @@ function App() {
                   {readTailorResumeModelOptionGroups(row.key).map((group) => (
                     <optgroup key={group} label={group}>
                       {tailorResumeModelOptions
-                        .filter((option) => option.group === group)
+                        .filter(
+                          (option) =>
+                            option.group === group &&
+                            isTailorResumeModelOptionAvailableForSetting(
+                              row.key,
+                              option.value,
+                            ),
+                        )
                         .map((option) => (
                           <option key={option.value} value={option.value}>
                             {option.label}

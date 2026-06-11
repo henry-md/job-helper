@@ -181,6 +181,16 @@ function resolveOpenAiPriceSnapshot(model: string): PriceSnapshot {
 function resolveAnthropicPriceSnapshot(model: string): PriceSnapshot {
   const normalized = normalizeModelName(model);
 
+  if (normalized.includes("fable-5")) {
+    return {
+      cachedInputUsdPerMillion: 1,
+      cacheCreationUsdPerMillion: 12.5,
+      inputUsdPerMillion: 10,
+      outputUsdPerMillion: 50,
+      pricingSource: "anthropic-pricing-2026-06-09:fable-5",
+    };
+  }
+
   if (normalized.includes("opus-4-7") || normalized.includes("opus-4-6")) {
     return {
       cachedInputUsdPerMillion: 0.5,
