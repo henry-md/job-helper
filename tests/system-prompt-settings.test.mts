@@ -143,6 +143,8 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /When editing Skills or Technical Skills, add actual concrete skills generously/i);
   assert.match(prompt, /It is a GOOD idea to pack job-relevant concrete hard-skill keywords into Skills for ATS matching/i);
   assert.match(prompt, /even when those exact terms are not in the bullets/i);
+  assert.match(prompt, /weave them into the middle of the closest existing comma-separated skill list or category/i);
+  assert.match(prompt, /Do not append all newly added keywords at the end/i);
   assert.match(prompt, /adjacent to the resume, USER\.md context/i);
   assert.match(prompt, /Be extremely optimistic about what the user likely has experience with/i);
   assert.match(prompt, /even when the exact term is not explicitly mentioned in experience/i);
@@ -158,6 +160,8 @@ test("buildTailorResumePlanningSystemPrompt injects retry feedback", () => {
   assert.match(prompt, /If a concrete hard skill is adjacent to the resume or USER\.md context/i);
   assert.match(prompt, /Skills-only keyword packing is often the right placement for ATS keywords/i);
   assert.match(prompt, /Concrete technologies can be valuable Skills-only ATS coverage/i);
+  assert.match(prompt, /weave them into the middle of the closest existing comma-separated skill list or category/i);
+  assert.match(prompt, /tail-end clusters make the additions look pasted on/i);
   assert.match(prompt, /Skills placement/i);
   assert.match(prompt, /not for every phrase used to pepper the resume/i);
   assert.match(prompt, /already provided as job keywords/i);
@@ -351,6 +355,8 @@ test("buildTailorResumeImplementationSystemPrompt injects retry feedback", () =>
   assert.match(prompt, /USER\.md is context, not a permission gate for adjacent Skills additions/i);
   assert.match(prompt, /Do not add vague capability phrases to Skills merely for keyword peppering/i);
   assert.match(prompt, /If the accepted plan adds actual skills to a skills section/i);
+  assert.match(prompt, /weave them into the middle of the closest existing comma-separated skill list or category/i);
+  assert.match(prompt, /Do not append all newly added keywords at the end/i);
   assert.match(prompt, /Do not introduce new capability keywords that are absent/i);
   assert.match(prompt, /Do not add extra capability phrases to Skills/i);
   assert.doesNotMatch(prompt, /RESTful/i);
@@ -390,6 +396,7 @@ test("buildTailorResumeImplementationSystemPrompt appends USER.md bolding guidan
   assert.match(prompt, /list_current_resume_keyword_usage/i);
   assert.match(prompt, /list_malformed_resume_bullets/i);
   assert.match(prompt, /missing high- or low-priority keyword/i);
+  assert.match(prompt, /weave them into the middle of the closest existing comma-separated skill list or category/i);
 });
 
 test("buildTailorResumeRefinementSystemPrompt injects retry feedback", () => {
@@ -423,6 +430,21 @@ test("buildTailorResumeRefinementSystemPrompt is optimistic about adjacent skill
   assert.match(prompt, /If a revised bullet bolds a concrete hard-skill keyword/i);
   assert.match(prompt, /Skills keyword set should be a strict superset/i);
   assert.match(prompt, /missing Skills coverage for a bolded bullet keyword as something to fix/i);
+  assert.match(prompt, /weave them into the middle of the closest existing comma-separated skill list or category/i);
+  assert.match(prompt, /Do not append all newly added keywords at the end/i);
+});
+
+test("buildTailorResumeRefinementSystemPrompt appends skills keyword placement to saved prompts", () => {
+  const prompt = buildTailorResumeRefinementSystemPrompt(
+    mergeSystemPromptSettings({
+      tailorResumeRefinement: "Custom refinement prompt.",
+    }),
+    {},
+  );
+
+  assert.match(prompt, /Custom refinement prompt\./);
+  assert.match(prompt, /weave them into the middle of the closest existing comma-separated skill list or category/i);
+  assert.match(prompt, /tail-end clusters make the additions look pasted on/i);
 });
 
 test("buildTailorResumeRefinementSystemPrompt does not announce empty edits", () => {
@@ -465,8 +487,27 @@ test("buildTailorResumePageCountCompactionPrompt injects page count tokens", () 
   assert.match(prompt, /Lead with what changed in the context of the job description/i);
   assert.match(prompt, /Mention the need to shorten only as a passing sentence fragment/i);
   assert.match(prompt, /fully replaces the old reason shown to the user/i);
+  assert.match(prompt, /weave them into the middle of the closest existing comma-separated skill list or category/i);
+  assert.match(prompt, /do not append all newly added keywords at the end/i);
   assert.equal(prompt.includes("{{TARGET_PAGE_COUNT_REQUIREMENT}}"), false);
   assert.equal(prompt.includes("{{ESTIMATED_LINE_REDUCTION}}"), false);
+});
+
+test("buildTailorResumePageCountCompactionPrompt appends skills keyword placement to saved prompts", () => {
+  const prompt = buildTailorResumePageCountCompactionPrompt(
+    mergeSystemPromptSettings({
+      tailorResumePageCountCompaction: "Custom page count prompt.",
+    }),
+    {
+      currentPageCount: 2,
+      estimatedLineReduction: 3,
+      targetPageCount: 1,
+    },
+  );
+
+  assert.match(prompt, /Custom page count prompt\./);
+  assert.match(prompt, /weave them into the middle of the closest existing comma-separated skill list or category/i);
+  assert.match(prompt, /tail-end clusters make the additions look pasted on/i);
 });
 
 test("buildTailorResumePageCountCompactionInstructions exposes resume inspection tools", () => {
@@ -478,6 +519,7 @@ test("buildTailorResumePageCountCompactionInstructions exposes resume inspection
 
   assert.match(instructions, /list_current_resume_keyword_usage/i);
   assert.match(instructions, /list_malformed_resume_bullets/i);
+  assert.match(instructions, /weave them into the middle of the closest existing comma-separated skill list or category/i);
   assert.match(instructions, /most updated resume draft/i);
   assert.match(instructions, /malformed rendered bullet/i);
 });

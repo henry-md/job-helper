@@ -185,6 +185,7 @@ export function buildTailorResumePageCountCompactionInstructions(input: {
     "Only include a block in the tool call when you believe the replacement will reduce that exact block by at least one rendered PDF line versus the current saved replacement for that block.",
     "Do not polish, rephrase, or touch a block unless the replacement is likely to create a user-visible rendered-line reduction for that same block.",
     "Use the current replacement LaTeX block shape. Keep the edit inside the same segment and preserve factual accuracy.",
+    tailorResumeSkillsKeywordPlacementSentence,
     "If a verified candidate set still leaves the resume above the target page count, widen the next measurement pass to include an additional high-priority multi-line block instead of repeatedly banking the same small cut shape.",
     `If ${input.pageCountVerificationToolName} shows the resume is still above the target, you may still submit those verified line-saving candidates so the next server-side retry starts from a smaller draft.`,
     "Every candidate reason replaces the old saved reason. Lead with what changed for the job-description fit, and mention shortening only as a passing fragment when necessary.",
@@ -202,6 +203,12 @@ const tailorResumeImplementationRedundantBulletGuardrail =
 
 const tailorResumePageCountRedundantBulletGuardrail =
   "Do not preserve two sufficiently redundant bullets under the same experience just to keep different technology keywords in body text. For example, two bullets about building CI/CD pipelines with different tools should be merged or reduced to the stronger one when page fit or resume quality benefits. If a high-priority concrete tool must be excluded from an experience bullet to avoid redundancy, that is acceptable because supported tools can still appear in the Skills section. ";
+
+const tailorResumeSkillsKeywordPlacementRule =
+  "- When adding important job keywords to a Skills or Technical Skills list, weave them into the middle of the closest existing comma-separated skill list or category. Do not append all newly added keywords at the end of the skills section or category, because tail-end clusters make the additions look pasted on.\n";
+
+const tailorResumeSkillsKeywordPlacementSentence =
+  "When adding important job keywords to a Skills or Technical Skills list, weave them into the middle of the closest existing comma-separated skill list or category; do not append all newly added keywords at the end, because tail-end clusters make the additions look pasted on.";
 
 export const defaultTailorResumeStep2ExperienceChatPrompt =
   "Help me craft resume experiences for the following technologies. Be optimistic about what my experience may be and I can correct you if it's too much. Create FAANG level experiences for each resume point, and give 3 sample bullets for each of the following experiences. Suggest them *in the context of my actual resume*, and for each bullet say which of my previous experiences you would put them under. List your bullets in letter order A. B. C., and be ready for me to answer like '[keyword] A' which should tell you to (1) iterate on this one by checking that it's not malformed (2) save it as a new resume bullet for me if you didn't have to change the string, or give a version that isn't malformed and ask me if you can add it.";
@@ -494,6 +501,7 @@ const defaultSystemPromptSettings = {
     "- Do not abandon a keyword after one awkward attempt. Try multiple compact strategies before leaving it out: a valid Skills entry, a tighter bullet rewrite, a bullet swap that removes weaker detail, a Skills-only ATS coverage entry for a concrete hard skill, or a different adjacent block. Only give up if adding the term would require inventing production ownership, likely extend a rendered line/page, remove an important keyword or stronger claim, or break block scope.\n" +
     tailorResumePlanningRedundantBulletGuardrail +
     "- When editing Skills or Technical Skills, add actual concrete skills generously. It is a GOOD idea to pack job-relevant concrete hard-skill keywords into Skills for ATS matching, even when those exact terms are not in the bullets. A new skills entry may be a concrete tool, language, framework, database, infrastructure tool, developer tool, observability tool, cloud service, or named method adjacent to the resume, USER.md context, user-confirmed learnings, explicit review-chat instruction, or existing skills. Be extremely optimistic about what the user likely has experience with; the Skills section can include adjacent technologies that a strong candidate could credibly use, even when the exact term is not explicitly mentioned in experience. If any planned non-skills bullet uses a concrete hard skill and a Skills or Technical Skills block is editable, return a Skills change in the same plan that lists that exact skill in the closest existing category. The Skills keyword set must be a strict superset of concrete hard-skill keywords bolded in bullets: if the plan asks Step 4 to bold a concrete technology, framework, language, database, infrastructure tool, observability tool, developer tool, cloud service, or named method in a bullet, the plan must also add or preserve that exact keyword in Skills. Do not rely on the bullet alone to cover the Skills section. If a concrete hard skill is useful ATS coverage but cannot responsibly fit in a bullet, still plan it as a Skills-only addition rather than dropping it. Do not add peppering/capability phrases such as broad API, infrastructure, fundamentals, or process wording to Skills merely because the job description emphasized them; use those in bullets or coverage checks when they are already provided as job keywords and fit naturally. Skills-only concrete tools are valid Skills additions when they are adjacent to the resume or USER.md context, even if they are not worthy of an experience bullet.\n" +
+    tailorResumeSkillsKeywordPlacementRule +
     "- Follow the Available tools section before final JSON. Treat low-priority misses from the assignment tool as revise-again signals unless you have already tried to assign them to a truthful compact block and can explain why truth, line fit, or higher-priority content prevents it.\n\n" +
     "Metadata rules:\n" +
     "- companyName should be the employer if identifiable.\n" +
@@ -589,6 +597,7 @@ const defaultSystemPromptSettings = {
     "- Your primary goal is to implement the accepted Step 3 plan faithfully while preserving its ambition. Within the planned replacements, keep pushing keyword coverage for both high- and low-priority terms instead of settling for a slightly better draft. Do not make Step 4 invent production ownership or edit unplanned blocks, but do try repeated compact wording passes before leaving a planned or adjacent keyword out.\n" +
     tailorResumeImplementationRedundantBulletGuardrail +
     "- If the accepted plan adds actual skills to a skills section, preserve those planned skills entries. When the accepted plan uses a concrete actual skill in a bullet and also includes a Skills or Technical Skills replacement, make sure that replacement lists the same exact skill in the closest existing category. Do not treat the bullet mention as a substitute for the skills-list entry. Do not add extra capability phrases to Skills merely to improve keyword coverage; they belong in bullets only when the accepted plan already uses them there.\n" +
+    tailorResumeSkillsKeywordPlacementRule +
     "- Follow the Available tools section before final JSON.\n\n" +
     "Common pitfalls:\n" +
     "- The most common structural failure is crossing a segment boundary. When in doubt, keep the replacement smaller and closer to the source block.\n" +
@@ -623,6 +632,7 @@ const defaultSystemPromptSettings = {
     "- Preserve factual accuracy without becoming defensive. Never invent achievements, employers, dates, titles, metrics, degrees, certifications, or production ownership. But when the user asks to include job-relevant skills, be extremely optimistic about likely transferable experience and add concrete adjacent technologies to Skills or Technical Skills when they fit near existing languages, frameworks, cloud, infrastructure, observability, or developer-tooling skills, even if the exact term is not explicitly mentioned in an experience bullet.\n" +
     "- In this review chat, the user's request is strong evidence of intent. If they say to include suggested skills or keywords, apply the edit instead of refusing merely because the exact term is not substantiated elsewhere. Prefer Skills-section additions for adjacent or likely skills; reserve experience-bullet claims for facts implied by the resume, USER.md context, existing tailored edits, screenshots, or the user's explicit wording. USER.md is context, not a gate for inclusion.\n" +
     "- For ATS, it is a GOOD idea to pack concrete hard-skill keywords into Skills or Technical Skills even when those exact keywords do not appear in bullets. When the user asks which missing keywords to include in Skills, be generous: recommend adjacent concrete hard skills instead of saying they need bullet-level substantiation, and do not frame Skills-only additions as a last resort.\n" +
+    tailorResumeSkillsKeywordPlacementRule +
     "- If a revised bullet bolds a concrete hard-skill keyword, that exact keyword must also appear in Skills or Technical Skills when an editable Skills block exists. The Skills keyword set should be a strict superset of the concrete hard-skill keywords bolded in bullets. When answering or editing, treat missing Skills coverage for a bolded bullet keyword as something to fix, not as optional.\n" +
     "- Use the keyword-coverage tool when the user asks which scraped keywords are included, missing, added, or covered. Do not answer those coverage questions by eyeballing raw LaTeX when the tool is available.\n" +
     "- Keep the tailored resume pdflatex-compatible.\n" +
@@ -642,6 +652,7 @@ const defaultSystemPromptSettings = {
     "The measurement tool will reject any candidate whose rendered line count does not actually drop for that block, including candidates that merely shorten text while preserving the same number of rendered lines. " +
     "Prioritize blocks that currently render across multiple lines; treat already-one-line blocks as last-resort cuts unless deleting one is truly necessary. " +
     "If only one line needs to be reclaimed overall, strongly prefer one minimal verified line-saving change and leave the other edited blocks effectively the same. " +
+    tailorResumeSkillsKeywordPlacementSentence + " " +
     tailorResumePageCountRedundantBulletGuardrail +
     "If a verified candidate set still leaves the resume above the target page count, widen the next pass by adding another high-priority multi-line block rather than repeating the same small cut shape. " +
     "If the exact page-count verification still shows the resume above the target, you may still submit those verified line-saving candidates so the next pass starts from a smaller draft, but do not call the job done until the exact page-count verification is at or below the target. " +
@@ -708,13 +719,16 @@ export function buildTailorResumePlanningSystemPrompt(
   },
 ) {
   const prompt = ensurePromptIncludesLine(
-    renderSystemPromptTemplate(settings.tailorResumePlanning, {
-      FEEDBACK_BLOCK: buildFeedbackBlock(
-        "Previous attempt feedback",
-        input.feedback,
-      ),
-    }),
-    tailorResumePlanningRedundantBulletGuardrail,
+    ensurePromptIncludesLine(
+      renderSystemPromptTemplate(settings.tailorResumePlanning, {
+        FEEDBACK_BLOCK: buildFeedbackBlock(
+          "Previous attempt feedback",
+          input.feedback,
+        ),
+      }),
+      tailorResumePlanningRedundantBulletGuardrail,
+    ),
+    tailorResumeSkillsKeywordPlacementRule,
   );
 
   return [
@@ -736,13 +750,16 @@ export function buildTailorResumeImplementationSystemPrompt(
   input: { feedback?: string },
 ) {
   const prompt = ensurePromptIncludesLine(
-    renderSystemPromptTemplate(settings.tailorResumeImplementation, {
-      FEEDBACK_BLOCK: buildFeedbackBlock(
-        "Previous implementation feedback",
-        input.feedback,
-      ),
-    }),
-    tailorResumeImplementationRedundantBulletGuardrail,
+    ensurePromptIncludesLine(
+      renderSystemPromptTemplate(settings.tailorResumeImplementation, {
+        FEEDBACK_BLOCK: buildFeedbackBlock(
+          "Previous implementation feedback",
+          input.feedback,
+        ),
+      }),
+      tailorResumeImplementationRedundantBulletGuardrail,
+    ),
+    tailorResumeSkillsKeywordPlacementRule,
   );
 
   return [
@@ -778,12 +795,15 @@ export function buildTailorResumeRefinementSystemPrompt(
   settings: SystemPromptSettings,
   input: { feedback?: string },
 ) {
-  return renderSystemPromptTemplate(settings.tailorResumeRefinement, {
-    FEEDBACK_BLOCK: buildFeedbackBlock(
-      "Previous refinement feedback",
-      input.feedback,
-    ),
-  }).trim();
+  return ensurePromptIncludesLine(
+    renderSystemPromptTemplate(settings.tailorResumeRefinement, {
+      FEEDBACK_BLOCK: buildFeedbackBlock(
+        "Previous refinement feedback",
+        input.feedback,
+      ),
+    }),
+    tailorResumeSkillsKeywordPlacementRule,
+  );
 }
 
 export function buildTailorResumePageCountCompactionPrompt(
@@ -794,28 +814,39 @@ export function buildTailorResumePageCountCompactionPrompt(
     targetPageCount: number;
   },
 ) {
-  const normalizedCurrentPageCount = Math.max(1, Math.floor(input.currentPageCount));
+  const normalizedCurrentPageCount = Math.max(
+    1,
+    Math.floor(input.currentPageCount),
+  );
   const normalizedEstimatedLineReduction = Math.max(
     1,
     Math.floor(input.estimatedLineReduction ?? 1),
   );
-  const normalizedTargetPageCount = Math.max(1, Math.floor(input.targetPageCount));
+  const normalizedTargetPageCount = Math.max(
+    1,
+    Math.floor(input.targetPageCount),
+  );
 
   return ensurePromptIncludesSentence(
-    renderSystemPromptTemplate(settings.tailorResumePageCountCompaction, {
-      CURRENT_PAGE_COUNT: String(normalizedCurrentPageCount),
-      CURRENT_PAGE_LABEL: normalizedCurrentPageCount === 1 ? "page" : "pages",
-      ESTIMATED_LINE_REDUCTION: String(normalizedEstimatedLineReduction),
-      ESTIMATED_LINE_REDUCTION_LABEL:
-        normalizedEstimatedLineReduction === 1 ? "rendered line" : "rendered lines",
-      TARGET_PAGE_COUNT: String(normalizedTargetPageCount),
-      TARGET_PAGE_COUNT_HARD_REQUIREMENT: buildPageCountHardRequirement(
-        normalizedTargetPageCount,
-      ),
-      TARGET_PAGE_COUNT_REQUIREMENT: buildPageCountRequirement(
-        normalizedTargetPageCount,
-      ),
-    }),
-    tailorResumePageCountRedundantBulletGuardrail,
+    ensurePromptIncludesSentence(
+      renderSystemPromptTemplate(settings.tailorResumePageCountCompaction, {
+        CURRENT_PAGE_COUNT: String(normalizedCurrentPageCount),
+        CURRENT_PAGE_LABEL: normalizedCurrentPageCount === 1 ? "page" : "pages",
+        ESTIMATED_LINE_REDUCTION: String(normalizedEstimatedLineReduction),
+        ESTIMATED_LINE_REDUCTION_LABEL:
+          normalizedEstimatedLineReduction === 1
+            ? "rendered line"
+            : "rendered lines",
+        TARGET_PAGE_COUNT: String(normalizedTargetPageCount),
+        TARGET_PAGE_COUNT_HARD_REQUIREMENT: buildPageCountHardRequirement(
+          normalizedTargetPageCount,
+        ),
+        TARGET_PAGE_COUNT_REQUIREMENT: buildPageCountRequirement(
+          normalizedTargetPageCount,
+        ),
+      }),
+      tailorResumePageCountRedundantBulletGuardrail,
+    ),
+    tailorResumeSkillsKeywordPlacementSentence,
   );
 }
