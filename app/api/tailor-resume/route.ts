@@ -5178,6 +5178,19 @@ async function handleRefineTailoredResumeAction(input: {
         refinementVersionId,
         refinementResult.previewPdf,
       );
+      const refinedKeywordCoverage = tailoredResume.keywordCoverage
+        ? buildTailoredResumeKeywordCoverage({
+            emphasizedTechnologies:
+              tailoredResume.keywordCoverage.allPriorities.terms.map((term) => ({
+                evidence: "",
+                name: term.name,
+                priority: term.priority,
+              })),
+            originalLatexCode: sourceAnnotatedLatexCode,
+            tailoredLatexCode: refinementResult.latexCode,
+            updatedAt: nextUpdatedAt,
+          })
+        : null;
 
       const nextRawProfile: TailorResumeProfile = {
         ...rawProfile,
@@ -5188,6 +5201,7 @@ async function handleRefineTailoredResumeAction(input: {
                 annotatedLatexCode: refinementResult.annotatedLatexCode,
                 edits: refinementResult.edits,
                 error: null,
+                keywordCoverage: refinedKeywordCoverage,
                 latexCode: refinementResult.latexCode,
                 pdfUpdatedAt: nextUpdatedAt,
                 sourceAnnotatedLatexCode,

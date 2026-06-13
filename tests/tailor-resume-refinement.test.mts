@@ -203,6 +203,9 @@ test("tailored resume review chat exposes keyword coverage as a tool", () => {
   assert.match(source, /missingFromTailored/);
   assert.match(source, /newlyAddedVsOriginal/);
   assert.match(routeSource, /keywordCoverage: tailoredResume\.keywordCoverage/);
+  assert.match(routeSource, /refinedKeywordCoverage/);
+  assert.match(routeSource, /tailoredLatexCode: refinementResult\.latexCode/);
+  assert.match(routeSource, /keywordCoverage: refinedKeywordCoverage/);
 });
 
 test("tailored resume review chat falls back to refinement version history", () => {
