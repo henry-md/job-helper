@@ -30,7 +30,11 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         "@": repoRootDir,
+        react: resolve(extensionDir, "node_modules/react"),
+        "react-dom": resolve(extensionDir, "node_modules/react-dom"),
+        "react/jsx-runtime": resolve(extensionDir, "node_modules/react/jsx-runtime.js"),
       },
+      dedupe: ["react", "react-dom"],
     },
     define: {
       __DEBUG_UI__: JSON.stringify(
