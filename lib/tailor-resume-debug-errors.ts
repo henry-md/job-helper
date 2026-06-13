@@ -8,6 +8,9 @@ import type {
 export const tailorResumeDebugErrorSources = {
   extractionCompileFailure: "extraction-compile-failure",
   pageCountCompactionTranscript: "page-count-compaction-transcript",
+  reviewChatServedError: "review-chat-served-error",
+  stepThreeToolTranscript: "step-3-tool-transcript",
+  stepFourToolTranscript: "step-4-tool-transcript",
   stepTwoChatServedError: "step-two-chat-served-error",
   tailoringCompileFailure: "tailoring-compile-failure",
   tailoringInvalidReplacement: "tailoring-invalid-replacement",
@@ -42,11 +45,18 @@ export function classifyTailorResumeDebugErrorSource(
     return "step_failure";
   }
 
-  if (source === tailorResumeDebugErrorSources.stepTwoChatServedError) {
+  if (
+    source === tailorResumeDebugErrorSources.reviewChatServedError ||
+    source === tailorResumeDebugErrorSources.stepTwoChatServedError
+  ) {
     return "chat_error";
   }
 
-  if (source === tailorResumeDebugErrorSources.pageCountCompactionTranscript) {
+  if (
+    source === tailorResumeDebugErrorSources.pageCountCompactionTranscript ||
+    source === tailorResumeDebugErrorSources.stepThreeToolTranscript ||
+    source === tailorResumeDebugErrorSources.stepFourToolTranscript
+  ) {
     return "tool_transcript";
   }
 
@@ -69,6 +79,12 @@ export function formatTailorResumeDebugErrorSource(source: string) {
       return "Extraction compile failure";
     case tailorResumeDebugErrorSources.pageCountCompactionTranscript:
       return "Page-count compaction transcript";
+    case tailorResumeDebugErrorSources.reviewChatServedError:
+      return "Review chat error";
+    case tailorResumeDebugErrorSources.stepThreeToolTranscript:
+      return "Step 3 tool transcript";
+    case tailorResumeDebugErrorSources.stepFourToolTranscript:
+      return "Step 4 tool transcript";
     case tailorResumeDebugErrorSources.stepTwoChatServedError:
       return "Step 2 chat error";
     case tailorResumeDebugErrorSources.tailoringCompileFailure:

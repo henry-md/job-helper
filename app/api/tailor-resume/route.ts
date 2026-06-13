@@ -85,7 +85,10 @@ import {
   advanceTailorResumeQuestioning,
   type TailorResumeInterviewStreamEvent,
 } from "@/lib/tailor-resume-questioning";
-import { refineTailoredResume } from "@/lib/tailor-resume-refinement";
+import {
+  formatTailoredResumeRefinementUserError,
+  refineTailoredResume,
+} from "@/lib/tailor-resume-refinement";
 import {
   appendTailoredResumeReviewChatMessages,
   attachTailoredResumeReviewChatsToProfile,
@@ -157,6 +160,7 @@ import {
   type TailoredResumeBlockEditRecord,
   type TailorResumeProfile,
   type TailorResumeSavedLinkUpdate,
+  type TailoredResumeOpenAiDebugStage,
 } from "@/lib/tailor-resume-types";
 import {
   findTailorResumeWorkspaceInterview,
@@ -318,6 +322,73 @@ async function logTailorResumeChatServedError(input: {
     source: tailorResumeDebugErrorSources.stepTwoChatServedError,
     userId: input.userId,
   });
+}
+
+async function logTailoredResumeReviewChatServedError(input: {
+  error: string;
+  model?: string | null;
+  tailoredResume?: TailorResumeProfile["tailoredResumes"][number] | null;
+  tailoredResumeId?: string | null;
+  userId: string;
+  userPrompt?: string | null;
+}) {
+  const tailoredResume = input.tailoredResume ?? null;
+  const payload = {
+    action: "refineTailoredResume",
+    applicationId: tailoredResume?.applicationId ?? null,
+    jobUrl: tailoredResume?.jobUrl ?? null,
+    model: input.model ?? null,
+    tailoredResumeId: input.tailoredResumeId ?? tailoredResume?.id ?? null,
+    userPrompt: input.userPrompt ?? null,
+  };
+
+  await logTailorResumeDebugError({
+    attempt: 1,
+    error: input.error,
+    latexCode: JSON.stringify(payload, null, 2),
+    source: tailorResumeDebugErrorSources.reviewChatServedError,
+    userId: input.userId,
+  });
+}
+
+async function logTailorResumeStageToolTranscripts(input: {
+  applicationId?: string | null;
+  attempt: number;
+  jobUrl?: string | null;
+  runId?: string | null;
+  stages: Array<{
+    debug: TailoredResumeOpenAiDebugStage;
+    source: string;
+    stepNumber: 3 | 4;
+  }>;
+  tailoredResumeId?: string | null;
+  userId: string;
+}) {
+  await Promise.all(
+    input.stages.map((stage) => {
+      const toolCallCount = stage.debug.toolCalls?.length ?? 0;
+
+      return logTailorResumeDebugError({
+        attempt: Math.max(1, Math.floor(input.attempt)),
+        error: `Step ${stage.stepNumber} used ${toolCallCount} tool call${toolCallCount === 1 ? "" : "s"}.`,
+        latexCode: JSON.stringify(
+          {
+            applicationId: input.applicationId ?? null,
+            jobUrl: input.jobUrl ?? null,
+            kind: "tailor_resume_stage_tool_transcript",
+            runId: input.runId ?? null,
+            stage: stage.debug,
+            stepNumber: stage.stepNumber,
+            tailoredResumeId: input.tailoredResumeId ?? null,
+          },
+          null,
+          2,
+        ),
+        source: stage.source,
+        userId: input.userId,
+      });
+    }),
+  );
 }
 
 async function markApplicationsChanged(userId: string) {
@@ -3125,6 +3196,26 @@ async function finalizeTailorResumeGeneration(input: {
       validationError: tailoringResult.validationError,
     });
 
+    await logTailorResumeStageToolTranscripts({
+      applicationId: input.applicationId,
+      attempt: tailoringResult.attempts,
+      jobUrl: input.jobUrl,
+      runId: input.runId,
+      stages: [
+        {
+          debug: tailoringResult.openAiDebug.planning,
+          source: tailorResumeDebugErrorSources.stepThreeToolTranscript,
+          stepNumber: 3,
+        },
+        {
+          debug: tailoringResult.openAiDebug.implementation,
+          source: tailorResumeDebugErrorSources.stepFourToolTranscript,
+          stepNumber: 4,
+        },
+      ],
+      userId: input.userId,
+    });
+
     await updateTailorResumeRunStatus({
       error: failureMessage,
       runId: input.runId,
@@ -3147,6 +3238,28 @@ async function finalizeTailorResumeGeneration(input: {
   const tailoredResumeId = randomUUID();
   const initialVersionId = randomUUID();
   const tailoredResumeUpdatedAt = new Date().toISOString();
+
+  await logTailorResumeStageToolTranscripts({
+    applicationId: input.applicationId,
+    attempt: tailoringResult.attempts,
+    jobUrl: input.jobUrl,
+    runId: input.runId,
+    stages: [
+      {
+        debug: tailoringResult.openAiDebug.planning,
+        source: tailorResumeDebugErrorSources.stepThreeToolTranscript,
+        stepNumber: 3,
+      },
+      {
+        debug: tailoringResult.openAiDebug.implementation,
+        source: tailorResumeDebugErrorSources.stepFourToolTranscript,
+        stepNumber: 4,
+      },
+    ],
+    tailoredResumeId,
+    userId: input.userId,
+  });
+
   const tailoredResumeCreatedAt =
     (await readTailorResumeRunCreatedAt({
       runId: input.runId,
@@ -5131,12 +5244,22 @@ async function handleRefineTailoredResumeAction(input: {
         toolCalls: refinementResult.toolCalls,
       });
     } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Unable to refine the tailored resume edits.";
+      await logTailoredResumeReviewChatServedError({
+        error: errorMessage,
+        model: selectedModel || rawProfile.generationSettings.values.reviewChatModel,
+        tailoredResume,
+        tailoredResumeId,
+        userId: input.userId,
+        userPrompt,
+      });
+
       return NextResponse.json(
         {
-          error:
-            error instanceof Error
-              ? error.message
-              : "Unable to refine the tailored resume edits.",
+          error: formatTailoredResumeRefinementUserError(errorMessage),
         },
         { status: 422 },
       );

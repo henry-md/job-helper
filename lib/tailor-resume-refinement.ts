@@ -44,6 +44,8 @@ const checkRefinedResumeHealthToolName = "check_refined_resume_health";
 const listRefinedResumeKeywordCoverageToolName =
   "list_refined_resume_keyword_coverage";
 const maxTailoredResumeRefinementToolRounds = 5;
+const missingRefinementHealthCheckError =
+  "The model returned final JSON before a matching successful refinement health check.";
 
 const refineTailoredResumeSchema = {
   type: "object",
@@ -178,6 +180,14 @@ type TailoredResumeRefinementToolCall = {
   name: string;
 };
 
+export function formatTailoredResumeRefinementUserError(error: string) {
+  if (error.includes(missingRefinementHealthCheckError)) {
+    return "I couldn't safely verify that proposed resume edit against the rendered PDF, so nothing was saved. Try again with a smaller or more specific edit, and I’ll re-check the page count before applying it.";
+  }
+
+  return error;
+}
+
 function getOpenAIClient() {
   const apiKey = process.env.OPENAI_API_KEY;
 
@@ -275,6 +285,17 @@ function serializeRefinementToolCall(
     argumentsText,
     name: toolCall.name,
     ...(outputText ? { outputText } : {}),
+  };
+}
+
+function serializeRefinementHealthCheckRecovery(input: {
+  candidate: Pick<TailoredResumeRefinementResponse, "changes" | "insertions">;
+  output: unknown;
+}): TailorResumeChatToolCallRecord {
+  return {
+    argumentsText: JSON.stringify(input.candidate, null, 2),
+    name: checkRefinedResumeHealthToolName,
+    outputText: JSON.stringify(input.output, null, 2),
   };
 }
 
@@ -563,9 +584,41 @@ function buildTailoredResumeRefinementInstructions(input: {
     "- Return changes: [] and insertions: [] when no resume edit should be applied. Do not return unchanged existing edits merely to preserve them.",
     `- Use ${listRefinedResumeKeywordCoverageToolName} when the user asks about scraped keyword coverage. Pass empty arrays for the current tailored resume, or pass candidate changes/insertions to inspect coverage after a possible edit.`,
     "- For changes, latexCode must contain only the replacement for that one listed segment.",
+    "- To delete an existing bullet or block, return a change for that segmentId with latexCode set to an empty string and explain the deletion in reason. Do not use insertions to delete content.",
     "- For insertions, anchorSegmentId must be a listed editable segment id and latexCode must contain only the new block. Do not write JOBHELPER_SEGMENT_ID comments.",
     `- Before final JSON, call ${checkRefinedResumeHealthToolName} with the exact changes and insertions you intend to return. Read its rendered page-count and malformed-bullet result. If it reports overflow or changed malformed bullets, revise and call the tool again. Final JSON must match the last successful tool-checked candidate.`,
   ].join("\n\n");
+}
+
+function canonicalizeRefinementSignatureValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeRefinementSignatureValue);
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+      .map(([key, entryValue]) => [
+        key,
+        canonicalizeRefinementSignatureValue(entryValue),
+      ]),
+  );
+}
+
+function buildRefinementCandidateSignature(input: {
+  changes: TailoredResumeRefinementResponse["changes"];
+  insertions: TailoredResumeRefinementResponse["insertions"];
+}) {
+  return JSON.stringify(
+    canonicalizeRefinementSignatureValue({
+      changes: input.changes,
+      insertions: input.insertions,
+    }),
+  );
 }
 
 function isTailoredResumeRefinementNoOp(input: {
@@ -1193,7 +1246,9 @@ export async function refineTailoredResume(input: {
           if (toolCall.name === checkRefinedResumeHealthToolName) {
             checkedCandidateOk = toolOutput.ok === true;
             latestCheckedCandidateSignature = checkedCandidateOk
-              ? JSON.stringify(parseRefinementToolArguments(toolCall))
+              ? buildRefinementCandidateSignature(
+                  parseRefinementToolCandidate(parseRefinementToolArguments(toolCall)),
+                )
               : "";
           }
           responseInput = [
@@ -1253,17 +1308,48 @@ export async function refineTailoredResume(input: {
     }
 
     if (!model.startsWith("anthropic:")) {
-      const finalCandidateSignature = JSON.stringify({
-        changes: refinement.changes,
-        insertions: refinement.insertions,
-      });
+      if (
+        !checkedCandidateOk ||
+        buildRefinementCandidateSignature(refinement) !==
+          latestCheckedCandidateSignature
+      ) {
+        const finalCandidateSignature =
+          buildRefinementCandidateSignature(refinement);
+        const recoveredHealthCheck = await checkRefinedResumeHealth({
+          args: {
+            changes: refinement.changes,
+            insertions: refinement.insertions,
+          },
+          edits: input.edits,
+          sourceAnnotatedLatexCode: sourceLatexCode,
+          targetPageCount,
+        });
 
-      if (!checkedCandidateOk || finalCandidateSignature !== latestCheckedCandidateSignature) {
-        lastError =
-          "The model returned final JSON before a matching successful refinement health check.";
-        feedback =
-          "Call check_refined_resume_health with the exact changes and insertions you plan to return, then return final JSON that matches the checked candidate.";
-        continue;
+        toolCalls.push(
+          serializeRefinementHealthCheckRecovery({
+            candidate: {
+              changes: refinement.changes,
+              insertions: refinement.insertions,
+            },
+            output: {
+              ...recoveredHealthCheck,
+              recoveredFromFinalJson: true,
+            },
+          }),
+        );
+
+        if (recoveredHealthCheck.ok === true) {
+          checkedCandidateOk = true;
+          latestCheckedCandidateSignature = finalCandidateSignature;
+        } else {
+          lastError = missingRefinementHealthCheckError;
+          feedback = [
+            lastError,
+            "The server checked the final JSON candidate directly and it did not pass.",
+            "Call check_refined_resume_health with the exact changes and insertions you plan to return, then return final JSON that matches a successful checked candidate.",
+          ].join("\n");
+          continue;
+        }
       }
     }
 

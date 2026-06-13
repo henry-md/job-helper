@@ -123,7 +123,7 @@ export default async function DebugErrorsPage() {
     },
     {
       description:
-        "Step 2 chat errors that were returned to the extension, including validation failures that should not disappear after the sidebar closes.",
+        "Chat errors that were returned to the extension or review surface, including validation failures that should not disappear after the sidebar closes.",
       failures: chatErrorFailures,
       title: "Chat Errors",
     },

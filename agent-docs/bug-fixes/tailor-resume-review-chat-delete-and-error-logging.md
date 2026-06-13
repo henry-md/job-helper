@@ -1,0 +1,6 @@
+Tailor Resume review chat delete and error logging:
+
+- Symptom: asking review chat to delete a resume bullet could fail unclearly, and validation errors such as a missing matching health check were returned to the UI without a durable chat-error record.
+- Fix: review-chat instructions now explicitly allow deleting an editable block by returning a change with empty `latexCode`, health-check matching uses a canonical candidate signature, and served review-chat errors log to durable Tailor Resume debug errors.
+- Guardrail: review-chat edits may replace a listed segment with empty LaTeX when deletion is the requested operation. Any error returned to the chat surface should also be logged with enough context to diagnose the prompt, model, job URL, and tailored resume id.
+- Manual review controls: the inline trash button should save an empty replacement for the targeted segment, not delete the edit record, so the card stays clickable and restorable. The yellow revert button restores the last official block: `afterLatexCode` for model/chat/pipeline edits, `beforeLatexCode` for user-created edits. Saving an existing edit equal to its original block should prune the review edit so no no-op before/after card remains. Existing edits must remain updateable even after an empty custom replacement removes their segment from the currently resolved LaTeX map.

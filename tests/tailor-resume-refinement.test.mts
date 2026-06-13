@@ -7,6 +7,7 @@ import {
 } from "../lib/system-prompt-settings.ts";
 import {
   buildTailoredResumeReviewChatTranscript,
+  formatTailoredResumeRefinementUserError,
   parseTailoredResumeRefinementResponse,
   validateTailoredResumeRefinementChanges,
 } from "../lib/tailor-resume-refinement.ts";
@@ -152,6 +153,37 @@ test("tailored resume review chat exposes the refinement health-check tool", () 
   assert.match(source, /check_refined_resume_health/);
   assert.match(source, /rendered page-count and malformed-bullet result/i);
   assert.match(routeSource, /toolCalls: refinementResult\.toolCalls/);
+});
+
+test("tailored resume review chat can recover final JSON with a server health check", () => {
+  const source = readFileSync(
+    new URL("../lib/tailor-resume-refinement.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /serializeRefinementHealthCheckRecovery/);
+  assert.match(source, /recoveredFromFinalJson/);
+  assert.match(source, /The server checked the final JSON candidate directly/);
+});
+
+test("tailored resume review chat hides internal health-check errors from users", () => {
+  assert.equal(
+    formatTailoredResumeRefinementUserError(
+      "The model returned final JSON before a matching successful refinement health check.",
+    ),
+    "I couldn't safely verify that proposed resume edit against the rendered PDF, so nothing was saved. Try again with a smaller or more specific edit, and I’ll re-check the page count before applying it.",
+  );
+});
+
+test("tailored resume review chat can delete editable bullets", () => {
+  const source = readFileSync(
+    new URL("../lib/tailor-resume-refinement.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /To delete an existing bullet or block/i);
+  assert.match(source, /latexCode set to an empty string/i);
+  assert.match(source, /Do not use insertions to delete content/i);
 });
 
 test("tailored resume review chat exposes keyword coverage as a tool", () => {

@@ -35,6 +35,12 @@ test("classifyTailorResumeDebugErrorSource separates invalid replacements from b
   );
   assert.equal(
     classifyTailorResumeDebugErrorSource(
+      tailorResumeDebugErrorSources.reviewChatServedError,
+    ),
+    "chat_error",
+  );
+  assert.equal(
+    classifyTailorResumeDebugErrorSource(
       tailorResumeDebugErrorSources.stepTwoChatServedError,
     ),
     "chat_error",
@@ -42,6 +48,18 @@ test("classifyTailorResumeDebugErrorSource separates invalid replacements from b
   assert.equal(
     classifyTailorResumeDebugErrorSource(
       tailorResumeDebugErrorSources.pageCountCompactionTranscript,
+    ),
+    "tool_transcript",
+  );
+  assert.equal(
+    classifyTailorResumeDebugErrorSource(
+      tailorResumeDebugErrorSources.stepThreeToolTranscript,
+    ),
+    "tool_transcript",
+  );
+  assert.equal(
+    classifyTailorResumeDebugErrorSource(
+      tailorResumeDebugErrorSources.stepFourToolTranscript,
     ),
     "tool_transcript",
   );
@@ -66,6 +84,18 @@ test("debug error labels stay human readable", () => {
   );
   assert.equal(
     formatTailorResumeDebugErrorSource(
+      tailorResumeDebugErrorSources.reviewChatServedError,
+    ),
+    "Review chat error",
+  );
+  assert.equal(
+    formatTailorResumeDebugPayloadLabel(
+      tailorResumeDebugErrorSources.reviewChatServedError,
+    ),
+    "Chat context",
+  );
+  assert.equal(
+    formatTailorResumeDebugErrorSource(
       tailorResumeDebugErrorSources.stepTwoChatServedError,
     ),
     "Step 2 chat error",
@@ -85,6 +115,24 @@ test("debug error labels stay human readable", () => {
   assert.equal(
     formatTailorResumeDebugPayloadLabel(
       tailorResumeDebugErrorSources.pageCountCompactionTranscript,
+    ),
+    "Tool-call transcript",
+  );
+  assert.equal(
+    formatTailorResumeDebugErrorSource(
+      tailorResumeDebugErrorSources.stepThreeToolTranscript,
+    ),
+    "Step 3 tool transcript",
+  );
+  assert.equal(
+    formatTailorResumeDebugErrorSource(
+      tailorResumeDebugErrorSources.stepFourToolTranscript,
+    ),
+    "Step 4 tool transcript",
+  );
+  assert.equal(
+    formatTailorResumeDebugPayloadLabel(
+      tailorResumeDebugErrorSources.stepThreeToolTranscript,
     ),
     "Tool-call transcript",
   );
