@@ -6,6 +6,8 @@ The Tailor Resume interactive preview spotlight should track cursor movement smo
 
 The spotlight should also dismiss when the cursor is outside both the rendered PDF page and the spotlight area.
 
+Steady rendered-PDF highlights, such as amber changed text and green added text, should remain visible on the base PDF while the spotlight is active. Only the base blue hover affordance should be hidden during spotlight mode; the spotlight renders its own hover layer and highlight layer.
+
 ## Bugs That Tend to Recreate This
 
 - Returning early from the page `pointermove` handler when the cursor is inside the fixed spotlight. That keeps hover state working but freezes the magnifier crop, causing dead zones followed by step changes.
@@ -16,6 +18,7 @@ The spotlight should also dismiss when the cursor is outside both the rendered P
 - Swapping to a high-resolution spotlight image before it has decoded, which can cause a brief blank frame.
 - Letting guided edit focus re-run on image-source changes or clear a newer cursor-hover spotlight state after its timer fires.
 - Clearing hover or spotlight state when leaving the PDF page into the spotlight, instead of dismissing only after the cursor is outside both regions.
+- Hiding every base `.resume-interactive-highlight` while the magnifier is active. That removes steady amber/green PDF change highlights from the rendered page below the spotlight.
 
 ## Focused Checks
 
@@ -31,3 +34,4 @@ Do not run this for every unrelated feature. Skim this file when the touched are
 - Expected direction/speed result: down and up sweeps should have `wrongDirectionCount: 0`, and `centerYPerPointer` should stay close to `1` rather than spiking above `2`.
 - For edit-focus jitter, click a previously tailored PDF segment such as `software-projects.entry-3.bullet-3`, hold the cursor at several positions for about two seconds each, and capture rapid screenshots. Rect, background position, and background size should stay stable while the cursor is still.
 - For dismissal, move from the rendered PDF into the spotlight and then outside both areas. The spotlight should stay visible in the first transition and disappear in the second.
+- For highlight persistence, open the spotlight over a PDF with steady amber/green highlights. The base PDF should still show those highlights outside the spotlight, the spotlight should show its own magnified highlights, and no green segment-target boxes should appear.

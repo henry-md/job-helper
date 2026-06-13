@@ -264,7 +264,6 @@
   animation: resume-preview-focus-pulse 420ms cubic-bezier(0.22, 1, 0.36, 1) 1;
 }
 
-.resume-interactive-page--magnifier-active > .resume-interactive-layer .resume-interactive-highlight,
 .resume-interactive-page--magnifier-active > .resume-interactive-layer .resume-interactive-segment-hover {
   opacity: 0;
 }
