@@ -402,9 +402,19 @@ function QuickReviewEditCard({
     }
   }
 
-  function revertToModelSuggestion() {
+  async function restoreOfficialLatexCode() {
+    if (isUpdating || draftLatexCode === resetLatexCode) {
+      return;
+    }
+
     setDraftLatexCode(resetLatexCode);
-    textareaRef.current?.focus();
+    const wasSaved = await onSaveUserEdit(edit.editId, resetLatexCode);
+
+    if (wasSaved) {
+      setIsEditingLatex(false);
+    } else {
+      textareaRef.current?.focus();
+    }
   }
 
   async function saveEditingLatex() {
@@ -494,7 +504,6 @@ function QuickReviewEditCard({
         </button>
 
         <div
-          aria-disabled={isSelectionLocked}
           className={`quick-review-diff-surface ${
             !readOnly && edit.state === "applied"
               ? "quick-review-diff-surface-selected"
@@ -520,7 +529,7 @@ function QuickReviewEditCard({
             {isEditingLatex ? (
               <div className="quick-review-inline-editor-actions">
                 <button
-                  aria-label="Revert to model suggestion"
+                  aria-label="Revert to official block"
                   className="quick-review-inline-editor-icon-action"
                   disabled={
                     isUpdating || draftLatexCode === resetLatexCode
@@ -528,10 +537,10 @@ function QuickReviewEditCard({
                   title={
                     isUserEdit
                       ? "Reset to the original block"
-                      : "Revert to the model suggestion"
+                      : "Revert to the latest generated block"
                   }
                   type="button"
-                  onClick={revertToModelSuggestion}
+                  onClick={() => void restoreOfficialLatexCode()}
                 >
                   <RevertIcon />
                 </button>
@@ -539,7 +548,7 @@ function QuickReviewEditCard({
                   aria-label="Delete block edit"
                   className="quick-review-inline-editor-icon-action quick-review-inline-editor-delete-action"
                   disabled={isUpdating}
-                  title="Delete this block edit"
+                  title="Delete this resume block"
                   type="button"
                   onClick={() => void deleteEdit()}
                 >

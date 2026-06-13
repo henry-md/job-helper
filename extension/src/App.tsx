@@ -4749,8 +4749,7 @@ function App() {
     useState<string | null>(null);
   const [tailoredReviewOpenEditRequest, setTailoredReviewOpenEditRequest] =
     useState(0);
-  const [tailoredReviewCloseEditRequest, setTailoredReviewCloseEditRequest] =
-    useState(0);
+  const [tailoredReviewCloseEditRequest] = useState(0);
   const [tailoredResumeReviewState, setTailoredResumeReviewState] =
     useState<TailoredResumeReviewState>({ record: null, status: "idle" });
   const [
@@ -14848,6 +14847,7 @@ function App() {
         throw new Error("The tailored resume review could not be refreshed.");
       }
 
+      setPendingTailoredResumeReviewEditId(null);
       setTailoredResumeReviewState({
         record: reviewRecord,
         status: "ready",
@@ -14889,11 +14889,14 @@ function App() {
     const isCreatingUserEdit = !previousRecord.edits.some(
       (edit) => edit.editId === editId,
     );
+    const normalizedDraftLatexCode = normalizeTailoredReviewEditedLatex(latexCode);
+    const normalizedBeforeLatexCode = normalizeTailoredReviewEditedLatex(
+      currentEdit.beforeLatexCode,
+    );
 
     if (
       isCreatingUserEdit &&
-      normalizeTailoredReviewEditedLatex(latexCode) ===
-        normalizeTailoredReviewEditedLatex(currentEdit.beforeLatexCode)
+      normalizedDraftLatexCode === normalizedBeforeLatexCode
     ) {
       setTailoredReviewDraftUserEditSegmentId((currentSegmentId) =>
         `${currentSegmentId}:user` === editId ? null : currentSegmentId,
@@ -14906,31 +14909,34 @@ function App() {
       edits: (isCreatingUserEdit
         ? [...previousRecord.edits, currentEdit]
         : previousRecord.edits
-      ).map((edit) => {
+      ).flatMap((edit) => {
         if (edit.editId !== editId) {
-          return edit;
+          return [edit];
         }
 
-        if (latexCode === edit.beforeLatexCode) {
-          return {
-            ...edit,
-            customLatexCode: null,
-            state: "rejected",
-          };
+        if (
+          !isCreatingUserEdit &&
+          normalizedDraftLatexCode ===
+            normalizeTailoredReviewEditedLatex(edit.beforeLatexCode)
+        ) {
+          return [];
         }
 
-        if (latexCode === edit.afterLatexCode) {
-          return {
+        if (
+          normalizedDraftLatexCode ===
+          normalizeTailoredReviewEditedLatex(edit.afterLatexCode)
+        ) {
+          return [{
             ...edit,
             customLatexCode: null,
             state: "applied",
-          };
+          }];
         }
 
-        return {
+        return [{
           ...edit,
           customLatexCode: latexCode,
-        };
+        }];
       }),
     };
 
@@ -14969,6 +14975,7 @@ function App() {
         throw new Error("The tailored resume review could not be refreshed.");
       }
 
+      setPendingTailoredResumeReviewEditId(null);
       setTailoredResumeReviewState({
         record: reviewRecord,
         status: "ready",
@@ -14992,103 +14999,7 @@ function App() {
   }
 
   async function deleteTailoredResumeReviewEdit(editId: string) {
-    if (
-      authState.status !== "signedIn" ||
-      !displayedActiveTailoredResumeReviewRecord ||
-      !activeTailoredResumeReviewRecord ||
-      pendingTailoredResumeReviewEditId
-    ) {
-      return false;
-    }
-
-    const currentEdit = displayedActiveTailoredResumeReviewRecord.edits.find(
-      (edit) => edit.editId === editId,
-    );
-
-    if (!currentEdit) {
-      return false;
-    }
-
-    const previousRecord = activeTailoredResumeReviewRecord;
-    const isDraftUserEdit = !previousRecord.edits.some(
-      (edit) => edit.editId === editId,
-    );
-
-    if (isDraftUserEdit) {
-      setTailoredReviewDraftUserEditSegmentId((currentSegmentId) =>
-        `${currentSegmentId}:user` === editId ? null : currentSegmentId,
-      );
-      setTailoredPreviewFocusEditId(null);
-      setTailoredReviewCloseEditRequest((currentValue) => currentValue + 1);
-      return true;
-    }
-
-    const optimisticEdits = previousRecord.edits.filter(
-      (edit) => edit.editId !== editId,
-    );
-    const optimisticRecord: TailoredResumeReviewRecord = {
-      ...previousRecord,
-      edits: optimisticEdits,
-    };
-
-    setPendingTailoredResumeReviewEditId(editId);
-    setTailoredResumeReviewState({
-      record: optimisticRecord,
-      status: "ready",
-    });
-    setTailoredReviewCloseEditRequest((currentValue) => currentValue + 1);
-    setTailoredReviewDraftUserEditSegmentId((currentSegmentId) =>
-      currentEdit.source === "user" && `${currentSegmentId}:user` === editId
-        ? null
-        : currentSegmentId,
-    );
-    setTailoredPreviewFocusEditId(null);
-
-    try {
-      const result = await patchTailorResume({
-        action: "deleteTailoredResumeEdit",
-        editId,
-        tailoredResumeId: previousRecord.id,
-      });
-
-      if (!result.ok) {
-        throw new Error(
-          readTailorResumePayloadError(
-            result.payload,
-            "Unable to delete the tailored resume block edit.",
-          ),
-        );
-      }
-
-      const reviewRecord =
-        resolveTailoredResumeReviewRecordFromPayload(
-          result.payload,
-          previousRecord.id,
-        ) ?? null;
-
-      if (!reviewRecord) {
-        throw new Error("The tailored resume review could not be refreshed.");
-      }
-
-      setTailoredResumeReviewState({
-        record: reviewRecord,
-        status: "ready",
-      });
-      syncTailoredResumeSummariesFromPayload(result.payload);
-      return true;
-    } catch (error) {
-      setTailoredResumeReviewState({
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unable to delete the tailored resume block edit.",
-        record: previousRecord,
-        status: "error",
-      });
-      return false;
-    } finally {
-      setPendingTailoredResumeReviewEditId(null);
-    }
+    return saveTailoredResumeReviewUserEdit(editId, "");
   }
 
   function cancelTailoredResumeReviewUserEditDraft(editId: string) {

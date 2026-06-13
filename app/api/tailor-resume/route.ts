@@ -7298,15 +7298,6 @@ export async function PATCH(request: Request) {
       edits: tailoredResume.edits,
       sourceAnnotatedLatexCode,
     });
-    const resolvedSegment = resolvedSegments.get(segmentId);
-
-    if (!resolvedSegment) {
-      return NextResponse.json(
-        { error: "The selected LaTeX block could not be found." },
-        { status: 404 },
-      );
-    }
-
     const normalizedReplacementLatexCode = stripTailorResumeSegmentIds(
       normalizeTailorResumeLatex(latexCode).annotatedLatex,
     ).replace(/\n+$/, "");
@@ -7323,7 +7314,15 @@ export async function PATCH(request: Request) {
       }
     }
 
+    const resolvedSegment = resolvedSegments.get(segmentId);
     const existingEdit = tailoredResume.edits.find((edit) => edit.segmentId === segmentId);
+
+    if (!resolvedSegment && (!existingEdit || isCreatingUserEdit)) {
+      return NextResponse.json(
+        { error: "The selected LaTeX block could not be found." },
+        { status: 404 },
+      );
+    }
 
     if (!existingEdit && !isCreatingUserEdit) {
       return NextResponse.json(
@@ -7339,7 +7338,11 @@ export async function PATCH(request: Request) {
       );
     }
 
-    if (isCreatingUserEdit && normalizedReplacementLatexCode === resolvedSegment.latexCode) {
+    if (
+      isCreatingUserEdit &&
+      resolvedSegment &&
+      normalizedReplacementLatexCode === resolvedSegment.latexCode
+    ) {
       return NextResponse.json(
         { error: "Change the LaTeX block before saving a user edit." },
         { status: 400 },
@@ -7347,39 +7350,39 @@ export async function PATCH(request: Request) {
     }
 
     const nextEdits: TailoredResumeBlockEditRecord[] = existingEdit
-      ? tailoredResume.edits.map((edit) => {
-      if (edit.editId !== existingEdit.editId) {
-        return edit;
-      }
+      ? tailoredResume.edits.flatMap((edit) => {
+          if (edit.editId !== existingEdit.editId) {
+            return [edit];
+          }
 
-      if (normalizedReplacementLatexCode === edit.beforeLatexCode) {
-        return {
-          ...edit,
-          customLatexCode: null,
-          state: "rejected",
-        };
-      }
+          if (normalizedReplacementLatexCode === edit.beforeLatexCode) {
+            return [];
+          }
 
-      if (normalizedReplacementLatexCode === edit.afterLatexCode) {
-        return {
-          ...edit,
-          customLatexCode: null,
-          state: "applied",
-        };
-      }
+          if (normalizedReplacementLatexCode === edit.afterLatexCode) {
+            return [
+              {
+                ...edit,
+                customLatexCode: null,
+                state: "applied",
+              },
+            ];
+          }
 
-      return {
-        ...edit,
-        command: resolvedSegment.command,
-        customLatexCode: normalizedReplacementLatexCode,
-      };
-      })
+          return [
+            {
+              ...edit,
+              command: resolvedSegment?.command ?? edit.command,
+              customLatexCode: normalizedReplacementLatexCode,
+            },
+          ];
+        })
       : [
           ...tailoredResume.edits,
           {
             afterLatexCode: normalizedReplacementLatexCode,
-            beforeLatexCode: resolvedSegment.latexCode,
-            command: resolvedSegment.command,
+            beforeLatexCode: resolvedSegment?.latexCode ?? "",
+            command: resolvedSegment?.command ?? null,
             customLatexCode: null,
             editId: `${segmentId}:user`,
             generatedByStep: 4,
