@@ -328,6 +328,7 @@ model JobApplication {
   recruiterContact String?
   notes            String?
   hasReferral      Boolean                  @default(false)
+  starred          Boolean                  @default(false)
   jobDescription   String?
   jobUrlHash       String?
   archivedAt       DateTime?
@@ -392,6 +393,7 @@ model TailoredResume {
   status          String
   error           String?          @db.Text
   generationStepTimings Json       @default("[]")
+  starred         Boolean          @default(false)
   archivedAt      DateTime?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt

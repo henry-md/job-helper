@@ -420,6 +420,7 @@ export type TailoredResumeRecord = {
   positionTitle: string;
   generationStepTimings: TailorResumeGenerationStepEvent[];
   sourceAnnotatedLatexCode: string | null;
+  starred: boolean;
   status: TailorResumeLatexStatus;
   thesis: TailoredResumeThesis | null;
   updatedAt: string;
@@ -1881,6 +1882,7 @@ function parseTailoredResumeRecord(value: unknown): TailoredResumeRecord | null 
       value.generationStepTimings,
     ),
     sourceAnnotatedLatexCode,
+    starred: value.starred === true,
     status,
     thesis,
     updatedAt,

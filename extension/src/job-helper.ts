@@ -170,6 +170,8 @@ export const TAILORING_RUNS_STORAGE_KEY = "jobHelperTailoringRuns";
 export const TAILORING_PROMPTS_STORAGE_KEY = "jobHelperTailoringPrompts";
 export const TAILORING_PREPARATIONS_STORAGE_KEY =
   "jobHelperTailoringPreparations";
+export const OPTIMISTIC_MUTATIONS_STORAGE_KEY =
+  "jobHelperOptimisticMutations";
 
 export type TailorRunTimeDisplayMode = "aggregate" | "specific";
 
@@ -331,6 +333,7 @@ export type TailoredResumeSummary = {
   jobUrl: string | null;
   keywordCoverage: TailoredResumeKeywordCoverage | null;
   positionTitle: string | null;
+  starred: boolean;
   status: string | null;
   updatedAt: string;
 };
@@ -570,6 +573,7 @@ export type TailorResumeExistingTailoringState =
       kind: "active_generation";
       lastStep: TailorResumeGenerationStepSummary | null;
       positionTitle: string | null;
+      starred: boolean;
       status: "CANCELLED" | "FAILED" | "NEEDS_INPUT" | "RUNNING" | "SUCCEEDED";
       updatedAt: string;
     }
@@ -588,6 +592,7 @@ export type TailorResumeExistingTailoringState =
       interviewStatus: "deciding" | "pending" | "ready";
       positionTitle: string | null;
       questionCount: number | null;
+      starred: boolean;
       updatedAt: string;
     }
   | {
@@ -604,6 +609,7 @@ export type TailorResumeExistingTailoringState =
       keywordCoverage: TailoredResumeKeywordCoverage | null;
       kind: "completed";
       positionTitle: string | null;
+      starred: boolean;
       status: string;
       tailoredResumeId: string;
       updatedAt: string;
@@ -940,6 +946,7 @@ export function readTailoredResumeSummary(
     jobUrl: readNullableString(value.jobUrl),
     keywordCoverage: readTailoredResumeKeywordCoverage(value.keywordCoverage),
     positionTitle: readString(value.positionTitle) || null,
+    starred: value.starred === true,
     status: readString(value.status) || null,
     updatedAt,
   };
@@ -1522,6 +1529,7 @@ export function readTailorResumeExistingTailoringState(
         existingTailoring.lastStep,
       ),
       positionTitle: readNullableString(existingTailoring.positionTitle),
+      starred: existingTailoring.starred === true,
       status: readTailorResumeExistingTailoringRunStatus(
         existingTailoring.status,
       ),
@@ -1561,6 +1569,7 @@ export function readTailorResumeExistingTailoringState(
       questionCount: readExistingTailoringQuestionCount(
         existingTailoring.questionCount,
       ),
+      starred: existingTailoring.starred === true,
       updatedAt,
     };
   }
@@ -1594,6 +1603,7 @@ export function readTailorResumeExistingTailoringState(
       ),
       kind,
       positionTitle: readNullableString(existingTailoring.positionTitle),
+      starred: existingTailoring.starred === true,
       status: readString(existingTailoring.status) || "ready",
       tailoredResumeId,
       updatedAt,

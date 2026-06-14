@@ -833,6 +833,7 @@ type TailoredResumeDbRecord = {
   jobUrl: string | null;
   positionTitle: string | null;
   profileRecordId: string;
+  starred: boolean;
   status: string;
   updatedAt: Date;
 };
@@ -2177,6 +2178,7 @@ function buildCompletedExistingTailoringState(
     keywordCoverage: tailoredResume.keywordCoverage,
     kind: "completed",
     positionTitle: tailoredResume.positionTitle,
+    starred: tailoredResume.starred === true,
     status: tailoredResume.status,
     tailoredResumeId: tailoredResume.id,
     generationStepTimings: tailoredResume.generationStepTimings,
@@ -2203,6 +2205,7 @@ function buildDbCompletedExistingTailoringState(
     keywordCoverage: null,
     kind: "completed",
     positionTitle: tailoredResume.positionTitle,
+    starred: tailoredResume.starred === true,
     status: tailoredResume.status,
     tailoredResumeId: tailoredResume.profileRecordId,
     updatedAt: tailoredResume.updatedAt.toISOString(),
@@ -2911,6 +2914,7 @@ async function upsertDbTailoredResume(input: {
   jobUrl: string | null;
   positionTitle: string | null;
   profileRecordId: string;
+  starred: boolean;
   status: string;
   userId: string;
 }) {
@@ -2937,6 +2941,7 @@ async function upsertDbTailoredResume(input: {
       jobUrlHash,
       positionTitle: input.positionTitle,
       profileRecordId: input.profileRecordId,
+      starred: input.starred,
       status: input.status,
       userId: input.userId,
     },
@@ -2951,6 +2956,7 @@ async function upsertDbTailoredResume(input: {
       jobUrl: input.jobUrl,
       jobUrlHash,
       positionTitle: input.positionTitle,
+      starred: input.starred,
       status: input.status,
     },
   });
@@ -3298,6 +3304,21 @@ async function finalizeTailorResumeGeneration(input: {
       ? (input.overwrittenTailoredResumeIds ?? [])
       : [],
   );
+  const isApplicationStarred = input.applicationId
+    ? Boolean(
+        (
+          await getPrismaClient().jobApplication.findFirst({
+            select: {
+              starred: true,
+            },
+            where: {
+              id: input.applicationId,
+              userId: input.userId,
+            },
+          })
+        )?.starred,
+      )
+    : false;
   const nextState = await withTailorResumeProfileLock(input.userId, async () => {
     const latestState = await readTailorResumeProfileState(input.userId);
     const runStillActive = await isTailorResumeRunStillActive({
@@ -3358,6 +3379,7 @@ async function finalizeTailorResumeGeneration(input: {
         planningResult: tailoringResult.planningResult,
         positionTitle: tailoredResumePositionTitle,
         sourceAnnotatedLatexCode: input.generationSourceAnnotatedLatex,
+        starred: isApplicationStarred,
         status: tailoringResult.previewPdf ? "ready" : "failed",
         thesis: tailoringResult.thesis,
         updatedAt: tailoredResumeUpdatedAt,
@@ -3454,6 +3476,7 @@ async function finalizeTailorResumeGeneration(input: {
       jobUrl: savedTailoredResume.jobUrl,
       positionTitle: savedTailoredResume.positionTitle,
       profileRecordId: savedTailoredResume.id,
+      starred: savedTailoredResume.starred,
       status: savedTailoredResume.status,
       userId: input.userId,
     });
@@ -6661,6 +6684,171 @@ export async function PATCH(request: Request) {
         includeLockedOnly: true,
       }),
       tailoredResumeId,
+    });
+  }
+
+  if ("action" in body && body.action === "setTailoredResumeStarredState") {
+    const tailoredResumeId =
+      "tailoredResumeId" in body && typeof body.tailoredResumeId === "string"
+        ? body.tailoredResumeId.trim()
+        : "";
+    const applicationId =
+      "applicationId" in body && typeof body.applicationId === "string"
+        ? body.applicationId.trim()
+        : "";
+    const starred =
+      "starred" in body && typeof body.starred === "boolean"
+        ? body.starred
+        : null;
+
+    if ((!tailoredResumeId && !applicationId) || starred === null) {
+      return NextResponse.json(
+        { error: "Provide the tailoring job and whether it should be starred." },
+        { status: 400 },
+      );
+    }
+
+    const matchingTailoredResumeIds = new Set<string>();
+    const matchingApplicationIds = new Set<string>();
+
+    if (applicationId) {
+      matchingApplicationIds.add(applicationId);
+    }
+
+    for (const record of rawProfile.tailoredResumes) {
+      const isMatchingResume = tailoredResumeId && record.id === tailoredResumeId;
+      const isMatchingApplication =
+        applicationId && record.applicationId === applicationId;
+
+      if (isMatchingResume || isMatchingApplication) {
+        matchingTailoredResumeIds.add(record.id);
+        if (record.applicationId) {
+          matchingApplicationIds.add(record.applicationId);
+        }
+      }
+    }
+
+    if (tailoredResumeId) {
+      const dbTailoredResumes = await getPrismaClient().tailoredResume.findMany({
+        select: {
+          applicationId: true,
+          profileRecordId: true,
+        },
+        where: {
+          OR: [{ id: tailoredResumeId }, { profileRecordId: tailoredResumeId }],
+          userId: session.user.id,
+        },
+      });
+
+      for (const dbTailoredResume of dbTailoredResumes) {
+        matchingTailoredResumeIds.add(dbTailoredResume.profileRecordId);
+        if (dbTailoredResume.applicationId) {
+          matchingApplicationIds.add(dbTailoredResume.applicationId);
+        }
+      }
+    }
+
+    if (matchingTailoredResumeIds.size === 0 && !applicationId) {
+      return NextResponse.json(
+        { error: "The tailored resume could not be found." },
+        { status: 404 },
+      );
+    }
+
+    const nextRawProfile: TailorResumeProfile =
+      matchingTailoredResumeIds.size === 0
+        ? rawProfile
+        : {
+            ...rawProfile,
+            tailoredResumes: rawProfile.tailoredResumes.map((record) =>
+              matchingTailoredResumeIds.has(record.id)
+                ? {
+                    ...record,
+                    starred,
+                  }
+                : record,
+            ),
+          };
+
+    if (nextRawProfile !== rawProfile) {
+      await writeTailorResumeProfile(session.user.id, nextRawProfile);
+    }
+
+    const prisma = getPrismaClient();
+    await prisma.$transaction([
+      ...(matchingApplicationIds.size > 0
+        ? [
+            prisma.jobApplication.updateMany({
+              data: {
+                starred,
+              },
+              where: {
+                id: {
+                  in: [...matchingApplicationIds],
+                },
+                userId: session.user.id,
+              },
+            }),
+          ]
+        : []),
+      prisma.tailoredResume.updateMany({
+        data: {
+          starred,
+        },
+        where: {
+          OR: [
+            ...(matchingTailoredResumeIds.size > 0
+              ? [
+                  {
+                    profileRecordId: {
+                      in: [...matchingTailoredResumeIds],
+                    },
+                  },
+                ]
+              : []),
+            ...(matchingApplicationIds.size > 0
+              ? [
+                  {
+                    applicationId: {
+                      in: [...matchingApplicationIds],
+                    },
+                  },
+                ]
+              : []),
+          ],
+          userId: session.user.id,
+        },
+      }),
+      prisma.userSyncState.upsert({
+        create: {
+          applicationsVersion: 1,
+          tailoringVersion: 1,
+          userId: session.user.id,
+        },
+        select: {
+          tailoringVersion: true,
+        },
+        update: {
+          applicationsVersion: {
+            increment: 1,
+          },
+          tailoringVersion: {
+            increment: 1,
+          },
+        },
+        where: {
+          userId: session.user.id,
+        },
+      }),
+    ]);
+
+    return NextResponse.json({
+      applicationIds: [...matchingApplicationIds],
+      profile: mergeTailorResumeProfileWithLockedLinks(nextRawProfile, lockedLinks, {
+        includeLockedOnly: true,
+      }),
+      starred,
+      tailoredResumeIds: [...matchingTailoredResumeIds],
     });
   }
 

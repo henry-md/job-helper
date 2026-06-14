@@ -54,6 +54,7 @@ function buildCompletedExistingTailoringState(
     keywordCoverage: tailoredResume.keywordCoverage,
     kind: "completed",
     positionTitle: tailoredResume.positionTitle,
+    starred: tailoredResume.starred,
     status: tailoredResume.status ?? "ready",
     tailoredResumeId: tailoredResume.id,
     updatedAt: tailoredResume.updatedAt,

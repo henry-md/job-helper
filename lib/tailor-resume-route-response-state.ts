@@ -31,6 +31,7 @@ export type TailorResumeDbRunRecord = {
     company: {
       name: string;
     };
+    starred: boolean;
     title: string;
   };
   applicationId: string;
@@ -124,6 +125,7 @@ export async function findActiveTailorResumeRun(input: {
               name: true,
             },
           },
+          starred: true,
           title: true,
         },
       },
@@ -167,6 +169,7 @@ export async function findActiveTailorResumeRunsForUser(input: {
               name: true,
             },
           },
+          starred: true,
           title: true,
         },
       },
