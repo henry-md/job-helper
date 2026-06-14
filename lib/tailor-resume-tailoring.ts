@@ -16,7 +16,6 @@ import {
 import { validateTailorResumeLatexDocument } from "./tailor-resume-link-validation.ts";
 import {
   buildTailorResumeKeywordCheckResult,
-  buildTailorResumeKeywordPresenceContext,
   resumeTextIncludesKeyword,
 } from "./tailor-resume-keyword-coverage.ts";
 import { formatTailorResumeTermWithCapitalFirst } from "./tailor-resume-non-technologies.ts";
@@ -2374,22 +2373,40 @@ function buildTailorResumeSkillQueryResult(input: {
   query: string;
   skillData?: TailorResumeStoredSkillData | null;
 }) {
+  const normalizedQuery = normalizeTechnologyName(input.query);
+  const matchingSkill =
+    input.mode === "body"
+      ? null
+      : input.skillData?.skills.find(
+          (skill) => normalizeTechnologyName(skill.name) === normalizedQuery,
+        ) ?? null;
   const topMatch = filterTailorResumeSpareBulletsForSearch({
     mode: input.mode,
     query: input.query,
     spareBullets: input.skillData?.spareBullets ?? [],
   })[0];
 
-  if (!topMatch) {
+  if (!topMatch && !matchingSkill) {
     return null;
   }
 
   return {
-    id: topMatch.id,
-    quote: topMatch.quote,
-    replacesQuote: topMatch.replacesQuote,
-    resumeExperienceId: topMatch.resumeExperienceId,
-    skills: topMatch.skills.map((skill) => skill.name),
+    skillsOnlySupport: matchingSkill
+      ? {
+          id: matchingSkill.id,
+          listInSkillsOnly: matchingSkill.listInSkillsOnly,
+          name: matchingSkill.name,
+        }
+      : null,
+    spareBulletSupport: topMatch
+      ? {
+          id: topMatch.id,
+          quote: topMatch.quote,
+          replacesQuote: topMatch.replacesQuote,
+          resumeExperienceId: topMatch.resumeExperienceId,
+          skills: topMatch.skills.map((skill) => skill.name),
+        }
+      : null,
   };
 }
 
@@ -2404,7 +2421,7 @@ function buildTailorResumeSingleSkillQueryToolOutput(input: {
       mode: input.mode,
       result: buildTailorResumeSkillQueryResult(input),
       nextAction:
-        "Use this single top saved resume-bullet support result as evidence if it is relevant. If result is null, do not invent support for that query. **** **WARNING: IF MULTIPLE SAVED REPLACEMENT BULLETS TARGET THE SAME SOURCE BULLET, TREAT THEM AS ALTERNATIVES UNLESS YOU INTENTIONALLY PLAN ONE MULTI-BULLET REPLACEMENT.** ****",
+        "Use skillsOnlySupport as direct permission to add that exact concrete keyword to Skills/Technical Skills. Use spareBulletSupport as experience-bullet evidence only when it is relevant. If result is null, do not invent experience for that query, but concrete adjacent skills may still be valid Skills-only additions under the prompt rules. **** **WARNING: IF MULTIPLE SAVED REPLACEMENT BULLETS TARGET THE SAME SOURCE BULLET, TREAT THEM AS ALTERNATIVES UNLESS YOU INTENTIONALLY PLAN ONE MULTI-BULLET REPLACEMENT.** ****",
     },
     null,
     2,
@@ -2429,7 +2446,7 @@ function buildTailorResumeBatchSkillQueryToolOutput(input: {
         }),
       })),
       nextAction:
-        "Use each top saved resume-bullet support result only when it is relevant. Null means no saved resume-bullet support matched that query. **** **WARNING: IF MULTIPLE SAVED REPLACEMENT BULLETS TARGET THE SAME SOURCE BULLET, TREAT THEM AS ALTERNATIVES UNLESS YOU INTENTIONALLY PLAN ONE MULTI-BULLET REPLACEMENT.** ****",
+        "Use skillsOnlySupport as direct permission to add that exact concrete keyword to Skills/Technical Skills. Use spareBulletSupport as experience-bullet evidence only when it is relevant. Null means no exact saved skill or resume-bullet support matched that query; do not invent experience, but concrete adjacent skills may still be valid Skills-only additions under the prompt rules. **** **WARNING: IF MULTIPLE SAVED REPLACEMENT BULLETS TARGET THE SAME SOURCE BULLET, TREAT THEM AS ALTERNATIVES UNLESS YOU INTENTIONALLY PLAN ONE MULTI-BULLET REPLACEMENT.** ****",
     },
     null,
     2,
@@ -4043,105 +4060,6 @@ function buildImplementationRequiredTechnologies(input: {
   );
 }
 
-function userMarkdownRejectsTechnologyExperience(input: {
-  technologyName: string;
-  userMarkdown: string;
-}) {
-  const matchingSections: string[] = [];
-  let currentHeadingMatchesTechnology = false;
-  let currentSectionLines: string[] = [];
-  const flushCurrentSection = () => {
-    if (currentHeadingMatchesTechnology && currentSectionLines.length > 0) {
-      matchingSections.push(currentSectionLines.join("\n"));
-    }
-
-    currentHeadingMatchesTechnology = false;
-    currentSectionLines = [];
-  };
-  const matchingStandaloneLines = input.userMarkdown
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .flatMap((line) => {
-      const headingMatch = /^(?:#{1,6})\s+(.+)$/.exec(line);
-
-      if (headingMatch) {
-        flushCurrentSection();
-        currentHeadingMatchesTechnology = resumeTextIncludesKeyword({
-          term: input.technologyName,
-          text: headingMatch[1] ?? "",
-        });
-        currentSectionLines = currentHeadingMatchesTechnology ? [line] : [];
-        return [];
-      }
-
-      if (currentHeadingMatchesTechnology) {
-        currentSectionLines.push(line);
-      }
-
-      return resumeTextIncludesKeyword({
-        term: input.technologyName,
-        text: line,
-      })
-        ? [line]
-        : [];
-    });
-
-  flushCurrentSection();
-
-  return [...matchingSections, ...matchingStandaloneLines].some((text) => {
-    const grantsSkillsPermission =
-      /\b(?:can|may|ok(?:ay)?\s+to)\s+(?:list|include)\b/i.test(text) &&
-      /\bskills?\b/i.test(text);
-    const rejectsExperience =
-      /\b(?:no|without)\b[^.\n;]{0,120}\b(?:experience|exposure)\b/i.test(
-        text,
-      ) ||
-      /\b(?:do\s+not|don't|does\s+not|doesn't|cannot|can't)\s+have\b[^.\n;]{0,120}\b(?:experience|exposure)\b/i.test(
-        text,
-      ) ||
-      /\b(?:do\s+not|don't|should\s+not|shouldn't)\s+(?:invent|add|include|claim)\b/i.test(
-        text,
-      ) ||
-      /\bunsupported\b/i.test(text);
-
-    return rejectsExperience && !grantsSkillsPermission;
-  });
-}
-
-export function filterUnsupportedEmphasizedTechnologiesForPlanning(input: {
-  emphasizedTechnologies: TailoredResumeEmphasizedTechnology[];
-  resumePlainText: string;
-  userMarkdown?: TailorResumeUserMarkdownState;
-}) {
-  if (!input.userMarkdown) {
-    return input.emphasizedTechnologies;
-  }
-
-  const userMarkdown = input.userMarkdown;
-  const keywordPresenceContext = buildTailorResumeKeywordPresenceContext({
-    emphasizedTechnologies: input.emphasizedTechnologies,
-    originalResumeText: input.resumePlainText,
-    userMarkdown: userMarkdown.markdown,
-  });
-  const supportedTechnologyNames = new Set(
-    keywordPresenceContext.terms
-      .filter(
-        (term) =>
-          term.presentInOriginalResume ||
-          (term.presentInUserMarkdown &&
-            !userMarkdownRejectsTechnologyExperience({
-              technologyName: term.name,
-              userMarkdown: userMarkdown.markdown,
-            })),
-      )
-      .map((term) => normalizeTechnologyName(term.name)),
-  );
-
-  return input.emphasizedTechnologies.filter((technology) =>
-    supportedTechnologyNames.has(normalizeTechnologyName(technology.name)),
-  );
-}
-
 function buildTailoringImplementationInput(input: {
   jobDescription: string;
   planningBlocksById: Map<string, TailorResumePlanningBlock>;
@@ -4521,11 +4439,7 @@ export async function planTailoredResume(input: {
       input.userMarkdown?.nonTechnologies,
     ).filter((technology) => technology.classification !== "non_skill");
   const emphasizedTechnologiesForPlanning =
-    filterUnsupportedEmphasizedTechnologiesForPlanning({
-      emphasizedTechnologies: emphasizedTechnologiesAfterNonTechnologyFilter,
-      resumePlainText: planningSnapshot.resumePlainText,
-      userMarkdown: input.userMarkdown,
-    });
+    emphasizedTechnologiesAfterNonTechnologyFilter;
 
   for (let attempt = 1; attempt <= maxPlanningAttempts; attempt += 1) {
     const planInput = buildTailoringPlanInput({
@@ -4833,11 +4747,7 @@ export async function planTailoredResume(input: {
         ...nextPlan,
         emphasizedTechnologies: input.precomputedEmphasizedTechnologies
           ? reviewedOrderedTechnologies
-          : filterUnsupportedEmphasizedTechnologiesForPlanning({
-              emphasizedTechnologies: reviewedOrderedTechnologies,
-              resumePlainText: planningSnapshot.resumePlainText,
-              userMarkdown: input.userMarkdown,
-            }),
+          : reviewedOrderedTechnologies,
       };
       validateTailoredResumePlanChanges({
         changes: nextPlanWithJobTechnologies.changes,
