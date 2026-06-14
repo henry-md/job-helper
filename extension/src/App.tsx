@@ -45,6 +45,7 @@ import {
   EXISTING_TAILORING_STORAGE_KEY,
   LAST_TAILORING_STORAGE_KEY,
   normalizeComparableUrl,
+  OPTIMISTIC_MUTATIONS_STORAGE_KEY,
   PREPARING_TAILORING_STORAGE_KEY,
   TAILORING_PREPARATIONS_STORAGE_KEY,
   TAILORING_PROMPTS_STORAGE_KEY,
@@ -179,6 +180,18 @@ import {
 import {
   splitTailoredResumesByArchiveState,
 } from "../../lib/tailored-resume-archive-state.ts";
+import {
+  applyOptimisticMutationsToPersonalInfo,
+  emptyOptimisticMutationStore,
+  readOptimisticMutationStore,
+  reconcileOptimisticMutationStoreWithPersonalInfo,
+  removeOptimisticMutation,
+  type OptimisticMutation,
+  type OptimisticMutationDraft,
+  type OptimisticMutationStore,
+  pruneOptimisticMutationStore,
+  upsertOptimisticMutation,
+} from "./optimistic-mutations";
 import {
   bestFuzzyTextScore,
   normalizeFuzzySearchText,
@@ -1948,6 +1961,33 @@ function buildRetryTailorRunRecord(input: {
   });
 }
 
+function buildOptimisticActiveTailoringState(input: {
+  id: string;
+  jobUrl: string;
+  run: TailorResumeRunRecord;
+  starred?: boolean;
+}): TailorResumeExistingTailoringState {
+  return {
+    applicationId: input.run.applicationId,
+    blockingTechnologies: [],
+    companyName: input.run.companyName,
+    createdAt: input.run.capturedAt,
+    error: null,
+    emphasizedTechnologies: [],
+    generationStepTimings: input.run.generationStepTimings ?? [],
+    id: input.id,
+    jobDescription: "",
+    jobIdentifier: input.run.jobIdentifier,
+    jobUrl: input.jobUrl,
+    kind: "active_generation",
+    lastStep: input.run.generationStep ?? null,
+    positionTitle: input.run.positionTitle,
+    starred: input.starred ?? false,
+    status: "RUNNING",
+    updatedAt: input.run.capturedAt,
+  };
+}
+
 function formatDeleteImpactSummary(impact: PersonalDeleteImpact) {
   const parts: string[] = [];
 
@@ -2003,20 +2043,6 @@ function buildPendingPersonalDeleteImpact(input: {
     tailoredResumeCount: 1,
     tailoredResumeIds: [tailoredResume.id],
     totalCount: 1,
-  };
-}
-
-function removeDeletedItemsFromPersonalInfo(input: {
-  impact: PersonalDeleteImpact;
-  personalInfo: PersonalInfoSummary;
-}): PersonalInfoSummary {
-  const tailoredResumeIds = new Set(input.impact.tailoredResumeIds);
-
-  return {
-    ...input.personalInfo,
-    tailoredResumes: input.personalInfo.tailoredResumes.filter(
-      (tailoredResume) => !tailoredResumeIds.has(tailoredResume.id),
-    ),
   };
 }
 
@@ -2118,68 +2144,6 @@ function removeInFlightTailorRunFromPersonalInfo(input: {
         : input.personalInfo.tailoringInterview,
     tailoringInterviews: input.personalInfo.tailoringInterviews.filter(
       (tailoringInterview) => !matchesTailoringInterview(tailoringInterview),
-    ),
-  };
-}
-
-function setTailoredResumeArchiveStateInPersonalInfo(input: {
-  archived: boolean;
-  personalInfo: PersonalInfoSummary;
-  tailoredResumeId: string;
-  updatedAt: string;
-}): PersonalInfoSummary {
-  return setTailoredResumesArchiveStateInPersonalInfo({
-    archived: input.archived,
-    personalInfo: input.personalInfo,
-    tailoredResumeIds: [input.tailoredResumeId],
-    updatedAt: input.updatedAt,
-  });
-}
-
-function setTailoredResumesArchiveStateInPersonalInfo(input: {
-  archived: boolean;
-  personalInfo: PersonalInfoSummary;
-  tailoredResumeIds: string[];
-  updatedAt: string;
-}): PersonalInfoSummary {
-  const tailoredResumeIds = new Set(
-    input.tailoredResumeIds.map((id) => id.trim()).filter(Boolean),
-  );
-
-  if (tailoredResumeIds.size === 0) {
-    return input.personalInfo;
-  }
-
-  return {
-    ...input.personalInfo,
-    tailoredResumes: input.personalInfo.tailoredResumes.map((tailoredResume) =>
-      tailoredResumeIds.has(tailoredResume.id)
-        ? {
-            ...tailoredResume,
-            archivedAt: input.archived ? input.updatedAt : null,
-            updatedAt: input.updatedAt,
-          }
-        : tailoredResume,
-    ),
-  };
-}
-
-function removeTailoredResumesFromPersonalInfo(input: {
-  personalInfo: PersonalInfoSummary;
-  tailoredResumeIds: string[];
-}): PersonalInfoSummary {
-  const tailoredResumeIds = new Set(
-    input.tailoredResumeIds.map((id) => id.trim()).filter(Boolean),
-  );
-
-  if (tailoredResumeIds.size === 0) {
-    return input.personalInfo;
-  }
-
-  return {
-    ...input.personalInfo,
-    tailoredResumes: input.personalInfo.tailoredResumes.filter(
-      (tailoredResume) => !tailoredResumeIds.has(tailoredResume.id),
     ),
   };
 }
@@ -2865,8 +2829,10 @@ function buildActiveTailorRunCardFromRun(input: {
         : input.run.status === "error"
           ? "error"
           : "loading",
+    starred: false,
     startedAtTime,
     suppressedTailoredResumeId: input.run.suppressedTailoredResumeId ?? null,
+    tailoredResumeId: input.run.tailoredResumeId ?? null,
     step,
     stepTimings: input.run.generationStepTimings ?? [],
     title: buildTailorRunCardTitle({
@@ -2989,9 +2955,11 @@ function buildActiveTailorRunCardFromExistingTailoring(input: {
           : shouldUsePendingInterviewStep && interviewStatus === "deciding"
             ? "loading"
             : input.statusDisplayState ?? nextCard.statusDisplayState,
+    starred: input.existingTailoring.starred,
     startedAtTime,
     step: pendingInterviewStep ?? nextCard.step,
     suppressedTailoredResumeId: null,
+    tailoredResumeId: null,
     url,
   };
 }
@@ -3036,8 +3004,10 @@ function buildActiveTailorRunCardFromPreparation(input: {
     pageKey: input.pageKey ?? null,
     sortTime: startedAtTime,
     statusDisplayState: "loading",
+    starred: false,
     startedAtTime,
     suppressedTailoredResumeId: input.run?.suppressedTailoredResumeId ?? null,
+    tailoredResumeId: input.run?.tailoredResumeId ?? null,
     step: readActiveTailorRunStep({
       captureState: "running",
       existingTailoring: null,
@@ -4724,6 +4694,8 @@ function App() {
   const [isTailorAuthPromptOpen, setIsTailorAuthPromptOpen] = useState(false);
   const [personalInfoState, setPersonalInfoState] =
     useState<PersonalInfoState>({ personalInfo: null, status: "idle" });
+  const [optimisticMutationStore, setOptimisticMutationStore] =
+    useState<OptimisticMutationStore>(emptyOptimisticMutationStore);
   const [pendingPersonalDelete, setPendingPersonalDelete] =
     useState<PendingPersonalDelete | null>(null);
   const [personalDeleteActionState, setPersonalDeleteActionState] =
@@ -4980,6 +4952,11 @@ function App() {
   const currentPageTailoredResumeRowRef = useRef<HTMLDivElement | null>(null);
   const currentPageActiveTailorRunCardRef = useRef<HTMLElement | null>(null);
   const lastReadyPersonalInfoRef = useRef<PersonalInfoSummary | null>(null);
+  const lastBasePersonalInfoRef = useRef<PersonalInfoSummary | null>(null);
+  const optimisticMutationStoreRef = useRef<OptimisticMutationStore>(
+    emptyOptimisticMutationStore,
+  );
+  const latestOptimisticMutationSequenceByKeyRef = useRef<Record<string, number>>({});
   const lastSeenSyncStateRef = useRef<UserSyncStateSnapshot | null>(null);
   const stoppedTailoringsByKeyRef = useRef<StoppedTailoringRegistry>({});
   const isSyncRefreshInFlightRef = useRef(false);
@@ -5191,6 +5168,150 @@ function App() {
     [applyStoppedTailoringFilter, authState],
   );
 
+  const persistOptimisticMutationStore = useCallback(
+    (nextStore: OptimisticMutationStore) => {
+      void chrome.storage.local.set({
+        [OPTIMISTIC_MUTATIONS_STORAGE_KEY]: nextStore,
+      });
+    },
+    [],
+  );
+
+  const publishBasePersonalInfo = useCallback(
+    (
+      basePersonalInfo: PersonalInfoSummary | null,
+      options: { persistCache?: boolean } = {},
+    ) => {
+      if (!basePersonalInfo) {
+        return null;
+      }
+
+      const filteredPersonalInfo = applyStoppedTailoringFilter(basePersonalInfo);
+      const reconciledOptimisticMutationStore =
+        reconcileOptimisticMutationStoreWithPersonalInfo(
+          optimisticMutationStoreRef.current,
+          filteredPersonalInfo,
+        );
+
+      if (
+        reconciledOptimisticMutationStore !== optimisticMutationStoreRef.current
+      ) {
+        optimisticMutationStoreRef.current = reconciledOptimisticMutationStore;
+        setOptimisticMutationStore(reconciledOptimisticMutationStore);
+        persistOptimisticMutationStore(reconciledOptimisticMutationStore);
+      }
+
+      lastBasePersonalInfoRef.current = filteredPersonalInfo;
+      const visiblePersonalInfo = applyOptimisticMutationsToPersonalInfo(
+        filteredPersonalInfo,
+        reconciledOptimisticMutationStore,
+      );
+      lastReadyPersonalInfoRef.current = visiblePersonalInfo;
+
+      if (options.persistCache !== false) {
+        publishPersonalInfoToSharedCache(lastBasePersonalInfoRef.current);
+      }
+
+      return visiblePersonalInfo;
+    },
+    [
+      applyStoppedTailoringFilter,
+      persistOptimisticMutationStore,
+      publishPersonalInfoToSharedCache,
+    ],
+  );
+
+  const setVisiblePersonalInfoFromBase = useCallback(
+    (
+      basePersonalInfo: PersonalInfoSummary,
+      options: { persistCache?: boolean } = {},
+    ) => {
+      const visiblePersonalInfo = publishBasePersonalInfo(
+        basePersonalInfo,
+        options,
+      );
+
+      if (!visiblePersonalInfo) {
+        return;
+      }
+
+      setPersonalInfoState({
+        personalInfo: visiblePersonalInfo,
+        status: "ready",
+      });
+    },
+    [publishBasePersonalInfo],
+  );
+
+  const updateOptimisticMutationStore = useCallback(
+    (nextStore: OptimisticMutationStore) => {
+      const prunedStore = pruneOptimisticMutationStore(nextStore);
+      optimisticMutationStoreRef.current = prunedStore;
+      setOptimisticMutationStore(prunedStore);
+      persistOptimisticMutationStore(prunedStore);
+
+      const basePersonalInfo =
+        lastBasePersonalInfoRef.current ?? lastReadyPersonalInfoRef.current;
+
+      if (basePersonalInfo) {
+        const visiblePersonalInfo =
+          applyOptimisticMutationsToPersonalInfo(
+            applyStoppedTailoringFilter(basePersonalInfo),
+            prunedStore,
+          );
+        lastReadyPersonalInfoRef.current = visiblePersonalInfo;
+        setPersonalInfoState({
+          personalInfo: visiblePersonalInfo,
+          status: "ready",
+        });
+      }
+    },
+    [applyStoppedTailoringFilter, persistOptimisticMutationStore],
+  );
+
+  const addOptimisticMutation = useCallback(
+    (draft: OptimisticMutationDraft) => {
+      const { mutation, store } = upsertOptimisticMutation(
+        optimisticMutationStoreRef.current,
+        draft,
+      );
+
+      if (mutation) {
+        latestOptimisticMutationSequenceByKeyRef.current = {
+          ...latestOptimisticMutationSequenceByKeyRef.current,
+          [mutation.key]: mutation.sequence,
+        };
+        updateOptimisticMutationStore(store);
+      }
+
+      return mutation;
+    },
+    [updateOptimisticMutationStore],
+  );
+
+  const isLatestOptimisticMutation = useCallback(
+    (mutation: OptimisticMutation | null) =>
+      Boolean(
+        mutation &&
+          latestOptimisticMutationSequenceByKeyRef.current[mutation.key] ===
+            mutation.sequence,
+      ),
+    [],
+  );
+
+  const clearOptimisticMutation = useCallback(
+    (mutation: OptimisticMutation | null) => {
+      if (!isLatestOptimisticMutation(mutation)) {
+        return;
+      }
+
+      updateOptimisticMutationStore(
+        removeOptimisticMutation(optimisticMutationStoreRef.current, mutation),
+      );
+    },
+    [isLatestOptimisticMutation, updateOptimisticMutationStore],
+  );
+
   const loadCachedPersonalInfo = useCallback(async (userId: string) => {
     try {
       const result = await chrome.storage.local.get(PERSONAL_INFO_CACHE_STORAGE_KEY);
@@ -5206,9 +5327,8 @@ function App() {
         cacheEntry.personalInfo,
       );
 
-      setPersonalInfoState({
-        personalInfo: nextPersonalInfo,
-        status: "ready",
+      setVisiblePersonalInfoFromBase(nextPersonalInfo, {
+        persistCache: false,
       });
 
       if (!areJsonSnapshotsEqual(nextPersonalInfo, cacheEntry.personalInfo)) {
@@ -5220,7 +5340,7 @@ function App() {
       console.error("Could not load the shared personal info cache.", error);
       return false;
     }
-  }, [applyStoppedTailoringFilter]);
+  }, [applyStoppedTailoringFilter, setVisiblePersonalInfoFromBase]);
 
   const loadPersonalInfo = useCallback(
     async (options: { forceFresh?: boolean; preserveCurrent?: boolean } = {}) => {
@@ -5245,11 +5365,7 @@ function App() {
         );
         lastSeenSyncStateRef.current = nextPersonalInfo.syncState;
 
-        setPersonalInfoState({
-          personalInfo: nextPersonalInfo,
-          status: "ready",
-        });
-        publishPersonalInfoToSharedCache(nextPersonalInfo);
+        setVisiblePersonalInfoFromBase(nextPersonalInfo);
       } catch (error) {
         if (options.preserveCurrent && lastReadyPersonalInfoRef.current) {
           setPersonalInfoState({
@@ -5269,7 +5385,7 @@ function App() {
         });
       }
     },
-    [applyStoppedTailoringFilter, publishPersonalInfoToSharedCache],
+    [applyStoppedTailoringFilter, setVisiblePersonalInfoFromBase],
   );
 
   const loadTailorStorageRegistries = useCallback(async () => {
@@ -8953,31 +9069,75 @@ function App() {
   }, [activeUsageTooltipBucketKey]);
 
   useEffect(() => {
+    optimisticMutationStoreRef.current = optimisticMutationStore;
+  }, [optimisticMutationStore]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const result = await chrome.storage.local.get(
+          OPTIMISTIC_MUTATIONS_STORAGE_KEY,
+        );
+        const nextStore = readOptimisticMutationStore(
+          result[OPTIMISTIC_MUTATIONS_STORAGE_KEY],
+        );
+        optimisticMutationStoreRef.current = nextStore;
+        setOptimisticMutationStore(nextStore);
+      } catch (error) {
+        console.error("Could not load optimistic mutation state.", error);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
     function handleStorageChange(
       changes: Record<string, chrome.storage.StorageChange>,
       areaName: string,
     ) {
       if (
         areaName !== "local" ||
-        !changes[PERSONAL_INFO_CACHE_STORAGE_KEY] ||
         authState.status !== "signedIn" ||
         isSuppressingActiveTailoringHydration
       ) {
         return;
       }
 
-      const cacheEntry = readPersonalInfoCacheEntry(
-        changes[PERSONAL_INFO_CACHE_STORAGE_KEY].newValue,
-      );
+      if (changes[OPTIMISTIC_MUTATIONS_STORAGE_KEY]) {
+        const nextStore = readOptimisticMutationStore(
+          changes[OPTIMISTIC_MUTATIONS_STORAGE_KEY].newValue,
+        );
+        optimisticMutationStoreRef.current = nextStore;
+        setOptimisticMutationStore(nextStore);
 
-      if (!cacheEntry || cacheEntry.userId !== authState.session.user.id) {
-        return;
+        const basePersonalInfo =
+          lastBasePersonalInfoRef.current ?? lastReadyPersonalInfoRef.current;
+
+        if (basePersonalInfo) {
+          const visiblePersonalInfo = applyOptimisticMutationsToPersonalInfo(
+            applyStoppedTailoringFilter(basePersonalInfo),
+            nextStore,
+          );
+          lastReadyPersonalInfoRef.current = visiblePersonalInfo;
+          setPersonalInfoState({
+            personalInfo: visiblePersonalInfo,
+            status: "ready",
+          });
+        }
       }
 
-      setPersonalInfoState({
-        personalInfo: applyStoppedTailoringFilter(cacheEntry.personalInfo),
-        status: "ready",
-      });
+      if (changes[PERSONAL_INFO_CACHE_STORAGE_KEY]) {
+        const cacheEntry = readPersonalInfoCacheEntry(
+          changes[PERSONAL_INFO_CACHE_STORAGE_KEY].newValue,
+        );
+
+        if (!cacheEntry || cacheEntry.userId !== authState.session.user.id) {
+          return;
+        }
+
+        setVisiblePersonalInfoFromBase(cacheEntry.personalInfo, {
+          persistCache: false,
+        });
+      }
     }
 
     chrome.storage.onChanged.addListener(handleStorageChange);
@@ -8985,7 +9145,12 @@ function App() {
     return () => {
       chrome.storage.onChanged.removeListener(handleStorageChange);
     };
-  }, [applyStoppedTailoringFilter, authState, isSuppressingActiveTailoringHydration]);
+  }, [
+    applyStoppedTailoringFilter,
+    authState,
+    isSuppressingActiveTailoringHydration,
+    setVisiblePersonalInfoFromBase,
+  ]);
 
   useEffect(() => {
     void (async () => {
@@ -9555,7 +9720,7 @@ function App() {
       setActivePanelTab("tailor");
     }
 
-    if (tailoredResumeArchiveFilter !== "unarchived") {
+    if (tailoredResumeArchiveFilter === "archived") {
       setTailoredResumeArchiveFilter("unarchived");
     }
 
@@ -9602,7 +9767,7 @@ function App() {
       setActivePanelTab("tailor");
     }
 
-    if (tailoredResumeArchiveFilter !== "unarchived") {
+    if (tailoredResumeArchiveFilter === "archived") {
       setTailoredResumeArchiveFilter("unarchived");
     }
 
@@ -10114,6 +10279,19 @@ function App() {
       status: "running",
       suppressedTailoredResumeId,
     });
+    const optimisticRunUrl =
+      optimisticRun.pageUrl ?? prompt.jobUrl ?? prompt.existingTailoring.jobUrl ?? "";
+    const optimisticActiveTailoring = buildOptimisticActiveTailoringState({
+      id: `start:${
+        suppressedTailoredResumeId ??
+        prompt.existingTailoring.id ??
+        pageKey ??
+        optimisticRunUrl
+      }`,
+      jobUrl: optimisticRunUrl,
+      run: optimisticRun,
+      starred: prompt.existingTailoring.starred,
+    });
 
     setExistingTailoringPrompt(null);
     setExistingTailoringPromptsByKey((currentRegistry) => {
@@ -10154,37 +10332,19 @@ function App() {
     setTailorGenerationStep(null);
     setTailorGenerationStepTimings([]);
     setCaptureState("running");
-    const removeJobUrl = prompt.jobUrl ?? prompt.existingTailoring.jobUrl ?? null;
-    const buildOptimisticPersonalInfo = (currentPersonalInfo: PersonalInfoSummary) => ({
-      ...currentPersonalInfo,
-      activeTailoring: null,
-      activeTailorings: currentPersonalInfo.activeTailorings.filter(
-        (activeTailoring) =>
-          !sameTailoringJobUrl(activeTailoring.jobUrl, removeJobUrl),
-      ),
-      tailoringInterview: null,
-      tailoringInterviews: currentPersonalInfo.tailoringInterviews.filter(
-        (tailoringInterview) =>
-          !sameTailoringJobUrl(tailoringInterview.jobUrl, removeJobUrl),
-      ),
-    }) satisfies PersonalInfoSummary;
-    const optimisticPersonalInfo = personalInfo
-      ? buildOptimisticPersonalInfo(personalInfo)
-      : null;
-
-    if (optimisticPersonalInfo) {
-      lastReadyPersonalInfoRef.current = optimisticPersonalInfo;
-      publishPersonalInfoToSharedCache(optimisticPersonalInfo);
-    }
-
-    setPersonalInfoState((currentState) =>
-      currentState.status === "ready"
-        ? {
-            personalInfo: buildOptimisticPersonalInfo(currentState.personalInfo),
-            status: "ready",
-          }
-        : currentState,
-    );
+    const optimisticMutation = addOptimisticMutation({
+      action: "startTailorRun",
+      activeTailoring: optimisticActiveTailoring,
+      jobUrl: optimisticRunUrl,
+      pageKey,
+      suppressTailoredResumeIds: suppressedTailoredResumeId
+        ? [suppressedTailoredResumeId]
+        : [],
+      tailorRunId:
+        prompt.existingTailoring.kind === "completed"
+          ? null
+          : prompt.existingTailoring.id,
+    });
 
     void persistExistingTailoringPrompt(null, pageKey).catch((error) => {
       console.error("Could not clear the Tailor Resume overwrite prompt.", error);
@@ -10209,6 +10369,7 @@ function App() {
       });
       setActiveTailoringOverrideState("idle");
     } catch (error) {
+      clearOptimisticMutation(optimisticMutation);
       const message =
         error instanceof Error ? error.message : "Failed to tailor the resume.";
       await persistTailorPreparationState(null);
@@ -11388,24 +11549,12 @@ function App() {
       positionTitle: tailoredResume.positionTitle,
       suppressedTailoredResumeId: tailoredResume.id,
     });
-    const optimisticActiveTailoring = {
-      applicationId: tailoredResume.applicationId,
-      blockingTechnologies: [],
-      companyName: tailoredResume.companyName,
-      createdAt: optimisticRun.capturedAt,
-      error: null,
-      emphasizedTechnologies: [],
-      generationStepTimings: [],
+    const optimisticActiveTailoring = buildOptimisticActiveTailoringState({
       id: `retry:${tailoredResume.id}`,
-      jobDescription: "",
-      jobIdentifier: tailoredResume.jobIdentifier,
       jobUrl: targetUrl,
-      kind: "active_generation" as const,
-      lastStep: optimisticRun.generationStep,
-      positionTitle: tailoredResume.positionTitle,
-      status: "RUNNING" as const,
-      updatedAt: optimisticRun.capturedAt,
-    } satisfies TailorResumeExistingTailoringState;
+      run: optimisticRun,
+      starred: tailoredResume.starred,
+    });
 
     setTailoringRunsByKey((currentRegistry) =>
       registryPageKey
@@ -11415,30 +11564,12 @@ function App() {
           }
         : currentRegistry,
     );
-    setPersonalInfoState((currentState) => {
-      if (currentState.status !== "ready") {
-        return currentState;
-      }
-
-      const nextPersonalInfo = {
-        ...currentState.personalInfo,
-        activeTailoring: optimisticActiveTailoring,
-        activeTailorings: [
-          optimisticActiveTailoring,
-          ...currentState.personalInfo.activeTailorings.filter(
-            (activeTailoring) =>
-              !sameTailoringJobUrl(activeTailoring.jobUrl, targetUrl),
-          ),
-        ],
-      } satisfies PersonalInfoSummary;
-
-      lastReadyPersonalInfoRef.current = nextPersonalInfo;
-      publishPersonalInfoToSharedCache(nextPersonalInfo);
-
-      return {
-        personalInfo: nextPersonalInfo,
-        status: "ready",
-      };
+    const optimisticMutation = addOptimisticMutation({
+      action: "retryTailorRun",
+      activeTailoring: optimisticActiveTailoring,
+      jobUrl: targetUrl,
+      pageKey: registryPageKey,
+      suppressTailoredResumeIds: [tailoredResume.id],
     });
 
     try {
@@ -11451,8 +11582,9 @@ function App() {
       setTailoredResumeMenuPosition(null);
       setActiveTailorRunDetailView(null);
       setSelectedTailoredResumeId(null);
-      void loadPersonalInfo({ preserveCurrent: true });
+      await loadPersonalInfo({ preserveCurrent: true });
     } catch (error) {
+      clearOptimisticMutation(optimisticMutation);
       setTailoredResumeMenuError(
         error instanceof Error
           ? error.message
@@ -11637,13 +11769,7 @@ function App() {
     const currentDeleteImpact = pendingPersonalDeleteImpact;
     const fallbackMessage = "Unable to delete the tailored resume.";
     const previousPersonalInfo = personalInfo ?? null;
-    const optimisticPersonalInfo =
-      previousPersonalInfo && currentDeleteImpact
-        ? removeDeletedItemsFromPersonalInfo({
-            impact: currentDeleteImpact,
-            personalInfo: previousPersonalInfo,
-          })
-        : null;
+    const previousBasePersonalInfo = lastBasePersonalInfoRef.current;
     const deletedJobUrls =
       previousPersonalInfo && currentDeleteImpact
         ? readDeletedPersonalInfoJobUrls({
@@ -11658,14 +11784,11 @@ function App() {
     setTailoredResumeMutationError(null);
     void requestHideTailoredResumeBadgesForUrls(deletedJobUrls);
 
-    if (optimisticPersonalInfo) {
-      lastReadyPersonalInfoRef.current = optimisticPersonalInfo;
-      setPersonalInfoState({
-        personalInfo: optimisticPersonalInfo,
-        status: "ready",
-      });
-      publishPersonalInfoToSharedCache(optimisticPersonalInfo);
-    }
+    const optimisticMutation = addOptimisticMutation({
+      action: "deleteTailoredResumes",
+      applicationIds: currentDeleteImpact.applicationIds,
+      tailoredResumeIds: currentDeleteImpact.tailoredResumeIds,
+    });
 
     setPendingPersonalDelete(null);
 
@@ -11694,13 +11817,14 @@ function App() {
         setPersonalDeleteError(null);
         shouldRefreshPersonalInfo = true;
       } else {
+        clearOptimisticMutation(optimisticMutation);
         if (previousPersonalInfo) {
+          lastBasePersonalInfoRef.current = previousBasePersonalInfo;
           lastReadyPersonalInfoRef.current = previousPersonalInfo;
           setPersonalInfoState({
             personalInfo: previousPersonalInfo,
             status: "ready",
           });
-          publishPersonalInfoToSharedCache(previousPersonalInfo);
         }
 
         setPendingPersonalDelete(currentDelete);
@@ -11713,7 +11837,7 @@ function App() {
     }
 
     if (shouldRefreshPersonalInfo) {
-      void loadPersonalInfo({ preserveCurrent: true });
+      await loadPersonalInfo({ preserveCurrent: true });
     }
   }
 
@@ -11851,8 +11975,6 @@ function App() {
     );
     const registryPageKey =
       currentPageResolvedRegistryKey ?? buildTailorRunRegistryKey(targetUrl);
-    let previousPersonalInfo: PersonalInfoSummary | null = null;
-    let nextPersonalInfo: PersonalInfoSummary | null = null;
     let cancelSettled = !shouldCancelCurrentTailoring;
 
     setTailorRunMenuActionState("retrying");
@@ -11892,6 +12014,21 @@ function App() {
         null,
       suppressedTailoredResumeId: retryTailoredResumeId,
     });
+    const optimisticActiveTailoring = buildOptimisticActiveTailoringState({
+      id: `retry:${
+        retryTailoredResumeId ?? existingTailoringId ?? registryPageKey ?? targetUrl
+      }`,
+      jobUrl: targetUrl,
+      run: optimisticRun,
+      starred:
+        currentPageCompletedTailoredResume?.starred ??
+        currentPageCompletedTailoring?.starred ??
+        currentPagePersonalInfoTailoring?.starred ??
+        existingTailoringPrompt?.existingTailoring.starred ??
+        activeTailoring?.starred ??
+        currentActiveTailorRunCard?.starred ??
+        false,
+    });
 
     setTailorGenerationStep(optimisticRun.generationStep);
     setTailorGenerationStepTimings([]);
@@ -11905,6 +12042,16 @@ function App() {
           }
         : currentRegistry,
     );
+    const optimisticMutation = addOptimisticMutation({
+      action: "retryTailorRun",
+      activeTailoring: optimisticActiveTailoring,
+      jobUrl: targetUrl,
+      pageKey: registryPageKey,
+      suppressTailoredResumeIds: retryTailoredResumeId
+        ? [retryTailoredResumeId]
+        : [],
+      tailorRunId: existingTailoringId,
+    });
 
     if (shouldCancelCurrentTailoring) {
       activeTailorRequestAbortControllerRef.current?.abort();
@@ -11920,28 +12067,6 @@ function App() {
       setPendingTailorInterviewAnswerMessage(null);
       setIsTailorInterviewFinishPromptOpen(false);
       setTailorInterviewError(null);
-      setPersonalInfoState((currentState) => {
-        if (currentState.status !== "ready") {
-          return currentState;
-        }
-
-        previousPersonalInfo = currentState.personalInfo;
-        nextPersonalInfo = removeInFlightTailorRunFromPersonalInfo({
-          jobUrl: targetUrl,
-          personalInfo: currentState.personalInfo,
-          tailorRunId: existingTailoringId ?? "",
-        });
-
-        return {
-          personalInfo: nextPersonalInfo,
-          status: "ready",
-        };
-      });
-
-      if (nextPersonalInfo) {
-        lastReadyPersonalInfoRef.current = nextPersonalInfo;
-        publishPersonalInfoToSharedCache(nextPersonalInfo);
-      }
     }
 
     try {
@@ -11977,16 +12102,12 @@ function App() {
       });
       setActiveTailorRunDetailView(null);
       setSelectedTailoredResumeId(null);
-      void loadPersonalInfo({ preserveCurrent: true });
+      await loadPersonalInfo({ preserveCurrent: true });
     } catch (error) {
-      if (!cancelSettled && previousPersonalInfo) {
-        lastReadyPersonalInfoRef.current = previousPersonalInfo;
-        setPersonalInfoState({
-          personalInfo: previousPersonalInfo,
-          status: "ready",
-        });
-        publishPersonalInfoToSharedCache(previousPersonalInfo);
+      if (cancelSettled) {
+        await loadPersonalInfo({ preserveCurrent: true });
       }
+      clearOptimisticMutation(optimisticMutation);
 
       setTailorRunMenuError(
         error instanceof Error
@@ -12110,37 +12231,18 @@ function App() {
     setTailorGenerationStepTimings([]);
     setLastTailoringRun(null);
     setCaptureState("idle");
-    let previousPersonalInfo: PersonalInfoSummary | null = null;
-    let nextPersonalInfo: PersonalInfoSummary | null = null;
-    setPersonalInfoState((currentState) => {
-      if (currentState.status !== "ready") {
-        return currentState;
-      }
-
-      previousPersonalInfo = currentState.personalInfo;
-      nextPersonalInfo = shouldRemoveSavedArtifacts
-        ? removeTailorRunArtifactsFromPersonalInfo({
-            jobUrl,
-            personalInfo: currentState.personalInfo,
-            tailoredResumeId,
-            tailorRunId,
-          })
-        : removeInFlightTailorRunFromPersonalInfo({
-            jobUrl: cancelJobUrl ?? jobUrl,
-            personalInfo: currentState.personalInfo,
-            tailorRunId: tailorRunId || existingTailoringId || "",
-          });
-
-      return {
-        personalInfo: nextPersonalInfo,
-        status: "ready",
-      };
+    const previousPersonalInfo = personalInfo ?? lastReadyPersonalInfoRef.current;
+    const previousBasePersonalInfo = lastBasePersonalInfoRef.current;
+    const optimisticMutation = addOptimisticMutation({
+      action: "deleteTailoredResumes",
+      jobUrls: [jobUrl, cancelJobUrl, registryPageKey].filter(
+        (value): value is string => Boolean(value),
+      ),
+      tailoredResumeIds: shouldRemoveSavedArtifacts ? [tailoredResumeId] : [],
+      tailorRunIds: [tailorRunId, existingTailoringId].filter(
+        (value): value is string => Boolean(value),
+      ),
     });
-
-    if (nextPersonalInfo) {
-      lastReadyPersonalInfoRef.current = nextPersonalInfo;
-      publishPersonalInfoToSharedCache(nextPersonalInfo);
-    }
 
     let shouldRefreshPersonalInfo = false;
 
@@ -12197,13 +12299,14 @@ function App() {
       }
       shouldRefreshPersonalInfo = true;
     } catch (error) {
+      clearOptimisticMutation(optimisticMutation);
       if (previousPersonalInfo) {
+        lastBasePersonalInfoRef.current = previousBasePersonalInfo;
         lastReadyPersonalInfoRef.current = previousPersonalInfo;
         setPersonalInfoState({
           personalInfo: previousPersonalInfo,
           status: "ready",
         });
-        publishPersonalInfoToSharedCache(previousPersonalInfo);
       }
 
       setTailorRunMenuError(
@@ -12214,7 +12317,7 @@ function App() {
     }
 
     if (shouldRefreshPersonalInfo) {
-      void loadPersonalInfo({ preserveCurrent: true });
+      await loadPersonalInfo({ preserveCurrent: true });
     }
   }
 
@@ -12378,6 +12481,17 @@ function App() {
       suppressedTailoredResumeId:
         card.deleteTarget?.tailoredResumeId ?? card.suppressedTailoredResumeId,
     });
+    const optimisticActiveTailoring = buildOptimisticActiveTailoringState({
+      id: `retry:${
+        card.deleteTarget?.tailoredResumeId ??
+        card.existingTailoringId ??
+        card.pageKey ??
+        targetUrl
+      }`,
+      jobUrl: targetUrl,
+      run: optimisticRun,
+      starred: card.starred,
+    });
 
     setTailoringRunsByKey((currentRegistry) =>
       registryPageKey
@@ -12387,35 +12501,17 @@ function App() {
           }
         : currentRegistry,
     );
-
-    let previousPersonalInfo: PersonalInfoSummary | null = null;
-    let nextPersonalInfo: PersonalInfoSummary | null = null;
+    const optimisticMutation = addOptimisticMutation({
+      action: "retryTailorRun",
+      activeTailoring: optimisticActiveTailoring,
+      jobUrl: targetUrl,
+      pageKey: registryPageKey,
+      suppressTailoredResumeIds: [
+        card.deleteTarget?.tailoredResumeId ?? card.suppressedTailoredResumeId,
+      ].filter((id): id is string => Boolean(id)),
+      tailorRunId: existingTailoringId,
+    });
     let cancelSettled = !shouldCancelExistingRun;
-
-    if (shouldCancelExistingRun) {
-      setPersonalInfoState((currentState) => {
-        if (currentState.status !== "ready") {
-          return currentState;
-        }
-
-        previousPersonalInfo = currentState.personalInfo;
-        nextPersonalInfo = removeInFlightTailorRunFromPersonalInfo({
-          jobUrl: targetUrl,
-          personalInfo: currentState.personalInfo,
-          tailorRunId: existingTailoringId,
-        });
-
-        return {
-          personalInfo: nextPersonalInfo,
-          status: "ready",
-        };
-      });
-
-      if (nextPersonalInfo) {
-        lastReadyPersonalInfoRef.current = nextPersonalInfo;
-        publishPersonalInfoToSharedCache(nextPersonalInfo);
-      }
-    }
 
     await clearTailorRegistryEntriesForMatch({
       jobUrl: targetUrl,
@@ -12450,18 +12546,16 @@ function App() {
         url: targetUrl,
       });
       setActiveTailorRunDetailView(null);
-      void loadPersonalInfo({ preserveCurrent: true });
+      await loadPersonalInfo({ preserveCurrent: true });
     } catch (error) {
-      if (!cancelSettled && previousPersonalInfo) {
-        lastReadyPersonalInfoRef.current = previousPersonalInfo;
-        setPersonalInfoState({
-          personalInfo: previousPersonalInfo,
-          status: "ready",
-        });
-        publishPersonalInfoToSharedCache(previousPersonalInfo);
+      if (cancelSettled) {
+        await loadPersonalInfo({ preserveCurrent: true });
       }
+      clearOptimisticMutation(optimisticMutation);
 
-      await loadPersonalInfo();
+      if (!cancelSettled) {
+        await loadPersonalInfo();
+      }
       setBackgroundTailorRunMenuErrorCardId(card.id);
       setBackgroundTailorRunMenuError(
         error instanceof Error
@@ -12550,36 +12644,22 @@ function App() {
     setBackgroundTailorRunMenuId(null);
     let shouldRefreshPersonalInfo = false;
     let previousPersonalInfo: PersonalInfoSummary | null = null;
-    let nextPersonalInfo: PersonalInfoSummary | null = null;
-    setPersonalInfoState((currentState) => {
-      if (currentState.status !== "ready") {
-        return currentState;
-      }
+    const previousBasePersonalInfo = lastBasePersonalInfoRef.current;
 
-      previousPersonalInfo = currentState.personalInfo;
-      nextPersonalInfo = shouldRemoveSavedArtifacts
-        ? removeTailorRunArtifactsFromPersonalInfo({
-            jobUrl,
-            personalInfo: currentState.personalInfo,
-            tailoredResumeId,
-            tailorRunId,
-          })
-        : removeInFlightTailorRunFromPersonalInfo({
-            jobUrl,
-            personalInfo: currentState.personalInfo,
-            tailorRunId: tailorRunId || existingTailoringId,
-          });
-
-      return {
-        personalInfo: nextPersonalInfo,
-        status: "ready",
-      };
-    });
-
-    if (nextPersonalInfo) {
-      lastReadyPersonalInfoRef.current = nextPersonalInfo;
-      publishPersonalInfoToSharedCache(nextPersonalInfo);
+    if (personalInfo) {
+      previousPersonalInfo = personalInfo;
     }
+
+    const optimisticMutation = addOptimisticMutation({
+      action: "deleteTailoredResumes",
+      jobUrls: [jobUrl, card.pageKey].filter(
+        (value): value is string => Boolean(value),
+      ),
+      tailoredResumeIds: shouldRemoveSavedArtifacts ? [tailoredResumeId] : [],
+      tailorRunIds: [tailorRunId, existingTailoringId].filter(
+        (value): value is string => Boolean(value),
+      ),
+    });
 
     void requestHideTailoredResumeBadgesForUrls([jobUrl, card.pageKey]);
 
@@ -12628,13 +12708,14 @@ function App() {
       setActiveTailorRunDetailView(null);
       shouldRefreshPersonalInfo = true;
     } catch (error) {
+      clearOptimisticMutation(optimisticMutation);
       if (previousPersonalInfo) {
+        lastBasePersonalInfoRef.current = previousBasePersonalInfo;
         lastReadyPersonalInfoRef.current = previousPersonalInfo;
         setPersonalInfoState({
           personalInfo: previousPersonalInfo,
           status: "ready",
         });
-        publishPersonalInfoToSharedCache(previousPersonalInfo);
       }
 
       await loadPersonalInfo();
@@ -12651,7 +12732,7 @@ function App() {
     }
 
     if (shouldRefreshPersonalInfo) {
-      void loadPersonalInfo({ preserveCurrent: true });
+      await loadPersonalInfo({ preserveCurrent: true });
     }
   }
 
@@ -14783,19 +14864,27 @@ function App() {
     const tailoredResumes = readTailoredResumeSummaries(payload);
 
     let nextPersonalInfo: PersonalInfoSummary | null = null;
+    let nextBasePersonalInfo: PersonalInfoSummary | null = null;
     setPersonalInfoState((currentState) =>
       currentState.status === "ready"
         ? {
-            personalInfo: (nextPersonalInfo = {
-              ...currentState.personalInfo,
-              tailoredResumes,
-            }),
+            personalInfo: (nextPersonalInfo = applyOptimisticMutationsToPersonalInfo(
+              (nextBasePersonalInfo = {
+                ...(lastBasePersonalInfoRef.current ?? currentState.personalInfo),
+                tailoredResumes,
+              }),
+              optimisticMutationStoreRef.current,
+            )),
             status: "ready",
           }
         : currentState,
     );
 
-    publishPersonalInfoToSharedCache(nextPersonalInfo);
+    if (nextBasePersonalInfo) {
+      lastBasePersonalInfoRef.current = nextBasePersonalInfo;
+      lastReadyPersonalInfoRef.current = nextPersonalInfo;
+      publishPersonalInfoToSharedCache(nextBasePersonalInfo);
+    }
   }
 
   async function setTailoredResumeArchivedState(input: {
@@ -14826,23 +14915,12 @@ function App() {
     });
     setTailoredResumeMutationError(null);
     const previousPersonalInfo = personalInfo ?? lastReadyPersonalInfoRef.current;
-    const optimisticPersonalInfo = previousPersonalInfo
-      ? setTailoredResumeArchiveStateInPersonalInfo({
-          archived: input.archived,
-          personalInfo: previousPersonalInfo,
-          tailoredResumeId,
-          updatedAt: new Date().toISOString(),
-        })
-      : null;
-
-    if (optimisticPersonalInfo) {
-      lastReadyPersonalInfoRef.current = optimisticPersonalInfo;
-      setPersonalInfoState({
-        personalInfo: optimisticPersonalInfo,
-        status: "ready",
-      });
-      publishPersonalInfoToSharedCache(optimisticPersonalInfo);
-    }
+    const previousBasePersonalInfo = lastBasePersonalInfoRef.current;
+    const optimisticMutation = addOptimisticMutation({
+      action: "setArchived",
+      archived: input.archived,
+      tailoredResumeIds: [tailoredResumeId],
+    });
 
     try {
       const result = await patchTailorResume({
@@ -14862,8 +14940,10 @@ function App() {
         );
       }
 
-      syncTailoredResumeSummariesFromPayload(result.payload);
-      await loadPersonalInfo({ preserveCurrent: true });
+      if (isLatestOptimisticMutation(optimisticMutation)) {
+        syncTailoredResumeSummariesFromPayload(result.payload);
+        await loadPersonalInfo({ preserveCurrent: true });
+      }
 
       return {
         ok: true as const,
@@ -14877,6 +14957,7 @@ function App() {
             : "Unable to restore the tailored resume.";
 
       if (isMissingTailoredResumeErrorMessage(message)) {
+        clearOptimisticMutation(optimisticMutation);
         await evictMissingTailoredResumeLocally(tailoredResumeId);
         await loadPersonalInfo({ preserveCurrent: true });
 
@@ -14886,13 +14967,14 @@ function App() {
       }
 
       setTailoredResumeMutationError(message);
+      clearOptimisticMutation(optimisticMutation);
       if (previousPersonalInfo) {
+        lastBasePersonalInfoRef.current = previousBasePersonalInfo;
         lastReadyPersonalInfoRef.current = previousPersonalInfo;
         setPersonalInfoState({
           personalInfo: previousPersonalInfo,
           status: "ready",
         });
-        publishPersonalInfoToSharedCache(previousPersonalInfo);
       }
 
       return {
@@ -15017,23 +15099,12 @@ function App() {
 
     const previousArchiveFilter = tailoredResumeArchiveFilter;
     const previousPersonalInfo = personalInfo ?? lastReadyPersonalInfoRef.current;
-    const optimisticPersonalInfo = previousPersonalInfo
-      ? setTailoredResumesArchiveStateInPersonalInfo({
-          archived: true,
-          personalInfo: previousPersonalInfo,
-          tailoredResumeIds,
-          updatedAt: new Date().toISOString(),
-        })
-      : null;
-
-    if (optimisticPersonalInfo) {
-      lastReadyPersonalInfoRef.current = optimisticPersonalInfo;
-      setPersonalInfoState({
-        personalInfo: optimisticPersonalInfo,
-        status: "ready",
-      });
-      publishPersonalInfoToSharedCache(optimisticPersonalInfo);
-    }
+    const previousBasePersonalInfo = lastBasePersonalInfoRef.current;
+    const optimisticMutation = addOptimisticMutation({
+      action: "setArchived",
+      archived: true,
+      tailoredResumeIds,
+    });
 
     setTailoredResumeArchiveFilter("archived");
 
@@ -15051,8 +15122,10 @@ function App() {
         );
       }
 
-      syncTailoredResumeSummariesFromPayload(result.payload);
-      void loadPersonalInfo({ preserveCurrent: true });
+      if (isLatestOptimisticMutation(optimisticMutation)) {
+        syncTailoredResumeSummariesFromPayload(result.payload);
+        await loadPersonalInfo({ preserveCurrent: true });
+      }
     } catch (error) {
       setTailoredResumeMutationError(
         error instanceof Error
@@ -15060,13 +15133,14 @@ function App() {
           : "Unable to archive all tailored resumes.",
       );
 
+      clearOptimisticMutation(optimisticMutation);
       if (previousPersonalInfo) {
+        lastBasePersonalInfoRef.current = previousBasePersonalInfo;
         lastReadyPersonalInfoRef.current = previousPersonalInfo;
         setPersonalInfoState({
           personalInfo: previousPersonalInfo,
           status: "ready",
         });
-        publishPersonalInfoToSharedCache(previousPersonalInfo);
       }
 
       setTailoredResumeArchiveFilter(previousArchiveFilter);
@@ -15116,26 +15190,14 @@ function App() {
     setTailoredResumeArchiveActionIds(new Set(tailoredResumeIds));
 
     const previousPersonalInfo = personalInfo ?? lastReadyPersonalInfoRef.current;
-    const optimisticPersonalInfo = previousPersonalInfo
-      ? {
-          ...removeTailoredResumesFromPersonalInfo({
-            personalInfo: previousPersonalInfo,
-            tailoredResumeIds,
-          }),
-          activeTailoring: null,
-          activeTailorings: [],
-          tailoringInterviews: [],
-        }
-      : null;
-
-    if (optimisticPersonalInfo) {
-      lastReadyPersonalInfoRef.current = optimisticPersonalInfo;
-      setPersonalInfoState({
-        personalInfo: optimisticPersonalInfo,
-        status: "ready",
-      });
-      publishPersonalInfoToSharedCache(optimisticPersonalInfo);
-    }
+    const previousBasePersonalInfo = lastBasePersonalInfoRef.current;
+    const optimisticMutation = addOptimisticMutation({
+      action: "deleteTailoredResumes",
+      jobUrls: activeRunUrlsToDelete,
+      tailoredResumeIds,
+      tailorRunIds: activeRunIdsToDelete,
+    });
+    setIsDeleteAllTailoredResumesPromptOpen(false);
 
     void requestHideTailoredResumeBadgesForUrls(
       [
@@ -15185,13 +15247,16 @@ function App() {
         );
       }
 
-      syncTailoredResumeSummariesFromPayload(result.payload);
+      if (isLatestOptimisticMutation(optimisticMutation)) {
+        syncTailoredResumeSummariesFromPayload(result.payload);
+      }
       setSelectedTailoredResumeId((currentId) =>
         currentId && tailoredResumeIds.includes(currentId) ? null : currentId,
       );
       setActiveTailorRunDetailView(null);
-      setIsDeleteAllTailoredResumesPromptOpen(false);
-      void loadPersonalInfo({ preserveCurrent: true });
+      if (isLatestOptimisticMutation(optimisticMutation)) {
+        await loadPersonalInfo({ preserveCurrent: true });
+      }
     } catch (error) {
       setTailoredResumeMutationError(
         error instanceof Error
@@ -15199,13 +15264,14 @@ function App() {
           : "Unable to delete all tailored resumes.",
       );
 
+      clearOptimisticMutation(optimisticMutation);
       if (previousPersonalInfo) {
+        lastBasePersonalInfoRef.current = previousBasePersonalInfo;
         lastReadyPersonalInfoRef.current = previousPersonalInfo;
         setPersonalInfoState({
           personalInfo: previousPersonalInfo,
           status: "ready",
         });
-        publishPersonalInfoToSharedCache(previousPersonalInfo);
       }
     } finally {
       setIsDeletingAllTailoredResumes(false);
