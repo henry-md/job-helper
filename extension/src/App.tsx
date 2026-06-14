@@ -232,6 +232,7 @@ type DashboardOpenActionState = "idle" | "running";
 
 type PanelTab = "settings" | "tailor" | "usage";
 type TailoredResumeArchiveFilter = "archived" | "unarchived";
+type TailoredResumeStarFilter = "both" | "starred" | "unstarred";
 type AiUsageReportState =
   | { error: string | null; report: null; status: "idle" | "loading" }
   | { error: null; report: AiUsageReport; status: "ready" }
@@ -347,6 +348,19 @@ function filterTailoredResumesForArchiveSearch(input: {
     .map((item) => item.resume);
 }
 
+function filterTailoredResumesForStarFilter(input: {
+  filter: TailoredResumeStarFilter;
+  resumes: readonly TailoredResumeSummary[];
+}) {
+  if (input.filter === "both") {
+    return [...input.resumes];
+  }
+
+  return input.resumes.filter((resume) =>
+    input.filter === "starred" ? resume.starred : !resume.starred,
+  );
+}
+
 type SettingsSpareBulletEditDraft = {
   id: string;
   quote: string;
@@ -423,8 +437,10 @@ type ActiveTailorRunCard = {
   pageKey: string | null;
   sortTime: number;
   statusDisplayState: "error" | "loading" | "ready" | "warning";
+  starred: boolean;
   startedAtTime: number;
   suppressedTailoredResumeId: string | null;
+  tailoredResumeId: string | null;
   step: TailorRunProgressStep;
   stepTimings: TailorResumeGenerationStepTiming[];
   title: string;
@@ -4193,6 +4209,14 @@ function FilterIcon() {
   );
 }
 
+function StarIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="m12 3.5 2.65 5.37 5.93.86-4.29 4.18 1.01 5.9L12 17.02l-5.3 2.79 1.01-5.9-4.29-4.18 5.93-.86L12 3.5Z" />
+    </svg>
+  );
+}
+
 function CloseIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -4646,6 +4670,10 @@ function App() {
   );
   const [tailoredResumeArchiveFilter, setTailoredResumeArchiveFilter] =
     useState<TailoredResumeArchiveFilter>("unarchived");
+  const [tailoredResumeStarFilter, setTailoredResumeStarFilter] =
+    useState<TailoredResumeStarFilter>("both");
+  const [isTailoredResumeFiltersOpen, setIsTailoredResumeFiltersOpen] =
+    useState(false);
   const [tailoredResumeSearchQuery, setTailoredResumeSearchQuery] =
     useState("");
   const [aiUsageReportState, setAiUsageReportState] =
@@ -4948,6 +4976,7 @@ function App() {
   const tailoredResumeMenuRef = useRef<HTMLDivElement | null>(null);
   const tailoredResumeMenuPopoverRef = useRef<HTMLDivElement | null>(null);
   const tailoredResumeBatchMenuRef = useRef<HTMLDivElement | null>(null);
+  const tailoredResumeFilterPopoverRef = useRef<HTMLDivElement | null>(null);
   const currentPageTailoredResumeRowRef = useRef<HTMLDivElement | null>(null);
   const currentPageActiveTailorRunCardRef = useRef<HTMLElement | null>(null);
   const lastReadyPersonalInfoRef = useRef<PersonalInfoSummary | null>(null);
@@ -6040,9 +6069,12 @@ function App() {
     () =>
       filterTailoredResumesForArchiveSearch({
         query: tailoredResumeSearchQuery,
-        resumes: archivedTailoredResumes,
+        resumes: filterTailoredResumesForStarFilter({
+          filter: tailoredResumeStarFilter,
+          resumes: archivedTailoredResumes,
+        }),
       }),
-    [tailoredResumeSearchQuery, archivedTailoredResumes],
+    [tailoredResumeSearchQuery, tailoredResumeStarFilter, archivedTailoredResumes],
   );
   const isTailoredResumeSearchActive =
     tailoredResumeSearchQuery.trim().length > 0;
@@ -6403,12 +6435,46 @@ function App() {
     () =>
       filterTailoredResumesForArchiveSearch({
         query: tailoredResumeSearchQuery,
-        resumes: visibleUnarchivedTailoredResumes,
+        resumes: filterTailoredResumesForStarFilter({
+          filter: tailoredResumeStarFilter,
+          resumes: visibleUnarchivedTailoredResumes,
+        }),
       }),
-    [tailoredResumeSearchQuery, visibleUnarchivedTailoredResumes],
+    [
+      tailoredResumeSearchQuery,
+      tailoredResumeStarFilter,
+      visibleUnarchivedTailoredResumes,
+    ],
   );
+  const isActiveTailorRunCardStarred = (card: ActiveTailorRunCard) => {
+    const matchingActiveTailoring =
+      personalInfo?.activeTailorings.find(
+        (activeTailoring) =>
+          (card.applicationId &&
+            activeTailoring.applicationId === card.applicationId) ||
+          (card.tailoredResumeId &&
+            activeTailoring.kind === "completed" &&
+            activeTailoring.tailoredResumeId === card.tailoredResumeId),
+      ) ?? null;
+    const matchingResume =
+      personalInfo?.tailoredResumes.find(
+        (tailoredResume) =>
+          (card.tailoredResumeId && tailoredResume.id === card.tailoredResumeId) ||
+          (card.applicationId &&
+            tailoredResume.applicationId === card.applicationId),
+      ) ?? null;
+
+    return matchingActiveTailoring?.starred ?? matchingResume?.starred ?? card.starred;
+  };
   const displayedActiveTailorRunCards = filterVisibleTailorRunCardsForSavedResumes({
-    cards: activeTailorRunCards,
+    cards:
+      tailoredResumeStarFilter === "both"
+        ? activeTailorRunCards
+        : activeTailorRunCards.filter((card) =>
+            tailoredResumeStarFilter === "starred"
+              ? isActiveTailorRunCardStarred(card)
+              : !isActiveTailorRunCardStarred(card),
+          ),
     resumes: displayedUnarchivedTailoredResumes,
   });
   const shouldRenderUnarchivedResumeLibrary =
@@ -8732,6 +8798,71 @@ function App() {
       document.removeEventListener("pointerdown", handlePointerDown);
     };
   }, [isAiUsageFiltersOpen]);
+
+  useEffect(() => {
+    if (!isTailoredResumeFiltersOpen) {
+      return;
+    }
+
+    const shouldKeepTailoredResumeFiltersOpen = (
+      event: MouseEvent | PointerEvent,
+    ) => {
+      const shell = tailoredResumeFilterPopoverRef.current;
+
+      if (!shell) {
+        return false;
+      }
+
+      const popover = shell.querySelector<HTMLElement>(
+        ".tailored-resume-star-filter-panel",
+      );
+      const composedPath =
+        typeof event.composedPath === "function" ? event.composedPath() : [];
+
+      if (
+        composedPath.includes(shell) ||
+        (popover && composedPath.includes(popover))
+      ) {
+        return true;
+      }
+
+      const shellRect = shell.getBoundingClientRect();
+      const popoverRect = popover?.getBoundingClientRect() ?? null;
+      const left = Math.min(shellRect.left, popoverRect?.left ?? shellRect.left) - 20;
+      const right =
+        Math.max(shellRect.right, popoverRect?.right ?? shellRect.right) + 20;
+      const top = Math.min(shellRect.top, popoverRect?.top ?? shellRect.top) - 20;
+      const bottom =
+        Math.max(shellRect.bottom, popoverRect?.bottom ?? shellRect.bottom) + 20;
+
+      return (
+        event.clientX >= left &&
+        event.clientX <= right &&
+        event.clientY >= top &&
+        event.clientY <= bottom
+      );
+    };
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (!shouldKeepTailoredResumeFiltersOpen(event)) {
+        setIsTailoredResumeFiltersOpen(false);
+      }
+    };
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!shouldKeepTailoredResumeFiltersOpen(event)) {
+        setIsTailoredResumeFiltersOpen(false);
+      }
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("pointerdown", handlePointerDown);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [isTailoredResumeFiltersOpen]);
 
   useEffect(() => {
     if (activePanelTab !== "usage") {
@@ -12711,6 +12842,54 @@ function App() {
     }
   }
 
+  function renderTailoredResumeStarButton(input: {
+    applicationId?: string | null;
+    className?: string;
+    displayName: string;
+    starred: boolean;
+    tailoredResumeId?: string | null;
+  }) {
+    const tailoredResumeId = input.tailoredResumeId?.trim() || null;
+    const applicationId = input.applicationId?.trim() || null;
+    const actionKey = tailoredResumeId ?? applicationId;
+    const nextStarred = !input.starred;
+    const label = input.starred
+      ? `Unstar ${input.displayName}`
+      : `Star ${input.displayName}`;
+
+    if (!actionKey) {
+      return null;
+    }
+
+    return (
+      <button
+        aria-label={label}
+        aria-pressed={input.starred}
+        className={`secondary-action compact-action tailored-resume-star-action ${
+          input.starred ? "tailored-resume-star-action-active" : ""
+        } ${input.className ?? ""}`.trim()}
+        disabled={
+          authActionState === "running" ||
+          isDeletingPersonalItem ||
+          isArchivingAllTailoredResumes ||
+          isDeletingAllTailoredResumes
+        }
+        title={label}
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          void setTailoredResumeStarredState({
+            applicationId,
+            starred: nextStarred,
+            tailoredResumeId,
+          });
+        }}
+      >
+        <StarIcon />
+      </button>
+    );
+  }
+
   const renderActiveTailorRunCard = (card: ActiveTailorRunCard) => {
     const isCurrentCard = card.isCurrentPage;
     const backgroundActionState = backgroundTailorRunActionStates[card.id] ?? null;
@@ -12842,6 +13021,26 @@ function App() {
         technology.classification === "skills_section" &&
         technology.name.trim().length > 0,
     );
+    const matchingStarredActiveTailoring =
+      personalInfo?.activeTailorings.find(
+        (activeTailoring) =>
+          (card.applicationId &&
+            activeTailoring.applicationId === card.applicationId) ||
+          (card.tailoredResumeId &&
+            activeTailoring.kind === "completed" &&
+            activeTailoring.tailoredResumeId === card.tailoredResumeId),
+      ) ?? null;
+    const matchingStarredResume =
+      personalInfo?.tailoredResumes.find(
+        (tailoredResume) =>
+          (card.tailoredResumeId && tailoredResume.id === card.tailoredResumeId) ||
+          (card.applicationId &&
+            tailoredResume.applicationId === card.applicationId),
+      ) ?? null;
+    const isCardStarred =
+      matchingStarredActiveTailoring?.starred ??
+      matchingStarredResume?.starred ??
+      card.starred;
 
     return (
       <section
@@ -12899,6 +13098,13 @@ function App() {
                   {menuActionStateLabel === "retrying" ? "Retrying..." : "Retry"}
                 </button>
               ) : null}
+              {renderTailoredResumeStarButton({
+                applicationId: card.applicationId,
+                className: "tailor-run-star-action",
+                displayName: card.title,
+                starred: isCardStarred,
+                tailoredResumeId: card.tailoredResumeId,
+              })}
               <div
                 className="tailor-run-menu-shell"
                 ref={isCurrentCard && isMenuOpen
@@ -13673,6 +13879,18 @@ function App() {
       onMouseMove: () => setHoveredTailoredResumeBatchAction(action),
       onPointerEnter: () => setHoveredTailoredResumeBatchAction(action),
     });
+    const openTailoredResumeFilters = () => {
+      setIsTailoredResumeFiltersOpen(true);
+    };
+    const selectTailoredResumeStarFilter = (filter: TailoredResumeStarFilter) => {
+      setTailoredResumeStarFilter(filter);
+    };
+    const tailoredResumeStarFilterLabel =
+      tailoredResumeStarFilter === "both"
+        ? "Both"
+        : tailoredResumeStarFilter === "starred"
+          ? "Starred"
+          : "Non-starred";
 
     return (
       <div className="tailored-resume-archive-controls">
@@ -13683,7 +13901,7 @@ function App() {
           <SearchIcon />
           <input
             aria-label="Search tailored resumes by company or title"
-            placeholder="Search company or title"
+            placeholder="Search"
             type="search"
             value={tailoredResumeSearchQuery}
             onChange={(event) =>
@@ -13720,6 +13938,59 @@ function App() {
           >
             Archived
           </button>
+        </div>
+        <div
+          className="tailored-resume-star-filter-shell"
+          ref={tailoredResumeFilterPopoverRef}
+          onFocus={openTailoredResumeFilters}
+          onMouseEnter={openTailoredResumeFilters}
+          onMouseMove={openTailoredResumeFilters}
+          onPointerEnter={openTailoredResumeFilters}
+        >
+          <button
+            aria-expanded={isTailoredResumeFiltersOpen}
+            aria-label={`Resume filters: ${tailoredResumeStarFilterLabel}`}
+            className={`secondary-action compact-action tailored-resume-star-filter-trigger ${
+              tailoredResumeStarFilter !== "both"
+                ? "tailored-resume-star-filter-trigger-active"
+                : ""
+            }`.trim()}
+            title={`Filters: ${tailoredResumeStarFilterLabel}`}
+            type="button"
+            onClick={openTailoredResumeFilters}
+          >
+            <FilterIcon />
+          </button>
+          {isTailoredResumeFiltersOpen ? (
+            <div className="tailored-resume-star-filter-panel" role="tooltip">
+              <fieldset className="tailored-resume-star-filter-group">
+                <legend>Stars</legend>
+                <div
+                  aria-label="Starred resume visibility"
+                  className="tailored-resume-star-filter-options"
+                >
+                  {(
+                    [
+                      ["both", "Both"],
+                      ["starred", "Starred"],
+                      ["unstarred", "Non-starred"],
+                    ] as const
+                  ).map(([filter, label]) => (
+                    <label className="tailored-resume-star-filter-option" key={filter}>
+                      <input
+                        checked={tailoredResumeStarFilter === filter}
+                        name="tailored-resume-star-filter"
+                        type="radio"
+                        value={filter}
+                        onChange={() => selectTailoredResumeStarFilter(filter)}
+                      />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            </div>
+          ) : null}
         </div>
         <div
           className="tailored-resume-batch-menu-shell"
@@ -14159,17 +14430,29 @@ function App() {
                     : ""
                 }`.trim()}
               >
-                <button
+                <div
                   className={`tailored-resume-row ${
                     isCurrentPageMatch ? "tailored-resume-row-current-page" : ""
                   }`.trim()}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() =>
                     openTailoredResumeDetailView(
                       tailoredResume.id,
                       "quickReview",
                     )
                   }
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") {
+                      return;
+                    }
+
+                    event.preventDefault();
+                    openTailoredResumeDetailView(
+                      tailoredResume.id,
+                      "quickReview",
+                    );
+                  }}
                 >
                   <span className="tailored-resume-main">
                     <span className="tailored-resume-title">
@@ -14192,10 +14475,17 @@ function App() {
                       </span>
                     ) : null}
                     <span className="tailored-resume-date">
-                      {formatTailoredResumeDate(tailoredResume.updatedAt)}
+                      {formatTailoredResumeDate(tailoredResume.createdAt)}
                     </span>
+                    {renderTailoredResumeStarButton({
+                      applicationId: tailoredResume.applicationId,
+                      className: "tailored-resume-row-star-action",
+                      displayName,
+                      starred: tailoredResume.starred,
+                      tailoredResumeId: tailoredResume.id,
+                    })}
                   </span>
-                </button>
+                </div>
 
                 <div className="tailored-resume-row-actions">
                   <div
@@ -14615,6 +14905,92 @@ function App() {
         nextIds.delete(tailoredResumeId);
         return nextIds;
       });
+    }
+  }
+
+  async function setTailoredResumeStarredState(input: {
+    applicationId?: string | null;
+    starred: boolean;
+    tailoredResumeId?: string | null;
+  }) {
+    const tailoredResumeId = input.tailoredResumeId?.trim() || null;
+    const applicationId = input.applicationId?.trim() || null;
+    const actionKey = tailoredResumeId ?? applicationId;
+
+    if (
+      authState.status !== "signedIn" ||
+      !actionKey ||
+      isArchivingAllTailoredResumes ||
+      isDeletingAllTailoredResumes
+    ) {
+      return {
+        error: input.starred
+          ? "Unable to star the tailored resume."
+          : "Unable to unstar the tailored resume.",
+        ok: false as const,
+      };
+    }
+
+    setTailoredResumeMutationError(null);
+    const previousPersonalInfo = personalInfo ?? lastReadyPersonalInfoRef.current;
+    const previousBasePersonalInfo = lastBasePersonalInfoRef.current;
+    const optimisticMutation = addOptimisticMutation({
+      action: "setStarred",
+      applicationId,
+      starred: input.starred,
+      tailoredResumeId,
+    });
+
+    try {
+      const result = await patchTailorResume({
+        action: "setTailoredResumeStarredState",
+        applicationId,
+        starred: input.starred,
+        tailoredResumeId,
+      });
+
+      if (!result.ok) {
+        throw new Error(
+          readTailorResumePayloadError(
+            result.payload,
+            input.starred
+              ? "Unable to star the tailored resume."
+              : "Unable to unstar the tailored resume.",
+          ),
+        );
+      }
+
+      if (isLatestOptimisticMutation(optimisticMutation)) {
+        syncTailoredResumeSummariesFromPayload(result.payload);
+        await loadPersonalInfo({ preserveCurrent: true });
+      }
+
+      return {
+        ok: true as const,
+      };
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : input.starred
+            ? "Unable to star the tailored resume."
+            : "Unable to unstar the tailored resume.";
+
+      setTailoredResumeMutationError(message);
+      clearOptimisticMutation(optimisticMutation);
+      if (previousPersonalInfo) {
+        lastBasePersonalInfoRef.current = previousBasePersonalInfo;
+        lastReadyPersonalInfoRef.current = previousPersonalInfo;
+        setPersonalInfoState({
+          personalInfo: previousPersonalInfo,
+          status: "ready",
+        });
+      }
+
+      return {
+        error: message,
+        ok: false as const,
+      };
     }
   }
 
