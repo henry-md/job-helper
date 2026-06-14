@@ -608,6 +608,34 @@ async function getActiveTab() {
   return tab;
 }
 
+function buildSnapshotFromTab(tab: chrome.tabs.Tab): JobPageContext | null {
+  const url = typeof tab.url === "string" ? tab.url.trim() : "";
+
+  if (!url) {
+    return null;
+  }
+
+  const title = typeof tab.title === "string" ? tab.title.trim() : "";
+
+  return {
+    canonicalUrl: "",
+    companyCandidates: [],
+    description: "",
+    employmentTypeCandidates: [],
+    headings: title ? [title] : [],
+    jsonLdJobPostings: [],
+    locationCandidates: [],
+    rawText: title,
+    salaryMentions: [],
+    selectionText: "",
+    siteName: "",
+    title,
+    titleCandidates: title ? [title] : [],
+    topTextBlocks: title ? [title] : [],
+    url,
+  };
+}
+
 async function fetchSnapshot() {
   const tab = await getActiveTab();
   const tabId = tab.id;
@@ -4655,6 +4683,8 @@ function App() {
     status: "loading",
     snapshot: null,
   });
+  const [activeTabSnapshot, setActiveTabSnapshot] =
+    useState<JobPageContext | null>(null);
   const [extensionPreferences, setExtensionPreferences] =
     useState<ExtensionPreferences>(defaultExtensionPreferences);
   const [captureState, setCaptureState] = useState<CaptureState>("idle");
@@ -4982,7 +5012,20 @@ function App() {
   }, []);
 
   const loadSnapshot = useCallback(async () => {
-    setState({ status: "loading", snapshot: null });
+    let provisionalSnapshot: JobPageContext | null = null;
+
+    try {
+      provisionalSnapshot = buildSnapshotFromTab(await getActiveTab());
+    } catch {
+      provisionalSnapshot = null;
+    }
+
+    setActiveTabSnapshot(provisionalSnapshot);
+    setState(
+      provisionalSnapshot
+        ? { status: "ready", snapshot: provisionalSnapshot }
+        : { status: "loading", snapshot: null },
+    );
 
     try {
       const snapshot = await fetchSnapshot();
@@ -8456,6 +8499,17 @@ function App() {
     let isMounted = true;
 
     async function loadInitialSnapshot() {
+      try {
+        const provisionalSnapshot = buildSnapshotFromTab(await getActiveTab());
+
+        if (isMounted && provisionalSnapshot) {
+          setActiveTabSnapshot(provisionalSnapshot);
+          setState({ status: "ready", snapshot: provisionalSnapshot });
+        }
+      } catch {
+        // The full capture path below will surface any actionable error state.
+      }
+
       try {
         const snapshot = await fetchSnapshot();
 
@@ -13578,14 +13632,22 @@ function App() {
   function tailoredResumeMatchesCurrentPage(tailoredResume: {
     jobUrl: string | null;
   }) {
-    if (!currentPageIdentity) {
-      return false;
-    }
+    const activeTabIdentity = activeTabSnapshot
+      ? {
+          canonicalUrl: activeTabSnapshot.canonicalUrl,
+          jobUrl: readJobUrlFromPageContext(activeTabSnapshot),
+          pageUrl: activeTabSnapshot.url,
+        }
+      : null;
 
-    return matchesTailorOverwritePageIdentity({
-      jobUrl: tailoredResume.jobUrl,
-      pageIdentity: currentPageIdentity,
-    });
+    return [currentPageIdentity, activeTabIdentity].some((pageIdentity) =>
+      pageIdentity
+        ? matchesTailorOverwritePageIdentity({
+            jobUrl: tailoredResume.jobUrl,
+            pageIdentity,
+          })
+        : false,
+    );
   }
 
   function renderTailoredResumeArchiveControls() {

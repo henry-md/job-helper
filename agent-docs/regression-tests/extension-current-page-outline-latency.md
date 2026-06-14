@@ -1,0 +1,3 @@
+- Preserve: saved tailored-resume rows that exactly match the active tab URL must show the blue current-page outline immediately and keep it after the fuller page scrape resolves.
+- Common failure mode: clearing the page snapshot while `JOB_HELPER_CAPTURE_PAGE` is in flight makes `currentPageIdentity` null for about a second; relying only on the scraped snapshot can also remove the outline if the scrape returns a different or reduced URL shape.
+- Focused check: load the extension Tailor tab with multiple saved resumes, delay content-script page capture, and verify exact URL matches are outlined in the first frame and still outlined after capture; also verify a query-distinct URL remains unoutlined.
