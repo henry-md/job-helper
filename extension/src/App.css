@@ -4032,7 +4032,7 @@ button:disabled {
   --tailored-resume-control-inset: 4px;
   --tailored-resume-control-radius: 8px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(132px, 0.72fr) 40px;
+  grid-template-columns: minmax(0, 1fr) minmax(132px, 0.72fr) 34px 40px;
   grid-auto-rows: 40px;
   align-items: center;
   gap: 6px;
@@ -4218,6 +4218,117 @@ button:disabled {
   transform: translateY(0.5px);
 }
 
+.tailored-resume-star-filter-shell {
+  position: relative;
+  display: flex;
+  height: 40px;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.tailored-resume-star-filter-trigger {
+  width: calc(40px - (var(--tailored-resume-control-inset) * 2));
+  min-width: calc(40px - (var(--tailored-resume-control-inset) * 2));
+  height: calc(40px - (var(--tailored-resume-control-inset) * 2));
+  min-height: 0;
+  padding: 0;
+  border-radius: var(--tailored-resume-control-radius);
+  color: var(--muted);
+  line-height: 1;
+}
+
+.tailored-resume-star-filter-trigger:hover:not(:disabled),
+.tailored-resume-star-filter-trigger-active {
+  color: var(--foreground);
+}
+
+.tailored-resume-star-filter-trigger-active {
+  border-color: rgba(250, 204, 21, 0.3);
+  background: rgba(250, 204, 21, 0.08);
+}
+
+.tailored-resume-star-filter-trigger svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.tailored-resume-star-filter-panel {
+  position: absolute;
+  z-index: 55;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  width: 172px;
+  border: 1px solid rgba(244, 244, 245, 0.08);
+  border-radius: 10px;
+  padding: 8px;
+  background: rgba(8, 10, 14, 0.98);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.38);
+}
+
+.tailored-resume-star-filter-group {
+  min-width: 0;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.tailored-resume-star-filter-group legend {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.14em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.tailored-resume-star-filter-options {
+  display: grid;
+  gap: 4px;
+}
+
+.tailored-resume-star-filter-option {
+  display: grid;
+  min-height: 28px;
+  cursor: pointer;
+  grid-template-columns: 13px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 0 8px;
+  color: var(--foreground);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.tailored-resume-star-filter-option:hover,
+.tailored-resume-star-filter-option:focus-within {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.tailored-resume-star-filter-option input {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  accent-color: rgb(250, 204, 21);
+}
+
+.tailored-resume-star-filter-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tailored-resume-card {
   padding-bottom: 12px;
 }
@@ -4308,6 +4419,7 @@ button:disabled {
   background: rgba(255, 255, 255, 0.035);
   box-shadow: none;
   text-align: left;
+  cursor: pointer;
 }
 
 .tailored-resume-row:hover:not(:disabled),
@@ -4390,6 +4502,21 @@ button:disabled {
   font-size: 11px;
   font-weight: 650;
   white-space: nowrap;
+}
+
+.tailored-resume-row-star-action {
+  width: 30px;
+  min-width: 30px;
+  min-height: 30px;
+}
+
+.tailored-resume-row-star-action svg {
+  width: 15px;
+  height: 15px;
+}
+
+.tailor-run-star-action {
+  border-radius: 0;
 }
 
 .tailored-resume-row-actions {
@@ -6514,7 +6641,7 @@ button:disabled {
     align-items: center;
   }
 
-  .tailor-run-meta-badges {
+.tailor-run-meta-badges {
     justify-content: flex-start;
   }
 
@@ -6787,6 +6914,47 @@ button:disabled {
   min-height: 20px;
   align-items: center;
   gap: 5px;
+}
+
+.tailored-resume-star-action {
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-color: transparent;
+  border-radius: 0;
+  color: var(--subtle);
+  background: transparent;
+  box-shadow: none;
+}
+
+.tailored-resume-star-action:hover:not(:disabled) {
+  border-color: transparent;
+  color: #fde68a;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.tailored-resume-star-action svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.tailored-resume-star-action-active {
+  border-color: transparent;
+  color: #facc15;
+  background: transparent;
+  box-shadow: none;
+}
+
+.tailored-resume-star-action-active svg {
+  fill: currentColor;
 }
 
 .chat-thinking-indicator span {
